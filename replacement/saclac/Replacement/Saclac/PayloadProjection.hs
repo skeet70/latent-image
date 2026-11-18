@@ -5,6 +5,7 @@ module Replacement.Saclac.PayloadProjection
   , Direction (..)
   , QueueId (..)
   , Operation (..)
+  , Role (..)
   , parseDeclaration
   , projectPayload
   , declarationJson
@@ -28,8 +29,15 @@ newtype Width = Width Int deriving (Eq, Show)
 newtype Citation = Citation T.Text deriving (Eq, Show)
 data Direction = Incoming | Outgoing deriving (Eq, Show)
 data Exclusion = Exclusion Offset Width [Word32] [Citation] deriving (Eq, Show)
-data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) deriving (Eq, Show)
+-- | A callback-identity word: the stock role passes the stock callee itself, an owned role the
+-- linked address of the symbol the replacement contract declares for that callee.
+data Callback = Callback Word32 T.Text deriving (Eq, Show)
+data Field = Field T.Text Offset Width [Citation] (Maybe Exclusion) (Maybe Callback) deriving (Eq, Show)
 data Padding = Padding Offset Width [Citation] deriving (Eq, Show)
+
+-- | Whose stream a payload belongs to. An owned role resolves a symbol in the compared image's own
+-- symbol table, refusing an absent or repeated name.
+data Role = StockRole | OwnedRole (T.Text -> Either String Word32)
 
 -- | The little-endian word at an offset that separates two senders of one
 -- operation. Every entry that declares one is selected by it; an entry
@@ -73,6 +81,14 @@ instance FromJSON Exclusion where
 instance ToJSON Exclusion where
   toJSON (Exclusion (Offset offset) (Width width) values sources) = object
     ["offset" .= offset, "bytes" .= width, "values" .= values, "sources" .= sources]
+instance FromJSON Callback where
+  parseJSON = withObject "callback identity" $ \row -> do
+    entry <- row .: "stock_entry"
+    symbol <- row .: "replacement_symbol"
+    unless (not (T.null (T.strip symbol))) (fail "a callback identity names its replacement symbol")
+    pure (Callback entry symbol)
+instance ToJSON Callback where
+  toJSON (Callback entry symbol) = object ["stock_entry" .= entry, "replacement_symbol" .= symbol]
 instance FromJSON Field where
   parseJSON = withObject "payload field" $ \row -> do
     name <- row .: "name"
@@ -80,12 +96,16 @@ instance FromJSON Field where
     width <- row .: "bytes"
     sources <- row .: "sources"
     exclusion <- row .:? "excluded_when"
+    callback <- row .:? "callback"
     unless (not (T.null (T.strip name)) && offset >= 0 && width > 0 && not (null sources)) (fail "invalid payload field")
-    pure (Field name (Offset offset) (Width width) sources exclusion)
+    unless (maybe True (const (width == 4 && exclusion == Nothing)) callback)
+      (fail "a callback identity is one unconditional word")
+    pure (Field name (Offset offset) (Width width) sources exclusion callback)
 instance ToJSON Field where
-  toJSON (Field name (Offset offset) (Width width) sources exclusion) = object
+  toJSON (Field name (Offset offset) (Width width) sources exclusion callback) = object
     (["name" .= name, "offset" .= offset, "bytes" .= width, "sources" .= sources]
-      ++ maybe [] (\condition -> ["excluded_when" .= condition]) exclusion)
+      ++ maybe [] (\condition -> ["excluded_when" .= condition]) exclusion
+      ++ maybe [] (\identity -> ["callback" .= identity]) callback)
 instance FromJSON Padding where
   parseJSON = withObject "payload padding" $ \row -> do
     offset <- row .: "offset"
@@ -126,27 +146,27 @@ declaredMessage row direction queue operation = do
   padding <- row .:? "padding" .!= []
   discriminator <- row .:? "discriminator"
   let spans = sortOn fst
-        ([(offset, width) | Field _ (Offset offset) (Width width) _ _ <- fields]
+        ([(offset, width) | Field _ (Offset offset) (Width width) _ _ _ <- fields]
         ++ [(offset, width) | Padding (Offset offset) (Width width) _ <- padding])
       covered = foldl advance (Just 0) spans
       advance (Just next) (offset, width) | next == offset && width <= size - offset = Just (offset + width)
       advance _ _ = Nothing
-      unconditional (Field _ (Offset start) (Width count) _ Nothing) = [(start, start + count)]
+      unconditional (Field _ (Offset start) (Width count) _ Nothing _) = [(start, start + count)]
       unconditional _ = []
       insideSelector (Discriminator (Offset offset) _) =
         any (\(start, end) -> start <= offset && offset + discriminatorWidth <= end)
           (concatMap unconditional fields)
       discriminatorFits (Discriminator (Offset offset) _) = offset + discriminatorWidth <= size
   unless (size >= 0 && size <= 4096 && covered == Just size) (fail "message fields and padding must partition its payload")
-  let selectorDefined (Field _ _ _ _ Nothing) = True
-      selectorDefined (Field _ _ _ _ (Just (Exclusion (Offset offset) (Width width) _ _))) =
-        any (\(Field _ (Offset start) (Width count) _ condition) ->
+  let selectorDefined (Field _ _ _ _ Nothing _) = True
+      selectorDefined (Field _ _ _ _ (Just (Exclusion (Offset offset) (Width width) _ _)) _) =
+        any (\(Field _ (Offset start) (Width count) _ condition _) ->
           condition == Nothing && start <= offset && offset + width <= start + count) fields
   unless (all selectorDefined fields) (fail "conditional selector must be an unconditional field")
   unless (maybe True (\value -> discriminatorFits value && insideSelector value) discriminator)
     (fail "message discriminator must lie inside an unconditional field")
   pure (Message direction queue operation (PayloadSize size) (sortOn fieldOffset fields) padding discriminator)
-  where fieldOffset (Field _ (Offset offset) _ _ _) = offset
+  where fieldOffset (Field _ (Offset offset) _ _ _ _) = offset
 
 instance ToJSON Message where
   toJSON (Message direction (QueueId queue) (Operation operation) (PayloadSize size) fields padding discriminator) = object
@@ -193,8 +213,12 @@ declarationJson (Declaration source messages channels causal) = object
   ["schema" .= (1 :: Int), "source_commit" .= source, "messages" .= messages
   , "channels" .= channels, "causal_pairs" .= causal]
 
-projectPayload :: Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
-projectPayload (Declaration _ messages _ _) direction queue operation payload = do
+-- | A callback identity projects to its declared stock callee once the word is that callee in the
+-- stock role, or the declared replacement symbol's address in the owned image's own symbol table.
+-- Any other word is refused: a residual stock address or an unsymbolized word in an owned role,
+-- and anything but the declared callee in the stock role.
+projectPayload :: Role -> Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
+projectPayload role (Declaration _ messages _ _) direction queue operation payload = do
   let candidates = filter ((== (direction, queue, operation)) . messageAddress) messages
   unless (not (null candidates)) (Left "message has no field declaration")
   selected <- maybe (Left "message discriminator matches no declaration") Right (find (`selectedBy` payload) candidates)
@@ -205,8 +229,17 @@ projectPayload (Declaration _ messages _ _) direction queue operation payload = 
       let included Nothing = True
           included (Just (Exclusion (Offset offset) (Width width) values _)) =
             wordAt offset width payload `notElem` values
-      pure (concat [take width (drop offset payload) | Field _ (Offset offset) (Width width) _ condition <- fields, included condition])
+      concat <$> sequence [project field | field@(Field _ _ _ _ condition _) <- fields, included condition]
   where
+    project (Field _ (Offset offset) (Width width) _ _ Nothing) = pure (take width (drop offset payload))
+    project (Field name (Offset offset) _ _ _ (Just (Callback entry symbol))) = do
+      let word = wordAt offset 4 payload
+          refuse detail = Left ("callback identity " ++ T.unpack name ++ " at " ++ show offset ++ ": " ++ detail)
+      expected <- case role of
+        StockRole -> pure entry
+        OwnedRole resolve -> either (refuse . ("replacement " ++)) pure (resolve symbol)
+      unless (word == expected) (refuse ("word " ++ show word ++ " is not " ++ show expected))
+      pure [fromIntegral (entry `div` 256 ^ index) | index <- [0 .. 3 :: Int]]
     selectedBy Internal {} _ = True
     selectedBy (Message _ _ _ _ _ _ Nothing) _ = True
     selectedBy (Message _ _ _ (PayloadSize size) _ _ (Just (Discriminator (Offset offset) value))) bytes =

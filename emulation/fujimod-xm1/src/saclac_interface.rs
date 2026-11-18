@@ -58,8 +58,9 @@ pub struct Shared {
 #[derive(Debug, Deserialize)]
 pub struct Declaration {
     post: String,
+    /// One entry per Root image variant, each bound from that variant's link; the loaded word selects the variant.
     #[serde(default)]
-    owned_post: Option<OwnedPost>,
+    owned_posts: Vec<OwnedPost>,
     entries: Vec<Entry>,
     shared: Vec<Shared>,
     #[serde(default)]
@@ -68,7 +69,7 @@ pub struct Declaration {
 
 pub struct Plan {
     post: u32,
-    owned_post: Option<(u32, u32)>,
+    owned_posts: Vec<(u32, u32)>,
     entries: Vec<BoundaryEntry>,
     shared: Vec<(u32, u32)>,
     callers: Vec<(u32, u32)>,
@@ -78,11 +79,13 @@ impl Declaration {
     pub fn validate(self) -> Result<Plan, String> {
         require(self.entries.len() <= 512 && self.shared.len() <= 64, "interface declaration exceeds bounds")?;
         let post = parse_hex(&self.post)?;
-        let owned_post = match self.owned_post {
-            Some(owned) => Some((parse_hex(&owned.address)?, parse_hex(&owned.instruction)?)),
-            None => None,
-        };
-        require(owned_post.is_none_or(|(address, _)| address & 3 == 0 && address != post), "owned interface post is unaligned or duplicates stock")?;
+        let owned_posts = self.owned_posts.iter()
+            .map(|owned| Ok((parse_hex(&owned.address)?, parse_hex(&owned.instruction)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        require(owned_posts.len() <= 8, "owned interface posts exceed bounds")?;
+        let mut owned_addresses = BTreeSet::new();
+        require(owned_posts.iter().all(|&(address, _)| address & 3 == 0 && address != post && owned_addresses.insert(address)),
+            "owned interface post is unaligned, repeated or duplicates stock")?;
         let mut addresses = BTreeSet::from([post]);
         let mut entries = Vec::new();
         for entry in self.entries {
@@ -110,16 +113,16 @@ impl Declaration {
             Ok((start, end))
         }).collect::<Result<Vec<_>, String>>()?;
         require(callers.len() <= 16 && (!entries.iter().any(|entry| matches!(entry.kind, EntryKind::ServiceRequest)) || !callers.is_empty()), "interface service callers missing or excessive")?;
-        Ok(Plan { post, owned_post, entries, shared, callers })
+        Ok(Plan { post, owned_posts, entries, shared, callers })
     }
 }
 
 impl Plan {
     pub fn sites(&self) -> Vec<u32> {
-        let mut sites = Vec::with_capacity(self.entries.len() + 2);
+        let mut sites = Vec::with_capacity(self.entries.len() + 1 + self.owned_posts.len());
         sites.push(self.post);
         sites.extend(self.entries.iter().map(|entry| entry.address));
-        if let Some((address, _)) = self.owned_post { sites.push(address); }
+        sites.extend(self.owned_posts.iter().map(|&(address, _)| address));
         sites
     }
 }
@@ -134,7 +137,7 @@ fn post_event(queue: u8, header: u32, payload: Vec<u8>) -> Option<Event> {
 
 impl Plan {
     fn owned_post_instruction(&self, address: u32) -> Option<u32> {
-        self.owned_post.and_then(|(owned, instruction)| (owned == address).then_some(instruction))
+        self.owned_posts.iter().find(|&&(owned, _)| owned == address).map(|&(_, instruction)| instruction)
     }
 }
 
@@ -309,7 +312,7 @@ mod tests {
     fn plan() -> Plan {
         Declaration {
             post: "0x1000".into(),
-            owned_post: None,
+            owned_posts: Vec::new(),
             entries: Vec::new(),
             shared: vec![Shared { start: "0x2000".into(), end: "0x2010".into() }],
             callers: Vec::new(),
@@ -338,15 +341,30 @@ mod tests {
     }
 
     #[test]
-    fn owned_post_is_armed_before_update_and_preserves_boundary_observations() {
+    fn owned_posts_are_armed_before_update_and_preserve_boundary_observations() {
         let owned = Declaration {
             post: "0x1000".into(),
-            owned_post: Some(OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() }),
+            owned_posts: vec![
+                OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() },
+                OwnedPost { address: "0x300c".into(), instruction: "0xe92d4ff0".into() },
+            ],
             entries: Vec::new(),
             shared: Vec::new(),
             callers: Vec::new(),
         }.validate().unwrap();
-        assert_eq!(owned.sites(), vec![0x1000, 0x3000]);
+        assert_eq!(owned.sites(), vec![0x1000, 0x3000, 0x300c]);
+        assert_eq!((owned.owned_post_instruction(0x300c), owned.owned_post_instruction(0x3004)), (Some(0xe92d4ff0), None));
+        let repeated = Declaration {
+            post: "0x1000".into(),
+            owned_posts: vec![
+                OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() },
+                OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() },
+            ],
+            entries: Vec::new(),
+            shared: Vec::new(),
+            callers: Vec::new(),
+        };
+        assert!(repeated.validate().is_err());
         let payload = vec![1, 2, 3];
         assert_eq!(
             post_event(47, 0x2f2b3f26, payload.clone()),

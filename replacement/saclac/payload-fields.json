@@ -288,8 +288,13 @@
      "offset": 0,
      "bytes": 4,
      "sources": [
-      "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)"
-     ]
+      "drivers/lens/control/tu_0076f044.c: both words assigned before send_payload_first_result(0x4214,2,words)",
+      "X-M1 1.50 id5 0xf46f88: the only saclac caller of 0x76f5dc passes callee 0xf15070; Root passes xm1_saclac_root_lens_status, which posts the same halfword and mode"
+     ],
+     "callback": {
+      "stock_entry": 15814768,
+      "replacement_symbol": "xm1_saclac_root_lens_status"
+     }
     },
     {
      "name": "word-1",
@@ -1268,8 +1273,13 @@
      "offset": 76,
      "bytes": 4,
      "sources": [
-      "0x00f4c6e8: callback word after copied record"
-     ]
+      "0x00f4c6e8: callback word after copied record",
+      "X-M1 1.50 id5 0xf3a73c: the only caller of 0xf4c6e8 passes callee 0xf3a3f8; Root passes xm1_saclac_root_round_window, which traces 0x11107000 and posts 0x8d {status, result}"
+     ],
+     "callback": {
+      "stock_entry": 15967224,
+      "replacement_symbol": "xm1_saclac_root_round_window"
+     }
     }
    ],
    "padding": [
@@ -1322,8 +1332,13 @@
      "offset": 124,
      "bytes": 4,
      "sources": [
-      "0x00f4c490: callback word after copied record"
-     ]
+      "0x00f4c490: callback word after copied record",
+      "X-M1 1.50 id5 0xf385ac: the only caller of 0xf4c490 passes callee 0xf37854; Root passes xm1_saclac_root_round_auxiliary, which traces 0x11104000 and posts 0x8a"
+     ],
+     "callback": {
+      "stock_entry": 15956052,
+      "replacement_symbol": "xm1_saclac_root_round_auxiliary"
+     }
     }
    ],
    "padding": []

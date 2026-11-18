@@ -9,6 +9,7 @@ import Data.Char (isHexDigit)
 import Data.List (find)
 import qualified Data.Text as Text
 import Data.Word (Word8, Word16, Word32)
+import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import System.Environment (getArgs)
 import Text.Read (readMaybe)
@@ -125,8 +126,8 @@ load path = do
   bytes <- H.readRegular (16 * 1024 * 1024) path
   either H.failH pure (eitherDecodeStrict bytes)
 
-applyProjection :: Payload.Declaration -> Receipt -> IO Receipt
-applyProjection declaration receipt = do
+applyProjection :: Payload.Role -> Payload.Declaration -> Receipt -> IO Receipt
+applyProjection role declaration receipt = do
   rows <- traverse projectObserved (timedEvents receipt)
   pure receipt { events = concatMap (normalize . observedEvent) rows, timedEvents = rows }
   where
@@ -134,7 +135,43 @@ applyProjection declaration receipt = do
       QueueIn operation sender bytes -> QueueIn operation sender <$> payloadFields Payload.Incoming sender operation bytes
       PeerRequest queue operation bytes -> PeerRequest queue operation <$> payloadFields Payload.Outgoing queue operation bytes
       _ -> pure event
-    payloadFields direction queue operation = either H.failH pure . Payload.projectPayload declaration direction (Payload.QueueId queue) (Payload.Operation operation)
+    payloadFields direction queue operation = either H.failH pure . Payload.projectPayload role declaration direction (Payload.QueueId queue) (Payload.Operation operation)
+
+-- | The owned role of one compared lane: its linked symbol table, bound to the candidate its census
+-- observed through the staging receipt (candidate DAT and fixed body) and the stage contract
+-- (fixed body and linked symbols). Any break in that chain refuses the comparison.
+data ImageBinding = ImageBinding { bindingContract :: FilePath, bindingStaging :: FilePath, bindingSymbols :: FilePath }
+
+imageBinding :: String -> IO ImageBinding
+imageBinding text = case splitOn ',' text of
+  [contract, staging, symbols] -> pure (ImageBinding contract staging symbols)
+  _ -> H.failH "an image binding is CONTRACT,STAGING,SYMBOLS"
+  where
+    splitOn separator value = case break (== separator) value of
+      (part, []) -> [part]
+      (part, _ : rest) -> part : splitOn separator rest
+
+ownedRole :: Receipt -> ImageBinding -> IO (Payload.Role, Value)
+ownedRole receipt binding = do
+  observed <- case inputBindings receipt of
+    _ : Binding (Digest candidate) : _ -> pure candidate
+    _ -> H.failH "census receipt has no candidate binding"
+  contract <- jsonFile (bindingContract binding)
+  staging <- jsonFile (bindingStaging binding)
+  symbolsBytes <- H.readRegular (16 * 1024 * 1024) (bindingSymbols binding)
+  symbolsDigest <- Text.pack <$> H.sha256 symbolsBytes
+  let field path value = either H.failH pure (J.parseEither path value)
+  stagedCandidate <- field (withObject "staging" (.: "dat_sha256")) staging
+  stagedBody <- field (withObject "staging" (.: "body_sha256")) staging
+  contractBody <- field (withObject "contract" (\row -> row .: "fixed_body" >>= withObject "fixed body" (.: "sha256"))) contract
+  contractSymbols <- field (withObject "contract" (.: "linked_symbols_sha256")) contract
+  H.ensure (stagedCandidate == observed) "staging receipt names another candidate than the census observed"
+  H.ensure (stagedBody == (contractBody :: Text.Text)) "staging receipt and stage contract name different fixed bodies"
+  H.ensure (contractSymbols == symbolsDigest) "symbol table is not the stage contract's linked symbols"
+  symbols <- either H.failH pure (F.parseSymbols symbolsBytes)
+  let resolve name = either Left (Right . F.symbolAddress) (F.lookupSymbol symbols (Text.unpack name))
+  pure (Payload.OwnedRole resolve, object ["candidate_sha256" .= observed, "fixed_body_sha256" .= stagedBody, "linked_symbols_sha256" .= symbolsDigest])
+  where jsonFile path = H.readRegular (1024 * 1024) path >>= either H.failH pure . eitherDecodeStrict
 
 healthy :: Receipt -> Bool
 healthy receipt = observationError receipt == Nothing && machineFailure receipt == Nothing
@@ -185,29 +222,36 @@ runValue compatible extents phase receipt = do
     , "events" .= observations
     ])
 
--- | The two options after the five positional paths, each with its value.
-options :: [String] -> IO (Maybe String, Maybe String)
-options [] = pure (Nothing, Nothing)
-options (key : value : rest) = do
-  (milestoneOption, controlOption) <- options rest
-  case key of
-    "--milestone" -> pure (Just value, controlOption)
-    "--control" -> pure (milestoneOption, Just value)
-    _ -> H.failH ("unknown option " ++ key)
+-- | The options after the five positional paths, each with its value.
+options :: [String] -> IO [(String, String)]
+options [] = pure []
+options (key : value : rest)
+  | key `elem` ["--milestone", "--control", "--candidate-image", "--control-image"] = ((key, value) :) <$> options rest
+  | otherwise = H.failH ("unknown option " ++ key)
 options _ = H.failH "an option needs a value"
 
 main :: IO ()
 main = do
   arguments <- getArgs
+  let usage = "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON --candidate-image CONTRACT,STAGING,SYMBOLS --control-image CONTRACT,STAGING,SYMBOLS [--milestone PHASE] [--control NAME]"
   (stockPath, candidatePath, controlPath, projectionPath, output) <- case take 5 arguments of
     [stock, candidate, control, fields, target] -> pure (stock, candidate, control, fields, target)
-    _ -> H.failH "usage: saclac-interface-compare STOCK_JSON CANDIDATE_JSON WRONG_JSON FIELDS_JSON OUTPUT_JSON [--milestone PHASE] [--control NAME]"
-  (phase, controlName) <- options (drop 5 arguments)
-  let variant = maybe "unconditional-command-present-store" id controlName
+    _ -> H.failH usage
+  given <- options (drop 5 arguments)
+  let phase = lookup "--milestone" given
+      variant = maybe "unconditional-command-present-store" id (lookup "--control" given)
+      required key = maybe (H.failH usage) imageBinding (lookup key given)
+  candidateBinding <- required "--candidate-image"
+  controlBinding <- required "--control-image"
   declaration <- H.readRegular (1024 * 1024) projectionPath >>= either H.failH pure . Payload.parseDeclaration
-  stock <- load stockPath >>= applyProjection declaration
-  candidate <- load candidatePath >>= applyProjection declaration
-  control <- load controlPath >>= applyProjection declaration
+  stockReceipt <- load stockPath
+  candidateReceipt <- load candidatePath
+  controlReceipt <- load controlPath
+  (candidateRole, candidateBound) <- ownedRole candidateReceipt candidateBinding
+  (controlRole, controlBound) <- ownedRole controlReceipt controlBinding
+  stock <- applyProjection Payload.StockRole declaration stockReceipt
+  candidate <- applyProjection candidateRole declaration candidateReceipt
+  control <- applyProjection controlRole declaration controlReceipt
   let sameScenario = scenario stock == scenario candidate && scenario stock == scenario control
       sameInputs = case map projectionInputs [stock, candidate, control] of
         [Just left, Just middle, Just right] -> left == middle && left == right
@@ -231,6 +275,7 @@ main = do
     , "controls" .= [object ["name" .= variant, "run" .= wrongRun]]
     , "milestone" .= milestone
     , "same_observer_and_scenario_inputs" .= sameInputs
+    , "callback_identity_bindings" .= object ["owned" .= candidateBound, "controls" .= [controlBound]]
     , "stock_executed_instructions_in_action_extents" .= stockFetches stock
-    , "normalization" .= ("instruction clocks and cores omitted; each store expanded into ascending-address bytes without reordering events; transient reply pointer addresses omitted and contents retained" :: String)
+    , "normalization" .= ("instruction clocks and cores omitted; each store expanded into ascending-address bytes without reordering events; transient reply pointer addresses omitted and contents retained; a declared callback-identity word projects to its stock callee only when it equals that callee (stock) or the declared replacement symbol's address in the lane's own bound symbol table (owned), and any other word refuses the comparison" :: String)
     ]))

@@ -189,19 +189,21 @@ genrule(
     tools = [":saclac-extents"],
 )
 
-# The owned post entry is bound from the linked image, so the observer follows every relink.
+# One owned post entry per compared Root image variant, bound from each link, so a single sites
+# file observes the candidate and its wrong-driver-store control through every relink.
+_CENSUS_IMAGES = ["saclac-image", "saclac-image-wrong-driver-store"]
+
+_CENSUS_IMAGE_FILES = [
+    ":" + image + suffix
+    for image in _CENSUS_IMAGES
+    for suffix in [".elf", ".bin", ".symbols", ".disasm", ".sections"]
+]
+
 genrule(
     name = "saclac-census-sites",
-    srcs = [
-        "//emulation:saclac-census-sites",
-        ":saclac-image.elf",
-        ":saclac-image.bin",
-        ":saclac-image.symbols",
-        ":saclac-image.disasm",
-        ":saclac-image.sections",
-    ],
+    srcs = ["//emulation:saclac-census-sites"] + _CENSUS_IMAGE_FILES,
     outs = ["saclac-census-sites.json"],
-    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $(location :saclac-image.elf) $(location :saclac-image.bin) $(location :saclac-image.symbols) $(location :saclac-image.disasm) $(location :saclac-image.sections) $@",
+    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $@ " + " ".join(["$(location " + label + ")" for label in _CENSUS_IMAGE_FILES]),
     tools = [":saclac-extents"],
 )
 
@@ -373,6 +375,7 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:first-stage",
         "//host:host-support",
         "//host:text",
     ],

@@ -6,14 +6,15 @@ module Replacement.Saclac.Placement
   ( renderLinkerScript
   , watchRanges
   , insertWatchRanges
-  , bindOwnedPost
+  , bindOwnedPosts
   , hexAddress
   ) where
 
+import Control.Monad (unless)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (isInfixOf, isPrefixOf, isSuffixOf)
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub)
 import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import Numeric (showHex)
@@ -124,24 +125,29 @@ insertWatchRanges value = case value of
   J.Object fields -> Right (J.Object (KM.insert (K.fromText "watch") (J.toJSON watchRanges) fields))
   _ -> Left "the census sites file is not a JSON object"
 
--- | The census sites file with its owned post entry bound to this linked image: the slot-table
--- backend's @message_post@ address and the first instruction word loaded there. The observer
--- enables that entry's ABI only while the loaded word matches, so a stale address would silently
--- drop every owned peer post; binding from the link keeps the declaration and the image together.
-bindOwnedPost :: Admitted -> J.Value -> Either String J.Value
-bindOwnedPost admitted value = do
-  post <- case filter isPost (admittedSymbols admitted) of
-    [symbol] -> Right symbol
-    [] -> Left "the linked image has no slot-table message_post"
-    _ -> Left "the linked image has more than one slot-table message_post"
-  let address = F.symbolAddress post
-      owned = J.object ["address" J..= hexAddress address, "instruction" J..= hexAddress (wordAt admitted address)]
+-- | The census sites file with one owned post entry per linked Root image variant: each variant's
+-- slot-table backend @message_post@ address and the first instruction word loaded there. The
+-- observer enables an entry's ABI only while the loaded word matches, so one sites file serves
+-- every compared lane. Binding refuses unless, in each variant, exactly one listed entry holds its
+-- declared word and that entry is the variant's own; another variant's entry can never fire there.
+bindOwnedPosts :: [Admitted] -> J.Value -> Either String J.Value
+bindOwnedPosts images value = do
+  posts <- mapM postOf images
+  let distinct = nub posts
+      holds image (address, word) = wordAt image address == word
+  mapM_ (\(image, own) -> unless (filter (holds image) distinct == [own])
+    (Left ("owned post " ++ hexAddress (fst own) ++ " is not the only declared post its image holds"))) (zip images posts)
+  let owned = [J.object ["address" J..= hexAddress address, "instruction" J..= hexAddress word] | (address, word) <- distinct]
   case value of
     J.Object fields -> case KM.lookup (K.fromText "interface") fields of
       Just (J.Object interface) ->
-        Right (J.Object (KM.insert (K.fromText "interface") (J.Object (KM.insert (K.fromText "owned_post") owned interface)) fields))
+        Right (J.Object (KM.insert (K.fromText "interface") (J.Object (KM.insert (K.fromText "owned_posts") (J.toJSON owned) interface)) fields))
       _ -> Left "the census sites file has no interface object"
     _ -> Left "the census sites file is not a JSON object"
   where
+    postOf admitted = case filter isPost (admittedSymbols admitted) of
+      [symbol] -> let address = F.symbolAddress symbol in Right (address, wordAt admitted address)
+      [] -> Left "the linked image has no slot-table message_post"
+      _ -> Left "the linked image has more than one slot-table message_post"
     isPost symbol = let name = F.symbolName symbol
                      in all (`isInfixOf` name) ["10xm1_kernel", "10slot_table", "9SlotTable"] && "7Backend12message_post" `isSuffixOf` name

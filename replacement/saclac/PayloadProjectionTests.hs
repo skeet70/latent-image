@@ -11,7 +11,12 @@ import Data.Aeson (Value, encode, object, (.=))
 import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString as B
 import System.Environment (getArgs)
-import Replacement.Saclac.PayloadProjection
+import Replacement.Saclac.PayloadProjection hiding (projectPayload)
+import qualified Replacement.Saclac.PayloadProjection as P
+
+-- | The stock stream's projection; the callback identity cases below exercise the owned role.
+projectPayload :: Declaration -> Direction -> QueueId -> Operation -> [Word8] -> Either String [Word8]
+projectPayload = P.projectPayload StockRole
 
 main :: IO ()
 main = do
@@ -54,7 +59,7 @@ main = do
   mapM_ (\offset -> check (captureRecord captureBytes /= captureRecord (mutate offset captureBytes))) [0..175]
   check (isLeft (captureRecord (replicate 175 0)))
   let windowRequest = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c0c)
-      windowBytes = replicate 80 0
+      windowBytes = withWord 76 0x00f3a3f8 (replicate 80 0)
       windowUnwritten = [10,11] ++ [17..19] ++ [28..31] ++ [34,35]
   mapM_ (\offset -> check (windowRequest windowBytes == windowRequest (mutate offset windowBytes))) windowUnwritten
   mapM_ (\offset -> check (windowRequest windowBytes /= windowRequest (mutate offset windowBytes))) (filter (`notElem` windowUnwritten) [0..79])
@@ -77,7 +82,7 @@ main = do
   recoveredRoundTrip <- either fail pure (parseDeclaration (L.toStrict (encode (declarationJson recovered))))
   check (projectPayload recoveredRoundTrip Outgoing (QueueId 48) (Operation 0x4002) (mutate 36 nonzero) == through (mutate 36 nonzero))
   let half = projectPayload recovered Outgoing (QueueId 44) (Operation 0x3c0c)
-      halfBytes = replicate 80 0
+      halfBytes = withWord 76 0x00f3a3f8 (replicate 80 0)
       holes = [10,11,17,18,19,28,29,30,31,34,35]
   mapM_ (\offset -> check (half halfBytes == half (mutate offset halfBytes))) holes
   mapM_ (\offset -> check (half halfBytes /= half (mutate offset halfBytes))) (filter (`notElem` holes) [0..79])
@@ -109,6 +114,7 @@ main = do
   internalCompletions
   recoveredInternal recovered
   recoveredLayouts recovered
+  callbackIdentities recovered
   putStrLn "payload field projection behavioral tests passed"
   where parse = either fail pure . parseDeclaration . L.toStrict . encode
 
@@ -279,6 +285,40 @@ recoveredLayouts recovered = do
   request 48 0x400e 32 []
   request 48 0x400f 4 []
   request 48 0x4043 0 []
+
+-- A callback identity word: stock must pass the declared callee; an owned image must pass the
+-- declared replacement symbol's address from its own symbol table. Each refusal is separate.
+callbackIdentities :: Declaration -> IO ()
+callbackIdentities recovered = do
+  let linked = 0x00b7f514
+      owned name = if name == "xm1_saclac_root_round_window" then Right linked else Left "absent"
+      window role = P.projectPayload role recovered Outgoing (QueueId 44) (Operation 0x3c0c)
+      request word = withWord 76 word (replicate 80 0)
+      stockProjection = window StockRole (request 0x00f3a3f8)
+  check (not (isLeft stockProjection))
+  -- The owned word at the linked replacement projects to the stock callee.
+  check (window (OwnedRole owned) (request linked) == stockProjection)
+  -- The stock role refuses any word but the declared callee, including the owned replacement.
+  check (isLeft (window StockRole (request linked)))
+  -- An owned role refuses a residual stock address.
+  check (isLeft (window (OwnedRole owned) (request 0x00f3a3f8)))
+  -- An owned role refuses an unsymbolized word, here inside the replacement's body.
+  check (isLeft (window (OwnedRole owned) (request (linked + 4))))
+  -- An owned role refuses when its image does not link the declared replacement.
+  check (isLeft (window (OwnedRole (const (Left "absent"))) (request linked)))
+  -- Each declared identity binds its own replacement.
+  let auxiliary role word = P.projectPayload role recovered Outgoing (QueueId 45) (Operation 0x3d02) (withWord 124 word (replicate 128 0))
+      lens role word = P.projectPayload role recovered Outgoing (QueueId 50) (Operation 0x4214) (withWord 0 word (replicate 8 0))
+      bound name = Right (if name == "xm1_saclac_root_round_auxiliary" then 0x00b7f44c else 0x00b7ed70)
+  check (auxiliary (OwnedRole bound) 0x00b7f44c == auxiliary StockRole 0x00f37854)
+  check (isLeft (auxiliary (OwnedRole bound) 0x00f37854))
+  check (lens (OwnedRole bound) 0x00b7ed70 == lens StockRole 0x00f15070)
+  check (isLeft (lens StockRole 0x00b7ed70))
+  -- A declared callback identity is one unconditional word.
+  check (isLeft (parseDeclaration (L.toStrict (encode (policy [object
+    [ "name" .= ("synthetic-callback" :: String), "offset" .= (0 :: Int), "bytes" .= (2 :: Int)
+    , "sources" .= (["synthetic fixture"] :: [String])
+    , "callback" .= object ["stock_entry" .= (1 :: Int), "replacement_symbol" .= ("xm1_fixture" :: String)] ], field 2 3] [])))))
 
 -- Two senders of one operation are separated by the word each copies at the
 -- same offset, and a payload matching neither is refused.
