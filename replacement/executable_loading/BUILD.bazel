@@ -8,6 +8,8 @@ _CORE = [
     "src/protocol.rs",
     "src/receiver.rs",
     "src/sender.rs",
+    "src/timeout.rs",
+    "//replacement/embassy_platform:src/clock.rs",
 ]
 
 xm1_rust_host_rlib(
@@ -57,8 +59,10 @@ xm1_rust_rlib(
     rlib_search_deps = _POWER_SERVICES_SEARCH,
 )
 
-# Explicit qualification policies. Each composition links exactly one; the
-# owner library has no production duration or drain default.
+# Compositions link exactly one configuration. The stock-wrapper timeout is the
+# Root startup caller policy (`timeout::STARTUP_CLASS_HANG_BOUND`) except in the
+# retention controls, which link an explicit test timeout; drains are
+# qualification choices. The owner library has no timeout or drain default.
 _OWNERS = {
     "native": (":arm", ["//replacement/application_nand:arm"]),
     "root": (":arm-root", ["//replacement/power_lifecycle:services-arm"] + _POWER_SERVICES_SEARCH),
@@ -73,14 +77,14 @@ _OWNERS = {
         rlib_deps = {"xm1_executable_loading": _OWNERS[composition][0]},
         rlib_search_deps = _OWNERS[composition][1],
         rustc_flags = ["--cfg", "loading_qualification_" + variant],
-        env = {"XM1_LOADING_POLICY_TICKS": ticks},
+        env = {"XM1_LOADING_TEST_TIMEOUT_MS": test_timeout} if test_timeout else {},
         testonly = True,
     )
-    for variant, composition, ticks in [
-        ("fujimod", "root", "4294967296"),
-        ("retention", "root", "65536"),
-        ("external", "native", "1048576"),
-        ("retention", "native", "4096"),
+    for variant, composition, test_timeout in [
+        ("fujimod", "root", None),
+        ("retention", "root", "22"),
+        ("external", "native", None),
+        ("retention", "native", "2"),
     ]
 ]
 

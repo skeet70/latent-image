@@ -5,7 +5,7 @@
   "rows": [
     {
       "id": "executable-loading-callers",
-      "shim": "xm1_loading_configuration, xm1_loading_startup, xm1_loading_ready, xm1_loading_legacy_request, xm1_loading_legacy_cancel, xm1_loading_configure, xm1_loading_absolute_deadline, xm1_loading_initialize, xm1_loading_request, xm1_loading_request_sync, xm1_loading_cancel, xm1_loading_wait_channel and xm1_loading_observe_completion",
+      "shim": "xm1_loading_configuration, xm1_loading_startup, xm1_loading_ready, xm1_loading_legacy_request, xm1_loading_legacy_cancel, xm1_loading_configure, xm1_loading_deadline_after_ms, xm1_loading_initialize, xm1_loading_request, xm1_loading_request_sync, xm1_loading_cancel, xm1_loading_wait_channel and xm1_loading_observe_completion",
       "kind": "stock-ABI export",
       "other_side": "startup construction, stock task60 wrapper callers and Develop loading callers",
       "owned": "yes",
@@ -21,7 +21,7 @@
             "xm1_loading_legacy_request",
             "xm1_loading_legacy_cancel",
             "xm1_loading_configure",
-            "xm1_loading_absolute_deadline",
+            "xm1_loading_deadline_after_ms",
             "xm1_loading_initialize",
             "xm1_loading_request",
             "xm1_loading_request_sync",
@@ -30,7 +30,7 @@
             "xm1_loading_observe_completion"
           ],
           "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
-          "requirement": "Reference-only until the Root bank's loading variant is bound in replacement/shim-images.json. //replacement/saclac:saclac-image-loading-* export these bodies; stage-saclac publishes the 0x73ac74/0x73ac94/0x73aca4 veneers only when all three are linked. The composition supplies one schema1 policy; each posted request forms one finite absolute deadline and carries it unchanged through read and cleanup. A published completion latch answers as stock flashloader_request/cancel do, without posting. No duration, default or cleanup budget is fitted by the library."
+          "requirement": "Reference-only until the Root bank's loading variant is bound in replacement/shim-images.json. //replacement/saclac:saclac-image-loading-* export these bodies; stage-saclac publishes the 0x73ac74/0x73ac94/0x73aca4 veneers only when all three are linked. The composition supplies schema2 configuration whose stock-wrapper timeout is the Root startup caller policy in milliseconds; each posted request converts its caller's timeout once through the timer contract into one finite absolute deadline and carries it unchanged through read and cleanup. A published completion latch answers as stock flashloader_request/cancel do, without posting. No duration, default or cleanup budget is fitted by the library."
         }
       ],
       "predicates": {

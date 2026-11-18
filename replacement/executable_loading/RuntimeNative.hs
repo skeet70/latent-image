@@ -196,6 +196,8 @@ main = do
             expectedCompletion = if retained then [3,1,3,10,0,0,0,0x6201] else [0,1,3,0,0,0x360000,0,0]
             expectedCallback = if retained then [1,0x12345678,1] else [1,0x12345678,0]
             state = readWordAt (memory "nand-state") 0x528
+            -- Linked configurations: success uses the startup-class 30000 ms bound, retention the 2 ms test input.
+            expectedTimeoutCounts = if retained then 2 * 3000 else 30000 * 3000
             handle = readWordAt (memory "nand-state") 0x538
             token = readWordAt (memory "nand-state") 0x540
             done = readWordAt (memory "done") 0x44c
@@ -206,7 +208,9 @@ main = do
             lifecycle = if retained then state == 2 && handle /= 0 && token == 0 && done == 0 && busy == 1 else state == 0 && handle == 0 && token == 0 && done == 1 && busy == 0
             passed = nativeStatus observation == Returned && completion == expectedCompletion && callbackWords == expectedCallback
               && transport == [60,48,16] && task == [60,4,0xc00,taskEntry] && message == [60,0x3c3c4c03,8] && payload == [1,3]
-              && take 2 envelope == [1,1] && envelope !! 2 /= 0 && envelope !! 4 == callbackAddress && envelope !! 5 == 0x12345678
+              && take 2 envelope == [1,1] && envelope !! 4 == callbackAddress && envelope !! 5 == 0x12345678
+              -- Fixture tick cell is 0, so now is the polled counter; the deadline is now + timeout * 3000 counts.
+              && envelope !! 3 == 0 && envelope !! 2 >= expectedTimeoutCounts && envelope !! 2 < expectedTimeoutCounts + 1000000
               && lifecycle && progressOk && deadlineCalls == 1
         pure (passed, object ["case" .= caseId spec, "passed" .= passed, "status" .= runnerStatusLabel (nativeStatus observation),
           "completion_words" .= completion, "transport_words" .= transport, "task_words" .= task, "message_words" .= message,

@@ -159,7 +159,7 @@ impl ProfileGeometryFamily {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_pipeline_sensor_profile_geometry(stage: SensorStage, _source: ImagePlane, selection: CaptureSelection, output: Address32) -> u32 {
     let kind = xm1_executable_loading::protocol::CommandKind::Initialize;
-    let Ok(deadline) = xm1_executable_loading::client::configured_deadline(kind) else { return 0 };
+    let Ok(deadline) = xm1_executable_loading::client::deadline_after(super::LOADING_INITIALIZE_TIMEOUT) else { return 0 };
     if xm1_executable_loading::client::request_sync(kind, deadline).is_err() { return 0; }
     let feature = unsafe { xm1_pipeline_sensor_profile_feature(ProfileId(word(stage.0, 0x2260))) };
     unsafe { store(output, 0, if configuration_byte(ConfigurationKey(0xc9)) & 2 != 0 { 2 } else { 1 }); }

@@ -1,4 +1,4 @@
-use core::{mem::MaybeUninit, ptr::{self, NonNull}, slice, sync::atomic::{AtomicBool, AtomicU32, AtomicU8, fence, Ordering}};
+use core::{mem::MaybeUninit, ptr::{self, NonNull}, sync::atomic::{AtomicBool, AtomicU32, AtomicU8, fence, Ordering}};
 
 use crate::{
     CallbackResult, Clock, Completion, Publication, ReceiverKernel, SenderKernel,
@@ -12,6 +12,7 @@ use crate::protocol::{
 };
 use crate::receiver::Receiver;
 use crate::sender::Sender;
+use crate::timeout::{self, Milliseconds};
 use crate::nand::dma_native::{ClockBinding, ClockSource, CounterDirection, DrainContract};
 use crate::nand::dma_read::{Deadline, Instant};
 
@@ -64,18 +65,17 @@ extern "C" {
     fn xm1_loading_configuration() -> *const LoadingConfiguration;
 }
 
-pub type DeadlineLeaf = unsafe extern "C" fn(*mut (), u32, *mut u64) -> i32;
 pub type QuiescenceLeaf = unsafe extern "C" fn(*mut ()) -> u32;
 
-#[derive(Clone, Copy)]
-struct DeadlineProvider { context: *mut (), deadline: DeadlineLeaf }
-
+/// Schema 2. The composition states the caller policy for the stock wrapper
+/// callers (`0x73ac94`/`0x73aca4`, Root startup) as a time-unit timeout; the
+/// loader converts it once per request through the timer contract.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LoadingConfiguration {
     pub version: u32,
-    pub deadline_context: *mut (),
-    pub deadline: Option<DeadlineLeaf>,
+    /// Required, nonzero: the stock-wrapper callers' timeout in milliseconds.
+    pub legacy_timeout_milliseconds: u32,
     /// 1 selects the pinned FujiMod 3d90035d synchronous-copy contract;
     /// 2 requires `quiescence` and its caller-owned context.
     pub drain_kind: u32,
@@ -93,7 +93,10 @@ struct NativeKernel;
 static mut CLOCK: MaybeUninit<ClockBinding> = MaybeUninit::uninit();
 static TASK_NAME: &[u8; 15] = b"flashloader-rs\0";
 static mut TASK_ARGUMENT: u32 = 0;
-static mut CONFIGURATION: MaybeUninit<(DeadlineProvider, DrainContract)> = MaybeUninit::uninit();
+static mut CONFIGURATION: MaybeUninit<(Milliseconds, DrainContract)> = MaybeUninit::uninit();
+/// Absolute deadlines formed for posted requests; one per request.
+#[no_mangle]
+pub static XM1_LOADING_DEADLINE_CALLS: AtomicU32 = AtomicU32::new(0);
 static CONFIGURED: AtomicBool = AtomicBool::new(false);
 static mut SENDER: MaybeUninit<Sender> = MaybeUninit::uninit();
 static mut RECEIVER: MaybeUninit<Receiver> = MaybeUninit::uninit();
@@ -141,9 +144,9 @@ fn store_completion(kind: CommandKind, completion: Option<Completion>) {
     }
 }
 
-fn configured() -> Option<(DeadlineProvider, DrainContract)> {
+fn configured() -> Option<(Milliseconds, DrainContract)> {
     if !CONFIGURED.load(Ordering::Acquire) { return None; }
-    Some(unsafe { ptr::addr_of!(CONFIGURATION).cast::<(DeadlineProvider, DrainContract)>().read() })
+    Some(unsafe { ptr::addr_of!(CONFIGURATION).cast::<(Milliseconds, DrainContract)>().read() })
 }
 
 fn clock() -> &'static ClockBinding {
@@ -179,18 +182,18 @@ fn external_status(error: ProtocolError) -> i32 {
     }
 }
 
-pub fn current_count() -> u64 {
-    if CONFIGURED.load(Ordering::Acquire) { clock().now().count() } else { 0 }
-}
-
-fn configured_deadline(kind: CommandKind) -> Result<Deadline, ProtocolError> {
-    let Some((provider, _)) = configured() else { return Err(ProtocolError::NotConfigured); };
-    let mut count = 0u64;
-    let code = unsafe { (provider.deadline)(provider.context, kind as u32, &mut count) };
-    if code != 0 { return Err(ProtocolError::Kernel(code)); }
-    let deadline = Deadline::new(Instant::new(count)).ok_or(ProtocolError::NonFiniteDeadline)?;
+/// Forms one absolute deadline `timeout` from now on the configured clock.
+fn deadline_after(timeout: Milliseconds) -> Result<Deadline, ProtocolError> {
+    if !CONFIGURED.load(Ordering::Acquire) { return Err(ProtocolError::NotConfigured); }
+    XM1_LOADING_DEADLINE_CALLS.fetch_add(1, Ordering::Relaxed);
+    let deadline = timeout::deadline_after(clock().now(), timeout).ok_or(ProtocolError::NonFiniteDeadline)?;
     if clock().now() >= deadline.instant() { return Err(ProtocolError::Expired); }
     Ok(deadline)
+}
+
+fn legacy_deadline() -> Result<Deadline, ProtocolError> {
+    let Some((timeout, _)) = configured() else { return Err(ProtocolError::NotConfigured); };
+    deadline_after(timeout)
 }
 
 impl SenderKernel for NativeKernel {
@@ -323,7 +326,7 @@ pub unsafe extern "C" fn xm1_loading_legacy_request(kind: u32, callback: u32, ar
         }
         return 0;
     }
-    let deadline = match configured_deadline(kind_value) {
+    let deadline = match legacy_deadline() {
         Ok(deadline) => deadline,
         Err(error) => return external_status(error),
     };
@@ -335,7 +338,7 @@ pub unsafe extern "C" fn xm1_loading_legacy_cancel(kind: u32) -> i32 {
     if !ready() { return -1; }
     let Some(kind_value) = CommandKind::parse(kind) else { return -30; };
     if latched(kind_value) { return 0; }
-    let deadline = match configured_deadline(kind_value) {
+    let deadline = match legacy_deadline() {
         Ok(deadline) => deadline,
         Err(error) => return external_status(error),
     };
@@ -347,9 +350,8 @@ pub unsafe extern "C" fn xm1_loading_configure(configuration: *const LoadingConf
     if SENDER_READY.load(Ordering::Acquire) { return -2; }
     CONFIGURED.store(false, Ordering::Release);
     let Some(configuration) = (unsafe { configuration.as_ref() }) else { return -30; };
-    if configuration.version != 1 { return -30; }
-    let Some(deadline) = configuration.deadline else { return -30; };
-    let provider = DeadlineProvider { context: configuration.deadline_context, deadline };
+    if configuration.version != 2 { return -30; }
+    let Some(legacy_timeout) = Milliseconds::new(configuration.legacy_timeout_milliseconds) else { return -30; };
     let drain = match configuration.drain_kind {
         1 => DrainContract::FujiMod3d90035d,
         2 => {
@@ -364,7 +366,7 @@ pub unsafe extern "C" fn xm1_loading_configure(configuration: *const LoadingConf
             CounterDirection::Up,
             ClockSource::NativeCore0,
         ));
-        ptr::addr_of_mut!(CONFIGURATION).cast::<(DeadlineProvider, DrainContract)>().write((provider, drain));
+        ptr::addr_of_mut!(CONFIGURATION).cast::<(Milliseconds, DrainContract)>().write((legacy_timeout, drain));
     }
     CONFIGURED.store(true, Ordering::Release);
     0
@@ -444,11 +446,13 @@ pub unsafe extern "C" fn xm1_loading_cancel(kind: u32, deadline: u64) -> i32 {
     unsafe { xm1_loading_request_sync(kind, deadline, result.as_mut_ptr()) }
 }
 
+/// The caller's own timeout, converted once to an absolute deadline on the
+/// configured clock; the caller passes the result unchanged to its request.
 #[no_mangle]
-pub unsafe extern "C" fn xm1_loading_absolute_deadline(kind: u32, result: *mut u64) -> i32 {
-    let Some(kind) = CommandKind::parse(kind) else { return -30; };
+pub unsafe extern "C" fn xm1_loading_deadline_after_ms(timeout_milliseconds: u32, result: *mut u64) -> i32 {
+    let Some(timeout) = Milliseconds::new(timeout_milliseconds) else { return -30; };
     if result.is_null() || (result as usize) & (core::mem::align_of::<u64>() - 1) != 0 { return -30; }
-    match configured_deadline(kind) {
+    match deadline_after(timeout) {
         Ok(deadline) => { unsafe { result.write(deadline.instant().count()); } 0 }
         Err(error) => external_status(error),
     }

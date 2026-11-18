@@ -4,6 +4,7 @@ pub mod client;
 pub mod protocol;
 pub mod receiver;
 pub mod sender;
+pub mod timeout;
 #[cfg(target_arch = "arm")]
 mod producer;
 #[cfg(target_arch = "arm")]

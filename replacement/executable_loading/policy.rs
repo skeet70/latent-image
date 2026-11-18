@@ -1,39 +1,44 @@
 #![no_std]
 
-//! Explicit qualification-only loading policy. A composition links exactly one
-//! variant; the library itself has no duration, default or cleanup budget.
+//! The schema-2 loading configuration a composition links. Exactly one
+//! variant is linked; the loader library has no timeout or drain default.
+//!
+//! Timeout: the stock-wrapper callers are Root startup, whose caller policy is
+//! `STARTUP_CLASS_HANG_BOUND`. Only the retention control links an explicit
+//! qualification timeout (`XM1_LOADING_TEST_TIMEOUT_MS`) chosen so the false
+//! drain leaf expires within a bounded run.
+//! Drain: every variant is a qualification choice; no physical drain exists.
 
 extern crate xm1_executable_loading;
 
-use core::{mem::MaybeUninit, sync::atomic::{AtomicU32, Ordering}};
-use xm1_executable_loading::native::{self, LoadingConfiguration};
+use core::mem::MaybeUninit;
+use xm1_executable_loading::native::LoadingConfiguration;
+#[cfg(not(loading_qualification_retention))]
+use xm1_executable_loading::timeout::STARTUP_CLASS_HANG_BOUND;
 
 static POLICY: u32 = 0;
 
-/// Number of absolute deadlines this policy formed; one per request.
-#[no_mangle]
-pub static XM1_LOADING_DEADLINE_CALLS: AtomicU32 = AtomicU32::new(0);
+#[cfg(not(loading_qualification_retention))]
+const LEGACY_TIMEOUT_MILLISECONDS: u32 = STARTUP_CLASS_HANG_BOUND.get();
 
-fn policy_ticks() -> Option<u64> {
-    let mut value = 0u64;
-    let bytes = env!("XM1_LOADING_POLICY_TICKS").as_bytes();
-    if bytes.is_empty() { return None; }
-    for byte in bytes {
-        if !byte.is_ascii_digit() { return None; }
-        value = value.checked_mul(10)?.checked_add(u64::from(*byte - b'0'))?;
+#[cfg(loading_qualification_retention)]
+const LEGACY_TIMEOUT_MILLISECONDS: u32 = {
+    let bytes = env!("XM1_LOADING_TEST_TIMEOUT_MS").as_bytes();
+    let mut value = 0u32;
+    let mut index = 0;
+    assert!(!bytes.is_empty(), "test timeout is required");
+    while index < bytes.len() {
+        assert!(bytes[index].is_ascii_digit(), "test timeout is decimal milliseconds");
+        value = value * 10 + (bytes[index] - b'0') as u32;
+        index += 1;
     }
-    if value == 0 { None } else { Some(value) }
-}
+    assert!(value != 0, "test timeout is nonzero");
+    value
+};
 
-unsafe extern "C" fn deadline(context: *mut (), _: u32, result: *mut u64) -> i32 {
-    XM1_LOADING_DEADLINE_CALLS.fetch_add(1, Ordering::Relaxed);
-    if context != core::ptr::addr_of!(POLICY).cast_mut().cast() || result.is_null() { return -30; }
-    let Some(ticks) = policy_ticks() else { return -30; };
-    let Some(absolute) = native::current_count().checked_add(ticks) else { return -30; };
-    if absolute == 0 { return -30; }
-    unsafe { result.write(absolute); }
-    0
-}
+/// The linked stock-wrapper timeout, exported so artifact checks can bind it.
+#[no_mangle]
+pub static XM1_LOADING_LEGACY_TIMEOUT_MS: u32 = LEGACY_TIMEOUT_MILLISECONDS;
 
 #[cfg(any(loading_qualification_external, loading_qualification_retention))]
 unsafe extern "C" fn quiescent(_: *mut ()) -> u32 {
@@ -45,7 +50,7 @@ unsafe extern "C" fn quiescent(_: *mut ()) -> u32 {
 
 static mut CONFIGURATION: MaybeUninit<LoadingConfiguration> = MaybeUninit::uninit();
 
-/// The schema-1 configuration startup obtains before constructing task60.
+/// The configuration startup obtains before constructing task60.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_loading_configuration() -> *const LoadingConfiguration {
     let context = core::ptr::addr_of!(POLICY).cast_mut().cast();
@@ -56,9 +61,8 @@ pub unsafe extern "C" fn xm1_loading_configuration() -> *const LoadingConfigurat
     let slot = &raw mut CONFIGURATION;
     unsafe {
         (*slot).write(LoadingConfiguration {
-            version: 1,
-            deadline_context: context,
-            deadline: Some(deadline),
+            version: 2,
+            legacy_timeout_milliseconds: core::ptr::read_volatile(&XM1_LOADING_LEGACY_TIMEOUT_MS),
             drain_kind,
             quiescence_context: context,
             quiescence,

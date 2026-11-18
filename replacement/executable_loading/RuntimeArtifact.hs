@@ -11,7 +11,7 @@ import Data.Bits ((.&.), (.|.), complement)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (sort)
-import Data.Word (Word32, Word64)
+import Data.Word (Word32)
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
@@ -97,9 +97,9 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    ["contract", decoder, sourcePath, stagingPath, imagePath, bodyPath, symbolsPath, rowsPath, candidatePath, scope, ticksText, output] -> do
-      ticks <- maybe (H.failH "policy ticks are not a finite Word64") pure (readMaybe ticksText :: Maybe Word64)
-      H.ensure (ticks /= 0) "policy ticks must be nonzero"
+    ["contract", decoder, sourcePath, stagingPath, imagePath, bodyPath, symbolsPath, rowsPath, candidatePath, scope, timeoutText, output] -> do
+      timeout <- maybe (H.failH "stock-wrapper timeout is not a Word32 millisecond count") pure (readMaybe timeoutText :: Maybe Word32)
+      H.ensure (timeout /= 0) "stock-wrapper timeout must be nonzero"
       H.ensure (scope `elem` ["fujimod-3d90035d", "synthetic-retention-control"]) "unknown qualification policy scope"
       source <- H.readRegular (64 * 1024 * 1024) sourcePath
       H.ensure (identity source == canonicalDat) "canonical DAT differs"
@@ -109,7 +109,10 @@ main = do
       image <- H.readRegular 0x400000 imagePath
       H.ensure (identity image == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") "canonical image4 differs"
       (body, symbols, bssStart, bssEnd) <- linked bodyPath symbolsPath
-      H.ensure (C.pack ticksText `B.isInfixOf` body) "declared policy ticks are not the linked policy"
+      timeoutSymbol <- symbol symbols "XM1_LOADING_LEGACY_TIMEOUT_MS"
+      let timeoutOffset = toInteger (F.symbolAddress timeoutSymbol) - toInteger (imageBase + headerBytes)
+      H.ensure (F.symbolSize timeoutSymbol == 4 && timeoutOffset >= 0 && timeoutOffset + 4 <= toInteger (B.length body)
+        && U.word32At body (fromInteger timeoutOffset) == timeout) "declared stock-wrapper timeout is not the linked configuration"
       rows <- readRows rowsPath
       let word address = U.word32At image (fromIntegral (address - 0x61c400))
           image4Rows = [(address, old, new) | Publication Image4 address old new <- rows]
@@ -161,7 +164,7 @@ main = do
         , "bss" .= [bssStart, bssEnd]
         , "entries" .= exports
         , "publications" .= rowsValue (reservationPublications ++ rows)
-        , "deadline_policy" .= object ["scope" .= scope, "ticks" .= ticks, "formed_once_per_request" .= True, "cleanup_budget" .= (0 :: Int)]
+        , "deadline_policy" .= object ["scope" .= scope, "timeout_ms" .= timeout, "counts_per_millisecond" .= (3000 :: Int), "timer_contract" .= ("reports/xm1-timer-interrupt-laws.md#1" :: String), "formed_once_per_request" .= True, "cleanup_budget" .= (0 :: Int)]
         , "drain_scope" .= if scope == "fujimod-3d90035d" then ("FujiMod-3d90035d-synchronous-copy-only" :: String) else "synthetic-external-quiescence-control"
         ]))
-    _ -> H.failH "usage: runtime-artifact contract FFLZD CANONICAL_DAT STAGING_DAT CANONICAL_IMAGE4 FIXED_BODY SYMBOLS PUBLICATIONS_JSON CANDIDATE SCOPE TICKS OUTPUT"
+    _ -> H.failH "usage: runtime-artifact contract FFLZD CANONICAL_DAT STAGING_DAT CANONICAL_IMAGE4 FIXED_BODY SYMBOLS PUBLICATIONS_JSON CANDIDATE SCOPE TIMEOUT_MS OUTPUT"

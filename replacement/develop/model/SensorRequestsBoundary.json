@@ -5,7 +5,7 @@
   "loadingOwnership": {
     "owner": "executable_loading",
     "command": "Initialize (0x4c06)",
-    "client": "xm1_executable_loading::client::configured_deadline followed by request_sync with the same absolute Deadline",
+    "client": "xm1_executable_loading::client::deadline_after(LOADING_INITIALIZE_TIMEOUT) followed by request_sync with the same absolute Deadline",
     "retiredDevelopPublications": ["0x73b238", "0x73aca4", "0x73b728"],
     "failurePropagation": "profile_geometry and prepare_processing return u32 success (1) or failure (0). The sole stock callsites are e57990 and e647b8. Their owned callers consume the result. Failed loading leaves the profile pointer zero, preserves feature0x20 and returns process_planes failure before sensor initialization, configuration or start.",
     "candidateFailureScenarios": "SensorRequestsScenarios.sensorLoadingFailureScenarios requires a fresh unconfigured loading owner."

@@ -1,6 +1,7 @@
 use core::num::NonZeroI32;
 use crate::{Completion, CompletionOutcome, Retention};
 use crate::protocol::{CommandKind, ProtocolError, RequestId};
+use crate::timeout::Milliseconds;
 use crate::nand::dma_read::{AdmissionError, BlockCount, ByteCount, CleanupError, Deadline, Failure, Instant, LowerStatus, Phase, PrimaryError, ReadReport};
 
 #[repr(C)]
@@ -36,7 +37,7 @@ pub enum ClientError {
 }
 
 unsafe extern "C" {
-    fn xm1_loading_absolute_deadline(kind: u32, result: *mut u64) -> i32;
+    fn xm1_loading_deadline_after_ms(timeout_milliseconds: u32, result: *mut u64) -> i32;
     fn xm1_loading_request_sync(kind: u32, deadline: u64, result: *mut CompletionWords) -> i32;
 }
 
@@ -49,9 +50,11 @@ fn owner_status(code: i32) -> ClientError {
     }
 }
 
-pub fn configured_deadline(kind: CommandKind) -> Result<Deadline, ClientError> {
+/// Forms the caller's own absolute deadline `timeout` from now through the
+/// timer contract (`crate::timeout`). Pass the result unchanged to the request.
+pub fn deadline_after(timeout: Milliseconds) -> Result<Deadline, ClientError> {
     let mut count = 0u64;
-    let status = unsafe { xm1_loading_absolute_deadline(kind as u32, &mut count) };
+    let status = unsafe { xm1_loading_deadline_after_ms(timeout.get(), &mut count) };
     if status != 0 { return Err(owner_status(status)); }
     Deadline::new(Instant::new(count)).ok_or(ClientError::Protocol(ProtocolError::NonFiniteDeadline))
 }

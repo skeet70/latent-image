@@ -380,3 +380,14 @@ fn actual_sender_receiver_dma_owner_skips_bad_block_before_publication() {
     assert!(transport.sink.events[0].1.completed_latch);
     assert_eq!(transport.capacity, Some((QUEUE_ID, QUEUE_MESSAGES, QUEUE_MESSAGE_BYTES)));
 }
+
+#[test]
+fn caller_millisecond_timeout_converts_through_the_timer_contract() {
+    use crate::timeout::{deadline_after, Milliseconds, STARTUP_CLASS_HANG_BOUND};
+    // 30 s is 3000 nominal 10 ms kernel ticks of 30000 counts each.
+    let deadline = deadline_after(Instant::new(1_234), STARTUP_CLASS_HANG_BOUND).unwrap();
+    assert_eq!(deadline.instant().count(), 1_234 + 3_000 * 30_000);
+    assert_eq!(deadline_after(Instant::new(0), Milliseconds::new(1).unwrap()).unwrap().instant().count(), 3_000);
+    assert!(deadline_after(Instant::new(u64::MAX - 2_999), Milliseconds::new(1).unwrap()).is_none());
+    assert!(Milliseconds::new(0).is_none());
+}

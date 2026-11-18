@@ -23,7 +23,7 @@ S=$B/replacement/saclac
   --expect-slot-sha256 b943e4e7e666bc5c17a87e1aab76ca0811171ed00de5b4d7350857f9aa832dce
 
 stage() {
-  local policy=$1 scope=$2 ticks=$3 out=$XM1_RUN_WORK/$1 image=$S/saclac-image-loading-$1
+  local policy=$1 scope=$2 timeout_ms=$3 out=$XM1_RUN_WORK/$1 image=$S/saclac-image-loading-$1
   mkdir -p "$out/artifact"
   "$S/stage-saclac" "$B/lz/lz-encode" "$B/host/firmware/rebuild-update" "$B/lz/fflzd" "$DAT" "$ID5" "$ID4" \
     "$image.elf" "$image.bin" "$image.symbols" "$image.disasm" "$image.sections" "$XM1_RUN_WORK" \
@@ -34,7 +34,7 @@ stage() {
     "$B/replacement/first_stage/first-stage-fixed-image.symbols" "$out/candidate.DAT"
   "$L/runtime-artifact" contract "$B/lz/fflzd" "$DAT" "$XM1_RUN_WORK/first-stage.DAT" "$ID4" \
     "$out/artifact/runtime.bin" "$image.symbols" "$out/publications.json" "$out/candidate.DAT" \
-    "$scope" "$ticks" "$out/artifact/runtime-contract.json"
+    "$scope" "$timeout_ms" "$out/artifact/runtime-contract.json"
   for name in saclac-contract.json publications.json candidate.DAT.json; do cp "$out/$name" "$XM1_RUN_RESULT/$policy-$name"; done
   cp "$out/artifact/runtime-contract.json" "$XM1_RUN_RESULT/$policy-runtime-contract.json"
 }
@@ -50,8 +50,9 @@ observe() {
   return "$status"
 }
 
-stage fujimod fujimod-3d90035d 4294967296
-stage retention synthetic-retention-control 65536
+# Success links the Root startup caller policy (30000 ms); retention links its explicit 22 ms test input.
+stage fujimod fujimod-3d90035d 30000
+stage retention synthetic-retention-control 22
 fail=0
 observe fujimod || fail=1
 observe retention || fail=1

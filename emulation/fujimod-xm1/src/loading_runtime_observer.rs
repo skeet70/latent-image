@@ -33,7 +33,7 @@ struct Export { kind: Entry, symbol: String, veneer: Guest, address: Guest, byte
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Publication { address: Guest, old: u32, new: u32 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct DeadlinePolicy { scope: String, ticks: u64, formed_once_per_request: bool, cleanup_budget: u32 }
+struct DeadlinePolicy { scope: String, timeout_ms: u32, counts_per_millisecond: u64, timer_contract: String, formed_once_per_request: bool, cleanup_budget: u32 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Contract {
     schema: u32, firmware_sha256: Digest, staging_dat_sha256: Digest, candidate_dat_sha256: Digest, candidate_image4_sha256: Digest,
@@ -165,7 +165,8 @@ fn drive() -> Result<(), String> {
     require(contract.schema == 1 && contract.firmware_sha256.is(SOURCE_UPDATE), "runtime source contract differs")?;
     require(run_id.sha256.is(RUN_SHA256) && rom_id.sha256.is(ROM_SHA256) && update_id.sha256 == contract.candidate_dat_sha256, "runtime input identity differs")?;
     require(body_id.sha256 == contract.body_sha256 && symbol_id.sha256 == contract.symbols_sha256 && body_bytes.len() == contract.body_bytes as usize, "runtime body identity differs")?;
-    require(contract.deadline_policy.formed_once_per_request && contract.deadline_policy.cleanup_budget == 0 && contract.deadline_policy.ticks != 0, "runtime deadline contract differs")?;
+    require(contract.deadline_policy.formed_once_per_request && contract.deadline_policy.cleanup_budget == 0 && contract.deadline_policy.timeout_ms != 0
+        && contract.deadline_policy.counts_per_millisecond == 3000, "runtime deadline contract differs")?;
     require(contract.body_start.0 % 4 == 0 && contract.bss[0].0 >= contract.body_start.0 + contract.body_bytes && contract.bss[1].0 >= contract.bss[0].0 && contract.bss[1].0 <= 0xbf1a00, "bank fixed composition differs")?;
     let symbols = symbols(&symbol_bytes)?;
     let expected_entries = [(Entry::LoaderInit, "xm1_loading_startup", 0x73ac74), (Entry::LoaderRequest, "xm1_loading_legacy_request", 0x73ac94),
@@ -272,7 +273,8 @@ fn drive() -> Result<(), String> {
                     require(payload[1] == kind, "owned task60 message kind differs")?;
                     let record = words(&machine, envelopes_address + kind * 24, 6)?;
                     seen_requests.insert(kind);
-                    Some([message, payload, record].concat())
+                    let tick = words(&machine, 0x400c0800, 1)?;
+                    Some([message, payload, record, tick].concat())
                 } else if pc == Guest(0x725318) {
                     let message = words(&machine, regs.r[1], 3)?;
                     require(regs.r[0] == 60 && regs.r[2] == u32::MAX && message[1] == 8 && message[2] != 0, "owned task60 receive buffer differs")?;
@@ -336,10 +338,14 @@ fn drive() -> Result<(), String> {
     require(!sends.is_empty() && sends.len() == receives.len(), "owned task60 send/receive count differs")?;
     for event in sends {
         let envelope = event.envelope.as_ref().ok_or("owned task60 send envelope absent")?;
-        // [header, length 8, data, id, kind, version, id, deadline lo, deadline hi, callback, argument]
-        require(envelope.len() == 11 && envelope[1] == 8 && envelope[5] == 1 && envelope[6] == envelope[3] && envelope[3] != 0
-            && (u64::from(envelope[7]) | (u64::from(envelope[8]) << 32)) != 0,
+        // [header, length 8, data, id, kind, version, id, deadline lo, deadline hi, callback, argument, tick cell]
+        require(envelope.len() == 12 && envelope[1] == 8 && envelope[5] == 1 && envelope[6] == envelope[3] && envelope[3] != 0,
             "owned task60 message or envelope record differs")?;
+        // The deadline was formed from now = tick * 30000 + sub-tick at most one tick before this send.
+        let deadline = u64::from(envelope[7]) | (u64::from(envelope[8]) << 32);
+        let timeout = u64::from(contract.deadline_policy.timeout_ms) * contract.deadline_policy.counts_per_millisecond;
+        let remaining = deadline.checked_sub(u64::from(envelope[11]) * 30_000).ok_or("envelope deadline precedes its send tick")?;
+        require(remaining + 30_000 > timeout && remaining < timeout + 30_000, "envelope deadline is not the configured millisecond timeout")?;
     }
     let deadline_calls = words(&machine, deadline_calls_address, 1)?[0];
     require(deadline_calls as usize == receives.len(), "configured deadline provider was not called exactly once per posted request")?;
