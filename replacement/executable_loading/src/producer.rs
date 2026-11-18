@@ -2,15 +2,19 @@ use core::{ptr::NonNull, slice};
 
 use crate::{LoadedProof, Producer, ProducerCompletion, Retention};
 use crate::protocol::{CommandKind, Request};
-use xm1_application_nand::{PhysicalBlock, BLOCK_BYTES};
-use xm1_application_nand::dma_native::{
+use crate::nand::{PhysicalBlock, BLOCK_BYTES};
+use crate::nand::dma_native::{
     ClockBinding, DrainContract, KernelLeafContract, NandReadPorts, PrefixContext, ProgressSink,
 };
-use xm1_application_nand::dma_read::{
+use crate::nand::dma_read::{
     AdmissionError, BlockCount, ByteCount, CleanupError, DmaDestination, DmaReadOwner, Failure,
     LowerStatus, Phase, PrimaryError, ReadOutcome, ReadPlan, ReadReport, SkipBudget,
 };
 
+/// Segment-table ids the stock producers pass to `0x657114`: image5 producer
+/// `0x6a96c0` uses 5, plain producer `0x6a9844` uses 6.
+const SEGMENT_IMAGE5: u32 = 5;
+const SEGMENT_PLAIN: u32 = 6;
 const IMAGE5_STAGING: u32 = 0x43e4_0000;
 const IMAGE5_STAGING_BYTES: usize = 0x2e_0000;
 const IMAGE5_DESTINATION: u32 = 0x00bf_1a00;
@@ -39,7 +43,7 @@ struct Segment {
 struct Extents { entries: u32, destination: u32, bytes: u32 }
 
 extern "C" {
-    fn xm1_loading_segment(kind: u32) -> *const Segment;
+    fn xm1_loading_segment(id: u32) -> *const Segment;
     fn xm1_loading_extents() -> *const Extents;
     fn xm1_loading_mode() -> u32;
     fn xm1_loading_plain_progress(bytes: u32);
@@ -329,7 +333,7 @@ impl Producer for NativeProducer {
     fn execute(&mut self, request: Request) -> ProducerCompletion {
         match request.kind {
             CommandKind::Plain => {
-                let segment = unsafe { xm1_loading_segment(CommandKind::Plain as u32).as_ref() };
+                let segment = unsafe { xm1_loading_segment(SEGMENT_PLAIN).as_ref() };
                 let extents = unsafe { xm1_loading_extents().as_ref() };
                 match (segment, extents) {
                     (Some(segment), Some(extents)) if unsafe { xm1_loading_mode() } == 0 => self.plain_read(request, segment, extents),
@@ -337,7 +341,7 @@ impl Producer for NativeProducer {
                     _ => Self::failed(PrimaryError::Admission(AdmissionError::MissingSegment), Self::report_zero(), Retention::Released),
                 }
             }
-            CommandKind::Image5 => match unsafe { xm1_loading_segment(CommandKind::Image5 as u32).as_ref() } {
+            CommandKind::Image5 => match unsafe { xm1_loading_segment(SEGMENT_IMAGE5).as_ref() } {
                 Some(segment) => self.image5(request, segment),
                 None => Self::failed(PrimaryError::Admission(AdmissionError::MissingSegment), Self::report_zero(), Retention::Released),
             },

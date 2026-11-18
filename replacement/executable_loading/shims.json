@@ -14,10 +14,10 @@
       "evidence": [{
         "kind": "export",
         "symbols": ["xm1_loading_configuration", "xm1_loading_startup", "xm1_loading_ready", "xm1_loading_legacy_request", "xm1_loading_legacy_cancel", "xm1_loading_configure", "xm1_loading_absolute_deadline", "xm1_loading_initialize", "xm1_loading_request", "xm1_loading_request_sync", "xm1_loading_cancel", "xm1_loading_wait_channel", "xm1_loading_observe_completion"],
-        "contract": "replacement/executable_loading/RuntimeArtifact.hs",
-        "requirement": "The startup/request/cancel veneers at 0x73ac74/0x73ac94/0x73aca4 select the sole owner. The composition supplies schema1 configuration; each legacy request forms one finite absolute deadline through that provider and carries it unchanged through read and cleanup. No duration, default or cleanup budget is fitted by the library. Abort argument 0x91482c remains a task argument, not policy storage."
+        "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
+        "requirement": "The Root bank publishes the startup/request/cancel veneers at 0x73ac74/0x73ac94/0x73aca4 only when it links all three owner bodies. The composition supplies one schema1 policy; each legacy request forms one finite absolute deadline through that provider and carries it unchanged through read and cleanup. No duration, default or cleanup budget is fitted by the library. Abort argument 0x91482c remains a task argument, not policy storage."
       }],
-      "predicates": {"caller_closure": "true", "same_image_comparison": "unestablished", "direct_owned_api": "true"}
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "true"}
     },
     {
       "id": "executable-loading-kernel",
@@ -30,7 +30,7 @@
       "evidence": [{
         "kind": "retained-import",
         "symbols": ["xm1_loading_create_channel", "xm1_loading_create_task", "xm1_loading_send_message", "xm1_loading_receive_message", "xm1_loading_current_task", "xm1_loading_wait_reserved", "xm1_loading_signal_reserved"],
-        "contract": "replacement/executable_loading/runtime.ld",
+        "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
         "requirement": "Queue60 retains the source 48-byte capacity and 16-message depth. The 24-byte envelope carries the request's original absolute deadline. The receiver supplies its own 24-byte payload buffer, and task startup preserves the nine reserved completion semaphores and task-id publication."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
@@ -39,14 +39,14 @@
       "id": "executable-loading-storage",
       "shim": "NAND, decoder, segment, extent, progress and delegated-command leaves",
       "kind": "trampoline into retained stock",
-      "other_side": "retained X-M1 services and the owned image5 decoder component",
+      "other_side": "retained X-M1 services; the owned image5 decoder and NAND owner are called directly in the same bank",
       "owned": "partly",
       "removal": "the corresponding device and delegated command units are owned",
       "state": "required",
       "evidence": [{
         "kind": "retained-import",
-        "symbols": ["xm1_loading_segment", "xm1_loading_extents", "xm1_loading_mode", "xm1_loading_plain_progress", "xm1_loading_take", "xm1_loading_give", "xm1_loading_delay", "xm1_loading_cache", "xm1_decoder_init", "xm1_decoder_feed", "xm1_decoder_finish", "xm1_loading_action1", "xm1_loading_action2", "xm1_loading_section3", "xm1_loading_selected", "xm1_loading_region", "xm1_loading_initialize_storage", "xm1_loading_register_completion", "xm1_loading_auxiliary"],
-        "contract": "replacement/executable_loading/runtime.ld",
+        "symbols": ["xm1_loading_segment", "xm1_loading_extents", "xm1_loading_mode", "xm1_loading_plain_progress", "xm1_loading_take", "xm1_loading_give", "xm1_loading_delay", "xm1_loading_cache", "xm1_lower_read_clean_invalidate", "xm1_lower_read_clock_mask", "xm1_lower_read_clock_restore", "xm1_loading_action1", "xm1_loading_action2", "xm1_loading_section3", "xm1_loading_selected", "xm1_loading_region", "xm1_loading_initialize_storage", "xm1_loading_register_completion", "xm1_loading_auxiliary"],
+        "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
         "requirement": "The DMA unit is fixed at 0x20000 bytes. Plain backing is 0x360000 bytes and image5 staging is 0x2e0000 bytes; 0x100000 remains a controller budget, not a lease extent. The plain progress reporter is the source-inspected void ABI at 0x73b924."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}

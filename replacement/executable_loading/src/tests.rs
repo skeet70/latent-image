@@ -69,8 +69,8 @@ impl<P: Producer> Transport<P> {
     }
 }
 impl<P: Producer> SenderKernel for Transport<P> {
-    fn initialize_queue(&mut self, queue: u32, capacity_bytes: u32, depth: u32) -> Result<(), ProtocolError> {
-        self.capacity = Some((queue, capacity_bytes, depth)); Ok(())
+    fn initialize_queue(&mut self, queue: u32, messages: u32, message_bytes: u32) -> Result<(), ProtocolError> {
+        self.capacity = Some((queue, messages, message_bytes)); Ok(())
     }
     fn start_receiver(&mut self) -> Result<(), ProtocolError> { Ok(()) }
     fn post(&mut self, _: u32, operation: u16, envelope: &[u8; ENVELOPE_BYTES], deadline: xm1_application_nand::dma_read::Deadline) -> Result<(), ProtocolError> {
@@ -378,5 +378,5 @@ fn actual_sender_receiver_dma_owner_skips_bad_block_before_publication() {
         }),
     );
     assert!(transport.sink.events[0].1.completed_latch);
-    assert_eq!(transport.capacity, Some((QUEUE_ID, QUEUE_CAPACITY_BYTES, QUEUE_DEPTH)));
+    assert_eq!(transport.capacity, Some((QUEUE_ID, QUEUE_MESSAGES, QUEUE_MESSAGE_BYTES)));
 }

@@ -7,6 +7,12 @@ pub extern crate xm1_rtos_own_first_component;
 pub extern crate xm1_rtos_global_lock_component;
 #[cfg(target_arch = "arm")]
 extern crate xm1_image5_decoder;
+// The task60 loading owner and one explicit policy; linked only by the
+// `saclac-image-loading-*` bank compositions.
+#[cfg(all(target_arch = "arm", loading_owner))]
+extern crate xm1_executable_loading;
+#[cfg(all(target_arch = "arm", loading_owner))]
+extern crate xm1_loading_policy;
 
 pub mod engine;
 pub mod driver;

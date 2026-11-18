@@ -1,5 +1,5 @@
 use core::num::NonZeroU32;
-use xm1_application_nand::dma_read::{Deadline, Instant};
+use crate::nand::dma_read::{Deadline, Instant};
 
 pub const COMMAND_COUNT: usize = 9;
 pub const ENVELOPE_BYTES: usize = 24;

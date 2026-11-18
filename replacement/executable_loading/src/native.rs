@@ -1,8 +1,8 @@
-use core::{mem::MaybeUninit, ptr::{self, NonNull}, slice, sync::atomic::{AtomicBool, compiler_fence, Ordering}};
+use core::{mem::MaybeUninit, ptr::{self, NonNull}, slice, sync::atomic::{AtomicBool, AtomicU32, AtomicU8, fence, Ordering}};
 
 use crate::{
     CallbackResult, Clock, Completion, Publication, ReceiverKernel, SenderKernel,
-    QUEUE_CAPACITY_BYTES, QUEUE_DEPTH, QUEUE_ID,
+    QUEUE_ID, QUEUE_MESSAGE_BYTES, QUEUE_MESSAGES,
 };
 use crate::client::CompletionWords;
 use crate::producer::NativeProducer;
@@ -12,15 +12,26 @@ use crate::protocol::{
 };
 use crate::receiver::Receiver;
 use crate::sender::Sender;
-use xm1_application_nand::dma_native::{ClockBinding, ClockSource, CounterDirection, DrainContract};
-use xm1_application_nand::dma_read::{Deadline, Instant};
+use crate::nand::dma_native::{ClockBinding, ClockSource, CounterDirection, DrainContract};
+use crate::nand::dma_read::{Deadline, Instant};
 
 const COMPLETION_LATCHES: u32 = 0x0094_4440;
 const COMPLETION_SEMAPHORES: u32 = 0x0081_7700;
 const PUBLIC_BUSY: u32 = 0x0095_7600;
 
+/// Stock `dispatch_create_channel` order: message count, then per-message bytes
+/// (8-byte header plus payload). Queue60 keeps its 0x30 x 16-byte geometry.
 #[repr(C)]
-struct ChannelConfiguration { capacity_bytes: u32, depth: u32 }
+struct ChannelConfiguration { messages: u32, message_bytes: u32 }
+
+/// Stock queue60 payload limit: 16-byte message minus the 8-byte header.
+const MESSAGE_PAYLOAD_BYTES: u32 = 8;
+
+/// Owned per-command envelope records. The queue message carries only
+/// `(request id, command kind)`; the Sender admits one outstanding request per
+/// kind, so a record is not rewritten until its completion is published.
+#[no_mangle]
+pub static mut XM1_LOADING_ENVELOPES: [[u8; ENVELOPE_BYTES]; COMMAND_COUNT] = [[0; ENVELOPE_BYTES]; COMMAND_COUNT];
 
 #[repr(C)]
 struct TaskConfiguration {
@@ -88,43 +99,46 @@ static mut SENDER: MaybeUninit<Sender> = MaybeUninit::uninit();
 static mut RECEIVER: MaybeUninit<Receiver> = MaybeUninit::uninit();
 static mut PRODUCER: MaybeUninit<NativeProducer> = MaybeUninit::uninit();
 static SENDER_READY: AtomicBool = AtomicBool::new(false);
-static SENDER_BORROWED: AtomicBool = AtomicBool::new(false);
+/// Word-sized: the guard needs LDREX/STREX, not the byte exclusives.
+static SENDER_BORROWED: AtomicU32 = AtomicU32::new(0);
 
 struct SenderGuard;
 impl SenderGuard {
     fn acquire() -> Result<Self, i32> {
-        SENDER_BORROWED.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        SENDER_BORROWED.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .map(|_| Self).map_err(|_| -2)
     }
 }
 impl Drop for SenderGuard {
-    fn drop(&mut self) { SENDER_BORROWED.store(false, Ordering::Release); }
+    fn drop(&mut self) { SENDER_BORROWED.store(0, Ordering::Release); }
 }
 static mut COMPLETIONS: [MaybeUninit<Completion>; COMMAND_COUNT] =
     [const { MaybeUninit::uninit() }; COMMAND_COUNT];
-static mut COMPLETION_VALID: [u8; COMMAND_COUNT] = [0; COMMAND_COUNT];
+/// Publication flag per command; release/acquire order the completion record
+/// across the receiver task and callers on either core.
+static COMPLETION_VALID: [AtomicU8; COMMAND_COUNT] = [const { AtomicU8::new(0) }; COMMAND_COUNT];
 
 fn completion_slot(kind: CommandKind) -> *mut Completion {
     unsafe { ptr::addr_of_mut!(COMPLETIONS).cast::<MaybeUninit<Completion>>().add(kind.index()).cast() }
 }
 
 fn load_completion(kind: CommandKind) -> Option<Completion> {
-    compiler_fence(Ordering::SeqCst);
-    let valid = unsafe { ptr::read_volatile(ptr::addr_of!(COMPLETION_VALID).cast::<u8>().add(kind.index())) };
-    if valid == 0 { None } else { Some(unsafe { ptr::read_volatile(completion_slot(kind)) }) }
+    if COMPLETION_VALID[kind.index()].load(Ordering::Acquire) == 0 { return None; }
+    let completion = unsafe { ptr::read_volatile(completion_slot(kind)) };
+    fence(Ordering::Acquire);
+    Some(completion)
 }
 
 fn store_completion(kind: CommandKind, completion: Option<Completion>) {
-    let valid = unsafe { ptr::addr_of_mut!(COMPLETION_VALID).cast::<u8>().add(kind.index()) };
     match completion {
-        Some(completion) => unsafe {
-            ptr::write_volatile(completion_slot(kind), completion);
-            compiler_fence(Ordering::SeqCst);
-            ptr::write_volatile(valid, 1);
-        },
-        None => unsafe { ptr::write_volatile(valid, 0); },
+        Some(completion) => {
+            COMPLETION_VALID[kind.index()].store(0, Ordering::Relaxed);
+            fence(Ordering::Release);
+            unsafe { ptr::write_volatile(completion_slot(kind), completion); }
+            COMPLETION_VALID[kind.index()].store(1, Ordering::Release);
+        }
+        None => COMPLETION_VALID[kind.index()].store(0, Ordering::Release),
     }
-    compiler_fence(Ordering::SeqCst);
 }
 
 fn configured() -> Option<(DeadlineProvider, DrainContract)> {
@@ -180,11 +194,13 @@ fn configured_deadline(kind: CommandKind) -> Result<Deadline, ProtocolError> {
 }
 
 impl SenderKernel for NativeKernel {
-    fn initialize_queue(&mut self, queue: u32, capacity_bytes: u32, depth: u32) -> Result<(), ProtocolError> {
-        if queue != QUEUE_ID || capacity_bytes != QUEUE_CAPACITY_BYTES || depth != QUEUE_DEPTH {
+    fn initialize_queue(&mut self, queue: u32, messages: u32, message_bytes: u32) -> Result<(), ProtocolError> {
+        if queue != QUEUE_ID || messages != QUEUE_MESSAGES || message_bytes != QUEUE_MESSAGE_BYTES
+            || message_bytes != 8 + MESSAGE_PAYLOAD_BYTES
+        {
             return Err(ProtocolError::InvalidRequest);
         }
-        let configuration = ChannelConfiguration { capacity_bytes, depth };
+        let configuration = ChannelConfiguration { messages, message_bytes };
         status(unsafe { xm1_loading_create_channel(queue, &configuration) })
     }
 
@@ -203,12 +219,19 @@ impl SenderKernel for NativeKernel {
 
     fn post(&mut self, queue: u32, operation: u16, envelope: &[u8; ENVELOPE_BYTES], deadline: Deadline) -> Result<(), ProtocolError> {
         if clock().now() >= deadline.instant() { return Err(ProtocolError::Expired); }
+        let kind = CommandKind::from_operation(operation).ok_or(ProtocolError::InvalidCommand)?;
+        let id = u32::from_le_bytes([envelope[4], envelope[5], envelope[6], envelope[7]]);
+        unsafe { ptr::addr_of_mut!(XM1_LOADING_ENVELOPES).cast::<[u8; ENVELOPE_BYTES]>().add(kind.index()).write_volatile(*envelope); }
+        fence(Ordering::Release);
+        let mut payload = [0u8; MESSAGE_PAYLOAD_BYTES as usize];
+        payload[..4].copy_from_slice(&id.to_le_bytes());
+        payload[4..].copy_from_slice(&(kind as u32).to_le_bytes());
         let message = Message {
             operation,
             sender: unsafe { xm1_loading_current_task() } as u8,
             destination: queue as u8,
-            length: ENVELOPE_BYTES as u32,
-            data: envelope.as_ptr().cast_mut(),
+            length: MESSAGE_PAYLOAD_BYTES,
+            data: payload.as_mut_ptr(),
         };
         status(unsafe { xm1_loading_send_message(queue, &message) })
     }
@@ -281,10 +304,25 @@ pub unsafe extern "C" fn xm1_loading_startup(argument: u32) -> i32 {
     unsafe { xm1_loading_initialize(argument) }
 }
 
+fn latched(kind: CommandKind) -> bool {
+    load(COMPLETION_LATCHES + kind.index() as u32 * 4) == 1
+}
+
+/// Stock `flashloader_request`: a published command-completion latch answers
+/// at once with success and posts nothing; otherwise one new envelope is formed
+/// with one configured absolute deadline.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_loading_legacy_request(kind: u32, callback: u32, argument: u32) -> i32 {
     if !ready() { return -1; }
     let Some(kind_value) = CommandKind::parse(kind) else { return -30; };
+    let Some(callback_value) = Callback::parse(callback) else { return -30; };
+    if latched(kind_value) {
+        if let Callback::Address(address) = callback_value {
+            let callback: unsafe extern "C" fn(u32, u32) = unsafe { core::mem::transmute(address.word() as usize) };
+            unsafe { callback(argument, 0); }
+        }
+        return 0;
+    }
     let deadline = match configured_deadline(kind_value) {
         Ok(deadline) => deadline,
         Err(error) => return external_status(error),
@@ -296,6 +334,7 @@ pub unsafe extern "C" fn xm1_loading_legacy_request(kind: u32, callback: u32, ar
 pub unsafe extern "C" fn xm1_loading_legacy_cancel(kind: u32) -> i32 {
     if !ready() { return -1; }
     let Some(kind_value) = CommandKind::parse(kind) else { return -30; };
+    if latched(kind_value) { return 0; }
     let deadline = match configured_deadline(kind_value) {
         Ok(deadline) => deadline,
         Err(error) => return external_status(error),
@@ -435,20 +474,26 @@ pub unsafe extern "C" fn xm1_loading_wait_channel(kind: u32, result: *mut Comple
 }
 
 fn receive_once() -> Result<(), ProtocolError> {
-    let mut envelope = [0u8; ENVELOPE_BYTES];
+    let mut payload = [0u8; MESSAGE_PAYLOAD_BYTES as usize];
     let mut message = Message {
         operation: 0,
         sender: 0,
         destination: 0,
-        length: ENVELOPE_BYTES as u32,
-        data: envelope.as_mut_ptr(),
+        length: MESSAGE_PAYLOAD_BYTES,
+        data: payload.as_mut_ptr(),
     };
     status(unsafe { xm1_loading_receive_message(QUEUE_ID, &mut message, u32::MAX) })?;
-    if message.data != envelope.as_mut_ptr() || message.length != ENVELOPE_BYTES as u32 {
-        store(PUBLIC_BUSY, 1);
+    store(PUBLIC_BUSY, 1);
+    let kind = CommandKind::from_operation(message.operation).ok_or(ProtocolError::InvalidCommand)?;
+    if message.data != payload.as_mut_ptr() || message.length != MESSAGE_PAYLOAD_BYTES
+        || u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]) != kind as u32
+    {
         return Err(ProtocolError::EnvelopeSize);
     }
-    let bytes = unsafe { slice::from_raw_parts(message.data, message.length as usize) };
+    fence(Ordering::Acquire);
+    let envelope = unsafe { ptr::addr_of!(XM1_LOADING_ENVELOPES).cast::<[u8; ENVELOPE_BYTES]>().add(kind.index()).read_volatile() };
+    if envelope[4..8] != payload[..4] { return Err(ProtocolError::InvalidRequest); }
+    let bytes = &envelope[..];
     store(PUBLIC_BUSY, 1);
     let producer = producer_mut();
     let receiver = receiver_mut();

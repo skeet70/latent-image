@@ -15,7 +15,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.List (isPrefixOf)
 import Data.Word (Word32)
 import Numeric (showHex)
-import Replacement.Saclac.Artifact (Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, retainedData, retainedExternals)
+import Replacement.Saclac.Artifact (Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, loadingEntries, retainedData, retainedExternals)
 import qualified Replacement.FixedImage.Layout as Fixed
 
 hexAddress :: Word32 -> String
@@ -40,10 +40,12 @@ renderLinkerScript = case (entries, extents) of
     , ""
     , "/* Generated from Replacement.Saclac.Artifact.extents. */"
     , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK XM1_SACLAC_CONSTRUCTOR_STACK xm1_saclac_create_task XM1_DECODER_STATE xm1_decoder_init xm1_decoder_feed xm1_decoder_progress xm1_decoder_complete xm1_decoder_finish)"
+    , "/* Present only when the bank links the task60 loading owner. */"
+    , "EXTERN(" ++ unwords (map snd loadingEntries) ++ ")"
     ]
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
-           any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_"]
+           any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_", "xm1_loading_", "xm1_lower_read_"]
          ]
       ++ [ "MEMORY {"
     ]

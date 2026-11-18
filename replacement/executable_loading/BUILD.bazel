@@ -35,65 +35,93 @@ xm1_rust_rlib(
     rlib_deps = {"xm1_application_nand": "//replacement/application_nand:arm"},
 )
 
+_POWER_SERVICES_SEARCH = [
+    "//replacement/settings_storage:record-store-guest-rlib",
+    "//replacement/settings_storage:property-core",
+    "//replacement/display_scanout:libdisplay_scanout_panel",
+    "//replacement/calibration_liveview:libcalibration_liveview",
+    "//replacement/callback_core:arm",
+    "//replacement/kernel:arm",
+]
+
+# The Root bank already links application_nand inside power services; this
+# variant uses that single NAND owner instead of a second copy.
+xm1_rust_rlib(
+    name = "arm-root",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    out = "arm-root/libxm1_executable_loading.rlib",
+    data = _CORE + ["src/native.rs", "src/producer.rs"],
+    rustc_flags = ["--cfg", "loading_nand_in_power_services"],
+    rlib_deps = {"xm1_power_services": "//replacement/power_lifecycle:services-arm"},
+    rlib_search_deps = _POWER_SERVICES_SEARCH,
+)
+
+# Explicit qualification policies. Each composition links exactly one; the
+# owner library has no production duration or drain default.
+_OWNERS = {
+    "native": (":arm", ["//replacement/application_nand:arm"]),
+    "root": (":arm-root", ["//replacement/power_lifecycle:services-arm"] + _POWER_SERVICES_SEARCH),
+}
+
+[
+    xm1_rust_rlib(
+        name = "policy-%s-%s" % (variant, composition),
+        src = "policy.rs",
+        crate_name = "xm1_loading_policy",
+        out = "policy-%s-%s/libxm1_loading_policy.rlib" % (variant, composition),
+        rlib_deps = {"xm1_executable_loading": _OWNERS[composition][0]},
+        rlib_search_deps = _OWNERS[composition][1],
+        rustc_flags = ["--cfg", "loading_qualification_" + variant],
+        env = {"XM1_LOADING_POLICY_TICKS": ticks},
+        testonly = True,
+    )
+    for variant, composition, ticks in [
+        ("fujimod", "root", "4294967296"),
+        ("retention", "root", "65536"),
+        ("external", "native", "1048576"),
+        ("retention", "native", "4096"),
+    ]
+]
+
+# Native-qualification harness only; installed composition is the Root bank
+# (`//replacement/saclac:saclac-image-loading-*`).
 genrule(
     name = "runtime-fixed-script",
     srcs = ["runtime.ld"],
     outs = ["runtime-fixed.ld"],
     tools = ["//replacement/image5_load:image5-decoder-artifact"],
     cmd = "$(location //replacement/image5_load:image5-decoder-artifact) script $(location runtime.ld) > $@",
-)
-
-_RUNTIME_RLIBS = {
-    "xm1_application_nand": "//replacement/application_nand:arm",
-    "xm1_executable_loading": ":arm",
-    "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
-}
-
-xm1_rust_staticlib(
-    name = "runtime-fujimod-rust",
-    src = "runtime.rs",
-    crate_name = "xm1_loading_runtime",
-    rlib_deps = _RUNTIME_RLIBS,
-    rustc_flags = ["--cfg", "loading_qualification_fujimod"],
-    env = {"XM1_LOADING_POLICY_TICKS": "4294967296"},
-    testonly = True,
-)
-
-xm1_rust_staticlib(
-    name = "runtime-native-rust",
-    src = "runtime.rs",
-    crate_name = "xm1_loading_runtime",
-    rlib_deps = _RUNTIME_RLIBS,
-    rustc_flags = ["--cfg", "loading_qualification_external"],
-    env = {"XM1_LOADING_POLICY_TICKS": "1048576"},
-    testonly = True,
-)
-
-xm1_rust_staticlib(
-    name = "runtime-retention-rust",
-    src = "runtime.rs",
-    crate_name = "xm1_loading_runtime",
-    rlib_deps = _RUNTIME_RLIBS,
-    rustc_flags = ["--cfg", "loading_qualification_retention"],
-    env = {"XM1_LOADING_POLICY_TICKS": "65536"},
     testonly = True,
 )
 
 [
+    xm1_rust_staticlib(
+        name = "runtime-%s-rust" % variant,
+        src = "runtime.rs",
+        crate_name = "xm1_loading_runtime",
+        rlib_deps = {
+            "xm1_application_nand": "//replacement/application_nand:arm",
+            "xm1_executable_loading": ":arm",
+            "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
+            "xm1_loading_policy": ":policy-%s-native" % policy,
+        },
+        testonly = True,
+    )
+    for variant, policy in [("native", "external"), ("retention", "retention")]
+]
+
+[
     xm1_rust_elf(
-        name = name,
-        rust_staticlib = rust,
+        name = "runtime-" + variant,
+        rust_staticlib = ":runtime-%s-rust" % variant,
         entry = "xm1_loading_startup",
         link_script = ":runtime-fixed-script",
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
         link_map = True,
         testonly = True,
     )
-    for name, rust in [
-        ("runtime-fujimod", ":runtime-fujimod-rust"),
-        ("runtime-native", ":runtime-native-rust"),
-        ("runtime-retention", ":runtime-retention-rust"),
-    ]
+    for variant in ["native", "retention"]
 ]
 
 haskell_binary(
@@ -121,6 +149,7 @@ haskell_binary(
     deps = [
         "//emulation:native-observation",
         "//emulation:owned-case",
+        "//host:containers",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
@@ -132,6 +161,6 @@ haskell_binary(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "RuntimeArtifact.hs", "runtime.rs"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "RuntimeArtifact.hs", "policy.rs", "runtime.rs"],
     visibility = ["//replacement/shim_check:__pkg__"],
 )

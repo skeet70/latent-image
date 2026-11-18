@@ -81,6 +81,53 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
 )
 
+# The same bank with the task60 loading owner and one explicit qualification
+# policy. There is no production loading policy; these are emulator inputs.
+[
+    xm1_rust_staticlib(
+        name = "saclac-rust-loading-" + policy,
+        src = "src/lib.rs",
+        crate_name = "xm1_saclac",
+        rustc_flags = ["-C", "jump-tables=no", "--cfg", "loading_owner"],
+        data = _SOURCES,
+        rlib_deps = dict(
+            _ARM_DEPS,
+            xm1_executable_loading = "//replacement/executable_loading:arm-root",
+            xm1_loading_policy = "//replacement/executable_loading:policy-%s-root" % policy,
+        ),
+        rlib_search_deps = _ARM_SEARCH_DEPS,
+        dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+        testonly = True,
+    )
+    for policy in ["fujimod", "retention"]
+]
+
+[
+    xm1_rust_elf(
+        name = "saclac-image-loading-" + policy,
+        rust_staticlib = ":saclac-rust-loading-" + policy,
+        asm_srcs = ["entry.S"],
+        entry = "xm1_saclac_dispatch_entry",
+        link_script = ":saclac.ld",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+        link_map = True,
+        testonly = True,
+    )
+    for policy in ["fujimod", "retention"]
+]
+
+[
+    genrule(
+        name = "saclac-image-loading-%s-sections" % policy,
+        srcs = [":saclac-image-loading-%s.elf" % policy],
+        outs = ["saclac-image-loading-%s.sections" % policy],
+        cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-loading-%s.elf) > $@" % policy,
+        tools = ["@lab_llvm//:bin/llvm-readelf"],
+        testonly = True,
+    )
+    for policy in ["fujimod", "retention"]
+]
+
 # The comparison's deliberately wrong variant: the action entry sees the table base in r3.
 xm1_rust_staticlib(
     name = "saclac-rust-wrong-r3",

@@ -1,6 +1,6 @@
 use crate::{Clock, Completion, CompletionOutcome, Producer, ProducerCompletion, Publication, ReceiverKernel, Retention};
 use crate::protocol::{ProtocolError, Request, COMMAND_COUNT};
-use xm1_application_nand::dma_read::{Failure, Phase, PrimaryError};
+use crate::nand::dma_read::{Failure, Phase, PrimaryError};
 
 pub struct Receiver { busy: bool, last_request: u32, completed: [Option<CompletionOutcome>; COMMAND_COUNT] }
 impl Receiver {

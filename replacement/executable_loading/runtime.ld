@@ -7,6 +7,7 @@ EXTERN(xm1_decoder_feed)
 EXTERN(xm1_decoder_progress)
 EXTERN(xm1_decoder_complete)
 EXTERN(xm1_decoder_finish)
+EXTERN(xm1_loading_qualification_drive)
 
 xm1_loading_create_channel = 0x724cdc;
 xm1_loading_create_task = 0x725dd8;

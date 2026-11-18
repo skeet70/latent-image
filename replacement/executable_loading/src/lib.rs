@@ -9,12 +9,20 @@ mod producer;
 #[cfg(target_arch = "arm")]
 pub mod native;
 
+/// The single NAND owner of this composition: the standalone unit, or the copy
+/// the Root bank already links inside power services.
+#[cfg(not(loading_nand_in_power_services))]
+pub use ::xm1_application_nand as nand;
+#[cfg(loading_nand_in_power_services)]
+pub use ::xm1_power_services::application_nand as nand;
+
 use protocol::{CommandKind, ProtocolError, Request, RequestId};
-use xm1_application_nand::dma_read::{Deadline, Failure, Instant, ReadReport};
+use nand::dma_read::{Deadline, Failure, Instant, ReadReport};
 
 pub const QUEUE_ID: u32 = 60;
-pub const QUEUE_CAPACITY_BYTES: u32 = 0x30;
-pub const QUEUE_DEPTH: u32 = 0x10;
+/// Stock queue60 geometry (`dispatch_create_channel`): 0x30 messages of 16 bytes.
+pub const QUEUE_MESSAGES: u32 = 0x30;
+pub const QUEUE_MESSAGE_BYTES: u32 = 0x10;
 
 pub trait Clock {
     fn now(&mut self) -> Instant;
@@ -83,7 +91,7 @@ pub trait ReceiverKernel {
 }
 
 pub trait SenderKernel {
-    fn initialize_queue(&mut self, queue: u32, capacity_bytes: u32, depth: u32) -> Result<(), ProtocolError>;
+    fn initialize_queue(&mut self, queue: u32, messages: u32, message_bytes: u32) -> Result<(), ProtocolError>;
     fn start_receiver(&mut self) -> Result<(), ProtocolError>;
     /// Queue admission is bounded by the supplied absolute deadline.
     fn post(&mut self, queue: u32, operation: u16, envelope: &[u8; protocol::ENVELOPE_BYTES], deadline: Deadline) -> Result<(), ProtocolError>;

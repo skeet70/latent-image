@@ -1,17 +1,19 @@
-use crate::{Clock, Completion, CompletionOutcome, SenderKernel, QUEUE_CAPACITY_BYTES, QUEUE_DEPTH, QUEUE_ID};
+use crate::{Clock, Completion, CompletionOutcome, SenderKernel, QUEUE_ID, QUEUE_MESSAGE_BYTES, QUEUE_MESSAGES};
+use crate::protocol::COMMAND_COUNT;
 use crate::protocol::{Callback, CallbackArgument, CommandKind, ProtocolError, Request, RequestId};
-use xm1_application_nand::dma_read::Deadline;
+use crate::nand::dma_read::Deadline;
 
 pub struct Sender {
     next_id: Option<RequestId>,
-    pending: [Option<Request>; QUEUE_DEPTH as usize],
+    /// At most one outstanding request per command kind.
+    pending: [Option<Request>; COMMAND_COUNT],
     retained: bool,
 }
 
 impl Sender {
     pub fn new<K: SenderKernel>(kernel: &mut K) -> Result<Self, ProtocolError> {
-        kernel.initialize_queue(QUEUE_ID, QUEUE_CAPACITY_BYTES, QUEUE_DEPTH)?;
-        let sender = Self { next_id: RequestId::new(1), pending: [None; QUEUE_DEPTH as usize], retained: false };
+        kernel.initialize_queue(QUEUE_ID, QUEUE_MESSAGES, QUEUE_MESSAGE_BYTES)?;
+        let sender = Self { next_id: RequestId::new(1), pending: [None; COMMAND_COUNT], retained: false };
         kernel.start_receiver()?;
         Ok(sender)
     }

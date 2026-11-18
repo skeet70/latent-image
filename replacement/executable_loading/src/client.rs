@@ -1,7 +1,7 @@
 use core::num::NonZeroI32;
 use crate::{Completion, CompletionOutcome, Retention};
 use crate::protocol::{CommandKind, ProtocolError, RequestId};
-use xm1_application_nand::dma_read::{AdmissionError, BlockCount, ByteCount, CleanupError, Deadline, Failure, Instant, LowerStatus, Phase, PrimaryError, ReadReport};
+use crate::nand::dma_read::{AdmissionError, BlockCount, ByteCount, CleanupError, Deadline, Failure, Instant, LowerStatus, Phase, PrimaryError, ReadReport};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
