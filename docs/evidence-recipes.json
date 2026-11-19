@@ -2578,6 +2578,180 @@
     }
   ]
 },
+{
+  "id": "E-GENERAL-HEAP-ABI-QUALIFICATION-150",
+  "claim": "At the retained stock ABI entries, called one at a time from a natural no-card seed (task {{seed_task}} entering the free core entry 0x89e560 with the lock free, after the menu route and one Up press), the owned general heap matches executed stock bytes at {{owned_compared}} of {{steps}} directed steps and differs only by the declared corrections at the other {{owned_corrections}}. The steps cover {{operations}} calls: zero-size, shrink, grow, same-chunk and zero resize, failed resize preserving bytes, calloc zeroing over reused memory, capacity rejection, exhaustion with {{exhaustion}} successes of 128 KiB before and after coalescence, a refused fragmented request and trim. Executed stock oversized resize leaks {{stock_leak}} recursive depth per call while owned stays balanced; stock calloc of a wrapped product returns {{stock_wrapped}} where owned returns {{owned_wrapped}}; stock trim returned {{stock_trim}}. The Rust GlobalAlloc front end, after the admitted tape, matches stock at {{front_compared}} steps with inapplicable requests {{front_inapplicable}}. Journal controls are refused on target {{owned_controls}} times for the owned ABI and {{front_controls}} for the front end; the executed traffic mutant is refused with {{mutant_error}}. Each role makes {{calls}} harness calls. The J7 canonical stack test passes {{j7_checks}} checks, pinning owned and stock heap entry demands and refused whole-task walks.",
+  "scope": "Whole general-heap artifact behind the retained A32 entries malloc 0x89cda4, free 0x89cdc4, realloc 0x89da3c, calloc 0xbf1c1c and trim 0x89e464, called under the board harness on core 0 with interrupt delivery off from one natural no-card seed per role on the current FujiMod model; uncontended single-task calls, not cross-core contention, interrupt context or silicon timing.",
+  "notes": "Allocation addresses and movement on grow are not compared. One loader word differs from the decoded loader at the seed in both roles and is bound for fetches only. Stock trim did not release backing, so the trim correction is observed only as equal zero returns. Over-alignment has no stock counterpart and is covered by the host suite. The front end has no operation for zero-size, null-free, trim or overflowing calloc. The J7 canonical log records owned/stock entry demands and that whole-task walks of all 16 published-stack tasks refuse, so per-task heap headroom is unestablished (reports/general-heap-cutover.md#stack-headroom). Natural callers of realloc, calloc and trim remain unreached.",
+  "artifacts": [
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-controls.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-mutant.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/stock.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/owned.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/mutant-owned.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/front-end.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014250Z-abi-stock/result/abi-journal.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014256Z-abi-owned/result/abi-journal.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014303Z-abi-mutant-owned/result/abi-journal.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014309Z-abi-front-end/result/abi-journal.json",
+    "private-data/scratch/HeapCoverage/runs/20261119T014311Z-j7-heap-headroom/result/j7-heap-canonical.log"
+  ],
+  "facts": [
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/stock.json",
+      "pointer": [
+        "update_sha256"
+      ]
+    },
+    {
+      "name": "seed_task",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "seeds",
+        "0",
+        "task"
+      ]
+    },
+    {
+      "name": "steps",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "steps"
+      ]
+    },
+    {
+      "name": "owned_compared",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "compared"
+      ]
+    },
+    {
+      "name": "owned_corrections",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "operations",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "operations"
+      ]
+    },
+    {
+      "name": "exhaustion",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "first_exhaustion_successes"
+      ]
+    },
+    {
+      "name": "stock_leak",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "3",
+        "stock_lock",
+        "depth_change"
+      ]
+    },
+    {
+      "name": "stock_wrapped",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "1",
+        "stock",
+        "kind"
+      ]
+    },
+    {
+      "name": "owned_wrapped",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "1",
+        "counterpart",
+        "kind"
+      ]
+    },
+    {
+      "name": "stock_trim",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "0",
+        "stock",
+        "word"
+      ]
+    },
+    {
+      "name": "front_compared",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "rust_front_end",
+        "compared"
+      ]
+    },
+    {
+      "name": "front_inapplicable",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "rust_front_end",
+        "inapplicable"
+      ]
+    },
+    {
+      "name": "owned_controls",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-controls.json",
+      "pointer": [
+        "owned_abi_refused"
+      ]
+    },
+    {
+      "name": "front_controls",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-controls.json",
+      "pointer": [
+        "rust_front_end_refused"
+      ]
+    },
+    {
+      "name": "mutant_error",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-mutant.json",
+      "pointer": [
+        "error"
+      ]
+    },
+    {
+      "name": "calls",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "calls"
+      ]
+    },
+    {
+      "name": "j7_checks",
+      "path": "private-data/scratch/HeapCoverage/runs/20261119T014311Z-j7-heap-headroom/result/j7-heap-canonical.log",
+      "operation": "decimal-between",
+      "prefix": "startup-artifact-j7-heap-canonical-tests: ",
+      "suffix": " checks passed"
+    }
+  ]
+},
   {
     "id": "E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150",
     "claim": "The exact packaged playback source/mode preparation boundary passes ({{qualified}}) {{pairs}} original/owned entry pairs and rejects {{controls}} returned entry-omission controls under historical runner {{entry_runner}}. The same runtime {{runtime}} and ELF {{elf}} pass conditional published-caller/producer qualification ({{callers_qualified}}) under literal-entry runner {{caller_runner}}: {{caller_pairs}} original/owned machine-1 action2/action3 pairs, {{caller_controls}} returned caller-omission controls and {{producer_executions}} machine-5 action5/packet-0142/queue-descriptor executions, {{total_executions}} executions in that later cohort. The producer's accepted/rejected submit cases return with matching descriptor/payload, status and error ordering; its returned omission is rejected ({{producer_control}}). Actual published mode bytes {{publication}} reach {{owned_entry}}. Full dispatch return, machine-11 event, machine-1 cursor, callee-saved registers and stack are checked. Separate default Observe/install checks are {{observe_checks}}/{{install_checks}}, restoring {{observe_restored}}/{{install_restored}} original publication words.",

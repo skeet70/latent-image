@@ -182,6 +182,16 @@ Scope: Whole general-heap artifact behind retained A32 entries on the finite nat
 
 <!-- /evidence-record E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150 -->
 
+The stock-ABI qualification (`heap-observe --abi-stock|--abi-owned|--abi-check|--abi-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]`, with `heap-bridge-replay ... --abi NEW_JSON` for the Rust front end) is described in the [cutover report](../reports/general-heap-cutover.md#stock-abi-qualification).
+
+<!-- evidence-record E-GENERAL-HEAP-ABI-QUALIFICATION-150 -->
+
+E-GENERAL-HEAP-ABI-QUALIFICATION-150: At the retained stock ABI entries, called one at a time from a natural no-card seed (task 33 entering the free core entry 0x89e560 with the lock free, after the menu route and one Up press), the owned general heap matches executed stock bytes at 94 of 99 directed steps and differs only by the declared corrections at the other 5. The steps cover {"calloc":8,"free":43,"malloc":38,"realloc":9,"trim":1} calls: zero-size, shrink, grow, same-chunk and zero resize, failed resize preserving bytes, calloc zeroing over reused memory, capacity rejection, exhaustion with 10 successes of 128 KiB before and after coalescence, a refused fragmented request and trim. Executed stock oversized resize leaks 1 recursive depth per call while owned stays balanced; stock calloc of a wrapped product returns allocation where owned returns null; stock trim returned 0. The Rust GlobalAlloc front end, after the admitted tape, matches stock at 75 steps with inapplicable requests {"NullFree":16,"ZeroSize":3}. Journal controls are refused on target 12 times for the owned ABI and 9 for the front end; the executed traffic mutant is refused with RoleLocal { side: Counterpart, step: 0, label: "zero-malloc", property: Errno }. Each role makes [99,99] harness calls. The J7 canonical stack test passes 66 checks, pinning owned and stock heap entry demands and refused whole-task walks.
+
+Scope: Whole general-heap artifact behind the retained A32 entries malloc 0x89cda4, free 0x89cdc4, realloc 0x89da3c, calloc 0xbf1c1c and trim 0x89e464, called under the board harness on core 0 with interrupt delivery off from one natural no-card seed per role on the current FujiMod model; uncontended single-task calls, not cross-core contention, interrupt context or silicon timing.
+
+<!-- /evidence-record E-GENERAL-HEAP-ABI-QUALIFICATION-150 -->
+
 ## Time services
 
 `replacement/time_services` owns the task-6 delay and task-9 timer loops, software timer slots and interrupt registration behind typed ports. `//replacement/time_services:host-tests` exercises callback ordering, cancellation, delay completion and the task receive-error contract. These are core contract tests, not stock equality evidence.
