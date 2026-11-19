@@ -435,6 +435,59 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "cycle-step",
+    srcs = ["Replacement/Saclac/CycleStep.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_binary(
+    name = "cycle-step-run",
+    srcs = ["CycleStepMain.hs"],
+    main_file = "CycleStepMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+    ],
+    data = ["//emulation:native-runner"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":cycle-step",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "cycle-step-tests",
+    size = "small",
+    srcs = ["CycleStepTests.hs"],
+    main_file = "CycleStepTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":cycle-step",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 filegroup(
     name = "all",
     srcs = [

@@ -1,0 +1,95 @@
+{-# LANGUAGE GHC2021 #-}
+{-# LANGUAGE OverloadedStrings #-}
+-- | Refusal-path tests for the per-cycle stock step: the pairing refuses a cycle whose
+-- dumps are missing, out of order or superseded, and the state comparison reports only a
+-- declared-span byte or a byte the step itself changed.
+module Main (main) where
+
+import Control.Monad (unless)
+import Data.Bits (shiftR)
+import qualified Data.ByteString as B
+import Data.List (isInfixOf)
+import Data.Word (Word32, Word8)
+import Replacement.Saclac.CycleStep
+import System.Exit (exitFailure)
+
+check :: String -> Bool -> IO Bool
+check name ok = do
+  putStrLn ((if ok then "ok   " else "FAIL ") ++ name)
+  pure ok
+
+dump :: String -> Int -> Integer -> Dump
+dump label index instructions = Dump label index instructions ("dumps/" ++ label ++ ".bin") 6291456 (replicate 64 '0')
+
+queueIn :: Integer -> Int -> Int -> TimedEvent
+queueIn instructions operation sender = TimedEvent instructions (EventQueueIn operation sender [1, 2, 3, 4])
+
+peer :: Integer -> Int -> Int -> TimedEvent
+peer instructions queue operation = TimedEvent instructions (EventPeerRequest queue operation [9, 9])
+
+emptyState :: State
+emptyState = State (B.replicate (fromIntegral lowSize) 0) (B.replicate (fromIntegral highSize) 0)
+
+withByte :: State -> Integer -> Word8 -> State
+withByte state address byte = either (const state) id (overlayState state address (B.singleton byte))
+
+withWord :: State -> Integer -> Word32 -> State
+withWord state address value =
+  either (const state) id (overlayState state address (B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]))
+
+refusalsOf :: [Dump] -> [TimedEvent] -> [String]
+refusalsOf dumps events = map refusalReason (snd (pairCycles dumps events))
+
+main :: IO ()
+main = do
+  results <- sequence
+    [ do
+        let dumps = [dump "wake" 0 1001, dump "frame" 0 1003, dump "window-completion" 0 1101]
+            events = [queueIn 1000 0x3b4b 47, peer 1050 44 0x3c0c, peer 1060 45 0x3d00, queueIn 1100 0x3b8d 44]
+            (cycles, refusals) = pairCycles dumps events
+        _ <- check "qualified cycle pairs wake, frame and completion" (length cycles == 1 && null refusals)
+        _ <- check "qualified cycle keeps the step's two posts" (case cycles of [paired] -> length (cyclePosts paired) == 2; _ -> False)
+        _ <- check "qualified cycle ends at the completion dump" (case cycles of [paired] -> cycleBoundary paired == 1101; _ -> False)
+        check "qualified cycle brackets the frame" (case cycles of [paired] -> eventInstructions (cycleWakeEvent paired) < dumpInstructions (cycleFrame paired); _ -> False)
+    , do
+        let dumps = [dump "wake" 0 1001, dump "frame" 0 1003]
+        check "missing completion refuses the wake" (any ("without a window-completion" `isInfixOf`) (refusalsOf dumps [queueIn 1000 0x3b4b 47]))
+    , do
+        let dumps = [dump "wake" 0 1001, dump "window-completion" 0 1101]
+        check "missing frame refuses the wake" (any ("without a frame dump" `isInfixOf`) (refusalsOf dumps [queueIn 1000 0x3b4b 47, queueIn 1100 0x3b8d 44]))
+    , do
+        let dumps = [dump "frame" 0 999, dump "wake" 0 1001]
+        check "frame before a wake is refused" (any ("without a preceding wake" `isInfixOf`) (refusalsOf dumps [queueIn 1000 0x3b4b 47]))
+    , do
+        let dumps = [dump "wake" 0 1001, dump "wake" 1 2001, dump "frame" 0 2003, dump "window-completion" 0 2101]
+            events = [queueIn 1000 0x3b4b 47, queueIn 2000 0x3b4b 47, peer 2050 44 0x3c0c, peer 2060 45 0x3d00, queueIn 2100 0x3b8d 44]
+            (cycles, refusals) = pairCycles dumps events
+        check "a superseded wake is refused and the later cycle kept" (length cycles == 1 && any ("superseded" `isInfixOf`) (map refusalReason refusals))
+    , do
+        let dumps = [dump "wake" 0 1001, dump "frame" 0 1101, dump "window-completion" 0 1101]
+            events = [queueIn 1000 0x3b4b 47, queueIn 1100 0x3b8d 44]
+        check "dump order is refused" (any ("dump order" `isInfixOf`) (refusalsOf dumps events))
+    , do
+        let dumps = [dump "wake" 0 1001, dump "frame" 0 1003, dump "window-completion" 0 1101]
+        check "a wake without its queue-in event is refused" (any ("no 0x3b4b queue-in" `isInfixOf`) (refusalsOf dumps [peer 1050 44 0x3c0c, queueIn 1100 0x3b8d 44]))
+    , do
+        let dumps = [dump "wake" 0 1001, dump "frame" 0 1003, dump "window-completion" 0 1101]
+        check "an overlapping wake is refused" (any ("later 0x3b4b wake" `isInfixOf`) (refusalsOf dumps [queueIn 1000 0x3b4b 47, queueIn 1090 0x3b4b 47, queueIn 1100 0x3b8d 44]))
+    , do
+        let placed = withWord (withWord (withWord emptyState 0xa72004 0x0169d370) 0xa72008 0x0169d380) 0xa7200c 0x0169d374
+            doubled = withWord (withWord (withWord placed 0xa72104 0x0169d370) 0xa72108 0x0169d380) 0xa7210c 0x0169d374
+        _ <- check "the loop frame is found" (findLoopStack placed == Right 0xa72000)
+        _ <- check "an absent loop frame is refused" (case findLoopStack emptyState of Left _ -> True; _ -> False)
+        check "two loop frames are refused" (case findLoopStack doubled of Left _ -> True; _ -> False)
+    , do
+        let initial = emptyState
+            predicted = withByte (withByte initial 0x0169cf30 7) 0x00920000 1
+            observed = withByte (withByte initial 0x0169cf30 8) 0x00920000 2
+            spans = [Span 0x0169cf24 0x0169d370]
+            differences = compareState spans (netChanged initial predicted) predicted observed
+            outside = withByte initial 0x00920000 2
+        _ <- check "a declared-span byte differs" (any (\difference -> differenceAddress difference == 0x0169cf30 && differenceDeclared difference) differences)
+        _ <- check "a step-changed byte outside the spans differs" (any (\difference -> differenceAddress difference == 0x00920000 && not (differenceDeclared difference)) differences)
+        check "a foreign byte outside the spans and the step's writes is not a difference" (not (any (\difference -> differenceAddress difference == 0x00920000) (compareState spans [] initial outside)))
+    ]
+  unless (and results) exitFailure
