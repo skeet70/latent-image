@@ -20,6 +20,7 @@ filegroup(
         "//replacement/completion_delay:completion-delay-image.elf",
         "//replacement/critical_pair:critical-pair-image.elf",
         "//replacement/develop:develop-candidate.elf",
+        "//replacement/display_scanout:display-scanout-fixed-image.elf",
         "//replacement/display_scanout:display-scanout-panel.elf",
         "//replacement/display_scanout:display-scanout.elf",
         "//replacement/first_stage:first-stage-fixed-image.elf",

@@ -643,6 +643,26 @@
       "expected_sha256": "5abfbddfb8a22a27294f5acb9970cdb3a7ddf692fe775878c00e8f7f1ffb78d9"
     },
     {
+      "id": "//replacement/display_scanout:display-scanout-fixed-image",
+      "elf": "replacement/display_scanout/display-scanout-fixed-image.elf",
+      "units": [
+        "display_scanout"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/display_scanout/display-scanout-fixed.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield"
+      ],
+      "expected_sha256": "865f0563a3cc8c80dc15e75715a92c93ee875290544920621fd5479b0e4c9e00"
+    },
+    {
       "id": "//replacement/display_scanout:display-scanout-panel",
       "elf": "replacement/display_scanout/display-scanout-panel.elf",
       "units": [
