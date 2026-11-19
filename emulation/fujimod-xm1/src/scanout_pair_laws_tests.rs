@@ -190,6 +190,17 @@ fn registration_compares_its_request_and_output_not_the_caller_stack() {
 }
 
 #[test]
+fn retained_interrupt_handles_compare_up_to_one_consistent_renaming() {
+    let isr = |before: u32, after: u32| Call { changes: vec![[SCHEDULER, before, after]], ..call(Entry::IsrOne) };
+    let stock = [isr(0, 9073), isr(9073, 9138), isr(9138, 9073)];
+    assert_eq!(first_difference(&stock, &[isr(0, 9076), isr(9076, 9141), isr(9141, 9076)]), None);
+    assert!(first_difference(&stock, &[isr(0, 9076), isr(9076, 9141), isr(9141, 9200)]).is_some());
+    assert!(first_difference(&stock, &[isr(0, 9076), isr(9076, 9076), isr(9076, 9076)]).is_some());
+    let other = |value: u32| Call { changes: vec![[SCHEDULER + 8, 0, value]], ..call(Entry::IsrOne) };
+    assert!(first_difference(&[other(1)], &[other(2)]).is_some());
+}
+
+#[test]
 fn the_comparison_ignores_calls_the_unit_makes_into_itself() {
     let inner = Call { caller: Caller::Unit, head: false, ..call(Entry::Commit) };
     let outer = call(Entry::CommitOne);

@@ -245,7 +245,7 @@ pub struct Projection<'a> {
     pub front: Option<FrontState>,
     pub bus: Vec<Bus>,
     pub callbacks: &'a [Callback],
-    pub changes: &'a [[u32; 3]],
+    pub changes: Vec<[u32; 3]>,
     pub returned: bool,
 }
 
@@ -260,12 +260,31 @@ pub fn collapsed_polls(bus: &[Bus]) -> Vec<Bus> {
     rows
 }
 
-pub fn projection(call: &Call) -> Projection<'_> {
+/// Cells holding handles the retained interrupt service `0x64e918` issues from its global counter: both ISR handle
+/// cells and each engine's registration handle.
+pub const HANDLE_CELLS: [u32; 4] = [SCHEDULER, SCHEDULER + 4, runtime(0) + 0x14, runtime(1) + 0x14];
+
+/// One role's handle values numbered in order of first appearance; two roles compare equal exactly when one
+/// consistent bijection maps one role's handles onto the other's.
+#[derive(Default)]
+pub struct HandleNames(std::collections::BTreeMap<u32, u32>);
+impl HandleNames {
+    fn name(&mut self, value: u32) -> u32 {
+        if value == 0 { return 0; }
+        let next = u32::try_from(self.0.len()).unwrap_or(u32::MAX).saturating_add(1);
+        *self.0.entry(value).or_insert(next)
+    }
+}
+
+pub fn projection<'a>(call: &'a Call, names: &mut HandleNames) -> Projection<'a> {
+    let changes = call.changes.iter().map(|&[address, before, after]| {
+        if HANDLE_CELLS.contains(&address) { [address, names.name(before), names.name(after)] } else { [address, before, after] }
+    }).collect();
     Projection {
         entry: call.entry, arguments: if call.entry == Entry::SchedulerRegister { &[] } else { &call.arguments },
         request: call.request, output: call.output, result: if call.entry.returns() { call.result } else { None },
         selection: call.selection, slots: &call.slots, pending: call.pending, front: call.front, bus: collapsed_polls(&call.bus),
-        callbacks: &call.callbacks, changes: &call.changes, returned: call.returned,
+        callbacks: &call.callbacks, changes, returned: call.returned,
     }
 }
 
@@ -282,7 +301,10 @@ pub struct Difference { pub boundary_call: usize, pub stock: Option<serde_json::
 /// The first compared call whose projection differs. Calls a unit body made into the unit's own entries are excluded
 /// unless they head a commit, which is how an ISR's persistent commit callback appears in both roles.
 pub fn first_difference(stock: &[Call], owned: &[Call]) -> Option<Difference> {
-    fn boundary(calls: &[Call]) -> Vec<Projection<'_>> { calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(projection).collect() }
+    fn boundary(calls: &[Call]) -> Vec<Projection<'_>> {
+        let mut names = HandleNames::default();
+        calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(|call| projection(call, &mut names)).collect()
+    }
     let (left, right) = (boundary(stock), boundary(owned));
     (0..left.len().max(right.len())).find(|index| left.get(*index) != right.get(*index)).map(|index| Difference {
         boundary_call: index,

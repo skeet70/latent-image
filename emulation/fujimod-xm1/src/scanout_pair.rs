@@ -103,6 +103,13 @@ fn words(machine: &Machine, address: u32, count: u32) -> Result<Vec<u32>, String
     Ok(bytes.chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect())
 }
 
+/// Words as `core` sees them, which includes its tightly coupled stack memory.
+fn core_words(machine: &Machine, core: usize, address: u32, count: usize) -> Result<Vec<u32>, String> {
+    let mut bytes = vec![0; count * 4];
+    machine.session.board.read_memory(core, u64::from(address), &mut bytes)?;
+    Ok(bytes.chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect())
+}
+
 fn region_words(machine: &Machine) -> Result<Vec<(u32, u32)>, String> {
     let mut result = Vec::new();
     for (start, length) in REGIONS {
@@ -249,7 +256,7 @@ impl Observer {
                 record.result = Some(register(machine, core, 0)?);
                 record.returned = true;
                 if let (Entry::SchedulerRegister, [_, output]) = (record.entry, record.arguments.as_slice()) {
-                    record.output = Some(machine.word(u64::from(*output & !ALIAS))?);
+                    record.output = Some(core_words(machine, core, *output, 1)?[0]);
                 }
                 if let (Entry::ItemConfiguration, Some([previous, _]), [engine, group, item, _]) = (record.entry, record.item, record.arguments.as_slice()) {
                     record.item = Some([previous, machine.word(u64::from(saved(*engine) + 0x64 + group * 0x4c + item * 16))?]);
@@ -316,7 +323,7 @@ impl Observer {
             };
             call.slots = drain_words(machine, &call)?;
             if let (Entry::SchedulerRegister, [request, _]) = (entry, call.arguments.as_slice()) {
-                let words = words(machine, *request & !ALIAS, 4)?;
+                let words = core_words(machine, core, *request, 4)?;
                 call.request = Some([words[0], words[1], words[2], words[3]]);
             }
             sites.extend(call.slots.iter().copied().filter(|word| *word != 0));
