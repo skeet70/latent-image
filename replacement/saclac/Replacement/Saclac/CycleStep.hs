@@ -414,12 +414,12 @@ windowsBytes :: [Window] -> Integer
 windowsBytes = sum . map (fromIntegral . windowSize)
 
 mergeWindows :: [Window] -> [Window]
-mergeWindows = foldl' add [] . sortOn windowBase
+mergeWindows = reverse . foldl' add [] . sortOn windowBase
   where
-    add [] window = [window]
     add (window : rest) next
-      | windowBase window + windowSize window >= windowBase next = add (Window (windowBase window) (max (windowBase window + windowSize window) (windowBase next + windowSize next) - windowBase window) : rest) next
-      | otherwise = window : add rest next
+      | windowBase next <= end window = Window (windowBase window) (max (end window) (end next) - windowBase window) : rest
+    add merged next = next : merged
+    end window = windowBase window + windowSize window
 
 -- ---------------------------------------------------------------------------
 -- The native case

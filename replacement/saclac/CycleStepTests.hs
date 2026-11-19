@@ -90,6 +90,9 @@ main = do
         _ <- check "a dump splits into its declared ranges in order" (fmap (\state -> stateSlice state 0x01600000 1) split == Right (Just (B.pack [fromIntegral (0x200000 `mod` 251 :: Int)])) && fmap (\state -> stateSlice state 0x00900001 1) split == Right (Just (B.pack [1])))
         _ <- check "a dump shorter than its ranges is refused" (case splitState layout (B.take 16 bytes) of Left _ -> True; _ -> False)
         check "an address between the ranges is not held" (fmap (`stateHolds` 0x00b00000) split == Right False)
+    , check "overlapping and adjacent windows merge, disjoint ones stay apart"
+        (mergeWindows [Window 0x3000 0x1000, Window 0x1000 0x1800, Window 0x2000 0x1000, Window 0x8000 0x100]
+          == [Window 0x1000 0x3000, Window 0x8000 0x100])
     , do
         let initial = emptyState
             predicted = withByte (withByte initial 0x0169cf30 7) 0x00920000 1
