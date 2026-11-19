@@ -498,6 +498,8 @@ data Plan = Plan
   , planCarriers :: [PhysicalRange]
   , planReads :: M.Map Word32 [(Word32,Int)]
   , planBankBoundary :: Maybe StorageBoundaries.BankApplyBoundary
+  -- | Bank apply return sites that a non-linking branch in the images also targets.
+  , planApplyLandings :: S.Set Word32
   } deriving (Eq, Show)
 
 -- | The observer's `--reset-observation` document for the plan.
@@ -613,14 +615,19 @@ roleImage4 inputs = do
 branchLinks :: Word32 -> B.ByteString -> S.Set Word32 -> [(Word32, Word32)]
 branchLinks base bytes targets =
   [ (target, address + 4)
+  | (address, True, target) <- branchWords base bytes
+  , S.member target targets ]
+
+-- | Every aligned A32 `b` or `bl`, conditional or not: its address, whether it links, and its target.
+branchWords :: Word32 -> B.ByteString -> [(Word32, Bool, Word32)]
+branchWords base bytes =
+  [ (address, testBit word 24, address + 8 + fromIntegral (signed * 4))
   | offset <- [0, 4 .. B.length bytes - 4]
   , let word = word32At bytes offset
         address = base + fromIntegral offset
-  , word `shiftR` 28 /= 0xf && (word `shiftR` 24) .&. 0xf == 0xb
+  , word `shiftR` 28 /= 0xf && (word `shiftR` 25) .&. 0x7 == 0x5
   , let displacement = fromIntegral (word .&. 0xffffff) :: Int32
-        signed = if testBit displacement 23 then displacement .|. complement 0xffffff else displacement
-        target = address + 8 + fromIntegral (signed * 4)
-  , S.member target targets ]
+        signed = if testBit displacement 23 then displacement .|. complement 0xffffff else displacement ]
 
 derivePlan :: PlanInputs -> Either String Plan
 derivePlan inputs = do
@@ -682,6 +689,8 @@ derivePlan inputs = do
           protected = S.fromList (map fst guards)
           completed = [(site,StorageSite BankApplyReturn) | (base,bytes) <- images,(_,site) <- branchLinks base bytes roots,S.notMember site protected]
       pure ((target,StorageSite BankApplyEntry):completed)
+  let applyReturns = S.fromList [site | (site,StorageSite BankApplyReturn) <- bankApply]
+      applyLandings = S.fromList [target | (base,bytes) <- images,(_,False,target) <- branchWords base bytes,S.member target applyReturns]
   customRefresh <- case contractPublication contract of
     Nothing -> Right []
     Just publication -> do
@@ -703,6 +712,7 @@ derivePlan inputs = do
     , planStores = M.fromList stores
     , planCarriers = if role == RetainedRole then [] else carrier : maybe [] publicationCarriers (contractPublication contract)
     , planBankBoundary = bankBoundary
+    , planApplyLandings = applyLandings
     , planReads = case contractPublication contract of
         Nothing -> M.empty
         Just _ -> M.fromList [(address,ranges) | (address,label) <- M.toList sites

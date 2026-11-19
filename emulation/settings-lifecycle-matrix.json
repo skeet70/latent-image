@@ -107,40 +107,7 @@
     {
      "kind": "repeat-setting",
      "setting": "film-simulation"
-    }
-   ]
-  },
-  {
-   "name": "menu-up-size-1",
-   "action": {
-    "kind": "key",
-    "key": "up"
-   },
-   "checks": []
-  },
-  {
-   "name": "menu-up-size-2",
-   "action": {
-    "kind": "key",
-    "key": "up"
-   },
-   "checks": []
-  },
-  {
-   "name": "menu-up-size-3",
-   "action": {
-    "kind": "key",
-    "key": "up"
-   },
-   "checks": []
-  },
-  {
-   "name": "size-open-capture",
-   "action": {
-    "kind": "key",
-    "key": "ok"
-   },
-   "checks": [
+    },
     {
      "kind": "bank-copy",
      "family": "alternate",
@@ -149,7 +116,15 @@
    ]
   },
   {
-   "name": "size-edit",
+   "name": "film-open-3",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-edit-3",
    "action": {
     "kind": "key",
     "key": "down"
@@ -157,7 +132,7 @@
    "checks": []
   },
   {
-   "name": "size-cancel-restore",
+   "name": "film-cancel-restore",
    "action": {
     "kind": "key",
     "key": "back"
@@ -236,30 +211,6 @@
   },
   {
    "name": "menu-down-custom-9",
-   "action": {
-    "kind": "key",
-    "key": "down"
-   },
-   "checks": []
-  },
-  {
-   "name": "menu-down-custom-10",
-   "action": {
-    "kind": "key",
-    "key": "down"
-   },
-   "checks": []
-  },
-  {
-   "name": "menu-down-custom-11",
-   "action": {
-    "kind": "key",
-    "key": "down"
-   },
-   "checks": []
-  },
-  {
-   "name": "menu-down-custom-12",
    "action": {
     "kind": "key",
     "key": "down"

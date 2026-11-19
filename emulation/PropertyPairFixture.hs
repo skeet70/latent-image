@@ -11,7 +11,7 @@ import Data.Aeson.Types (parseMaybe)
 import Data.Bits (shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (zip5)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
@@ -65,6 +65,9 @@ setterCall = 0x620010
 
 branchLink :: Word32 -> Word32 -> Word32
 branchLink site target = 0xeb000000 .|. (((target - (site + 8)) `shiftR` 2) .&. 0xffffff)
+
+branchNotEqual :: Word32 -> Word32 -> Word32
+branchNotEqual site target = 0x1a000000 .|. (((target - (site + 8)) `shiftR` 2) .&. 0xffffff)
 
 -- | The four store accessors, then one body word.
 linked :: B.ByteString
@@ -714,6 +717,7 @@ bankCallerCases =
   , ("a retained bank caller also requires its root entry", isLeft (bankQualified RetainedRole (drop 1 retained)))
   , ("retained caller LR must follow its actual property BL", isLeft (bankQualified RetainedRole
       (traceAt 1 (wireField ["lr"] (A.toJSON (hex 0x630a08))) retained)))
+  , ("a skip branch landing on the root return site is not a root return", isRight (landingQualified (owned ++ drop 3 owned)))
   ] ++ [(label,isLeft (bankQualified OwnedRole changed)) | (label,changed) <- negatives]
   where
     retained = bankHits RetainedRole
@@ -739,6 +743,11 @@ bankCallerCases =
     wrongCallee = bankArtifactBindings (putWord (bankApplyBody + 4) wrongWord composedImage)
       (B.take 0x104 elf <> littleWords [wrongWord] <> B.drop 0x108 elf) names
     missingFunction = bankArtifactBindings composedImage elf B.empty
+    skip = bankApplyRootCall - 4
+    landing = bankArtifactBindings (putWord skip (branchNotEqual skip (bankApplyRootCall + 4)) composedImage) elf names
+    landingQualified hits = do
+      context <- admitBindings landing
+      qualify context OwnedRole (reboundArtifactObservation landing (chainBound composedBindings OwnedRole [bankStep hits]))
     negatives =
       [ ("bank caller without a root entry refuses", drop 1 owned)
       , ("bank caller without a root return refuses", take 3 owned)

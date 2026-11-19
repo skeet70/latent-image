@@ -766,18 +766,22 @@ pairApply plan boundary index hit state = case hitSite hit of
           Just (frame:rest) -> Just (key,frame,rest)
           _ -> find (\(_,frame,_) -> null (applySetters frame) && matches frame)
             [(candidate,frame,rest) | (candidate,frame:rest) <- M.toList (pairApplyFrames state)]
-    (owner,frame,rest) <- maybe (Left (BankApplyContextRefused index ApplyReturnUnexpected)) Right candidates
-    unless (matches frame) (Left (BankApplyContextRefused index ApplyReturnUnexpected))
-    done <- case applySetters frame of
-      [] -> pure (pairApplyDone state)
-      setters -> do
-        entered <- fault (executionTask (applyEntryHit frame))
-        returned <- fault (executionTask hit)
-        unless (sameTask entered returned) (Left (BankApplyContextRefused index ApplyNotTaskExecution))
-        unless (all (`M.member` pairDone state) setters) (Left (BankApplyContextRefused index ApplyReturnMissing))
-        let context = BankApplyCaller (taskKernel entered) (taskLogicalId entered)
-        pure (foldr (\setter -> M.insert setter context) (pairApplyDone state) setters)
-    pure state {pairApplyFrames=if null rest then M.delete owner (pairApplyFrames state) else M.insert owner rest (pairApplyFrames state),pairApplyDone=done}
+    case candidates of
+      -- A branch landing reached with no apply call open.
+      Nothing | S.member (physicalAddress (hitAddress hit)) (planApplyLandings plan) -> pure state
+      _ -> do
+        (owner,frame,rest) <- maybe (Left (BankApplyContextRefused index ApplyReturnUnexpected)) Right candidates
+        unless (matches frame) (Left (BankApplyContextRefused index ApplyReturnUnexpected))
+        done <- case applySetters frame of
+          [] -> pure (pairApplyDone state)
+          setters -> do
+            entered <- fault (executionTask (applyEntryHit frame))
+            returned <- fault (executionTask hit)
+            unless (sameTask entered returned) (Left (BankApplyContextRefused index ApplyNotTaskExecution))
+            unless (all (`M.member` pairDone state) setters) (Left (BankApplyContextRefused index ApplyReturnMissing))
+            let context = BankApplyCaller (taskKernel entered) (taskLogicalId entered)
+            pure (foldr (\setter -> M.insert setter context) (pairApplyDone state) setters)
+        pure state {pairApplyFrames=if null rest then M.delete owner (pairApplyFrames state) else M.insert owner rest (pairApplyFrames state),pairApplyDone=done}
   _ -> pure state
   where
     key = (hitCore hit,hitTaskId hit)
