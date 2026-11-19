@@ -99,9 +99,29 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "file-service-observe",
+    srcs = ["ObserveMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "ObserveMain.hs",
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
 filegroup(
     name = "all",
     srcs = [
+        ":file-service-observe",
         ":file-service-stage",
         ":file-service-suite",
         ":host-tests",

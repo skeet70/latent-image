@@ -1,0 +1,247 @@
+{
+  "unit": "file_service",
+  "summary": "`file_service` owns the image-4 storage read path: tag allocation and the handle map, the open, read, write and close posters and their ten caller entries, result-slot helpers, post, status translation, media readiness, mediamsg routing with deferral and replay, the open interceptor and the media task. The bodies link through the bank root into the fixed image behind branch veneers at the 29 stock entries; write, flush, format and media-loss workers remain stock.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "file_service-01",
+      "shim": "Branch veneers at the 29 retired image-4 entries in `file_service/src/stock_requests.rs`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained image-4 callers of the stock tag, map, poster, result-slot, post, translation, readiness, media-task, mediamsg and open-interceptor entries",
+      "owned": "partly",
+      "removal": "no retained branch, literal or table word enters a retired extent",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/file_service:file-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_file_service_entry_close",
+            "xm1_file_service_entry_close_async",
+            "xm1_file_service_entry_close_wait",
+            "xm1_file_service_entry_intercept",
+            "xm1_file_service_entry_map_bind",
+            "xm1_file_service_entry_map_lookup",
+            "xm1_file_service_entry_map_unbind",
+            "xm1_file_service_entry_media_ready",
+            "xm1_file_service_entry_media_task",
+            "xm1_file_service_entry_open",
+            "xm1_file_service_entry_open_async",
+            "xm1_file_service_entry_open_unflagged",
+            "xm1_file_service_entry_open_unflagged_wait",
+            "xm1_file_service_entry_open_wait",
+            "xm1_file_service_entry_post",
+            "xm1_file_service_entry_read",
+            "xm1_file_service_entry_read_async",
+            "xm1_file_service_entry_read_wait",
+            "xm1_file_service_entry_result_acquire",
+            "xm1_file_service_entry_result_done",
+            "xm1_file_service_entry_result_release",
+            "xm1_file_service_entry_result_wait",
+            "xm1_file_service_entry_route",
+            "xm1_file_service_entry_tag_allocate",
+            "xm1_file_service_entry_tag_release",
+            "xm1_file_service_entry_translate",
+            "xm1_file_service_entry_write",
+            "xm1_file_service_entry_write_async",
+            "xm1_file_service_entry_write_wait"
+          ],
+          "contract": "replacement/file_service/file-service.ld",
+          "requirement": "The linker places each four-byte A32 branch at its stock entry address and fills the rest of every retired extent with 0xe7f000f0.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "file_service-02",
+      "shim": "Owned bodies behind the entry veneers in `file_service/src/stock.rs` and `file_service/src/stock_requests.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "the veneers at the 29 stock entries and the stock argument and return conventions of their callers",
+      "owned": "partly",
+      "removal": "every caller uses the typed owned file-service API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/file_service:file-service-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_file_service_close",
+            "xm1_file_service_close_async",
+            "xm1_file_service_close_wait",
+            "xm1_file_service_map_bind",
+            "xm1_file_service_map_lookup",
+            "xm1_file_service_map_unbind",
+            "xm1_file_service_media_ready",
+            "xm1_file_service_media_task",
+            "xm1_file_service_open",
+            "xm1_file_service_open_async",
+            "xm1_file_service_open_intercept",
+            "xm1_file_service_open_unflagged",
+            "xm1_file_service_open_unflagged_wait",
+            "xm1_file_service_open_wait",
+            "xm1_file_service_post",
+            "xm1_file_service_read",
+            "xm1_file_service_read_async",
+            "xm1_file_service_read_wait",
+            "xm1_file_service_result_acquire",
+            "xm1_file_service_result_done",
+            "xm1_file_service_result_release",
+            "xm1_file_service_result_wait",
+            "xm1_file_service_route",
+            "xm1_file_service_tag_allocate",
+            "xm1_file_service_tag_release",
+            "xm1_file_service_translate",
+            "xm1_file_service_write",
+            "xm1_file_service_write_async",
+            "xm1_file_service_write_wait"
+          ],
+          "contract": "replacement/file_service/file-service.ld",
+          "requirement": "The linker places every body in OWNED_FIXED with no writable statics.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "file_service-03",
+      "shim": "Retained kernel, media and copy services in `file_service/imports.ld`",
+      "kind": "trampoline into retained stock",
+      "other_side": "semaphore wait 0x724b68 and signal 0x724c00, cache claim 0x71e960, current task 0x723cb8, local record 0x7111c4, position 0x7111e0 and open 0x711200, device lookup 0x70ec84, strcpy 0x70e748, memcpy 0x722054, media report 0x726c74, send 0x72503c, request receive 0x71fe2c, sleep 0x7240c8, wake 0x724144 and tick read 0x7257a8",
+      "owned": "no",
+      "removal": "owned kernel, media and copy services replace every retained service the file service calls",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/file_service:file-service-image",
+          "kind": "retained-import",
+          "symbols": [
+            "file_service_cache_claim",
+            "file_service_copy_bytes",
+            "file_service_copy_string",
+            "file_service_current_task",
+            "file_service_device_for_letter",
+            "file_service_local_open",
+            "file_service_local_position",
+            "file_service_local_record",
+            "file_service_media_report",
+            "file_service_receive_request",
+            "file_service_semaphore_signal",
+            "file_service_semaphore_wait",
+            "file_service_send",
+            "file_service_sleep",
+            "file_service_ticks",
+            "file_service_wake"
+          ],
+          "contract": "replacement/file_service/imports.ld",
+          "requirement": "The linker binds each retained service to its stock entry address.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "file_service-04",
+      "shim": "Stock file-service memory in `file_service/src/stock.rs` and `file_service/src/stock_requests.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "handle map 0x910140, tag table 0x9101c0, sequence 0x910200, result owner 0x910134 and slot 0x910138, media context 0x910204, mediamsg session 0x910218, open set 0x910290, deferred requests 0x9102e0, media busy 0x940ac0 and media ticks 0x96bfb8",
+      "owned": "partly",
+      "removal": "no retained code reads or writes these words",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/file_service:file-service-image",
+          "kind": "layout",
+          "symbols": [
+            "xm1_file_service_map_bind",
+            "xm1_file_service_map_lookup",
+            "xm1_file_service_map_unbind",
+            "xm1_file_service_media_ready",
+            "xm1_file_service_media_task",
+            "xm1_file_service_result_acquire",
+            "xm1_file_service_result_release",
+            "xm1_file_service_result_wait",
+            "xm1_file_service_route",
+            "xm1_file_service_tag_allocate",
+            "xm1_file_service_tag_release"
+          ],
+          "contract": "replacement/file_service/file-service.ld",
+          "requirement": "The bodies read and write the stock handle, tag, result-slot, media-context and mediamsg words in place."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "file_service-05",
+      "shim": "Computed calls to retained workers and caller callbacks in `file_service/src/stock_requests.rs`",
+      "kind": "trampoline into retained stock",
+      "other_side": "the 34 request workers in `routing::WORKERS`, caller-supplied completion callbacks and the open interceptor word 0x7217f0",
+      "owned": "partly",
+      "removal": "every request worker and completion callback is owned and called directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/file_service:file-service-image",
+          "kind": "retained-entry",
+          "symbols": [
+            "xm1_file_service_media_task",
+            "xm1_file_service_open_intercept",
+            "xm1_file_service_route"
+          ],
+          "contract": "replacement/file_service/file-service.ld",
+          "requirement": "The media task, mediamsg router and open interceptor call guest code words that are not definite linked references.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "file_service-untyped-publication",
+      "shim": "Global untyped assembly entries and linker publication labels",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained entry, compiler ABI and image-layout consumers",
+      "owned": "partly",
+      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/file_service:file-service-image",
+          "kind": "publication",
+          "symbols": [
+            "__fixed_body_end",
+            "__fixed_body_start",
+            "__fixed_bss_end",
+            "__fixed_bss_start"
+          ],
+          "contract": "replacement/file_service/file-service.ld",
+          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

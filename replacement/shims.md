@@ -24,6 +24,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 27 |
 | `//replacement/display_scanout:display-scanout` | Production | display_scanout | 4 |
 | `//replacement/display_scanout:display-scanout-panel` | Production | display_scanout | 4 |
+| `//replacement/file_service:file-service-image` | Production | file_service | 6 |
 | `//replacement/first_stage:first-stage-fixed-image` | Production | first_stage | 7 |
 | `//replacement/first_stage:first-stage-image` | Production | first_stage | 7 |
 | `//replacement/fixed_image:probe-image` | Qualification | fixed_image | 5 |
@@ -351,6 +352,21 @@ Classification: `module`. [Declarations](embassy_trial/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+
+## file_service
+
+`file_service` owns the image-4 storage read path: tag allocation and the handle map, the open, read, write and close posters and their ten caller entries, result-slot helpers, post, status translation, media readiness, mediamsg routing with deferral and replay, the open interceptor and the media task. The bodies link through the bank root into the fixed image behind branch veneers at the 29 stock entries; write, flush, format and media-loss workers remain stock.
+
+Classification: `linked`. [Declarations](file_service/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Branch veneers at the 29 retired image-4 entries in `file_service/src/stock_requests.rs` | veneer or carrier at a stock address | retained image-4 callers of the stock tag, map, poster, result-slot, post, translation, readiness, media-task, mediamsg and open-interceptor entries | partly | no retained branch, literal or table word enters a retired extent | required | unestablished | `//replacement/file_service:file-service-image` (Export, 29 symbols, 0 definite references) |
+| Owned bodies behind the entry veneers in `file_service/src/stock.rs` and `file_service/src/stock_requests.rs` | stock-ABI export | the veneers at the 29 stock entries and the stock argument and return conventions of their callers | partly | every caller uses the typed owned file-service API | required | unestablished | `//replacement/file_service:file-service-image` (Export, 29 symbols, 0 definite references) |
+| Retained kernel, media and copy services in `file_service/imports.ld` | trampoline into retained stock | semaphore wait 0x724b68 and signal 0x724c00, cache claim 0x71e960, current task 0x723cb8, local record 0x7111c4, position 0x7111e0 and open 0x711200, device lookup 0x70ec84, strcpy 0x70e748, memcpy 0x722054, media report 0x726c74, send 0x72503c, request receive 0x71fe2c, sleep 0x7240c8, wake 0x724144 and tick read 0x7257a8 | no | owned kernel, media and copy services replace every retained service the file service calls | required | unestablished | `//replacement/file_service:file-service-image` (Import, 16 symbols, 0 definite references) |
+| Stock file-service memory in `file_service/src/stock.rs` and `file_service/src/stock_requests.rs` | guest-memory layout view | handle map 0x910140, tag table 0x9101c0, sequence 0x910200, result owner 0x910134 and slot 0x910138, media context 0x910204, mediamsg session 0x910218, open set 0x910290, deferred requests 0x9102e0, media busy 0x940ac0 and media ticks 0x96bfb8 | partly | no retained code reads or writes these words | required | unestablished | `//replacement/file_service:file-service-image` (Layout, 11 symbols, 0 definite references) |
+| Computed calls to retained workers and caller callbacks in `file_service/src/stock_requests.rs` | trampoline into retained stock | the 34 request workers in `routing::WORKERS`, caller-supplied completion callbacks and the open interceptor word 0x7217f0 | partly | every request worker and completion callback is owned and called directly | required | unestablished | `//replacement/file_service:file-service-image` (RetainedEntry, 3 symbols, 0 definite references) |
+| Global untyped assembly entries and linker publication labels | veneer or carrier at a stock address | retained entry, compiler ABI and image-layout consumers | partly | no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image | required | unestablished | `//replacement/file_service:file-service-image` (Publication, 4 symbols, 0 definite references) |
 
 ## first_stage
 

@@ -667,6 +667,38 @@
       "expected_sha256": "fbdda5d596c775c09e86a3e284602790c4eae7d9c1708d44c4523875eaf2a207"
     },
     {
+      "id": "//replacement/file_service:file-service-image",
+      "elf": "replacement/file_service/file-service-image.elf",
+      "units": [
+        "file_service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/file_service/file-service.ld",
+        "replacement/file_service/imports.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "file_service_cache_claim",
+        "file_service_copy_bytes",
+        "file_service_copy_string",
+        "file_service_current_task",
+        "file_service_device_for_letter",
+        "file_service_local_open",
+        "file_service_local_position",
+        "file_service_local_record",
+        "file_service_media_report",
+        "file_service_receive_request",
+        "file_service_semaphore_signal",
+        "file_service_semaphore_wait",
+        "file_service_send",
+        "file_service_sleep",
+        "file_service_ticks",
+        "file_service_wake"
+      ],
+      "expected_sha256": "55494cfb29f1db92791d829fb5bdc2a50da6d7ea9038dd3cee15b8fb6819960a"
+    },
+    {
       "id": "//replacement/first_stage:first-stage-fixed-image",
       "elf": "replacement/first_stage/first-stage-fixed-image.elf",
       "units": [
