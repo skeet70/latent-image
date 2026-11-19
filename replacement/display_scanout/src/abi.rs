@@ -83,9 +83,9 @@ impl scheduler::RegistrationObserver for RegistrationOutput {
 struct Completion;
 impl commit::CompletionCallbacks for Completion {
     fn prepared(&mut self,engine:Engine,state:&EngineState){unsafe{publish::prepared(engine,state);}}
-    fn call(&mut self,callback:commit::CallbackId,slot:commit::CompletionSlot,engine:Engine,state:&mut EngineState){
+    fn call(&mut self,callback:commit::CallbackId,slot:commit::CompletionSlot,engine:Engine,runtime:&mut commit::RuntimeState){
         if cfg!(feature="defect_skipped_drain")&&slot.list==commit::CompletionList::Second{return;}
-        unsafe{publish::clear_completion(engine,slot);let call:unsafe extern "C" fn()=core::mem::transmute(callback.0 as usize);call();state.runtime=stock::load_runtime(engine);}
+        unsafe{publish::clear_completion(engine,slot);let call:unsafe extern "C" fn()=core::mem::transmute(callback.0 as usize);call();*runtime=stock::load_runtime(engine);}
     }
 }
 struct Registration;
@@ -120,7 +120,10 @@ pub unsafe extern "C" fn xm1_scanout_group_options(e:u32,g:u32,packet:*const u32
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_blank(e:u32,packet:*const u8)->i32{status((||{let engine=engine(e)?;if stock::byte(stock::runtime_base(engine)+0x54)==0{return Err(Error::Uninitialized);}shadow::blank(&mut stock::StockShadow(engine),shadow::Blanking{selector:read_volatile(packet),color:[read_volatile(packet.add(1)),read_volatile(packet.add(2)),read_volatile(packet.add(3))]})})())}
 #[no_mangle]
-pub unsafe extern "C" fn xm1_scanout_commit(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut state=if stock::word(stock::runtime_base(engine)+12)==1{stock::load_engine(engine)}else{let mut state=EngineState::zero();state.runtime=stock::load_runtime(engine);state};let options=commit::CommitOptions{alternate_masks:stock::byte(0x916610)!=0,reverse_vertical:stock::byte(0x916611)!=0};if state.runtime.pending.0==1{stock::put_word(stock::runtime_base(engine)+12,0);}commit::commit(engine,&mut state,options,&mut CommitDevice::new(),&mut Completion);0}
+pub unsafe extern "C" fn xm1_scanout_commit(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut runtime=if stock::word(stock::runtime_base(engine)+12)==1{apply_pending(engine)}else{stock::load_runtime(engine)};commit::drain(engine,&mut runtime,&mut Completion);0}
+/// The pending branch in its own frame, so completion callbacks run without the saved and input images on the stack.
+#[inline(never)]
+unsafe fn apply_pending(engine:Engine)->commit::RuntimeState{let mut state=stock::load_engine(engine);let options=commit::CommitOptions{alternate_masks:stock::byte(0x916610)!=0,reverse_vertical:stock::byte(0x916611)!=0};stock::put_word(stock::runtime_base(engine)+12,0);commit::apply(engine,&mut state,options,&mut CommitDevice::new(),&mut Completion);state.runtime}
 /// The `defect_register_order` control emits the first two scanout writes of a commit in reverse order.
 #[cfg(feature="defect_register_order")]
 struct CommitDevice{inner:Device,held:Option<(Register,u32)>,swapped:bool}

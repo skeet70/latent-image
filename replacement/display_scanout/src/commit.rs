@@ -133,7 +133,7 @@ impl CompletionSlot {
 }
 pub trait CompletionCallbacks {
     fn prepared(&mut self, _engine: Engine, _state: &EngineState) {}
-    fn call(&mut self, callback: CallbackId, slot: CompletionSlot, engine: Engine, state: &mut EngineState);
+    fn call(&mut self, callback: CallbackId, slot: CompletionSlot, engine: Engine, runtime: &mut RuntimeState);
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CaptureConfiguration {
@@ -371,18 +371,26 @@ fn visit_registers(engine: Engine, capture: bool, saved: &mut SavedRegisters, mu
         interrupt_control=>0x1bc, interrupt_start=>0x9d0, interrupt_end=>0x9d4);
 }
 pub fn commit(engine: Engine, state: &mut EngineState, options: CommitOptions, hardware: &mut impl Hardware, callbacks: &mut impl CompletionCallbacks) {
+    apply(engine, state, options, hardware, callbacks);
+    drain(engine, &mut state.runtime, callbacks);
+}
+/// The pending branch: prepare the saved image and write it under the register map.
+pub fn apply(engine: Engine, state: &mut EngineState, options: CommitOptions, hardware: &mut impl Hardware, callbacks: &mut impl CompletionCallbacks) {
     if state.runtime.pending == CommitPending(1) {
         state.runtime.pending = CommitPending(0);
         prepare(state, options);
         callbacks.prepared(engine, state);
         visit_registers(engine, false, &mut state.saved, |word, offset| hardware.write(register(engine, offset), word.0));
     }
+}
+/// Drains the first then the second completion list, clearing each set slot before its call.
+pub fn drain(engine: Engine, runtime: &mut RuntimeState, callbacks: &mut impl CompletionCallbacks) {
     for secondary in [false, true] {
         for item in 0..6 {
-            let slot = if secondary { &mut state.runtime.secondary_callbacks[item] } else { &mut state.runtime.completion_callbacks[item] };
+            let slot = if secondary { &mut runtime.secondary_callbacks[item] } else { &mut runtime.completion_callbacks[item] };
             if let Some(callback) = slot.take() {
                 let list = if secondary { CompletionList::Second } else { CompletionList::First };
-                callbacks.call(callback, CompletionSlot { list, index: item }, engine, state);
+                callbacks.call(callback, CompletionSlot { list, index: item }, engine, runtime);
             }
         }
     }

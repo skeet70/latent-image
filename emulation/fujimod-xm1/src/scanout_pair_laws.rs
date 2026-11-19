@@ -107,6 +107,14 @@ pub struct Call {
     /// `0x6c9cf4`'s target shadow word before and after, when the item is valid.
     pub item: Option<[u32; 2]>,
     pub returned: bool,
+    /// `0x6c7318`'s four request words at entry and its output word at return; its two arguments are caller stack addresses.
+    #[serde(default)]
+    pub request: Option<[u32; 4]>,
+    #[serde(default)]
+    pub output: Option<u32>,
+    /// The caller's `sp` at entry.
+    #[serde(default)]
+    pub stack: u32,
 }
 
 pub fn selected_engine(selection: [u32; 2]) -> u32 { u32::from(selection[1] == 0 && selection[0] == 1) }
@@ -200,7 +208,8 @@ pub fn laws(calls: &[Call]) -> Vec<Finding> {
                 drain_law(index, call, &mut findings);
                 if let (Some(front), Some(engine)) = (call.front, call.engine) {
                     let low = |word: u32| word & 0x3fff_ffff;
-                    let explained = low(front.shadow) == low(front.image_address) || published.is_some_and(|value| low(value) == low(front.shadow));
+                    let explained = low(front.shadow) == low(front.image_address)
+                        || published.map_or(low(front.shadow) == 0, |value| low(value) == low(front.shadow));
                     if engine == selected_engine(call.selection) && !explained { findings.push(Finding::FrontStep { call: index, front }); }
                 }
             }
@@ -227,23 +236,44 @@ pub fn laws(calls: &[Call]) -> Vec<Finding> {
 pub struct Projection<'a> {
     pub entry: Entry,
     pub arguments: &'a [u32],
+    pub request: Option<[u32; 4]>,
+    pub output: Option<u32>,
     pub result: Option<u32>,
     pub selection: [u32; 2],
     pub slots: &'a [u32],
     pub pending: u32,
     pub front: Option<FrontState>,
-    pub bus: &'a [Bus],
+    pub bus: Vec<Bus>,
     pub callbacks: &'a [Callback],
     pub changes: &'a [[u32; 3]],
     pub returned: bool,
 }
 
+/// `bus` with each run of identical consecutive reads kept once: a status poll's iteration count follows its loop's
+/// instruction count, not the device.
+pub fn collapsed_polls(bus: &[Bus]) -> Vec<Bus> {
+    let mut rows: Vec<Bus> = Vec::with_capacity(bus.len());
+    for row in bus {
+        if !row.write && rows.last() == Some(row) { continue; }
+        rows.push(row.clone());
+    }
+    rows
+}
+
 pub fn projection(call: &Call) -> Projection<'_> {
     Projection {
-        entry: call.entry, arguments: &call.arguments, result: if call.entry.returns() { call.result } else { None },
-        selection: call.selection, slots: &call.slots, pending: call.pending, front: call.front, bus: &call.bus,
+        entry: call.entry, arguments: if call.entry == Entry::SchedulerRegister { &[] } else { &call.arguments },
+        request: call.request, output: call.output, result: if call.entry.returns() { call.result } else { None },
+        selection: call.selection, slots: &call.slots, pending: call.pending, front: call.front, bus: collapsed_polls(&call.bus),
         callbacks: &call.callbacks, changes: &call.changes, returned: call.returned,
     }
+}
+
+/// The deepest owned entry below the stock entry at the same compared position, in bytes; meaningful when no
+/// compared call differs.
+pub fn stack_excess(stock: &[Call], owned: &[Call]) -> i64 {
+    let boundary = |calls: &[Call]| calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(|call| call.stack).collect::<Vec<_>>();
+    boundary(stock).into_iter().zip(boundary(owned)).map(|(stock, owned)| i64::from(stock) - i64::from(owned)).max().unwrap_or(0)
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]

@@ -6,6 +6,7 @@ fn call(entry: Entry) -> Call {
     Call {
         entry, caller: Caller::Retained, head: engine.is_some(), engine, arguments: Vec::new(), result: None, selection: [1, 0], slots: Vec::new(),
         pending: 0, front: None, saved: Vec::new(), before_drain: 0, bus: Vec::new(), callbacks: Vec::new(), changes: Vec::new(), item: None, returned: true,
+        request: None, output: None, stack: 0,
     }
 }
 
@@ -154,6 +155,38 @@ fn shadow_must_follow_the_front_byte_or_the_last_publication() {
     assert_eq!(laws(&[at(0x023de000)]), []);
     assert!(matches!(laws(&[at(0x0228c800)]).as_slice(), [Finding::FrontStep { .. }]));
     assert_eq!(laws(&[publication(1, 0x4228c800, 0, 0x0228c800), at(0x0228c800)]), []);
+}
+
+#[test]
+fn an_unpublished_shadow_is_zero_until_vglib_publishes() {
+    let at = |shadow: u32| Call { arguments: vec![1], slots: vec![0; 12], front: Some(FrontState { front: 0, image_address: 0x4228c800, shadow }), ..call(Entry::Commit) };
+    assert_eq!(laws(&[at(0)]), []);
+    assert!(matches!(laws(&[publication(1, 0x423de000, 0, 0x023de000), at(0)]).as_slice(), [Finding::FrontStep { .. }]));
+}
+
+#[test]
+fn a_status_poll_compares_its_reads_once_but_every_write() {
+    let read = |value: u32| Bus { address: 0xfff6e000, write: false, value };
+    let write = |value: u32| Bus { address: 0xfff6e000, write: true, value };
+    let stock = Call { bus: vec![write(0), read(0), read(0), read(0x10000), write(0x10000)], ..call(Entry::Capture) };
+    let owned = Call { bus: vec![write(0), read(0), read(0), read(0), read(0), read(0x10000), write(0x10000)], ..call(Entry::Capture) };
+    assert_eq!(first_difference(&[stock.clone()], &[owned]), None);
+    let doubled = Call { bus: vec![write(0), write(0), read(0), read(0x10000), write(0x10000)], ..call(Entry::Capture) };
+    assert!(first_difference(&[stock.clone()], &[doubled]).is_some());
+    let skipped = Call { bus: vec![write(0), read(0x10000), write(0x10000)], ..call(Entry::Capture) };
+    assert!(first_difference(&[stock], &[skipped]).is_some());
+}
+
+#[test]
+fn registration_compares_its_request_and_output_not_the_caller_stack() {
+    let at = |stack: u32, request: [u32; 4], output: u32| Call {
+        arguments: vec![stack + 4, stack], request: Some(request), output: Some(output), result: Some(0), stack, ..call(Entry::SchedulerRegister)
+    };
+    let stock = at(0x7000_2048, [0x6d7f30, 0, 2, 0], 3);
+    assert_eq!(first_difference(&[stock.clone()], &[at(0x7000_1950, [0x6d7f30, 0, 2, 0], 3)]), None);
+    assert_eq!(stack_excess(&[stock.clone()], &[at(0x7000_1950, [0x6d7f30, 0, 2, 0], 3)]), 0x6f8);
+    assert!(first_difference(&[stock.clone()], &[at(0x7000_2048, [0x6d7f30, 0, 2, 1], 3)]).is_some());
+    assert!(first_difference(&[stock], &[at(0x7000_2048, [0x6d7f30, 0, 2, 0], 4)]).is_some());
 }
 
 #[test]

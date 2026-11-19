@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "scanout-pair stock|owned CONTRACT DAT ANALYSIS RUN ROM OUTPUT\n\
+const USAGE: &str = "scanout-pair stock CONTRACT DAT ANALYSIS RUN ROM OUTPUT\n\
+    scanout-pair owned CONTRACT DAT ANALYSIS RUN ROM STOCK_DIR OUTPUT\n\
     scanout-pair check STOCK_DIR OWNED_DIR REPORT_JSON\n\
     scanout-pair qualify STOCK_DIR OWNED_DIR REGISTER_ORDER_DIR SKIPPED_DRAIN_DIR REPORT_JSON";
 const ALIAS: u32 = 0x4000_0000;
@@ -52,6 +53,8 @@ struct Inputs {
     role: Role, contract_sha256: String, run: Vec<u8>, rom: Vec<u8>, dat: ValidatedUpdate,
     /// Image 4 as the role runs it: canonical for stock, canonical with the entry branches for owned.
     image4: Vec<u8>, entries: Vec<u32>, body: (u32, u32),
+    /// The owned role's route: the board tick each stock route point ended at, and the stock receipt's digest.
+    schedule: Option<(Vec<u64>, String)>,
 }
 
 fn load(arguments: &[String]) -> Result<Inputs, String> {
@@ -76,9 +79,18 @@ fn load(arguments: &[String]) -> Result<Inputs, String> {
     let rom = read(Path::new(&arguments[5]))?;
     require(sha256(&run) == "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
         && sha256(&rom) == "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be", "the pair requires the canonical no-card run and boot ROM")?;
+    let schedule = match role {
+        Role::Stock => None,
+        Role::Owned => {
+            let bytes = read(&Path::new(&arguments[6]).join("receipt.json"))?;
+            let stock: Receipt = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            require(stock.role == Role::Stock && stock.complete && !stock.points.is_empty(), "the owned route needs a complete stock receipt")?;
+            Some((stock.points.iter().map(|point| point.tick).collect(), sha256(&bytes)))
+        }
+    };
     Ok(Inputs {
         role, contract_sha256: sha256(&contract_bytes), run, rom, dat: ValidatedUpdate(read(Path::new(&arguments[2]))?), image4,
-        entries: contract.publications.iter().map(|row| row.address).collect(), body: (contract.body.low, contract.body.high),
+        entries: contract.publications.iter().map(|row| row.address).collect(), body: (contract.body.low, contract.body.high), schedule,
     })
 }
 
@@ -138,8 +150,9 @@ fn guard_ranges(body: (u32, u32)) -> Vec<WatchRange> {
         .chain([WatchRange { start: u64::from(body.0), end: u64::from(body.1), kinds: WatchKinds::CPU_FETCH }]).collect()
 }
 
+/// `fetches` counts instruction fetches per address in the retired bodies and the owned range.
 #[derive(Default)]
-struct Guard { carrier_fetches: u64, body_fetches: u64, installation_writes: u64, first_fetch: bool }
+struct Guard { carrier_fetches: u64, body_fetches: u64, installation_writes: u64, first_fetch: bool, fetches: BTreeMap<u32, u64> }
 
 impl Guard {
     /// Retired bodies change only through the image-4 load before their first fetch. In the owned role the only
@@ -149,13 +162,18 @@ impl Guard {
         for row in &batch.records {
             let low = u32::try_from(row.physical).map_err(|error| error.to_string())?;
             let high = low.checked_add(u32::try_from(row.size).map_err(|error| error.to_string())?).ok_or("guard row overflows")?;
-            if matches!(row.source, Access::CpuFetch) && body.0 <= low && high <= body.1 { self.body_fetches += 1; continue; }
+            if matches!(row.source, Access::CpuFetch) && body.0 <= low && high <= body.1 {
+                self.body_fetches += 1;
+                *self.fetches.entry(low).or_insert(0) += 1;
+                continue;
+            }
             if !CARRIERS.iter().any(|(start, end)| low < *end && *start < high) { continue; }
             match row.source {
                 Access::CpuFetch => {
                     require(role == Role::Stock || (row.size == 4 && entries.contains(&low)), "owned role fetched a retired stock body word")?;
                     self.first_fetch = true;
                     self.carrier_fetches += 1;
+                    *self.fetches.entry(low).or_insert(0) += 1;
                 }
                 Access::ModelBusWrite if !self.first_fetch => self.installation_writes += 1,
                 Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite => return Err("retired body modified outside the image-4 load".into()),
@@ -230,6 +248,9 @@ impl Observer {
                 record.changes = before.iter().zip(&after).filter(|(old, new)| old.1 != new.1).map(|(old, new)| [old.0, old.1, new.1]).collect();
                 record.result = Some(register(machine, core, 0)?);
                 record.returned = true;
+                if let (Entry::SchedulerRegister, [_, output]) = (record.entry, record.arguments.as_slice()) {
+                    record.output = Some(machine.word(u64::from(*output & !ALIAS))?);
+                }
                 if let (Entry::ItemConfiguration, Some([previous, _]), [engine, group, item, _]) = (record.entry, record.item, record.arguments.as_slice()) {
                     record.item = Some([previous, machine.word(u64::from(saved(*engine) + 0x64 + group * 0x4c + item * 16))?]);
                 }
@@ -291,8 +312,13 @@ impl Observer {
                 pending: match engine { Some(engine) if head => machine.word(u64::from(runtime(engine.min(1)) + 0x0c))?, _ => 0 },
                 front: match engine { Some(engine) if head => Some(front_state(machine, engine)?), _ => None },
                 saved: Vec::new(), before_drain: 0, bus: Vec::new(), callbacks: Vec::new(), changes: Vec::new(), item, returned: false,
+                request: None, output: None, stack: sp,
             };
             call.slots = drain_words(machine, &call)?;
+            if let (Entry::SchedulerRegister, [request, _]) = (entry, call.arguments.as_slice()) {
+                let words = words(machine, *request & !ALIAS, 4)?;
+                call.request = Some([words[0], words[1], words[2], words[3]]);
+            }
             sites.extend(call.slots.iter().copied().filter(|word| *word != 0));
             self.calls.push(call);
             self.open[core].push(Open::Frame { call: index, scope, lr, sp, before: region_words(machine)?, sampled: false });
@@ -305,11 +331,17 @@ impl Observer {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 struct Checkpoint { label: String, menu: Option<[u32; 3]>, frame_sha256: Option<String>, front: FrontState }
 
+/// Where one route step ended.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+struct RoutePoint { tick: u64, instructions: u64 }
+
 #[derive(Deserialize, Serialize)]
 struct Receipt {
     schema: u32, role: Role, complete: bool, error: Option<String>, machine_failure: Option<String>,
     contract_sha256: String, update_sha256: String, run_sha256: String, rom_sha256: String, observer_sha256: String,
-    instructions: u64, checkpoints: Vec<Checkpoint>,
+    /// The stock receipt whose route ticks an owned role replayed.
+    schedule_sha256: Option<String>,
+    instructions: u64, points: Vec<RoutePoint>, checkpoints: Vec<Checkpoint>,
     guard_carrier_fetches: u64, guard_body_fetches: u64, guard_installation_writes: u64, guard_carriers_match: bool,
     calls: usize, compared_calls: usize, open_calls: usize, entry_counts: BTreeMap<String, u64>,
     calls_sha256: String, unattributed_writes: usize, unattributed_sha256: String,
@@ -321,6 +353,7 @@ struct Run<'a> {
     observer: Observer,
     watch: Option<Box<MemoryWatch>>,
     maps: Vec<MemoryMap>,
+    points: Vec<RoutePoint>,
     checkpoints: Vec<Checkpoint>,
 }
 
@@ -347,12 +380,23 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// One route step: `budget` instructions in the stock role; in an owned role, until the board tick the stock
+    /// role's step ended at, so both roles reach each route point at the same guest time.
     fn advance(&mut self, budget: u64) -> Result<(), String> {
-        let target = self.machine.instructions().checked_add(budget).ok_or("route budget overflow")?;
-        while self.machine.instructions() < target {
-            let outcome = self.machine.run(target - self.machine.instructions());
+        let (target, until) = match &self.inputs.schedule {
+            None => (self.machine.instructions().checked_add(budget).ok_or("route budget overflow")?, None),
+            Some((ticks, _)) => {
+                let tick = *ticks.get(self.points.len()).ok_or("the stock route has fewer points")?;
+                let bound = self.machine.hold_bound(tick.saturating_sub(self.machine.session.board.now()) + 1);
+                (self.machine.instructions().checked_add(bound).ok_or("route budget overflow")?, Some(tick))
+            }
+        };
+        let reached = |machine: &Machine| machine.instructions() >= target || until.is_some_and(|tick| machine.session.board.now() >= tick);
+        while !reached(&self.machine) {
+            let outcome = self.machine.run_until(target - self.machine.instructions(), until);
             self.machine.require_running()?;
-            if outcome != RunOutcome::Stopped { break; }
+            if outcome == RunOutcome::Completed { continue; }
+            require(outcome == RunOutcome::Stopped, "unexpected scanout route run outcome")?;
             let hits: Vec<_> = self.machine.traces.hits.drain(..).collect();
             require(hits.len() == 1 && hits[0].core < 2, "scanout stop carries other than one hit")?;
             let core = hits[0].core;
@@ -367,7 +411,12 @@ impl Run<'_> {
                 .flat_map(|site| [site, site ^ ALIAS]).filter(|site| armed.insert(*site)).map(|site| (site, LABEL.into())).collect();
             if !new.is_empty() { self.machine.traces.add_sites(&self.machine.session, new)?; }
         }
-        require(self.machine.instructions() == target, "route instruction endpoint differs")
+        match until {
+            None => require(self.machine.instructions() == target, "route instruction endpoint differs")?,
+            Some(tick) => require(self.machine.session.board.now() >= tick, "route tick endpoint not reached within its instruction bound")?,
+        }
+        self.points.push(RoutePoint { tick: self.machine.session.board.now(), instructions: self.machine.instructions() });
+        Ok(())
     }
 
     fn key(&mut self, key: RouteKey) -> Result<(), String> {
@@ -425,11 +474,11 @@ fn execute(inputs: &Inputs, output: &Path) -> Result<(), String> {
     machine.traces.arm(&machine.session, armed.iter().map(|address| (*address, LABEL.into())).collect())?;
     machine.traces.stop_labels = [LABEL.into()].into_iter().collect();
     let observer = Observer { body: inputs.body, calls: Vec::new(), open: [Vec::new(), Vec::new()], unattributed: Vec::new(), guard: Guard::default(), armed };
-    let mut run = Run { inputs, machine, observer, watch: None, maps, checkpoints: Vec::new() };
+    let mut run = Run { inputs, machine, observer, watch: None, maps, points: Vec::new(), checkpoints: Vec::new() };
     run.begin()?;
     let result = run.route();
     let drained = run.drain(false);
-    let Run { machine, observer, checkpoints, .. } = run;
+    let Run { machine, observer, points, checkpoints, .. } = run;
     let mut carriers_match = true;
     for (low, high) in CARRIERS {
         let offset = (low - IMAGE4) as usize;
@@ -442,6 +491,7 @@ fn execute(inputs: &Inputs, output: &Path) -> Result<(), String> {
     let unattributed_bytes = serde_json::to_vec(&observer.unattributed).map_err(|error| error.to_string())?;
     write(&output.join("calls.json"), &calls_bytes)?;
     write(&output.join("unattributed.json"), &unattributed_bytes)?;
+    write(&output.join("fetches.json"), &serde_json::to_vec(&observer.guard.fetches).map_err(|error| error.to_string())?)?;
     let mut entry_counts = BTreeMap::new();
     for call in &observer.calls { *entry_counts.entry(serde_json::to_value(call.entry).map_err(|error| error.to_string())?.as_str().unwrap_or("").to_owned()).or_insert(0) += 1; }
     let error = result.err().or(drained.err())
@@ -452,7 +502,8 @@ fn execute(inputs: &Inputs, output: &Path) -> Result<(), String> {
         error, machine_failure: machine.failure.clone(), contract_sha256: inputs.contract_sha256.clone(), update_sha256: sha256(&inputs.dat.0),
         run_sha256: sha256(&inputs.run), rom_sha256: sha256(&inputs.rom),
         observer_sha256: sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?),
-        instructions: machine.instructions(), checkpoints, guard_carrier_fetches: guard.carrier_fetches, guard_body_fetches: guard.body_fetches,
+        schedule_sha256: inputs.schedule.as_ref().map(|(_, digest)| digest.clone()),
+        instructions: machine.instructions(), points, checkpoints, guard_carrier_fetches: guard.carrier_fetches, guard_body_fetches: guard.body_fetches,
         guard_installation_writes: guard.installation_writes, guard_carriers_match: carriers_match,
         calls: observer.calls.len(), compared_calls: observer.calls.iter().filter(|call| call.caller != Caller::Unit || call.head).count(), open_calls,
         entry_counts, calls_sha256: sha256(&calls_bytes), unattributed_writes: observer.unattributed.len(), unattributed_sha256: sha256(&unattributed_bytes),
@@ -472,8 +523,11 @@ fn check(stock_dir: &Path, owned_dir: &Path) -> Result<serde_json::Value, String
     for (name, role) in [("stock", &stock), ("owned", &owned)] {
         if !role.complete { reasons.push(format!("{name} role is incomplete: {:?}", role.error)); }
     }
-    if (stock.run_sha256.as_str(), stock.rom_sha256.as_str()) != (owned.run_sha256.as_str(), owned.rom_sha256.as_str()) || stock.instructions != owned.instructions {
-        reasons.push("roles ran different inputs or budgets".into());
+    let stock_receipt_sha256 = sha256(&read(&stock_dir.join("receipt.json"))?);
+    let replayed = owned.schedule_sha256.as_deref() == Some(stock_receipt_sha256.as_str()) && owned.points.len() == stock.points.len()
+        && owned.points.iter().zip(&stock.points).all(|(owned, stock)| owned.tick >= stock.tick);
+    if (stock.run_sha256.as_str(), stock.rom_sha256.as_str()) != (owned.run_sha256.as_str(), owned.rom_sha256.as_str()) || !replayed {
+        reasons.push("roles ran different inputs, or the owned role did not replay this stock role's route ticks".into());
     }
     let (stock_laws, owned_laws) = (laws(&stock_calls), laws(&owned_calls));
     if !stock_laws.is_empty() { reasons.push(format!("stock role breaks {} scanout laws", stock_laws.len())); }
@@ -495,13 +549,14 @@ fn check(stock_dir: &Path, owned_dir: &Path) -> Result<serde_json::Value, String
     let summary = |role: &Receipt, calls: &[Call], findings: &[Finding]| serde_json::json!({
         "complete": role.complete, "update_sha256": role.update_sha256, "contract_sha256": role.contract_sha256, "calls_sha256": role.calls_sha256,
         "compared_calls": role.compared_calls, "commits": heads(calls), "pending_commits": pending(calls), "drained_callbacks": drained(calls),
+        "instructions": role.instructions, "route_end_tick": role.points.last().map(|point| point.tick),
         "carrier_fetches": role.guard_carrier_fetches, "body_fetches": role.guard_body_fetches, "entry_counts": role.entry_counts, "laws": findings,
     });
     Ok(serde_json::json!({
         "schema": 1, "verdict": if reasons.is_empty() { "equal" } else { "refused" }, "reasons": reasons,
         "stock": summary(&stock, &stock_calls, &stock_laws), "owned": summary(&owned, &owned_calls, &owned_laws),
         "checkpoints": stock.checkpoints.len(), "checkpoints_equal": checkpoints_equal, "unattributed_writes_equal": unattributed_equal,
-        "difference": difference,
+        "stack_excess_bytes": stack_excess(&stock_calls, &owned_calls), "difference": difference,
     }))
 }
 
@@ -525,11 +580,17 @@ fn qualify(arguments: &[String]) -> Result<(), String> {
 fn drive() -> Result<(), String> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.first().map(String::as_str) {
-        Some("stock" | "owned") if arguments.len() == 7 => {
+        Some("stock") if arguments.len() == 7 => {
             let inputs = load(&arguments)?;
             fujimod_emulator_exr2_board::register_board_builder();
             fujimod_emulator_models::register();
             execute(&inputs, Path::new(&arguments[6]))
+        }
+        Some("owned") if arguments.len() == 8 => {
+            let inputs = load(&arguments)?;
+            fujimod_emulator_exr2_board::register_board_builder();
+            fujimod_emulator_models::register();
+            execute(&inputs, Path::new(&arguments[7]))
         }
         Some("check") if arguments.len() == 4 => {
             let report = check(Path::new(&arguments[1]), Path::new(&arguments[2]))?;
