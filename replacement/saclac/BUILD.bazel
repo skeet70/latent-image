@@ -445,6 +445,7 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:host-support",
     ],
 )

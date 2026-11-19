@@ -19,7 +19,7 @@ check name ok = do
   pure ok
 
 dump :: String -> Int -> Integer -> Dump
-dump label index instructions = Dump label index instructions ("dumps/" ++ label ++ ".bin") 6291456 (replicate 64 '0')
+dump label index instructions = Dump label index instructions ("dumps/" ++ label ++ ".bin") 6291456 (replicate 64 '0') []
 
 queueIn :: Integer -> Int -> Int -> TimedEvent
 queueIn instructions operation sender = TimedEvent instructions (EventQueueIn operation sender [1, 2, 3, 4])
@@ -27,8 +27,11 @@ queueIn instructions operation sender = TimedEvent instructions (EventQueueIn op
 peer :: Integer -> Int -> Int -> TimedEvent
 peer instructions queue operation = TimedEvent instructions (EventPeerRequest queue operation [9, 9])
 
+layout :: [Span]
+layout = [Span 0x00900000 0x00b00000, Span 0x01600000 0x01a00000]
+
 emptyState :: State
-emptyState = State (B.replicate (fromIntegral lowSize) 0) (B.replicate (fromIntegral highSize) 0)
+emptyState = State [Segment (spanLow span') (B.replicate (fromIntegral (spanBytes span')) 0) | span' <- layout]
 
 withByte :: State -> Integer -> Word8 -> State
 withByte state address byte = either (const state) id (overlayState state address (B.singleton byte))
@@ -82,6 +85,12 @@ main = do
         _ <- check "an absent loop frame is refused" (case findLoopStack emptyState of Left _ -> True; _ -> False)
         check "two loop frames are refused" (case findLoopStack doubled of Left _ -> True; _ -> False)
     , do
+        let bytes = B.pack [fromIntegral (index `mod` 251) | index <- [0 .. 0x600000 - 1 :: Int]]
+            split = splitState layout bytes
+        _ <- check "a dump splits into its declared ranges in order" (fmap (\state -> stateSlice state 0x01600000 1) split == Right (Just (B.pack [fromIntegral (0x200000 `mod` 251 :: Int)])) && fmap (\state -> stateSlice state 0x00900001 1) split == Right (Just (B.pack [1])))
+        _ <- check "a dump shorter than its ranges is refused" (case splitState layout (B.take 16 bytes) of Left _ -> True; _ -> False)
+        check "an address between the ranges is not held" (fmap (`stateHolds` 0x00b00000) split == Right False)
+    , do
         let initial = emptyState
             predicted = withByte (withByte initial 0x0169cf30 7) 0x00920000 1
             observed = withByte (withByte initial 0x0169cf30 8) 0x00920000 2
@@ -90,6 +99,7 @@ main = do
             outside = withByte initial 0x00920000 2
         _ <- check "a declared-span byte differs" (any (\difference -> differenceAddress difference == 0x0169cf30 && differenceDeclared difference) differences)
         _ <- check "a step-changed byte outside the spans differs" (any (\difference -> differenceAddress difference == 0x00920000 && not (differenceDeclared difference)) differences)
+        _ <- check "equal compared bytes are not differences" (null (compareState spans (netChanged initial predicted) predicted predicted))
         check "a foreign byte outside the spans and the step's writes is not a difference" (not (any (\difference -> differenceAddress difference == 0x00920000) (compareState spans [] initial outside)))
     ]
   unless (and results) exitFailure

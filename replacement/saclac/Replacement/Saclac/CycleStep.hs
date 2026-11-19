@@ -19,11 +19,15 @@ module Replacement.Saclac.CycleStep
   , cycleBoundary
     -- * State
   , State (..)
+  , Segment (..)
   , splitState
   , joinState
+  , sameLayout
   , stateSlice
   , stateWord
+  , stateHolds
   , overlayState
+  , overlayStates
   , netChanged
     -- * Spans and comparison
   , Span (..)
@@ -49,8 +53,7 @@ module Replacement.Saclac.CycleStep
   , hexValue
   , hexTextOf
   , hexBytes
-  , lowBase, lowSize, highBase, highSize
-  , frameLow, frameHigh
+  , stackLow, stackHigh
   , entryAddress, postAddress, receiveAddress, taskIdAddress
   , recordBase, recordSize, trampolineBase, trampolineSize
   , levelAddress, decadeAddress
@@ -58,6 +61,7 @@ module Replacement.Saclac.CycleStep
   ) where
 
 import Data.Aeson (Value (..))
+import qualified Data.Set as Set
 import qualified Data.ByteString as B
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.List (sortOn)
@@ -69,7 +73,8 @@ import Numeric (showHex)
 -- ---------------------------------------------------------------------------
 -- Captured inputs
 
--- | One row of @RESULT\/ROLE.json@'s @diagnostic.dumps@.
+-- | One row of @RESULT\/ROLE.json@'s @diagnostic.dumps@, with the ranges its plan declares,
+-- concatenated in that order in the dump file.
 data Dump = Dump
   { dumpLabel :: String
   , dumpIndex :: Int
@@ -77,15 +82,26 @@ data Dump = Dump
   , dumpPath :: FilePath
   , dumpByteCount :: Integer
   , dumpSha256 :: String
+  , dumpRanges :: [Span]
   }
   deriving (Eq, Show)
 
 parseDumps :: Value -> [Dump]
 parseDumps value =
-  [ Dump (str (get row "label")) (fromIntegral (num (get row "index"))) (num (get row "instructions"))
-      (str (get row "file")) (num (get row "bytes")) (str (get row "sha256"))
-  | row <- list (get (get value "diagnostic") "dumps")
+  [ Dump label (fromIntegral (num (get row "index"))) (num (get row "instructions"))
+      (str (get row "file")) (num (get row "bytes")) (str (get row "sha256")) (rangesOf label)
+  | row <- list (get diagnostic "dumps")
+  , let label = str (get row "label")
   ]
+  where
+    diagnostic = get value "diagnostic"
+    rangesOf label =
+      [ Span (addressOf (get range "start")) (addressOf (get range "end"))
+      | plan <- list (get diagnostic "dump_plans")
+      , str (get plan "label") == label
+      , range <- list (get plan "ranges")
+      ]
+    addressOf v = case v of Number _ -> num v; _ -> parseHex (str v)
 
 -- | The census interface events this comparison reads.
 data Event
@@ -218,17 +234,12 @@ pairCycles dumps events = go Nothing [] [] ordered
     label dump = dumpLabel dump ++ "-" ++ show (dumpIndex dump)
 
 -- ---------------------------------------------------------------------------
--- Retained state: the two dumped ranges.
+-- Retained state: the ranges a dump declares, one segment each.
 
-lowBase, highBase, lowSize, highSize :: Integer
-lowBase = 0x00900000
-lowSize = 0x200000
-highBase = 0x01600000
-highSize = 0x400000
-
-frameLow, frameHigh :: Integer
-frameLow = 0x016f4968
-frameHigh = 0x016f6740
+-- | The low RAM range holding the task-43 stack.
+stackLow, stackHigh :: Integer
+stackLow = 0x00900000
+stackHigh = 0x00b00000
 
 -- | The task-43 loop's stack frame signature: r5, r6 and r7 pushed at entry.
 loopFrame :: [Word32]
@@ -240,14 +251,13 @@ loopFrame = [0x0169d370, 0x0169d380, 0x0169d374]
 findLoopStack :: State -> Either String Word32
 findLoopStack state = case matches of
   [sp] -> Right (fromIntegral sp)
-  [] -> Left "no task-43 loop frame signature (r5=0x169d370, r6=0x169d380, r7=0x169d374) in the dumped low range"
+  [] -> Left "no task-43 loop frame signature (r5=0x169d370, r6=0x169d380, r7=0x169d374) in the dumped stack range"
   found -> Left ("ambiguous task-43 loop frame signature at " ++ unwords (map hexTextOf found) ++ " (" ++ show (length found) ++ " candidates)")
   where
     signature = B.concat (map (leWord . fromIntegral) loopFrame)
     matches =
       [ sp
-      | sp <- [lowBase + 8, lowBase + 16 .. lowBase + lowSize - 32]
-      , sp `mod` 8 == 0
+      | sp <- [stackLow + 8, stackLow + 16 .. stackHigh - 32]
       , frameAt sp
       ]
     frameAt sp = stateSlice state (sp + 4) 12 == Just signature
@@ -279,24 +289,50 @@ decadeAddress = 0x00919760
 groupBase :: Integer
 groupBase = 0x0091904c
 
-data State = State {stateLow :: B.ByteString, stateHigh :: B.ByteString} deriving (Eq, Show)
+data Segment = Segment {segmentBase :: Integer, segmentBytes :: B.ByteString} deriving (Eq, Show)
 
-splitState :: B.ByteString -> Either String State
-splitState bytes
-  | B.length bytes == fromIntegral (lowSize + highSize) =
-      Right (State (B.take (fromIntegral lowSize) bytes) (B.drop (fromIntegral lowSize) bytes))
-  | otherwise = Left ("a cycle-state dump must be " ++ show (lowSize + highSize) ++ " bytes")
+newtype State = State {stateSegments :: [Segment]} deriving (Eq, Show)
+
+-- | Splits a dump into its declared ranges.
+splitState :: [Span] -> B.ByteString -> Either String State
+splitState spans bytes
+  | null spans = Left "a dump declares no ranges"
+  | fromIntegral (B.length bytes) /= sum (map spanBytes spans) =
+      Left ("a dump of " ++ show (B.length bytes) ++ " bytes does not fill its declared ranges of " ++ show (sum (map spanBytes spans)) ++ " bytes")
+  | otherwise = Right (State (go spans bytes))
+  where
+    go [] _ = []
+    go (span' : rest) remaining =
+      let (here, later) = B.splitAt (fromIntegral (spanBytes span')) remaining
+       in Segment (spanLow span') here : go rest later
 
 joinState :: State -> B.ByteString
-joinState state = stateLow state <> stateHigh state
+joinState = B.concat . map segmentBytes . stateSegments
+
+-- | Two states hold the same ranges in the same order.
+sameLayout :: State -> State -> Bool
+sameLayout left right = shape left == shape right
+  where
+    shape = map (\segment -> (segmentBase segment, B.length (segmentBytes segment))) . stateSegments
+
+segmentOf :: State -> Integer -> Int -> Maybe (Int, Segment)
+segmentOf state address count =
+  case [ (index, segment)
+       | (index, segment) <- zip [0 ..] (stateSegments state)
+       , address >= segmentBase segment
+       , address + fromIntegral count <= segmentBase segment + fromIntegral (B.length (segmentBytes segment))
+       ] of
+    found : _ -> Just found
+    [] -> Nothing
+
+-- | The state holds the byte at an address.
+stateHolds :: State -> Integer -> Bool
+stateHolds state address = segmentOf state address 1 /= Nothing
 
 stateSlice :: State -> Integer -> Int -> Maybe B.ByteString
-stateSlice state address count
-  | address >= lowBase && address + fromIntegral count <= lowBase + lowSize =
-      Just (B.take count (B.drop (fromIntegral (address - lowBase)) (stateLow state)))
-  | address >= highBase && address + fromIntegral count <= highBase + highSize =
-      Just (B.take count (B.drop (fromIntegral (address - highBase)) (stateHigh state)))
-  | otherwise = Nothing
+stateSlice state address count = do
+  (_, segment) <- segmentOf state address count
+  pure (B.take count (B.drop (fromIntegral (address - segmentBase segment)) (segmentBytes segment)))
 
 stateWord :: State -> Integer -> Maybe Word32
 stateWord state address = do
@@ -306,22 +342,25 @@ stateWord state address = do
     _ -> Nothing
 
 overlayState :: State -> Integer -> B.ByteString -> Either String State
-overlayState state address bytes
-  | address >= lowBase && address + fromIntegral (B.length bytes) <= lowBase + lowSize =
-      Right state {stateLow = replace (stateLow state) (fromIntegral (address - lowBase)) bytes}
-  | address >= highBase && address + fromIntegral (B.length bytes) <= highBase + highSize =
-      Right state {stateHigh = replace (stateHigh state) (fromIntegral (address - highBase)) bytes}
-  | otherwise = Left ("overlay leaves the dumped ranges at " ++ hexTextOf address)
-  where
-    replace source offset value = B.take offset source <> value <> B.drop (offset + B.length value) source
+overlayState state address bytes = case segmentOf state address (B.length bytes) of
+  Nothing -> Left ("overlay leaves the dumped ranges at " ++ hexTextOf address)
+  Just (index, segment) ->
+    let offset = fromIntegral (address - segmentBase segment)
+        source = segmentBytes segment
+        replaced = segment {segmentBytes = B.take offset source <> bytes <> B.drop (offset + B.length bytes) source}
+     in Right (State [if position == index then replaced else other | (position, other) <- zip [0 ..] (stateSegments state)])
 
--- | The addresses whose byte differs between two states, over both dumped ranges.
+-- | Every segment of the second state written over the first.
+overlayStates :: State -> State -> Either String State
+overlayStates base top = foldl' (\acc segment -> acc >>= \state -> overlayState state (segmentBase segment) (segmentBytes segment)) (Right base) (stateSegments top)
+
+-- | The addresses whose byte differs between two states of the same layout.
 netChanged :: State -> State -> [Integer]
-netChanged left right =
-  map (lowBase +) (differences (stateLow left) (stateLow right))
-    ++ map (highBase +) (differences (stateHigh left) (stateHigh right))
+netChanged left right = concat (zipWith differences (stateSegments left) (stateSegments right))
   where
-    differences a b = map fromIntegral (B.findIndices (/= 0) (B.pack (B.zipWith (\x y -> if x == y then 0 else 1 :: Word8) a b)))
+    differences a b =
+      map ((segmentBase a +) . fromIntegral)
+        (B.findIndices (/= 0) (B.pack (B.zipWith (\x y -> if x == y then 0 else 1 :: Word8) (segmentBytes a) (segmentBytes b))))
 
 byteAt :: State -> Integer -> Word8
 byteAt state address = case stateSlice state address 1 of
@@ -352,13 +391,13 @@ data Difference = Difference
 -- spans only the step's net changes are compared, so a foreign writer's byte is not a
 -- difference.
 compareState :: [Span] -> [Integer] -> State -> State -> [Difference]
-compareState spans changed predicted observed = map difference addresses
+compareState spans changed predicted observed =
+  [ Difference address (byteAt predicted address) (byteAt observed address) (any (`spanAt` address) spans)
+  | address <- Set.toAscList addresses
+  , byteAt predicted address /= byteAt observed address
+  ]
   where
-    addresses = dedupe ([address | address <- changed, not (any (`spanAt` address) spans)]
-      ++ concatMap (\span' -> [spanLow span' .. spanHigh span' - 1]) spans)
-    difference address =
-      Difference address (byteAt predicted address) (byteAt observed address) (any (`spanAt` address) spans)
-    dedupe = foldr (\x seen -> if x `elem` seen then seen else x : seen) [] . reverse
+    addresses = Set.fromList changed `Set.union` Set.fromList (concatMap (\span' -> [spanLow span' .. spanHigh span' - 1]) spans)
 
 -- ---------------------------------------------------------------------------
 -- Code windows

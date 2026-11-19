@@ -46,8 +46,8 @@ const DIAGNOSTIC_HIT_LIMIT: usize = 4096;
 const DIAGNOSTIC_WRITE_LIMIT: usize = 1024;
 const DIAGNOSTIC_DUMP_DECL_LIMIT: usize = 4;
 const DIAGNOSTIC_DUMP_RANGE_LIMIT: usize = 16;
-/// The bytes of one dump: a native case maps at most 8 MiB, so a larger dump cannot seed one.
-const DIAGNOSTIC_DUMP_BYTES: u64 = 8 << 20;
+/// `saclac:cycle-step-run` reads at most this many bytes from one dump file.
+const DIAGNOSTIC_DUMP_BYTES: u64 = 16 << 20;
 const DIAGNOSTIC_DUMP_COUNT: usize = 64;
 /// The general registers every census stop reads.
 const STOP_REGISTERS: [&str; 13] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"];
@@ -2072,8 +2072,8 @@ mod tests {
         let one = serde_json::json!([{"start": "0x00900000", "end": "0x00900100"}]);
         assert!(load_diagnostic(&dumping("absent", "r0", one.clone())).is_err(), "a dump at an undeclared site is refused");
         assert!(load_diagnostic(&dumping("capture", "sp", one)).is_err(), "a condition on an unread register is refused");
-        assert!(load_diagnostic(&dumping("capture", "r0", serde_json::json!([{"start": "0x00000000", "end": "0x00800004"}]))).is_err(),
-            "a dump larger than a native case can map is refused");
+        assert!(load_diagnostic(&dumping("capture", "r0", serde_json::json!([{"start": "0x00000000", "end": "0x01000004"}]))).is_err(),
+            "a dump over its byte bound is refused");
         assert!(load_diagnostic(&dumping("capture", "r0", serde_json::json!([
             {"start": "0x00900000", "end": "0x00900100"}, {"start": "0x009000fc", "end": "0x00900200"}]))).is_err(),
             "overlapping dump ranges are refused");
