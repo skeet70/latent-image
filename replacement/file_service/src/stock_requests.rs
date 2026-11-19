@@ -93,7 +93,9 @@ pub extern "C" fn xm1_file_service_result_acquire() -> u32 {
 /// Entered at 0x71bc6c.
 #[no_mangle]
 pub extern "C" fn xm1_file_service_result_release() -> i32 {
-    write_word(RESULT_OWNER, 0);
+    if !cfg!(file_service_control_result_release_keeps_owner) {
+        write_word(RESULT_OWNER, 0);
+    }
     unsafe { signal(RESULT_SEMAPHORE) }
 }
 
@@ -167,7 +169,9 @@ impl Posting for StockPosting {
     }
 
     fn readiness(&mut self, mode: ReadinessMode) -> Translation {
-        completion::readiness(media(), mode)
+        let translation = completion::readiness(media(), mode);
+        report(translation);
+        translation
     }
 
     fn path_byte(&self, path: u32, index: u32) -> u8 {
@@ -516,7 +520,9 @@ pub extern "C" fn xm1_file_service_media_task() -> ! {
     loop {
         write_word(header + 8, payload.as_mut_ptr() as u32);
         let received = unsafe { file_service_receive_request(header as *mut u32) };
-        write_word(MEDIA_BUSY, 1);
+        if !cfg!(file_service_control_media_task_no_busy) {
+            write_word(MEDIA_BUSY, 1);
+        }
         if received == 0 {
             if let Some(worker) = routing::worker(RequestCode(read_half(header))) {
                 call1(worker, header);

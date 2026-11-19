@@ -85,8 +85,14 @@ const TRANSLATIONS: [Row; 39] = [
     reported(5, 0x5b),
 ];
 
+#[cfg(not(file_service_control_translate_unknown_ok))]
 pub fn translate(raw: RawStatus) -> Translation {
     row(usize::try_from(raw.0).ok().and_then(|index| TRANSLATIONS.get(index)).copied().unwrap_or(quiet(5)))
+}
+
+#[cfg(file_service_control_translate_unknown_ok)]
+pub fn translate(raw: RawStatus) -> Translation {
+    row(usize::try_from(raw.0).ok().and_then(|index| TRANSLATIONS.get(index)).copied().unwrap_or(quiet(0)))
 }
 
 /// The mode word a caller passes; the open, read, write and close posters pass 0.
@@ -106,6 +112,9 @@ pub enum Media {
 /// bit 3 refuses with 2 and report 0x52 in mode 0. Absent media refuses with 5.
 pub fn readiness(media: Media, mode: ReadinessMode) -> Translation {
     let Media::Present { flags } = media else {
+        #[cfg(file_service_control_readiness_absent_ok)]
+        return row(quiet(0));
+        #[cfg(not(file_service_control_readiness_absent_ok))]
         return row(quiet(5));
     };
     row(if flags & 1 != 0 {

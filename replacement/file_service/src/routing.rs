@@ -143,7 +143,9 @@ pub fn defer<P: Mediamsg>(port: &mut P, header: Header) -> i32 {
         return REFUSED;
     };
     port.store_deferred(slot, header);
-    port.set_deferred_count(port.deferred_count().wrapping_add(1));
+    if !cfg!(file_service_control_defer_no_count) {
+        port.set_deferred_count(port.deferred_count().wrapping_add(1));
+    }
     0
 }
 
@@ -272,7 +274,9 @@ pub fn intercept<P: Mediamsg>(port: &mut P, status: u32, handle: u32) {
     let callback = port.saved_callback();
     if callback != 0 {
         port.complete(callback, status, handle);
-        port.set_saved_callback(0);
+        if !cfg!(file_service_control_intercept_keeps_callback) {
+            port.set_saved_callback(0);
+        }
     }
     port.wake(MEDIAMSG_TASK);
 }

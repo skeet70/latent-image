@@ -32,6 +32,8 @@ code = Code
   { codeImageBase = 0x61c400
   , codeExtents = [("map-code", Extent 0x71ea34 0x71eba0), ("tag-code", Extent 0x71ef18 0x71f078)]
   , codeStockFunctions = [(0x71ea34, 0x78), (0x71eaac, 0x7c), (0x71eb28, 0x78), (0x71ef18, 0xdc), (0x71eff4, 0x84)]
+  , codeRetained = []
+  , codeRetainedFunctions = []
   }
 
 -- Model -------------------------------------------------------------------
@@ -113,11 +115,11 @@ step (state, script) op = case op of
 
 opCall :: Op -> Call
 opCall op = case op of
-  Allocate -> Call allocateEntry [] True
-  Release tag -> Call releaseEntry [tag] False
-  Bind tag -> Call bindEntry [tag] True
-  Lookup tag -> Call lookupEntry [tag] True
-  Unbind tag -> Call unbindEntry [tag] False
+  Allocate -> Call allocateEntry [] [] True
+  Release tag -> Call releaseEntry [tag] [] False
+  Bind tag -> Call bindEntry [tag] [] True
+  Lookup tag -> Call lookupEntry [tag] [] True
+  Unbind tag -> Call unbindEntry [tag] [] False
 
 opEntry :: Op -> Word32
 opEntry = callEntry . opCall
@@ -132,6 +134,7 @@ scenario name initial script ops = Scenario
   , scenarioCalls = map opCall ops
   , scenarioServices = concat services
   , scenarioResults = [result | Just result <- results]
+  , scenarioStop = Nothing
   }
   where
     ((final, _), results, services) = foldl run ((initial, script), [], []) ops

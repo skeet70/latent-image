@@ -5,6 +5,13 @@ FILE_SERVICE_CONTROLS = [
     "skip_allocated",
     "no_free_slot_advance",
     "release_after_failed_wait",
+    "translate_unknown_ok",
+    "readiness_absent_ok",
+    "result_release_keeps_owner",
+    "open_failure_keeps_tag",
+    "defer_no_count",
+    "intercept_keeps_callback",
+    "media_task_no_busy",
 ]
 
 def file_service_suffixes():

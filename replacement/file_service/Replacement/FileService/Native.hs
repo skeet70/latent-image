@@ -49,11 +49,14 @@ data Extent = Extent {extentLow :: Word32, extentHigh :: Word32}
 extentContains :: Extent -> Word32 -> Bool
 extentContains (Extent low high) address = low <= address && address < high
 
--- | The retired extents a suite maps and the stock function starts and sizes inside them.
+-- | The retired extents a suite maps and the stock function starts and sizes inside them,
+-- and the retained stock code both roles run, with its function starts and sizes.
 data Code = Code
   { codeImageBase :: Word32
   , codeExtents :: [(String, Extent)]
   , codeStockFunctions :: [(Word32, Word32)]
+  , codeRetained :: [(String, Extent)]
+  , codeRetainedFunctions :: [(Word32, Word32)]
   }
 
 -- | Stock data a case maps, with its initial bytes and its exact final bytes.
@@ -64,10 +67,11 @@ data DataRegion = DataRegion
   , dataFinal :: B.ByteString
   }
 
--- | One driver call: the stock entry, r0..r3, and whether r0 is a result.
+-- | One driver call: the stock entry, r0..r3, the words at sp, sp+4, ..., and whether r0 is a result.
 data Call = Call
   { callEntry :: Word32
   , callArguments :: [Word32]
+  , callStack :: [Word32]
   , callReturns :: Bool
   }
 
@@ -85,6 +89,7 @@ data Service = Service
   , serviceWrites :: [MemoryRow]
   }
 
+-- | A scenario with a stop address is a kernel case that ends when execution reaches it.
 data Scenario = Scenario
   { scenarioName :: String
   , scenarioEntry :: Word32
@@ -92,6 +97,7 @@ data Scenario = Scenario
   , scenarioCalls :: [Call]
   , scenarioServices :: [Service]
   , scenarioResults :: [Word32]
+  , scenarioStop :: Maybe Word32
   }
 
 data Role = Stock | Owned String E.Elf
@@ -99,6 +105,12 @@ data Role = Stock | Owned String E.Elf
 roleLabel :: Role -> String
 roleLabel Stock = "stock"
 roleLabel (Owned label _) = label
+
+-- | The role part of a case id; each role runs in its own batch, so every control shares one.
+roleTag :: Role -> String
+roleTag Stock = "stock"
+roleTag (Owned "owned" _) = "owned"
+roleTag (Owned _ _) = "control"
 
 data Observation = Observation
   { observationCase :: String
@@ -147,11 +159,16 @@ driverWords :: [Call] -> [Word32]
 driverWords calls = 0xe92d4010 : go (driverBase + 4) 0 calls ++ [0xe8bd8010]
   where
     go _ _ [] = []
-    go pc slot (Call entry arguments returns : rest) =
-      let loads = concat [[movw register value, movt register value] | (register, value) <- zip [0 ..] arguments]
-          callAt = pc + 4 * fromIntegral (length loads)
+    go pc slot (Call entry arguments stack returns : rest) =
+      let frame = 8 * ((fromIntegral (length stack) + 1) `div` 2) :: Word32
+          reserve = if null stack then [] else [0xe24dd000 .|. frame]
+          spill = concat [[movw 12 value, movt 12 value, 0xe58dc000 .|. (4 * index)] | (index, value) <- zip [0 ..] stack]
+          loads = concat [[movw register value, movt register value] | (register, value) <- zip [0 ..] arguments]
+          before = reserve ++ spill ++ loads
+          callAt = pc + 4 * fromIntegral (length before)
+          release = if null stack then [] else [0xe28dd000 .|. frame]
           store = if returns then [movw 12 (resultsBase .&. 0xffff), movt 12 resultsBase, 0xe58c0000 .|. (4 * slot)] else []
-          block = loads ++ [branchLink callAt entry] ++ store
+          block = before ++ [branchLink callAt entry] ++ release ++ store
        in block ++ go (pc + 4 * fromIntegral (length block)) (if returns then slot + 1 else slot) rest
 
 -- Case documents ------------------------------------------------------------
@@ -224,16 +241,21 @@ caseDocument code image role scenario = (document, artifacts)
     driver = words32le (driverWords (scenarioCalls scenario))
     regions =
       [Region name low "rx" (codeBytes image code role extent) | (name, extent@(Extent low _)) <- codeExtents code]
+        ++ [Region name low "rx" (codeBytes image code Stock extent) | (name, extent@(Extent low _)) <- codeRetained code]
         ++ [Region "owned-fixed" low "rx" bytes | Owned _ elf <- [role], Just (low, bytes) <- [fixedBody elf]]
+        ++ [Region "stop" stop "rx" (word32le trapWord) | Just stop <- [scenarioStop scenario]]
         ++ [Region (dataName region) (dataAddress region) "rw" (dataInitial region) | region <- scenarioData scenario]
         ++ [ Region "driver" driverBase "rx" driver
            , Region "results" resultsBase "rw" (B.replicate 0x100 0)
            , Region "stack" stackBase "rw" (B.replicate (fromIntegral (stackTop - stackBase)) 0xa5)
            , Region "exit" exitAddress "rx" (word32le 0xe12fff1e)
            ]
-    artifactName bytes = sha256Hex (sha256 bytes)
-    artifactId bytes = "a-" ++ take 40 (artifactName bytes)
-    artifacts = nub [(artifactName bytes ++ ".bin", bytes) | Region _ _ _ bytes <- regions]
+    blob = B.concat [bytes | Region _ _ _ bytes <- regions]
+    offsets = scanl (+) 0 [B.length bytes | Region _ _ _ bytes <- regions]
+    blobName = sha256Hex (sha256 blob)
+    blobId = "a-" ++ take 40 blobName
+    artifacts = [(blobName ++ ".bin", blob)]
+    stackFrame = object ["region" .= ("stack" :: String), "offset" .= (0 :: Int), "length" .= (fromIntegral (stackTop - stackBase) :: Int)]
     services = scenarioServices scenario
     stubs =
       [ object
@@ -260,20 +282,20 @@ caseDocument code image role scenario = (document, artifacts)
       | service <- services
       ]
     initial = [("r" ++ show index, 0x0e0e0e00 + fromIntegral index) | index <- [0 :: Int .. 3]] ++ preserved
-      ++ [("r12", 0x0c0c0c0c), ("sp", stackTop), ("lr", exitAddress), ("cpsr", 0x10)]
+      ++ [("r12", 0x0c0c0c0c), ("sp", stackTop), ("lr", exitAddress), ("cpsr", maybe 0x10 (const 0xd3) (scenarioStop scenario))]
     expectedMemory =
       [object ["region" .= dataName region, "offset" .= (0 :: Int), "hex" .= Native.hexBytes (dataFinal region)] | region <- scenarioData scenario]
         ++ [ object ["region" .= ("results" :: String), "offset" .= (0 :: Int), "hex" .= Native.hexBytes (words32le (scenarioResults scenario))]
            | not (null (scenarioResults scenario))
            ]
     document =
-      object
+      object $
         [ "schema_version" .= (1 :: Int)
-        , "id" .= (scenarioName scenario ++ "-" ++ roleLabel role)
+        , "id" .= (scenarioName scenario ++ "-" ++ roleTag role)
         , "origin" .= (case role of Stock -> "stock"; Owned _ _ -> "synthetic" :: String)
         , "provenance" .= ("X-M1 1.50 image4 file-service extents at x70view 55436fc85c0560dd252b0410af6f2427fe198cd3 byte-read boundaries; " ++ roleLabel role ++ " role" :: String)
         , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
-        , "artifacts" .= [object ["id" .= artifactId bytes, "path" .= name, "size" .= B.length bytes, "sha256" .= sha256Hex (sha256 bytes)] | (name, bytes) <- artifacts]
+        , "artifacts" .= [object ["id" .= blobId, "path" .= name, "size" .= B.length bytes, "sha256" .= sha256Hex (sha256 bytes)] | (name, bytes) <- artifacts]
         , "entry" .= hexWord driverBase
         , "exit" .= hexWord exitAddress
         , "registers" .= registers initial
@@ -283,26 +305,32 @@ caseDocument code image role scenario = (document, artifacts)
                 , "address" .= hexWord address
                 , "size" .= B.length bytes
                 , "permissions" .= permissions
-                , "initial" .= object ["artifact" .= artifactId bytes, "offset" .= (0 :: Int), "length" .= B.length bytes]
+                , "initial" .= object ["artifact" .= blobId, "offset" .= offset, "length" .= B.length bytes]
                 ]
-            | Region name address permissions bytes <- regions
+            | (Region name address permissions bytes, offset) <- zip regions offsets
             ]
         , "functions" .=
             [ object ["address" .= hexWord address, "size" .= size]
-            | (address, size) <- functionsOf code role ++ [(driverBase, fromIntegral (B.length driver))]
+            | (address, size) <- functionsOf code role ++ codeRetainedFunctions code ++ [(driverBase, fromIntegral (B.length driver))]
             ]
         , "stubs" .= stubs
         , "limits" .= object ["instructions" .= (200000 :: Int), "wall_ms" .= (2000 :: Int)]
-        , "ignored_memory" .= [object ["region" .= ("stack" :: String), "offset" .= (0 :: Int), "length" .= (fromIntegral (stackTop - stackBase) :: Int), "reason" .= ("private-frame" :: String)]]
-        , "expected" .=
-            object
-              [ "status" .= ("returned" :: String)
-              , "registers" .= registers (preserved ++ [("sp", stackTop), ("pc", exitAddress)])
-              , "memory" .= expectedMemory
-              , "events" .= events
-              ]
-        , "exclusions" .= ["Host Cortex-R5F native profile. Stock services are scripted stubs at their entries; no kernel, scheduling, interrupt or device qualification." :: String]
         ]
+          ++ [ "ignored_memory" .= [object ["region" .= ("stack" :: String), "offset" .= (0 :: Int), "length" .= (fromIntegral (stackTop - stackBase) :: Int), "reason" .= ("private-frame" :: String)]]
+             | Nothing <- [scenarioStop scenario]
+             ]
+          ++ [ "expected" .=
+                 object
+                   ( [ "status" .= (maybe "returned" (const "stop_address") (scenarioStop scenario) :: String)
+                     , "registers" .= registers (maybe (preserved ++ [("sp", stackTop), ("pc", exitAddress)]) (\stop -> [("pc", stop)]) (scenarioStop scenario))
+                     , "memory" .= expectedMemory
+                     , "events" .= events
+                     ]
+                       ++ ["ignored_memory" .= [stackFrame] | Just _ <- [scenarioStop scenario]]
+                   )
+             , "exclusions" .= ["Host Cortex-R5F native profile. Stock services are scripted stubs at their entries; no kernel, scheduling, interrupt or device qualification." :: String]
+             ]
+          ++ ["kernel" .= object ["stop" .= hexWord stop] | Just stop <- [scenarioStop scenario]]
 
 -- Execution ---------------------------------------------------------------
 
@@ -343,7 +371,7 @@ runRole runner directory code image role scenarios = do
   createDirectoryIfMissing True batchDirectory
   entries <- forM scenarios $ \scenario -> do
     let (document, artifacts) = caseDocument code image role scenario
-        ident = scenarioName scenario ++ "-" ++ roleLabel role
+        ident = scenarioName scenario ++ "-" ++ roleTag role
     forM_ artifacts $ \(name, bytes) -> B.writeFile (batchDirectory </> name) bytes
     BL.writeFile (batchDirectory </> (ident ++ ".case.json")) (encode document)
     pure (object ["id" .= ident, "path" .= (ident ++ ".case.json")])
@@ -373,12 +401,13 @@ compareRoles scenario stock owned =
   where
     compared = [(dataName region, dataAddress region) | region <- scenarioData scenario] ++ [("results", resultsBase)]
     memoryAt address observation = lookup (hexWord address) (observationMemory observation)
-    kept = map fst preserved ++ ["sp"]
+    kept = maybe (map fst preserved ++ ["sp"]) (const []) (scenarioStop scenario)
     registerOf observation name = field name (observationRegisters observation)
 
 -- | The cases a deliberately wrong owned ELF fails after reaching the case exit: a
--- returned status with a wrong observation, or @stub_contract@ at the exit address, the
--- runner's status for a scripted call the case never made. Other statuses are listed apart.
+-- returned or stopped status with a wrong observation, or @stub_contract@ at the exit
+-- address, the runner's status for a scripted call the case never made. Other statuses are
+-- listed apart.
 controlDetections :: [Observation] -> ([String], [(String, String)])
 controlDetections observations =
   ( [observationCase observation | observation <- observations, atExit observation, not (observationPassed observation)]
@@ -389,7 +418,7 @@ controlDetections observations =
   )
   where
     atExit observation =
-      observationRunnerStatus observation == "returned"
+      observationRunnerStatus observation `elem` ["returned", "stop_address"]
         || ( observationRunnerStatus observation == "stub_contract"
                && field "pc" (observationRegisters observation) == String (T.pack (hexWord exitAddress))
            )

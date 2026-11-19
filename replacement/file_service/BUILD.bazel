@@ -50,6 +50,7 @@ haskell_library(
     srcs = [
         "Replacement/FileService/Handles.hs",
         "Replacement/FileService/Native.hs",
+        "Replacement/FileService/Requests.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
@@ -85,9 +86,23 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "file-service-stage",
+    srcs = ["StageMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "StageMain.hs",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
 filegroup(
     name = "all",
     srcs = [
+        ":file-service-stage",
         ":file-service-suite",
         ":host-tests",
     ] + [":file-service-image" + suffix for suffix in file_service_suffixes()],

@@ -15,6 +15,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Handles as Handles
+import qualified Replacement.FileService.Requests as Requests
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -26,19 +27,34 @@ image4Digest = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16
 
 data Increment = Increment
   { incrementCode :: Code
-  , incrementScenarios :: [Scenario]
+  , incrementScenarios :: B.ByteString -> [Scenario]
   , incrementEntries :: [(String, Word)]
   }
 
 increments :: [(String, Increment)]
 increments =
   [ ( "handles"
-    , Increment Handles.code Handles.scenarios
+    , Increment Handles.code (const Handles.scenarios)
         [ ("xm1_file_service_entry_map_bind", 0x71ea34)
         , ("xm1_file_service_entry_map_unbind", 0x71eaac)
         , ("xm1_file_service_entry_map_lookup", 0x71eb28)
         , ("xm1_file_service_entry_tag_allocate", 0x71ef18)
         , ("xm1_file_service_entry_tag_release", 0x71eff4)
+        ]
+    )
+  , ( "requests"
+    , Increment Requests.code Requests.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("result_acquire", 0x71bc2c), ("result_release", 0x71bc6c), ("result_wait", 0x71bc90)
+            , ("read", 0x71be74), ("write", 0x71bfe0), ("close", 0x71c134), ("open", 0x71c2b0)
+            , ("result_done", 0x71c634), ("open_async", 0x71c648), ("open_wait", 0x71c670)
+            , ("open_unflagged", 0x71c6a4), ("open_unflagged_wait", 0x71c6c8), ("read_async", 0x71c6fc)
+            , ("read_wait", 0x71c720), ("write_async", 0x71c75c), ("write_wait", 0x71c780)
+            , ("close_async", 0x71c7bc), ("close_wait", 0x71c7e0), ("translate", 0x71d450)
+            , ("media_ready", 0x71ddf0), ("post", 0x71fde4), ("media_task", 0x71fe7c)
+            , ("route", 0x721578), ("intercept", 0x7217f0)
+            ]
         ]
     )
   ]
@@ -70,7 +86,7 @@ main = do
           image <- B.readFile imagePath
           unless (sha256Hex (sha256 image) == image4Digest) (fail "image 4 identity differs")
           let entries = incrementEntries increment
-              scenarios = incrementScenarios increment
+              scenarios = incrementScenarios increment image
               code = incrementCode increment
           (owned, ownedDigest) <- loadElf entries ownedPath
           stocks <- runRole runner output code image Stock scenarios

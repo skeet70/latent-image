@@ -154,7 +154,7 @@ pub fn open<P: Posting>(port: &mut P, callback: Callback, path: u32, mode: u32, 
             port.wait_result();
             let (status, _) = port.result(slot);
             port.release_result();
-            if status == 0 {
+            if status == 0 || cfg!(file_service_control_open_failure_keeps_tag) {
                 tag
             } else {
                 0
