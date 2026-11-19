@@ -151,7 +151,7 @@ word = withText "word32" $ \text -> maybe (fail "invalid word32") pure (N.parseW
 parseSpans :: Value -> [Value] -> Parser [SpanFact]
 parseSpans caseValue memory = withObject "case" (\c -> do
   version <- c .: "schema_version"
-  unless (version == (1 :: Int)) (fail "unsupported case schema")
+  unless (version `elem` [1, 2 :: Int]) (fail "unsupported case schema")
   regions <- c .: "regions" >>= mapM (withObject "region" (\r -> (,) <$> r .: "id" <*> r .: "address"))
   observed <- mapM (withObject "memory" (\r -> (,) <$> r .: "address" <*> r .: "bytes")) memory
   expected <- c .: "expected"

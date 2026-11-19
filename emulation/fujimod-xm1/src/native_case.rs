@@ -13,6 +13,14 @@
 //! LDRD/STRD it admits the instruction's whole transfer. Unmapped accesses fault
 //! and are refused.
 //!
+//! A page-aligned, non-device region below `0x40000000` may declare an uncached
+//! alias: one backing mapped at its base and at `base | 0x40000000` with the
+//! region's permission, each view admitted as the region is. No view of one
+//! region may overlap a view of another. There is no cache model: both views
+//! always hold the same bytes. The exclusive monitor tags
+//! the plain-view word. Alias views count against neither the region limit nor
+//! the mapped-byte limit, and the observation reports each region at its base.
+//!
 //! The case's call contract is tracked from the decoded control-flow words
 //! (B, BL, BX, BLX, single-register POP with PC, LDM with PC and the two LDR-to-PC
 //! dispatch forms). All other instruction semantics belong to the backend, which executes the
@@ -57,7 +65,8 @@
 //! FujiMod's XP4 CCSIDR override is Cortex-A7-specific, not an R4 cache model.
 //!
 //! Source proposal, not admitted behavior: a shared R-profile cache owner must
-//! mediate CPU loads/stores, instruction fetch, uncached aliases and DMA backing.
+//! mediate CPU loads/stores, instruction fetch, uncached aliases and DMA backing,
+//! replacing the coherent alias views above.
 //! Each core needs selector state and tagged lines with valid/dirty data.
 //! Cleaning publishes a selected dirty line to backing and clears dirty;
 //! invalidation discards the selected line; clean-and-invalidate publishes then
@@ -76,7 +85,7 @@
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
-    Access, Cpu, ExecutionError, Exit, Fault, Hook, HookRange, Model, Register, Run, arm,
+    Access, Cpu, ExecutionError, Exit, Fault, Hook, HookRange, Model, Register, Run, arm, memory::Backing,
 };
 use fujimod_emulator_cpu_unicorn::Library;
 use serde::ser::{SerializeMap, Serializer};
@@ -86,6 +95,7 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
 /// Legacy wire byte bound.
@@ -167,6 +177,7 @@ const PAGE: u64 = 4096;
 const TRANSLATION_CACHE_BYTES: u32 = 4 * 1024 * 1024;
 /// The PMSAv7 default map is execute-never from 0x80000000.
 const EXECUTABLE_END: u64 = 0x7fff_fffc;
+const UNCACHED_ALIAS: u32 = 0x4000_0000;
 const USER_MODE: u32 = 0x10;
 const SUPERVISOR_MODE: u32 = 0x13;
 const SYSTEM_MODE: u32 = 0x1f;
@@ -430,10 +441,37 @@ impl Permission {
     }
 }
 
+/// Whether a region is also visible at `base | UNCACHED_ALIAS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Views {
+    Plain,
+    /// Both views share one backing and the region's permission.
+    UncachedAlias,
+}
+
 struct Region {
     span: Span,
     permission: Permission,
+    views: Views,
     initial: Box<[u8]>,
+}
+
+impl Region {
+    fn alias(&self) -> Option<Span> {
+        match self.views {
+            Views::Plain => None,
+            Views::UncachedAlias => Some(Span { base: self.span.base | UNCACHED_ALIAS, bytes: self.span.bytes }),
+        }
+    }
+
+    fn holds(&self, address: u64, bytes: u64) -> bool {
+        self.span.contains(address, bytes) || self.alias().is_some_and(|alias| alias.contains(address, bytes))
+    }
+
+    fn overlaps(&self, other: &Region) -> bool {
+        let views = |region: &Region| [Some(region.span), region.alias()].into_iter().flatten();
+        views(self).any(|mine| views(other).any(|theirs| mine.overlaps(theirs)))
+    }
 }
 
 /// A core register from r0 through LR.
@@ -506,7 +544,7 @@ impl MemoryContract {
         case.regions.iter().any(|region| {
             region.permission != Permission::Device
                 && region.permission.grants(need)
-                && region.span.contains(u64::from(address), bytes)
+                && region.holds(u64::from(address), bytes)
         })
     }
 }
@@ -763,12 +801,12 @@ struct Case {
 }
 
 impl Case {
-    /// Containment of the whole range in one region granting `need`; a device
-    /// region takes whole-word accesses only.
+    /// Containment of the whole range in one view of one region granting `need`;
+    /// a device region takes whole-word accesses only.
     fn covers(&self, address: u64, bytes: u64, need: Need) -> bool {
         self.regions.iter().any(|region| {
             region.permission.grants(need)
-                && region.span.contains(address, bytes)
+                && region.holds(address, bytes)
                 && (region.permission != Permission::Device || bytes == 4)
         })
     }
@@ -784,8 +822,14 @@ impl Case {
             && self.regions.iter().any(|region| {
                 region.permission != Permission::Device
                     && region.permission.grants(need)
-                    && region.span.contains(u64::from(address), 4)
+                    && region.holds(u64::from(address), 4)
             })
+    }
+
+    /// The plain-view address of an address in an uncached alias view; any other address.
+    fn canonical(&self, address: u32) -> u32 {
+        let aliased = self.regions.iter().filter_map(Region::alias).any(|alias| alias.contains(u64::from(address), 1));
+        if aliased { address - UNCACHED_ALIAS } else { address }
     }
 
     fn stops_at(&self, address: u32) -> bool {
@@ -1037,18 +1081,34 @@ fn parse_case(
         if permission == Permission::Device && (bytes != 4 || !BANK_WORDS.contains(&base)) {
             return Err(WireError("a device region is one interrupt-controller bank word"));
         }
-        if permission == Permission::ReadExecute && span.end() > EXECUTABLE_END {
+        let views = if tokens.peek() == Some(b"u") {
+            tokens.next()?;
+            Views::UncachedAlias
+        } else {
+            Views::Plain
+        };
+        if views == Views::UncachedAlias
+            && (permission == Permission::Device
+                || u64::from(base) % PAGE != 0
+                || u64::from(bytes) % PAGE != 0
+                || span.end() > u64::from(UNCACHED_ALIAS))
+        {
+            return Err(WireError("an uncached alias needs a non-device, page-aligned region below 0x40000000"));
+        }
+        let region = Region { span, permission, views, initial: Box::default() };
+        let executable_end = region.alias().unwrap_or(span).end();
+        if permission == Permission::ReadExecute && executable_end > EXECUTABLE_END {
             return Err(WireError("executable region must end by 0x7ffffffc"));
         }
         mapped += u64::from(bytes);
         if mapped > envelope.aggregate_bytes() {
             return Err(envelope.error("regions exceed 4 MiB in total", "regions exceed 8 MiB in total"));
         }
-        if regions.iter().any(|region| region.span.overlaps(span)) {
+        if regions.iter().any(|prior| prior.overlaps(&region)) {
             return Err(WireError("regions overlap"));
         }
         let initial = initial(&mut tokens, bytes, envelope)?;
-        regions.push(Region { span, permission, initial });
+        regions.push(Region { initial, ..region });
     }
 
     let mut functions: Vec<Span> = Vec::with_capacity(function_count as usize);
@@ -1746,6 +1806,11 @@ fn execute_captured<'a>(case: &'a Case, captures: &[Capture], snapshots: &mut Ve
         pc: case.entry.0,
     };
     let refused = |detail: String| Observation::refused(case, entry_registers, detail);
+    // Declared before `cpu`, so the CPU mapping these backings drops first.
+    let backings = match alias_backings(case) {
+        Ok(backings) => backings,
+        Err(error) => return refused(format!("case setup failed: {error}")),
+    };
     let cpu = match Library::linked().and_then(|library| library.open(Model::CortexR5F, TRANSLATION_CACHE_BYTES)) {
         Ok(cpu) => cpu,
         Err(error) => return refused(format!("pinned CPU unavailable: {error}")),
@@ -1753,7 +1818,7 @@ fn execute_captured<'a>(case: &'a Case, captures: &[Capture], snapshots: &mut Ve
     if !cpu.features().access_refusal {
         return refused("pinned CPU lacks native access refusal".to_owned());
     }
-    if let Err(error) = prepare(&cpu, case) {
+    if let Err(error) = prepare(&cpu, case, &backings) {
         return refused(format!("case setup failed: {error}"));
     }
     let context = Context { cpu: &cpu, case, state: UnsafeCell::new(State::new(case)) };
@@ -1793,9 +1858,18 @@ fn execute_captured<'a>(case: &'a Case, captures: &[Capture], snapshots: &mut Ve
     state.observe(&cpu, case, elapsed, entry_registers)
 }
 
-fn prepare(cpu: &dyn Cpu, case: &Case) -> Result<(), String> {
+/// One zeroed page-aligned backing per aliased region, in region order.
+fn alias_backings(case: &Case) -> Result<Vec<Backing>, String> {
+    case.regions
+        .iter()
+        .filter(|region| region.views == Views::UncachedAlias)
+        .map(|region| Backing::aligned_zeros(region.span.bytes as usize, PAGE as usize))
+        .collect()
+}
+
+fn prepare(cpu: &dyn Cpu, case: &Case, backings: &[Backing]) -> Result<(), String> {
     let mut pages: BTreeMap<u64, u32> = BTreeMap::new();
-    for region in case.regions.iter() {
+    for region in case.regions.iter().filter(|region| region.views == Views::Plain) {
         let mut page = u64::from(region.span.base) & !(PAGE - 1);
         while page < region.span.end() {
             *pages.entry(page).or_default() |= region.permission.page_bits();
@@ -1811,6 +1885,15 @@ fn prepare(cpu: &dyn Cpu, case: &Case) -> Result<(), String> {
     }
     for (base, end, bits) in runs {
         cpu.map_zeroed(base, (end - base) as usize, bits)?;
+    }
+    let aliased = case.regions.iter().filter_map(|region| region.alias().map(|alias| (region, alias)));
+    for ((region, alias), backing) in aliased.zip(backings) {
+        let pointer = NonNull::new(backing.as_ptr()).ok_or("alias backing is null")?;
+        for view in [region.span, alias] {
+            // SAFETY: `backing` outlives `cpu` (see `execute_captured`), and no Rust
+            // reference to its bytes exists while the CPU runs.
+            unsafe { cpu.map_backing(u64::from(view.base), view.bytes as usize, region.permission.page_bits(), pointer)? };
+        }
     }
     for region in case.regions.iter() {
         cpu.write_memory(u64::from(region.span.base), &region.initial)?;
@@ -2255,7 +2338,7 @@ impl State {
                 let value = read_word(cpu, u64::from(address))?;
                 self.record_access(ProvenanceKind::Read, address, 4, u64::from(value));
                 write(cpu, arm::CORE[target], value)?;
-                self.monitor = Monitor::Exclusive(address);
+                self.monitor = Monitor::Exclusive(case.canonical(address));
                 self.reserved = Some(address);
             }
             KernelWord::StoreExclusive { status, source, base } => {
@@ -2266,7 +2349,7 @@ impl State {
                     return Err(Step::Stop(Status::MemoryGuard));
                 }
                 let stored = match self.monitor {
-                    Monitor::Exclusive(tag) if tag == address => true,
+                    Monitor::Exclusive(tag) if tag == case.canonical(address) => true,
                     Monitor::Exclusive(_) => return Err(Step::Stop(Status::UnsupportedInstruction)),
                     Monitor::Open => false,
                 };
@@ -2488,7 +2571,7 @@ impl State {
             *target = memory.address(cpu, case, Need::Write)?;
         }
         for (target, memory) in targets.iter().zip(call.writes.iter()) {
-            if self.monitor.clobbered(None, u64::from(*target), memory.bytes.len() as u64) {
+            if self.monitor.clobbered(None, u64::from(case.canonical(*target)), memory.bytes.len() as u64) {
                 return Err(Step::Stop(Status::UnsupportedInstruction));
             }
         }
@@ -2594,7 +2677,7 @@ impl State {
         self.log(kind, address, size, value);
         let transfer = self.instruction.transfer.take();
         match self.admit(case, need, address, size, transfer) {
-            Ok(true) if need == Need::Write && self.monitor.clobbered(transfer, address, size as u64) => {
+            Ok(true) if need == Need::Write && self.monitor.clobbered(transfer, u64::from(case.canonical(address as u32)), size as u64) => {
                 self.status.get_or_insert(Status::UnsupportedInstruction);
                 return refuse(cpu);
             }
