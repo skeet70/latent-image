@@ -1720,7 +1720,7 @@
         "xm1_kernel_critical_enter",
         "xm1_kernel_critical_exit"
       ],
-      "expected_sha256": "23db472588955cba2ba1e4d7be2200473639561860ea44b95e9d3c2355af0ffe"
+      "expected_sha256": "cc89d725f9ca28cdb4cf6268b93a2042dc7000fc8a5368156a4d64b5a6da83f5"
     },
     {
       "id": "//replacement/save:save-owned",

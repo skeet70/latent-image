@@ -54,7 +54,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Effects for Services<M, 
                 for (argument, word) in arguments[1..].iter_mut().zip(bytes.chunks_exact(4)) {
                     *argument = u32::from_le_bytes([word[0], word[1], word[2], word[3]]) as usize;
                 }
-                self.machine.enter(callback_word(callback), &arguments[..1 + bytes.len() / 4]);
+                self.machine.enter_client(callback_word(callback), &arguments[..1 + bytes.len() / 4], None);
             }
         }
     }

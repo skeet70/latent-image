@@ -64,9 +64,12 @@ impl<M: Machine> replies::Clients for Clients<M> {
                 arguments[0] = status.0 as usize;
                 for (argument, word) in arguments[1..].iter_mut().zip(words) { *argument = *word as usize; }
                 assert!(words.len() < arguments.len(), "controller reply exceeds its ABI");
-                self.0.enter(entry, &arguments[..words.len() + 1]);
+                self.0.enter_client(entry, &arguments[..words.len() + 1], None);
             }
-            Values::Record(record) => { self.0.enter(entry, &[status.0 as usize, record.as_ptr() as usize]); }
+            Values::Record(record) => {
+                let shape = Some(xm1_saclac_shared::stock::ClientRecord { index: 1, bytes: record.len() });
+                self.0.enter_client(entry, &[status.0 as usize, record.as_ptr() as usize], shape);
+            }
         }
     }
 }

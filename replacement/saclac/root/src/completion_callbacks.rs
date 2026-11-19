@@ -62,7 +62,7 @@ pub fn primary_end<B: Backend>(poster: &Poster<B>, status: u32, result: [u32; 3]
 pub fn primary_notice(machine: &impl Machine, status: u32) {
     if status != 0 { return; }
     if let Some(callback) = optional_callback(machine.read_u32(PARAMETER_BLOCKS[7].address)) {
-        machine.enter(callback_word(callback), &[8]);
+        machine.enter_client(callback_word(callback), &[8], None);
     }
 }
 

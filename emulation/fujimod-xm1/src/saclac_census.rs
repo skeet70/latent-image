@@ -44,6 +44,13 @@ const DIAGNOSTIC_SITE_LIMIT: usize = 32;
 const DIAGNOSTIC_RANGE_LIMIT: usize = 8;
 const DIAGNOSTIC_HIT_LIMIT: usize = 4096;
 const DIAGNOSTIC_WRITE_LIMIT: usize = 1024;
+const DIAGNOSTIC_DUMP_DECL_LIMIT: usize = 4;
+const DIAGNOSTIC_DUMP_RANGE_LIMIT: usize = 16;
+/// The bytes of one dump: a native case maps at most 8 MiB, so a larger dump cannot seed one.
+const DIAGNOSTIC_DUMP_BYTES: u64 = 8 << 20;
+const DIAGNOSTIC_DUMP_COUNT: usize = 64;
+/// The general registers every census stop reads.
+const STOP_REGISTERS: [&str; 13] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"];
 
 
 const INITIAL_MENU: u64 = 80_000_000;
@@ -572,12 +579,31 @@ struct DiagnosticReadDecl { label: String, address: String, bytes: u32 }
 #[derive(Clone, Debug, Deserialize)]
 struct DiagnosticRangeDecl { label: String, start: String, end: String }
 
+#[derive(Clone, Debug, Deserialize)]
+struct DiagnosticSpanDecl { start: String, end: String }
+
+/// A binary memory dump taken at each hit of one declared site, optionally only when one register,
+/// or the word at that register plus `at`, holds one value; the ranges are concatenated in declared order.
+#[derive(Clone, Debug, Deserialize)]
+struct DiagnosticDumpDecl {
+    label: String,
+    site: String,
+    #[serde(default)]
+    when: Option<DiagnosticConditionDecl>,
+    ranges: Vec<DiagnosticSpanDecl>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DiagnosticConditionDecl { register: String, #[serde(default)] at: Option<u32>, value: String }
+
 #[derive(Debug, Deserialize)]
 struct DiagnosticDocument {
     schema: u32,
     sites: Vec<DiagnosticSiteDecl>,
     reads: Vec<DiagnosticReadDecl>,
     writes: Vec<DiagnosticRangeDecl>,
+    #[serde(default)]
+    dumps: Vec<DiagnosticDumpDecl>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -589,11 +615,21 @@ struct DiagnosticRead { label: String, address: Address, bytes: u32 }
 #[derive(Clone, Debug, Serialize)]
 struct DiagnosticRange { label: String, start: Address, end: Address }
 
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticSpan { start: Address, end: Address }
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticCondition { register: String, at: Option<u32>, value: Address }
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticDump { label: String, site: Address, when: Option<DiagnosticCondition>, ranges: Vec<DiagnosticSpan> }
+
 #[derive(Debug)]
 struct DiagnosticPlan {
     sites: Vec<DiagnosticSite>,
     reads: Vec<DiagnosticRead>,
     writes: Vec<DiagnosticRange>,
+    dumps: Vec<DiagnosticDump>,
 }
 
 fn load_diagnostic(bytes: &[u8]) -> Result<DiagnosticPlan, String> {
@@ -628,7 +664,33 @@ fn load_diagnostic(bytes: &[u8]) -> Result<DiagnosticPlan, String> {
             "diagnostic: write ranges overlap")?;
         writes.push(DiagnosticRange { label: declared.label, start: Address(start), end: Address(end) });
     }
-    Ok(DiagnosticPlan { sites, reads, writes })
+    labels.clear();
+    require(document.dumps.len() <= DIAGNOSTIC_DUMP_DECL_LIMIT, "diagnostic: dump count is outside bounds")?;
+    let mut dumps = Vec::with_capacity(document.dumps.len());
+    for declared in document.dumps {
+        require(!declared.label.is_empty() && labels.insert(declared.label.clone()), "diagnostic: a dump label is empty or repeated")?;
+        let site = sites.iter().find(|site| site.label == declared.site).ok_or("diagnostic: a dump names an undeclared site")?.address;
+        let when = match declared.when {
+            Some(condition) => {
+                require(STOP_REGISTERS.contains(&condition.register.as_str()), "diagnostic: a dump condition names an unread register")?;
+                Some(DiagnosticCondition { register: condition.register, at: condition.at, value: Address(parse_hex(&condition.value)?) })
+            }
+            None => None,
+        };
+        require(!declared.ranges.is_empty() && declared.ranges.len() <= DIAGNOSTIC_DUMP_RANGE_LIMIT, "diagnostic: a dump range count is outside bounds")?;
+        let mut ranges: Vec<DiagnosticSpan> = Vec::with_capacity(declared.ranges.len());
+        let mut bytes = 0u64;
+        for span in declared.ranges {
+            let (start, end) = (parse_hex(&span.start)?, parse_hex(&span.end)?);
+            require(start % 4 == 0 && end % 4 == 0 && start < end, "diagnostic: a dump range is invalid")?;
+            require(!ranges.iter().any(|range| start < range.end.0 && range.start.0 < end), "diagnostic: dump ranges overlap")?;
+            bytes += u64::from(end - start);
+            ranges.push(DiagnosticSpan { start: Address(start), end: Address(end) });
+        }
+        require(bytes <= DIAGNOSTIC_DUMP_BYTES, "diagnostic: a dump exceeds its byte bound")?;
+        dumps.push(DiagnosticDump { label: declared.label, site, when, ranges });
+    }
+    Ok(DiagnosticPlan { sites, reads, writes, dumps })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -644,30 +706,50 @@ struct DiagnosticHit {
     memory: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct DiagnosticDumpRecord {
+    label: String,
+    index: usize,
+    instructions: u64,
+    core: usize,
+    file: String,
+    bytes: u64,
+    sha256: String,
+}
+
 #[derive(Debug, Serialize)]
 struct DiagnosticReport {
     sites: Vec<DiagnosticSite>,
     reads: Vec<DiagnosticRead>,
     write_ranges: Vec<DiagnosticRange>,
+    dump_plans: Vec<DiagnosticDump>,
     hits: Vec<DiagnosticHit>,
     writes: Vec<serde_json::Value>,
+    dumps: Vec<DiagnosticDumpRecord>,
     hit_overflow: u64,
     write_overflow: u64,
+    dump_overflow: u64,
 }
 
 #[derive(Debug)]
 struct DiagnosticState {
     plan: DiagnosticPlan,
+    output: PathBuf,
     hits: Vec<DiagnosticHit>,
     writes: Vec<serde_json::Value>,
+    dumps: Vec<DiagnosticDumpRecord>,
     cursor: usize,
     hit_overflow: u64,
     write_overflow: u64,
+    dump_overflow: u64,
 }
 
 impl DiagnosticState {
-    fn new(plan: DiagnosticPlan) -> Self {
-        Self { plan, hits: Vec::new(), writes: Vec::new(), cursor: 0, hit_overflow: 0, write_overflow: 0 }
+    fn new(plan: DiagnosticPlan, output: &Path) -> Self {
+        Self {
+            plan, output: output.join("dumps"), hits: Vec::new(), writes: Vec::new(), dumps: Vec::new(), cursor: 0,
+            hit_overflow: 0, write_overflow: 0, dump_overflow: 0,
+        }
     }
 
     fn classes(&self) -> impl Iterator<Item = WatchRange> + '_ {
@@ -680,23 +762,58 @@ impl DiagnosticState {
         self.plan.reads.iter().map(|read| SiteRead::Absolute([u64::from(read.address.0), u64::from(read.bytes)])).collect()
     }
 
-    fn hit(&mut self, stop: &Stop) {
-        let Some(site) = self.plan.sites.iter().find(|site| site.address.0 == stop.address) else { return };
+    fn hit(&mut self, machine: &Machine, stop: &Stop) -> Result<(), String> {
+        let Some(site) = self.plan.sites.iter().find(|site| site.address.0 == stop.address) else { return Ok(()) };
         if self.hits.len() >= DIAGNOSTIC_HIT_LIMIT {
             self.hit_overflow += 1;
-            return;
+        } else {
+            self.hits.push(DiagnosticHit {
+                label: site.label.clone(),
+                address: site.address,
+                instructions: stop.instructions,
+                core: stop.core,
+                cpsr: stop.cpsr,
+                sp: stop.sp.clone(),
+                lr: stop.lr.clone(),
+                registers: stop.registers.iter().map(|(name, value)| ((*name).to_owned(), value.clone())).collect(),
+                memory: stop.memory.clone(),
+            });
         }
-        self.hits.push(DiagnosticHit {
-            label: site.label.clone(),
-            address: site.address,
-            instructions: stop.instructions,
-            core: stop.core,
-            cpsr: stop.cpsr,
-            sp: stop.sp.clone(),
-            lr: stop.lr.clone(),
-            registers: stop.registers.iter().map(|(name, value)| ((*name).to_owned(), value.clone())).collect(),
-            memory: stop.memory.clone(),
-        });
+        for dump in &self.plan.dumps {
+            if dump.site.0 != stop.address { continue }
+            if let Some(condition) = &dump.when {
+                let held = parse_hex(stop.registers.get(condition.register.as_str()).ok_or("diagnostic: a dump register was not read")?)?;
+                let held = match condition.at {
+                    Some(offset) => {
+                        let mut word = [0u8; 4];
+                        let address = held.checked_add(offset).ok_or("diagnostic: a dump condition address overflows")?;
+                        machine.session.board.read_memory(stop.core, u64::from(address), &mut word)?;
+                        u32::from_le_bytes(word)
+                    }
+                    None => held,
+                };
+                if held != condition.value.0 { continue }
+            }
+            let index = self.dumps.iter().filter(|record| record.label == dump.label).count();
+            if index >= DIAGNOSTIC_DUMP_COUNT {
+                self.dump_overflow += 1;
+                continue;
+            }
+            let mut bytes = Vec::new();
+            for range in &dump.ranges {
+                let start = bytes.len();
+                bytes.resize(start + (range.end.0 - range.start.0) as usize, 0);
+                machine.session.board.read_memory(stop.core, u64::from(range.start.0), &mut bytes[start..])?;
+            }
+            std::fs::create_dir_all(&self.output).map_err(|error| format!("{}: {error}", self.output.display()))?;
+            let file = format!("{}-{index:04}.bin", dump.label);
+            write(&self.output.join(&file), &bytes)?;
+            self.dumps.push(DiagnosticDumpRecord {
+                label: dump.label.clone(), index, instructions: stop.instructions, core: stop.core,
+                file: format!("dumps/{file}"), bytes: bytes.len() as u64, sha256: sha256(&bytes),
+            });
+        }
+        Ok(())
     }
 
     fn stores(&mut self, state: &serde_json::Value) -> Result<(), String> {
@@ -725,10 +842,13 @@ impl DiagnosticState {
             sites: self.plan.sites.clone(),
             reads: self.plan.reads.clone(),
             write_ranges: self.plan.writes.clone(),
+            dump_plans: self.plan.dumps.clone(),
             hits: self.hits.clone(),
             writes: self.writes.clone(),
+            dumps: self.dumps.clone(),
             hit_overflow: self.hit_overflow,
             write_overflow: self.write_overflow,
+            dump_overflow: self.dump_overflow,
         }
     }
 }
@@ -1093,7 +1213,7 @@ impl<'a> Census<'a> {
     fn stop(&mut self, machine: &Machine, stops: &[Stop]) -> Result<(), String> {
         self.record_stores()?;
         for stop in stops {
-            if let Some(diagnostic) = &mut self.diagnostic { diagnostic.hit(stop); }
+            if let Some(diagnostic) = &mut self.diagnostic { diagnostic.hit(machine, stop)?; }
             if let Some(plan) = &self.plan.interface {
                 self.interface.entry(machine, plan, stop)?;
             }
@@ -1642,7 +1762,7 @@ fn drive() -> Result<(), String> {
     let (diagnostic, diagnostic_binding) = match paths.get("--diagnostic") {
         Some(path) => {
             let (bytes, binding) = bound(path)?;
-            (Some(DiagnosticState::new(load_diagnostic(&bytes)?)), Some(binding))
+            (Some(DiagnosticState::new(load_diagnostic(&bytes)?, &output)), Some(binding))
         }
         None => (None, None),
     };
@@ -1938,6 +2058,25 @@ mod tests {
             ],
         })).unwrap();
         assert!(load_diagnostic(&overlapping).is_err());
+
+        let dumping = |site: &str, register: &str, ranges: serde_json::Value| serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "sites": [{"label": "capture", "address": "0x00001000"}],
+            "reads": [],
+            "writes": [{"label": "level", "start": "0x00002000", "end": "0x00002004"}],
+            "dumps": [{"label": "state", "site": site, "when": {"register": register, "value": "0x0"}, "ranges": ranges}],
+        })).unwrap();
+        let plan = load_diagnostic(&dumping("capture", "r0", serde_json::json!([
+            {"start": "0x00900000", "end": "0x00a00000"}, {"start": "0x01690000", "end": "0x01710000"}]))).unwrap();
+        assert_eq!((plan.dumps[0].site.0, plan.dumps[0].ranges.len()), (0x1000, 2));
+        let one = serde_json::json!([{"start": "0x00900000", "end": "0x00900100"}]);
+        assert!(load_diagnostic(&dumping("absent", "r0", one.clone())).is_err(), "a dump at an undeclared site is refused");
+        assert!(load_diagnostic(&dumping("capture", "sp", one)).is_err(), "a condition on an unread register is refused");
+        assert!(load_diagnostic(&dumping("capture", "r0", serde_json::json!([{"start": "0x00000000", "end": "0x00800004"}]))).is_err(),
+            "a dump larger than a native case can map is refused");
+        assert!(load_diagnostic(&dumping("capture", "r0", serde_json::json!([
+            {"start": "0x00900000", "end": "0x00900100"}, {"start": "0x009000fc", "end": "0x00900200"}]))).is_err(),
+            "overlapping dump ranges are refused");
     }
 
     fn context(machine: u32, row: u32, state: Option<u16>) -> EntryContext {

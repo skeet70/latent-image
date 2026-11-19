@@ -25,6 +25,17 @@ pub enum Argument {
 /// The most arguments a retained entry `Guest` enters takes.
 const MOST_ARGUMENTS: usize = 17;
 
+/// A client callback argument the client reads through its address: the argument's index and
+/// the record's length.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClientRecord {
+    pub index: usize,
+    pub bytes: usize,
+}
+
+/// The most arguments a client callback call carries (stock's widest reply passes nine).
+const MOST_CLIENT_ARGUMENTS: usize = 12;
+
 /// The machine the boundary reads, writes and enters.
 pub trait Machine {
     fn read_u8(&self, address: u32) -> u8;
@@ -49,6 +60,28 @@ pub trait Machine {
         }
         self.enter(address, &words[..arguments.len()])
     }
+    /// Enters the client callback `target` with `arguments`, as stock's reply helpers do at their
+    /// `blx` into the client; `record` names an argument the client reads through its address.
+    fn enter_client(&self, target: u32, arguments: &[usize], record: Option<ClientRecord>) -> u32 {
+        let _ = record;
+        self.enter(target, arguments)
+    }
+}
+
+/// Root's one client call: the census observes its entry as the client-visible call that stock's
+/// reply helpers make at their `blx` (target in r0, the argument words at r1 with their count in
+/// r2, and in r3 an optional record argument as `(index + 1) | bytes << 8`).
+#[cfg(target_arch = "arm")]
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn xm1_saclac_client_call(target: u32, words: *const u32, count: u32, record: u32) -> u32 {
+    let _ = record;
+    let mut arguments = [0usize; MOST_CLIENT_ARGUMENTS];
+    let count = (count as usize).min(MOST_CLIENT_ARGUMENTS);
+    for (index, argument) in arguments[..count].iter_mut().enumerate() {
+        *argument = unsafe { read_volatile(words.add(index)) } as usize;
+    }
+    Guest.enter(target, &arguments[..count])
 }
 
 /// The X-M1 1.50 machine.
@@ -67,6 +100,22 @@ impl Machine for Guest {
     fn write_u16(&mut self, address: u32, value: u16) { unsafe { write_volatile(address as usize as *mut u16, value) } }
 
     fn write_u32(&mut self, address: u32, value: u32) { unsafe { write_volatile(address as usize as *mut u32, value) } }
+
+    fn enter_client(&self, target: u32, arguments: &[usize], record: Option<ClientRecord>) -> u32 {
+        assert!(arguments.len() <= MOST_CLIENT_ARGUMENTS, "client call exceeds its ABI");
+        #[cfg(target_arch = "arm")]
+        {
+            let mut words = [0u32; MOST_CLIENT_ARGUMENTS];
+            for (word, argument) in words.iter_mut().zip(arguments) { *word = *argument as u32; }
+            let record = record.map_or(0, |record| (record.index as u32 + 1) | (record.bytes as u32) << 8);
+            xm1_saclac_client_call(target, words.as_ptr(), arguments.len() as u32, record)
+        }
+        #[cfg(not(target_arch = "arm"))]
+        {
+            let _ = record;
+            self.enter(target, arguments)
+        }
+    }
 
     fn enter(&self, address: u32, arguments: &[usize]) -> u32 {
         let entry = address as usize;
@@ -212,9 +261,9 @@ impl<M: Machine> Clients for Stock<M> {
     fn enter(&mut self, callback: ClientCallback, arguments: ClientArguments) {
         let word = callback_word(callback);
         match arguments {
-            ClientArguments::Status(status) => self.machine.enter(word, &[status.0 as usize]),
+            ClientArguments::Status(status) => self.machine.enter_client(word, &[status.0 as usize], None),
             ClientArguments::Reply { status, words: [first, second, third, fourth] } => {
-                self.machine.enter(word, &[status.0 as usize, first as usize, second as usize, third as usize, fourth as usize])
+                self.machine.enter_client(word, &[status.0 as usize, first as usize, second as usize, third as usize, fourth as usize], None)
             }
         };
     }

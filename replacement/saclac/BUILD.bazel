@@ -164,6 +164,7 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:first-stage",
+        "//host:text",
     ],
 )
 
@@ -189,8 +190,9 @@ genrule(
     tools = [":saclac-extents"],
 )
 
-# One owned post entry per compared Root image variant, bound from each link, so a single sites
-# file observes the candidate and its wrong-driver-store control through every relink.
+# One owned post, owned callback and client call entry per compared Root image variant, bound from
+# each link, so a single sites file observes the candidate and its wrong-driver-store control
+# through every relink. Owned callbacks come from the payload contract's declared identities.
 _CENSUS_IMAGES = ["saclac-image", "saclac-image-wrong-driver-store"]
 
 _CENSUS_IMAGE_FILES = [
@@ -201,9 +203,9 @@ _CENSUS_IMAGE_FILES = [
 
 genrule(
     name = "saclac-census-sites",
-    srcs = ["//emulation:saclac-census-sites"] + _CENSUS_IMAGE_FILES,
+    srcs = ["//emulation:saclac-census-sites", "payload-fields.json"] + _CENSUS_IMAGE_FILES,
     outs = ["saclac-census-sites.json"],
-    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $@ " + " ".join(["$(location " + label + ")" for label in _CENSUS_IMAGE_FILES]),
+    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $(location payload-fields.json) $@ " + " ".join(["$(location " + label + ")" for label in _CENSUS_IMAGE_FILES]),
     tools = [":saclac-extents"],
 )
 

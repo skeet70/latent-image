@@ -49,6 +49,23 @@ pub struct OwnedPost {
     instruction: String,
 }
 
+/// A Root replacement of a declared stock callback, bound from one variant's link: its first 16
+/// code bytes select the variant, and entering it is observed as entering the stock callback.
+#[derive(Debug, Deserialize)]
+pub struct OwnedCallback {
+    address: String,
+    code: String,
+    stock_entry: String,
+}
+
+/// Root's client call veneer, bound from one variant's link: target in r0, argument words at r1
+/// with their count in r2, and in r3 an optional record argument as `(index + 1) | bytes << 8`.
+#[derive(Debug, Deserialize)]
+pub struct OwnedClient {
+    address: String,
+    code: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Shared {
     start: String,
@@ -61,6 +78,10 @@ pub struct Declaration {
     /// One entry per Root image variant, each bound from that variant's link; the loaded word selects the variant.
     #[serde(default)]
     owned_posts: Vec<OwnedPost>,
+    #[serde(default)]
+    owned_callbacks: Vec<OwnedCallback>,
+    #[serde(default)]
+    owned_clients: Vec<OwnedClient>,
     entries: Vec<Entry>,
     shared: Vec<Shared>,
     #[serde(default)]
@@ -70,6 +91,10 @@ pub struct Declaration {
 pub struct Plan {
     post: u32,
     owned_posts: Vec<(u32, u32)>,
+    /// Address, first 16 code bytes, stock callback entry.
+    owned_callbacks: Vec<(u32, [u8; 16], u32)>,
+    /// Address, first 16 code bytes.
+    owned_clients: Vec<(u32, [u8; 16])>,
     entries: Vec<BoundaryEntry>,
     shared: Vec<(u32, u32)>,
     callers: Vec<(u32, u32)>,
@@ -86,6 +111,16 @@ impl Declaration {
         let mut owned_addresses = BTreeSet::new();
         require(owned_posts.iter().all(|&(address, _)| address & 3 == 0 && address != post && owned_addresses.insert(address)),
             "owned interface post is unaligned, repeated or duplicates stock")?;
+        let owned_callbacks = self.owned_callbacks.iter()
+            .map(|owned| Ok((parse_hex(&owned.address)?, code(&owned.code)?, parse_hex(&owned.stock_entry)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        let owned_clients = self.owned_clients.iter()
+            .map(|owned| Ok((parse_hex(&owned.address)?, code(&owned.code)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        require(owned_callbacks.len() <= 64 && owned_clients.len() <= 8, "owned interface entries exceed bounds")?;
+        require(owned_callbacks.iter().map(|&(address, _, _)| address).chain(owned_clients.iter().map(|&(address, _)| address))
+            .all(|address| address & 3 == 0 && address != post && owned_addresses.insert(address)),
+            "owned interface entry is unaligned, repeated or duplicates another site")?;
         let mut addresses = BTreeSet::from([post]);
         let mut entries = Vec::new();
         for entry in self.entries {
@@ -113,18 +148,34 @@ impl Declaration {
             Ok((start, end))
         }).collect::<Result<Vec<_>, String>>()?;
         require(callers.len() <= 16 && (!entries.iter().any(|entry| matches!(entry.kind, EntryKind::ServiceRequest)) || !callers.is_empty()), "interface service callers missing or excessive")?;
-        Ok(Plan { post, owned_posts, entries, shared, callers })
+        require(entries.iter().all(|entry| !owned_addresses.contains(&entry.address)), "owned interface site duplicates a stock entry")?;
+        require(owned_callbacks.iter().all(|&(_, _, stock)| entries.iter().any(|entry| entry.address == stock && matches!(entry.kind, EntryKind::Callback))),
+            "owned interface callback names no declared stock callback")?;
+        Ok(Plan { post, owned_posts, owned_callbacks, owned_clients, entries, shared, callers })
     }
 }
 
 impl Plan {
     pub fn sites(&self) -> Vec<u32> {
-        let mut sites = Vec::with_capacity(self.entries.len() + 1 + self.owned_posts.len());
+        let mut sites = Vec::with_capacity(self.entries.len() + 1 + self.owned_posts.len() + self.owned_callbacks.len() + self.owned_clients.len());
         sites.push(self.post);
         sites.extend(self.entries.iter().map(|entry| entry.address));
         sites.extend(self.owned_posts.iter().map(|&(address, _)| address));
+        sites.extend(self.owned_callbacks.iter().map(|&(address, _, _)| address));
+        sites.extend(self.owned_clients.iter().map(|&(address, _)| address));
         sites
     }
+}
+
+/// Sixteen code bytes written as 32 hexadecimal digits.
+fn code(text: &str) -> Result<[u8; 16], String> {
+    let digits = text.strip_prefix("0x").unwrap_or(text);
+    require(digits.len() == 32 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()), "owned interface code is not 16 bytes of hexadecimal")?;
+    let mut code = [0; 16];
+    for (index, byte) in code.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&digits[2 * index..2 * index + 2], 16).map_err(|error| error.to_string())?;
+    }
+    Ok(code)
 }
 
 fn post_event(queue: u8, header: u32, payload: Vec<u8>) -> Option<Event> {
@@ -138,6 +189,14 @@ fn post_event(queue: u8, header: u32, payload: Vec<u8>) -> Option<Event> {
 impl Plan {
     fn owned_post_instruction(&self, address: u32) -> Option<u32> {
         self.owned_posts.iter().find(|&&(owned, _)| owned == address).map(|&(_, instruction)| instruction)
+    }
+
+    fn owned_callback(&self, address: u32) -> Option<([u8; 16], u32)> {
+        self.owned_callbacks.iter().find(|&&(owned, _, _)| owned == address).map(|&(_, code, stock)| (code, stock))
+    }
+
+    fn owned_client(&self, address: u32) -> Option<[u8; 16]> {
+        self.owned_clients.iter().find(|&&(owned, _)| owned == address).map(|&(_, code)| code)
     }
 }
 
@@ -235,6 +294,24 @@ impl Stream {
             let stack = bytes(machine, stop.core, sp, 8)?;
             let payload = bytes(machine, stop.core, read_u32(&stack, 0), read_u32(&stack, 4) as usize)?;
             post_event(queue, register("r3")?, payload)
+        } else if let Some((code, stock)) = plan.owned_callback(stop.address) {
+            if bytes(machine, stop.core, stop.address, 16)? != code { return Ok(()); }
+            Some(Event::Callback { entry: Address(stock) })
+        } else if let Some(code) = plan.owned_client(stop.address) {
+            if bytes(machine, stop.core, stop.address, 16)? != code { return Ok(()); }
+            let count = register("r2")? as usize;
+            require(count <= 12, "owned client call exceeds its declared arguments")?;
+            let words = bytes(machine, stop.core, register("r1")?, 4 * count)?;
+            let record = register("r3")?;
+            let arguments = (0..count).map(|index| {
+                let word = read_u32(&words, 4 * index);
+                Ok(if record != 0 && index + 1 == (record & 0xff) as usize {
+                    Argument::Memory { address: None, bytes: bytes(machine, stop.core, word, (record >> 8) as usize)? }
+                } else {
+                    Argument::Word { value: word }
+                })
+            }).collect::<Result<Vec<_>, String>>()?;
+            Some(Event::ClientReply { entry: Address(stop.address), target: Address(register("r0")?), arguments })
         } else {
             None
         };
@@ -313,6 +390,8 @@ mod tests {
         Declaration {
             post: "0x1000".into(),
             owned_posts: Vec::new(),
+            owned_callbacks: Vec::new(),
+            owned_clients: Vec::new(),
             entries: Vec::new(),
             shared: vec![Shared { start: "0x2000".into(), end: "0x2010".into() }],
             callers: Vec::new(),
@@ -348,6 +427,8 @@ mod tests {
                 OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() },
                 OwnedPost { address: "0x300c".into(), instruction: "0xe92d4ff0".into() },
             ],
+            owned_callbacks: Vec::new(),
+            owned_clients: Vec::new(),
             entries: Vec::new(),
             shared: Vec::new(),
             callers: Vec::new(),
@@ -360,6 +441,8 @@ mod tests {
                 OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() },
                 OwnedPost { address: "0x3000".into(), instruction: "0xe92d4ff0".into() },
             ],
+            owned_callbacks: Vec::new(),
+            owned_clients: Vec::new(),
             entries: Vec::new(),
             shared: Vec::new(),
             callers: Vec::new(),
@@ -375,6 +458,33 @@ mod tests {
             Some(Event::QueueIn { operation: 0x3f13, sender: 47, payload }),
         );
         assert_eq!(post_event(47, 0x2f2a3f26, Vec::new()), None);
+    }
+
+    #[test]
+    fn owned_callbacks_and_clients_replace_declared_stock_sites_only() {
+        const CODE: &str = "0xe92d48f0e28db014e24dd010e1a05000";
+        let declaration = |stock: &str, callback: &str, client: &str, code: &str| Declaration {
+            post: "0x1000".into(),
+            owned_posts: Vec::new(),
+            owned_callbacks: vec![OwnedCallback { address: callback.into(), code: code.into(), stock_entry: stock.into() }],
+            owned_clients: vec![OwnedClient { address: client.into(), code: CODE.into() }],
+            entries: vec![
+                Entry { address: "0x4000".into(), kind: EntryKind::Callback, target: None, arguments: Vec::new() },
+                Entry { address: "0x4100".into(), kind: EntryKind::ClientReply, target: Some(TargetRegister::R5), arguments: vec![ArgumentDecl::Word] },
+            ],
+            shared: Vec::new(),
+            callers: Vec::new(),
+        };
+        let plan = declaration("0x4000", "0x5000", "0x6000", CODE).validate().unwrap();
+        assert_eq!(plan.sites(), vec![0x1000, 0x4000, 0x4100, 0x5000, 0x6000]);
+        assert_eq!(plan.owned_callback(0x5000).map(|(_, stock)| stock), Some(0x4000));
+        assert!(plan.owned_client(0x6000).is_some() && plan.owned_client(0x5000).is_none());
+        // A replacement of a client reply instead of a callback, one placed on a stock entry, a
+        // client site repeating the callback's and a guard that is not 16 bytes are refused.
+        assert!(declaration("0x4100", "0x5000", "0x6000", CODE).validate().is_err());
+        assert!(declaration("0x4000", "0x4000", "0x6000", CODE).validate().is_err());
+        assert!(declaration("0x4000", "0x5000", "0x5000", CODE).validate().is_err());
+        assert!(declaration("0x4000", "0x5000", "0x6000", "0xe92d48f0").validate().is_err());
     }
 
     #[test]

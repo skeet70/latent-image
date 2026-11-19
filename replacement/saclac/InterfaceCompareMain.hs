@@ -60,7 +60,9 @@ instance ToJSON Event where
     QueueIn operation sender payload -> object ["kind" .= ("queue-in" :: String), "operation" .= operation, "sender" .= sender, "payload" .= payload]
     PeerRequest queue operation payload -> object ["kind" .= ("peer-request" :: String), "queue" .= queue, "operation" .= operation, "payload" .= payload]
     Callback entry -> object ["kind" .= ("callback" :: String), "entry" .= entry]
-    ClientReply entry target arguments -> object ["kind" .= ("client-reply" :: String), "entry" .= entry, "target" .= target, "arguments" .= arguments]
+    -- The client-visible call: stock observes it at its reply helpers' `blx` into the client and
+    -- Root at its client call veneer; the helper site is retired saclac code, so it is not compared.
+    ClientReply _ target arguments -> object ["kind" .= ("client-reply" :: String), "target" .= target, "arguments" .= arguments]
     ServiceRequest entry arguments -> object ["kind" .= ("service-request" :: String), "entry" .= entry, "arguments" .= arguments]
     Store address bytes -> object ["kind" .= ("store" :: String), "address" .= address, "bytes" .= bytes]
 

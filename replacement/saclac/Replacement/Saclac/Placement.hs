@@ -7,17 +7,20 @@ module Replacement.Saclac.Placement
   , watchRanges
   , insertWatchRanges
   , bindOwnedPosts
+  , bindOwnedEntries
   , hexAddress
   ) where
 
-import Control.Monad (unless)
+import Control.Monad (forM, unless)
+import Data.Bits (shiftR)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub)
 import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
-import Numeric (showHex)
+import Numeric (readHex, showHex)
+import qualified Data.Text as T
 import Replacement.Saclac.Artifact (Admitted (..), Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, retainedData, retainedExternals, wordAt)
 import qualified Replacement.FixedImage.Layout as Fixed
 
@@ -151,3 +154,59 @@ bindOwnedPosts images value = do
       _ -> Left "the linked image has more than one slot-table message_post"
     isPost symbol = let name = F.symbolName symbol
                      in all (`isInfixOf` name) ["10xm1_kernel", "10slot_table", "9SlotTable"] && "7Backend12message_post" `isSuffixOf` name
+
+-- | The census sites file with Root's owned callback entries and client call veneer, bound from
+-- each linked image variant. An owned callback is the replacement symbol of a declared identity
+-- whose stock value is a declared stock callback entry: entering it is observed as entering that
+-- stock callback. The client veneer is @xm1_saclac_client_call@, observed as the client call
+-- stock's reply helpers make. Each row carries the first 16 code bytes, and binding refuses
+-- unless, in each variant, exactly its own rows hold their bytes among the rows of the same role.
+bindOwnedEntries :: [(Word32, String)] -> [Admitted] -> J.Value -> Either String J.Value
+bindOwnedEntries identities images value = do
+  fields <- case value of
+    J.Object fields -> Right fields
+    _ -> Left "the census sites file is not a JSON object"
+  interface <- case KM.lookup (K.fromText "interface") fields of
+    Just (J.Object interface) -> Right interface
+    _ -> Left "the census sites file has no interface object"
+  callbacks <- stockCallbacks interface
+  let replaced = [(stock, symbol) | (stock, symbol) <- identities, stock `elem` callbacks]
+  perImage <- forM images $ \image -> do
+    owned <- forM replaced $ \(stock, symbol) -> do
+      address <- symbolAt image symbol
+      pure (stock, (address, codeAt image address))
+    client <- symbolAt image "xm1_saclac_client_call"
+    pure (owned, (client, codeAt image client))
+  let callbackRows = nub (concatMap fst perImage)
+      clientRows = nub (map snd perImage)
+      holds image (address, code) = codeAt image address == code
+  mapM_ (\(image, (owned, client)) -> do
+      mapM_ (\(stock, own) -> unless (filter (holds image . snd) (filter ((== stock) . fst) callbackRows) == [(stock, own)])
+        (Left ("owned callback " ++ hexAddress (fst own) ++ " is not the only declared replacement its image holds"))) owned
+      unless (filter (holds image) clientRows == [client])
+        (Left ("owned client call " ++ hexAddress (fst client) ++ " is not the only declared veneer its image holds")))
+    (zip images perImage)
+  let callbackJson = [J.object ["address" J..= hexAddress address, "code" J..= code, "stock_entry" J..= hexAddress stock] | (stock, (address, code)) <- callbackRows]
+      clientJson = [J.object ["address" J..= hexAddress address, "code" J..= code] | (address, code) <- clientRows]
+      updated = KM.insert (K.fromText "owned_clients") (J.toJSON clientJson) (KM.insert (K.fromText "owned_callbacks") (J.toJSON callbackJson) interface)
+  Right (J.Object (KM.insert (K.fromText "interface") (J.Object updated) fields))
+  where
+    symbolAt admitted name = case filter ((== name) . F.symbolName) (admittedSymbols admitted) of
+      [symbol] -> Right (F.symbolAddress symbol)
+      [] -> Left ("the linked image has no " ++ name)
+      _ -> Left ("the linked image repeats " ++ name)
+    codeAt admitted address = "0x" ++ concat
+      [ byteHex (fromIntegral (wordAt admitted (address + 4 * index) `shiftR` (8 * shift)))
+      | index <- [0 .. 3], shift <- [0 .. 3 :: Int] ]
+    byteHex :: Int -> String
+    byteHex byte = let digits = showHex (byte `mod` 256) "" in replicate (2 - length digits) '0' ++ digits
+    stockCallbacks interface = case KM.lookup (K.fromText "entries") interface of
+      Just (J.Array rows) -> Right [address | J.Object row <- foldr (:) [] rows
+                                    , Just (J.String "callback") <- [KM.lookup (K.fromText "kind") row]
+                                    , Just (J.String text) <- [KM.lookup (K.fromText "address") row]
+                                    , Just address <- [readHex32 (T.unpack text)]]
+      _ -> Left "the census sites file has no interface entries"
+    readHex32 text = case readHex (dropPrefix text) of
+      [(address, "")] -> Just address
+      _ -> Nothing
+    dropPrefix text = if "0x" `isPrefixOf` text then drop 2 text else text
