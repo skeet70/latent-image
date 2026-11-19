@@ -17,6 +17,7 @@ const RESULT: u32 = 0x910138;
 const RESULT_SEMAPHORE: u32 = 0x3a;
 const DONE_SEMAPHORE: u32 = 0x3b;
 const MEDIA_REPORT_CATEGORY: u32 = 2;
+#[cfg(target_arch = "arm")]
 const MEDIA_BUSY: u32 = 0x940ac0;
 #[cfg(target_arch = "arm")]
 const MEDIA_TICKS: u32 = 0x96bfb8;
@@ -510,7 +511,8 @@ pub extern "C" fn xm1_file_service_open_intercept(status: u32, handle: u32) {
 
 // The media task body, entered at 0x71fe7c by the task created at 0x71fd40, in stock's frame:
 // header at r11-32, payload at r11-116, and the receive, worker and tick calls entered with sp at
-// the payload.
+// the payload. A worker is entered as stock enters it: r0 at the header, r1 at its row of the
+// worker table, r2 at its code (for the open code, the r2 the receive returned) and r3 at itself.
 #[cfg(target_arch = "arm")]
 core::arch::global_asm!(
     ".pushsection .text.xm1_file_service_media_task, \"ax\", %progbits",
@@ -522,47 +524,62 @@ core::arch::global_asm!(
     "add r11, sp, #20",
     "sub sp, sp, #96",
     "sub r0, r11, #32",
-    "bl xm1_file_service_media_start",
+    "bl {start}",
     "1:",
     "sub r0, r11, #116",
     "str r0, [r11, #-24]",
     "sub r0, r11, #32",
     "bl file_service_receive_request",
+    "mov r4, r2",
     "sub r1, r11, #32",
-    "bl xm1_file_service_media_dispatch",
+    "bl {dispatch}",
     "movs r3, r0",
-    "subne r0, r11, #32",
-    "blxne r3",
+    "beq 2f",
+    "ldrh r2, [r11, #-32]",
+    "movw r0, #{open}",
+    "cmp r2, r0",
+    "moveq r2, r4",
+    "sub r0, r11, #32",
+    "blx r3",
+    "2:",
     "movw r0, #:lower16:{ticks}",
     "movt r0, #:upper16:{ticks}",
     "bl file_service_ticks",
-    "bl xm1_file_service_media_idle",
+    "bl {idle}",
     "b 1b",
     ".size xm1_file_service_media_task, . - xm1_file_service_media_task",
     ".popsection",
     ticks = const MEDIA_TICKS,
+    open = const RequestCode::OPEN.0,
+    start = sym media_start,
+    dispatch = sym media_dispatch,
+    idle = sym media_idle,
 );
 
-#[no_mangle]
-pub extern "C" fn xm1_file_service_media_start(header: u32) {
+#[cfg(target_arch = "arm")]
+extern "C" fn media_start(header: u32) {
     write_word(header + 4, 0x50);
     unsafe { wait(DONE_SEMAPHORE, FOREVER) };
 }
 
-/// Marks the media task busy and returns the received request's worker, or 0.
-#[no_mangle]
-pub extern "C" fn xm1_file_service_media_dispatch(received: i32, header: u32) -> u32 {
+/// Marks the media task busy and returns the received request's worker in the low word and
+/// its row address in `WORKER_TABLE` in the high word, or 0.
+#[cfg(target_arch = "arm")]
+extern "C" fn media_dispatch(received: i32, header: u32) -> u64 {
     if !cfg!(file_service_control_media_task_no_busy) {
         write_word(MEDIA_BUSY, 1);
     }
     if received != 0 {
         return 0;
     }
-    routing::worker(RequestCode(read_half(header))).unwrap_or(0)
+    routing::worker_row(RequestCode(read_half(header))).map_or(0, |found| {
+        let row = found.row + u32::from(cfg!(file_service_control_media_task_worker_row));
+        u64::from(found.worker) | u64::from(routing::WORKER_TABLE + 8 * row) << 32
+    })
 }
 
-#[no_mangle]
-pub extern "C" fn xm1_file_service_media_idle() {
+#[cfg(target_arch = "arm")]
+extern "C" fn media_idle() {
     write_word(MEDIA_BUSY, 0);
 }
 

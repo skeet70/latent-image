@@ -325,3 +325,11 @@ fn the_worker_table_holds_the_open_worker_first_and_no_unknown_code() {
     assert_eq!(worker(RequestCode(0x2c2d)), None);
     assert_eq!(worker(RequestCode(0)), None);
 }
+
+#[test]
+fn worker_rows_follow_the_stock_table_order() {
+    assert_eq!(worker_row(RequestCode::OPEN), Some(WorkerRow { row: 0, worker: 0x7115a4 }));
+    assert_eq!(worker_row(RequestCode::ATTACH), Some(WorkerRow { row: 18, worker: 0x7120d8 }));
+    assert_eq!(worker_row(RequestCode(0x2c12)), Some(WorkerRow { row: 33, worker: 0x712580 }));
+    assert_eq!(worker_row(RequestCode(0x2c2d)), None);
+}

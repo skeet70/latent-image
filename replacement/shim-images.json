@@ -696,7 +696,7 @@
         "file_service_ticks",
         "file_service_wake"
       ],
-      "expected_sha256": "55494cfb29f1db92791d829fb5bdc2a50da6d7ea9038dd3cee15b8fb6819960a"
+      "expected_sha256": "e0916f3631d2fafaf04fe59dbf24fcfea9decbb15f7ec7072aa5e116425e90b5"
     },
     {
       "id": "//replacement/first_stage:first-stage-fixed-image",

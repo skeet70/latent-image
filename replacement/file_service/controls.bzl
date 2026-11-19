@@ -12,6 +12,7 @@ FILE_SERVICE_CONTROLS = [
     "defer_no_count",
     "intercept_keeps_callback",
     "media_task_no_busy",
+    "media_task_worker_row",
 ]
 
 def file_service_suffixes():

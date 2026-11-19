@@ -2,7 +2,7 @@
 
 -- | file-service-observe observe --role stock|owned --update DAT --image4 ID4 --run JSON
 --     --boot-rom ROM --adjustment-nand NAND [--card IMG] --bridge BRIDGE --output NEW_DIR
---   file-service-observe compare STOCK_DIR OWNED_DIR OUTPUT_JSON
+--   file-service-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the 29 file-service entries and
 -- the media task's request workers, a write watch over the result slot, mediamsg session and
@@ -10,11 +10,12 @@
 -- attach it presses PLAY and the playback route keys, idles a fixed budget after each, and
 -- captures the screen.
 --
--- compare: the calls whose return address lies outside the retired extents and the fixed
--- body are the component's interface; their ordered entries, returns, arguments up to each
--- call's arity, state snapshots, the worker sequence, the watched writes and the screens must be
--- equal, and the owned role must fetch nothing in the retired extents. Registers beyond the
--- arity and void return registers are reported, not compared.
+-- compare: the calls whose return address lies outside the retired extents and the owned body
+-- (`__fixed_body_start` to `__fixed_body_end` in OWNED_SYMBOLS) are the component's interface.
+-- Their ordered entries with arguments up to each owned entry's arity, returns with r0..r3
+-- except registers listed dead at the return address, worker entries with r0..r3, state
+-- snapshots, the watched writes and the screens must be equal, and the owned role must fetch
+-- nothing in the retired extents. Registers left out are reported, not compared.
 module Main (main) where
 
 import Control.Exception (SomeException, bracket, displayException, try)
@@ -96,9 +97,14 @@ retired =
       ]
   ]
 
--- | The reserved fixed-image RAM range holding the owned body.
-fixedBody :: Span
-fixedBody = Span (Address 0xba0000) (Address 0xbe0000)
+-- | The owned body's extent in the fixed image.
+readBody :: FilePath -> IO Span
+readBody path = do
+  rows <- map words . lines <$> readFile path
+  let symbol name = [a | [address, _, _, n] <- rows, n == name, [(a, "")] <- [readHex address]]
+  case (symbol "__fixed_body_start", symbol "__fixed_body_end") of
+    ([s], [e]) | s < e -> pure (Span (Address s) (Address e))
+    _ -> ioError (userError (path ++ " does not hold one __fixed_body_start below one __fixed_body_end"))
 
 resultSlot, sessionAndOpenSet :: Span
 resultSlot = Span (Address 0x910134) (Address 0x910140)
@@ -276,8 +282,8 @@ main = do
   arguments <- getArgs
   case arguments of
     ("observe" : rest) -> parseInputs rest >>= observeMain
-    ["compare", stock, owned, output] -> compareMain stock owned output
-    _ -> ioError (userError "usage: file-service-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OUTPUT_JSON")
+    ["compare", stock, owned, symbols, output] -> compareMain stock owned symbols output
+    _ -> ioError (userError "usage: file-service-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON")
 
 observeMain :: Inputs -> IO ()
 observeMain inputs = do
@@ -399,18 +405,23 @@ observe inputs directory record = do
 
 -- * Comparison
 
--- | `eventDead` holds the argument registers beyond the call's arity.
+-- | `eventDead` holds the registers left out of `eventValue`.
 data Event = Event {eventKind :: String, eventName :: String, eventExternal :: Bool, eventValue :: Value, eventDead :: Value}
 
 entryNames :: M.Map Word32 String
 entryNames = M.fromList [(a, entryName e) | e <- entries, let Address a = entryAddress e]
 
--- | Return addresses inside the retired extents or the fixed body belong to the component.
-external :: Word32 -> Bool
-external address = not (any (`inside` address) (fixedBody : retired))
+-- | Return addresses inside the retired extents or the owned body belong to the component.
+external :: Span -> Word32 -> Bool
+external body address = not (any (`inside` address) (body : retired))
 
--- | Register arguments of each entry, from the stock signatures; the media task's workers take
--- the request header.
+-- | Registers a retained caller does not read after the call returning to it, from the stock
+-- bytes. 0x7217c4: r3 is written before any read on both paths, at 0x7217cc, and at 0x72533c in
+-- the receive reached from 0x7217dc through 0x7221c8, which reads r0..r2 only.
+deadAtReturn :: M.Map Word32 [T.Text]
+deadAtReturn = M.fromList [(0x7217c4, ["r3"])]
+
+-- | Register arguments of each owned entry, as its Rust signature declares them.
 arity :: String -> Int
 arity name = case name of
   "read" -> 4
@@ -436,7 +447,6 @@ arity name = case name of
   "post" -> 1
   "route" -> 1
   "intercept" -> 2
-  _ | "worker:" `isPrefixOf` name -> 1
   _ -> 0
 
 registersOf :: [T.Text] -> Value -> Value
@@ -451,8 +461,8 @@ taskOf hit = object ["kernel" .= field "kernel" (field "task" hit), "task_id" .=
 readsOf :: Value -> Value
 readsOf hit = A.toJSON [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
 
-event :: Value -> Maybe Event
-event hit = do
+event :: Span -> Value -> Maybe Event
+event body hit = do
   label <- textOf (field "site" hit)
   address <- hexValue (field "address" hit)
   lr <- hexValue (field "lr" hit)
@@ -461,17 +471,16 @@ event hit = do
     _ | "fs:" `isPrefixOf` label ->
           let name = drop 3 label
               (live, dead) = splitAt (arity name) argumentRegisters
-           in Just (Event "entry" name (external lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
+           in Just (Event "entry" name (external body lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
       | "worker:" `isPrefixOf` label ->
-          let (live, dead) = splitAt (arity label) argumentRegisters
-           in Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
+          Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= readsOf hit] ++ common)) (object []))
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
           let name = fromMaybe (hexWord site) (M.lookup site entryNames)
               kind = if M.member site entryNames then "return" else "worker-return"
-              result = kind == "return" && name `notElem` ["map_unbind", "tag_release", "intercept"]
-              (live, dead) = if result then (["r0"], ["r1", "r2", "r3"]) else ([], argumentRegisters)
-          Just (Event kind name (kind == "worker-return" || external address) (object (["kind" .= kind, "name" .= name, "result" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
+              dead = if kind == "return" then M.findWithDefault [] address deadAtReturn else argumentRegisters
+              live = filter (`notElem` dead) argumentRegisters
+          Just (Event kind name (kind == "worker-return" || external body address) (object (["kind" .= kind, "name" .= name, "result" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
       | otherwise -> Nothing
 
 loadHits :: FilePath -> IO [Value]
@@ -497,18 +506,20 @@ counts :: [Event] -> M.Map String (Int, Int)
 counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0) else (0, 1)) | e <- events, eventKind e `elem` ["entry", "worker"]]
   where add (a, b) (c, d) = (a + c, b + d)
 
-compareMain :: FilePath -> FilePath -> FilePath -> IO ()
-compareMain stockDir ownedDir output = do
+compareMain :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+compareMain stockDir ownedDir symbols output = do
   exists <- doesPathExist output
   need (not exists) "comparison output must be new"
+  body <- readBody symbols
   let load directory = do
-        events <- mapMaybe event <$> loadHits directory
+        events <- mapMaybe (event body) <$> loadHits directory
         receipt <- loadJson (directory </> "receipt.json")
         steps <- arrayOf <$> loadJson (directory </> "steps.json")
         pure (events, receipt, steps)
   (stockEvents, stockReceipt, stockSteps) <- load stockDir
   (ownedEvents, ownedReceipt, ownedSteps) <- load ownedDir
   forM_ [stockReceipt, ownedReceipt] $ \r -> need (field "status" (field "outcome" r) == String "completed") "an observation did not complete"
+  need (field "role" stockReceipt == String (roleName Stock)) "the first observation must have the stock role"
   let interface events = [eventValue e | e <- events, eventExternal e]
       dead events = [eventDead e | e <- events, eventExternal e]
       internal events = [eventValue e | e <- events, not (eventExternal e)]
@@ -533,12 +544,14 @@ compareMain stockDir ownedDir output = do
           && screens stockReceipt stockSteps == screens ownedReceipt ownedSteps
           && null (violations stockReceipt stockSteps) && null (violations ownedReceipt ownedSteps)
           && sharedInputs stockReceipt == sharedInputs ownedReceipt
-      equal = behaviorEqual && ownedFetches == 0
+      ownedRole = field "role" ownedReceipt == String (roleName Owned)
+      equal = behaviorEqual && (not ownedRole || ownedFetches == 0)
       sharedInputs receipt = case field "inputs" receipt of
         Object fields -> Object (KM.delete "update" fields)
         other -> other
   BL.writeFile output $ A.encode $ object
     [ "schema" .= (1 :: Int)
+    , "owned_body" .= spanValue body
     , "stock" .= object ["directory" .= stockDir, "inputs" .= field "inputs" stockReceipt, "hits" .= field "hit_count" stockReceipt, "events" .= length stockEvents, "interface_events" .= length (interface stockEvents), "internal_events" .= length (internal stockEvents), "retired_fetches" .= fetchTotal stockReceipt stockSteps, "watched_writes" .= length (writesOf stockReceipt stockSteps)]
     , "owned" .= object ["directory" .= ownedDir, "inputs" .= field "inputs" ownedReceipt, "hits" .= field "hit_count" ownedReceipt, "events" .= length ownedEvents, "interface_events" .= length (interface ownedEvents), "internal_events" .= length (internal ownedEvents), "retired_fetches" .= ownedFetches, "watched_writes" .= length (writesOf ownedReceipt ownedSteps)]
     , "entry_counts" .= countTable
@@ -554,3 +567,4 @@ compareMain stockDir ownedDir output = do
     , "verdict" .= (if equal then "equal" else "different" :: T.Text)
     ]
   putStrLn ("verdict " ++ (if equal then "equal" else "different"))
+  unless equal exitFailure

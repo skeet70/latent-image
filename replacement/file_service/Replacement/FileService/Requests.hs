@@ -825,7 +825,9 @@ workerRegion :: B.ByteString -> DataRegion
 workerRegion image =
   unchanged "workers" workerTable (B.take (8 * (length (workers image) + 1)) (B.drop (fromIntegral (workerTable - imageBase)) image))
 
--- | Each received request's status and code, in order, the last one reaching a worker.
+-- | Each received request's status and code, in order, the last one reaching a worker. Each
+-- receive returns a distinct r2; the worker is entered with r1 at its table row, r2 at its
+-- code (for the open code, the last receive's r2) and r3 at itself.
 mediaTaskCase :: B.ByteString -> String -> [(Word32, Word32)] -> Scenario
 mediaTaskCase image name received =
   Scenario
@@ -833,14 +835,20 @@ mediaTaskCase image name received =
     , scenarioEntry = mediaTaskEntry
     , scenarioData = [workerRegion image, DataRegion "media-busy" mediaBusy (word32le 0) (word32le 1)]
     , scenarioCalls = [Call mediaTaskEntry [] [] False]
-    , scenarioServices = waitOn 0x3b 0 : concatMap receiveOf (zip [1 :: Int ..] received)
+    , scenarioServices = waitOn 0x3b 0 : concatMap receiveOf (zip [1 ..] received)
     , scenarioResults = []
-    , scenarioStop = lookup (snd (last received)) (workers image)
+    , scenarioStop = stopAt <$> elemIndex reached (map fst rows)
     }
   where
+    rows = workers image
+    reached = snd (last received)
+    receiveR2 index = 0x2e2e0000 + index
+    stopAt row =
+      let worker = snd (rows !! row)
+       in Stop worker [("r1", workerTable + 8 * fromIntegral row), ("r2", if row == 0 then receiveR2 (fromIntegral (length received)) else reached), ("r3", worker)]
     receiveOf (index, (status, value)) =
-      Service receive [] [("r0", status)] [] [AtRegister "r0" 0 (halfWords value)]
-        : [service ticks [("r0", mediaTicks)] 0 | index < length received]
+      Service receive [] [("r0", status), ("r2", receiveR2 index)] [] [AtRegister "r0" 0 (halfWords value)]
+        : [service ticks [("r0", mediaTicks)] 0 | index < fromIntegral (length received)]
 
 mediaTaskScenarios :: B.ByteString -> [Scenario]
 mediaTaskScenarios image =

@@ -12,6 +12,7 @@ module Replacement.FileService.Native
   , Service (..)
   , MemoryRow (..)
   , Scenario (..)
+  , Stop (..)
   , Role (..)
   , Observation (..)
   , runRole
@@ -89,7 +90,13 @@ data Service = Service
   , serviceWrites :: [MemoryRow]
   }
 
--- | A scenario with a stop address is a kernel case that ends when execution reaches it.
+-- | Where a kernel case ends, and the registers execution must hold there besides pc.
+data Stop = Stop
+  { stopAddress :: Word32
+  , stopRegisters :: [(String, Word32)]
+  }
+
+-- | A scenario with a stop is a kernel case that ends when execution reaches it.
 data Scenario = Scenario
   { scenarioName :: String
   , scenarioEntry :: Word32
@@ -97,7 +104,7 @@ data Scenario = Scenario
   , scenarioCalls :: [Call]
   , scenarioServices :: [Service]
   , scenarioResults :: [Word32]
-  , scenarioStop :: Maybe Word32
+  , scenarioStop :: Maybe Stop
   }
 
 data Role = Stock | Owned String E.Elf
@@ -243,7 +250,7 @@ caseDocument code image role scenario = (document, artifacts)
       [Region name low "rx" (codeBytes image code role extent) | (name, extent@(Extent low _)) <- codeExtents code]
         ++ [Region name low "rx" (codeBytes image code Stock extent) | (name, extent@(Extent low _)) <- codeRetained code]
         ++ [Region "owned-fixed" low "rx" bytes | Owned _ elf <- [role], Just (low, bytes) <- [fixedBody elf]]
-        ++ [Region "stop" stop "rx" (word32le trapWord) | Just stop <- [scenarioStop scenario]]
+        ++ [Region "stop" (stopAddress stop) "rx" (word32le trapWord) | Just stop <- [scenarioStop scenario]]
         ++ [Region (dataName region) (dataAddress region) "rw" (dataInitial region) | region <- scenarioData scenario]
         ++ [ Region "driver" driverBase "rx" driver
            , Region "results" resultsBase "rw" (B.replicate 0x100 0)
@@ -322,7 +329,7 @@ caseDocument code image role scenario = (document, artifacts)
           ++ [ "expected" .=
                  object
                    ( [ "status" .= (maybe "returned" (const "stop_address") (scenarioStop scenario) :: String)
-                     , "registers" .= registers (maybe (preserved ++ [("sp", stackTop), ("pc", exitAddress)]) (\stop -> [("pc", stop)]) (scenarioStop scenario))
+                     , "registers" .= registers (maybe (preserved ++ [("sp", stackTop), ("pc", exitAddress)]) (\stop -> stopRegisters stop ++ [("pc", stopAddress stop)]) (scenarioStop scenario))
                      , "memory" .= expectedMemory
                      , "events" .= events
                      ]
@@ -330,7 +337,7 @@ caseDocument code image role scenario = (document, artifacts)
                    )
              , "exclusions" .= ["Host Cortex-R5F native profile. Stock services are scripted stubs at their entries; no kernel, scheduling, interrupt or device qualification." :: String]
              ]
-          ++ ["kernel" .= object ["stop" .= hexWord stop] | Just stop <- [scenarioStop scenario]]
+          ++ ["kernel" .= object ["stop" .= hexWord (stopAddress stop)] | Just stop <- [scenarioStop scenario]]
 
 -- Execution ---------------------------------------------------------------
 
@@ -388,7 +395,8 @@ runRole runner directory code image role scenarios = do
 
 -- | The differences between the stock and owned observations of one scenario: either role
 -- failing its independent expectation, and any difference in the data regions, the
--- results, the ordered service events or the preserved registers.
+-- results, the ordered service events, the preserved registers on return, or r0..r3 and sp
+-- at a stop.
 compareRoles :: Scenario -> Observation -> Observation -> [String]
 compareRoles scenario stock owned =
   [ role ++ " " ++ observationRunnerStatus observation ++ ": " ++ unwords (observationMismatches observation)
@@ -397,11 +405,11 @@ compareRoles scenario stock owned =
   ]
     ++ ["memory " ++ name | (name, address) <- compared, memoryAt address stock /= memoryAt address owned]
     ++ ["service events" | observationEvents stock /= observationEvents owned]
-    ++ ["preserved registers" | map (registerOf stock) kept /= map (registerOf owned) kept]
+    ++ ["registers" | map (registerOf stock) kept /= map (registerOf owned) kept]
   where
     compared = [(dataName region, dataAddress region) | region <- scenarioData scenario] ++ [("results", resultsBase)]
     memoryAt address observation = lookup (hexWord address) (observationMemory observation)
-    kept = maybe (map fst preserved ++ ["sp"]) (const []) (scenarioStop scenario)
+    kept = maybe (map fst preserved ++ ["sp"]) (const ["r0", "r1", "r2", "r3", "sp"]) (scenarioStop scenario)
     registerOf observation name = field name (observationRegisters observation)
 
 -- | The cases a deliberately wrong owned ELF fails after reaching the case exit: a

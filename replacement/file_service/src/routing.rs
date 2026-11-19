@@ -56,7 +56,10 @@ pub const MEDIA_TASK: u8 = 0x1c;
 pub const OPEN_SET_SLOTS: usize = 20;
 pub const DEFERRED_SLOTS: usize = 48;
 
-/// The 34 request workers, in the media task's table order.
+/// The stock worker table the media task searches: eight-byte rows of code then worker.
+pub const WORKER_TABLE: u32 = 0x814740;
+
+/// The 34 request workers, in the order of their rows in `WORKER_TABLE`.
 pub const WORKERS: [(RequestCode, u32); 34] = [
     (RequestCode(0x2c17), 0x7115a4),
     (RequestCode(0x2c18), 0x71edbc),
@@ -94,8 +97,26 @@ pub const WORKERS: [(RequestCode, u32); 34] = [
     (RequestCode(0x2c12), 0x712580),
 ];
 
+/// A request's worker and the index of its row in `WORKERS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerRow {
+    pub row: u32,
+    pub worker: u32,
+}
+
+pub fn worker_row(code: RequestCode) -> Option<WorkerRow> {
+    let mut row = 0;
+    for &(known, worker) in WORKERS.iter() {
+        if known == code {
+            return Some(WorkerRow { row, worker });
+        }
+        row += 1;
+    }
+    None
+}
+
 pub fn worker(code: RequestCode) -> Option<u32> {
-    WORKERS.iter().find(|(known, _)| *known == code).map(|&(_, address)| address)
+    worker_row(code).map(|found| found.worker)
 }
 
 pub trait Mediamsg {
