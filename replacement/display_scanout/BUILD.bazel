@@ -138,6 +138,6 @@ haskell_binary(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "Replacement/DisplayScanout/Artifact.hs"],
     visibility = ["//replacement/shim_check:__pkg__"],
 )
