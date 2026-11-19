@@ -2,13 +2,15 @@
 mod heap_state;
 #[path = "../../emulation/fujimod-xm1/src/heap_replay_state.rs"]
 mod heap_replay_state;
+#[path = "../../emulation/fujimod-xm1/src/heap_abi_scenario.rs"]
+mod heap_abi_scenario;
 
 use heap_replay_state::{AllocationOutcome, Layout as RequestLayout, Request, Tape};
 use heap_state::{AllocationId, Event, Summary};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
+    alloc::{alloc_zeroed, dealloc, GlobalAlloc, Layout},
     cell::{Cell, RefCell},
     collections::BTreeMap,
     fs::{File, OpenOptions},
@@ -17,13 +19,14 @@ use std::{
     process::ExitCode,
     ptr::NonNull,
 };
-use xm1_general_heap::{Heap, HeapAccess, HeapError, StockBridge};
+use heap_abi_scenario::{Counterpart, Executor, Lock, Observation, Returned};
+use xm1_general_heap::{Heap, HeapAccess, HeapAllocator, HeapError, StockBridge};
 
 const LIMIT: u64 = 256 * 1024 * 1024;
 const GUARD_BYTES: usize = 32;
 const GUARD_VALUE: u8 = 0xa5;
 const ERRNO_MARKER: u32 = 0x45;
-const USAGE: &str = "heap-bridge-replay --trace DIRECTORY --admission JSON --update DAT --image4 BIN --image5 BIN --output NEW_JSON\nReplays the admitted 8,529-operation no-card tape through the production stock bridge at original and recipe capacities.";
+const USAGE: &str = "heap-bridge-replay --trace DIRECTORY --admission JSON --update DAT --image4 BIN --image5 BIN --output NEW_JSON [--abi NEW_JSON]\nReplays the admitted 8,529-operation no-card tape through the production stock bridge at original and recipe capacities; --abi then runs the directed ABI scenario through the Rust GlobalAlloc front end at original capacity.";
 
 type Result<T, E = Failure> = std::result::Result<T, E>;
 
@@ -52,6 +55,7 @@ enum Failure {
     FreeLayout { step: usize },
     Payload { identity: AllocationId, offset: usize },
     UnsupportedOperation { step: usize },
+    Abi(String),
 }
 impl From<std::io::Error> for Failure {
     fn from(error: std::io::Error) -> Self { Self::Io(error) }
@@ -87,19 +91,19 @@ impl Serialize for Digest {
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-enum Flag { Trace, Admission, Update, Image4, Image5, Output }
+enum Flag { Trace, Admission, Update, Image4, Image5, Output, Abi }
 impl Flag {
     fn parse(text: &str) -> Result<Self> {
         match text {
             "--trace" => Ok(Self::Trace), "--admission" => Ok(Self::Admission),
             "--update" => Ok(Self::Update), "--image4" => Ok(Self::Image4),
-            "--image5" => Ok(Self::Image5), "--output" => Ok(Self::Output),
+            "--image5" => Ok(Self::Image5), "--output" => Ok(Self::Output), "--abi" => Ok(Self::Abi),
             _ => Err(Failure::Arguments),
         }
     }
 }
 #[derive(Serialize)]
-struct Arguments { trace: PathBuf, admission: PathBuf, update: PathBuf, image4: PathBuf, image5: PathBuf, output: PathBuf }
+struct Arguments { trace: PathBuf, admission: PathBuf, update: PathBuf, image4: PathBuf, image5: PathBuf, output: PathBuf, abi: Option<PathBuf> }
 impl Arguments {
     fn parse() -> Result<Self> {
         let mut arguments = std::env::args_os().skip(1);
@@ -109,9 +113,10 @@ impl Arguments {
             let path = PathBuf::from(arguments.next().ok_or(Failure::Arguments)?);
             if paths.insert(flag, path).is_some() { return Err(Failure::Arguments); }
         }
+        let abi = paths.remove(&Flag::Abi);
         let mut take = |flag| paths.remove(&flag).ok_or(Failure::Arguments);
         Ok(Self { trace: take(Flag::Trace)?, admission: take(Flag::Admission)?, update: take(Flag::Update)?,
-            image4: take(Flag::Image4)?, image5: take(Flag::Image5)?, output: take(Flag::Output)? })
+            image4: take(Flag::Image4)?, image5: take(Flag::Image5)?, output: take(Flag::Output)?, abi })
     }
 }
 fn read(path: &Path) -> Result<Vec<u8>> {
@@ -243,7 +248,53 @@ struct ReplayResult {
     payload_bytes_checked: u64, bridge_scope_entries: u64, bridge_scope_exits: u64,
     errno_before: u32, errno_after: u32,
 }
-fn replay(tape: &Tape, capacity: Capacity) -> Result<ReplayResult> {
+struct FrontEnd<'a> { allocator: HeapAllocator<&'a HostAccess>, access: &'a HostAccess, arena: &'a Arena }
+impl FrontEnd<'_> {
+    fn pointer(&self, address: u64, bytes: usize) -> std::result::Result<*mut u8, String> {
+        let base = self.arena.base().as_ptr() as u64;
+        if address < base || address.checked_add(bytes as u64).is_none_or(|end| end > base + self.arena.capacity as u64) {
+            return Err(format!("front-end access {address:#x}+{bytes} escapes the arena"));
+        }
+        Ok(address as usize as *mut u8)
+    }
+}
+fn layout(bytes: u32) -> std::result::Result<Layout, String> {
+    Layout::from_size_align(bytes as usize, 8).map_err(|error| error.to_string())
+}
+impl Executor for FrontEnd<'_> {
+    fn counterpart(&self) -> Option<Counterpart> { Some(Counterpart::RustFrontEnd) }
+    fn call(&mut self, request: heap_abi_scenario::Request) -> std::result::Result<Returned, String> {
+        use heap_abi_scenario::Request as Abi;
+        let held = |access: &HostAccess| i64::try_from(access.entries.get() - access.exits.get()).unwrap_or(i64::MAX);
+        let before = held(self.access);
+        let result = unsafe {
+            match request {
+                Abi::Malloc { bytes } | Abi::Realloc { old: None, bytes } => GlobalAlloc::alloc(&self.allocator, layout(bytes)?),
+                Abi::Calloc { count, element_bytes } => GlobalAlloc::alloc_zeroed(&self.allocator,
+                    layout(count.checked_mul(element_bytes).ok_or("front-end calloc product overflows")?)?),
+                Abi::Realloc { old: Some((address, old_bytes)), bytes } =>
+                    GlobalAlloc::realloc(&self.allocator, self.pointer(address, old_bytes as usize)?, layout(old_bytes)?, bytes as usize),
+                Abi::Free { old: Some((address, bytes)) } => {
+                    GlobalAlloc::dealloc(&self.allocator, self.pointer(address, bytes as usize)?, layout(bytes)?);
+                    std::ptr::null_mut()
+                }
+                Abi::Free { old: None } | Abi::Trim { .. } => return Err("front-end executor received an inapplicable request".into()),
+            }
+        };
+        Ok(Returned { result: result as usize as u64, errno: None,
+            lock: Lock { owner_restored: !self.access.active.get(), depth_change: held(self.access) - before } })
+    }
+    fn write(&mut self, address: u64, bytes: &[u8]) -> std::result::Result<(), String> {
+        let pointer = self.pointer(address, bytes.len())?;
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer, bytes.len()); }
+        Ok(())
+    }
+    fn read(&mut self, address: u64, length: usize) -> std::result::Result<Vec<u8>, String> {
+        let pointer = self.pointer(address, length)?;
+        Ok(unsafe { std::slice::from_raw_parts(pointer, length) }.to_vec())
+    }
+}
+fn replay(tape: &Tape, capacity: Capacity, abi: bool) -> Result<(ReplayResult, Option<Vec<Observation>>)> {
     let arena = Arena::new(capacity.bytes())?;
     let heap = unsafe { Heap::new(arena.base(), capacity.bytes()) }.map_err(Failure::HeapInitialization)?;
     let access = HostAccess { heap: RefCell::new(heap), errno: Cell::new(ERRNO_MARKER), active: Cell::new(false),
@@ -295,17 +346,40 @@ fn replay(tape: &Tape, capacity: Capacity) -> Result<ReplayResult> {
         || !live.iter().map(|(identity, allocation)| (*identity, allocation.layout)).eq(tape.final_live().iter().map(|(identity, layout)| (*identity, *layout))) {
         return Err(Failure::Population);
     }
-    Ok(ReplayResult { capacity, arena_bytes: capacity.bytes(), operations: tape.steps().len(), mallocs, frees,
+    let observations = if abi {
+        let mut front_end = FrontEnd { allocator: HeapAllocator::new(&access), access: &access, arena: &arena };
+        let observations = heap_abi_scenario::run(&mut front_end).map_err(Failure::Abi)?;
+        access.balanced()?;
+        arena.guards()?;
+        check_payloads(&arena, &live)?;
+        Some(observations)
+    } else { None };
+    Ok((ReplayResult { capacity, arena_bytes: capacity.bytes(), operations: tape.steps().len(), mallocs, frees,
         final_live: live.len(), final_requested_bytes: requested, peak_requested_bytes: peak,
         payload_bytes_checked: checked, bridge_scope_entries: access.entries.get(), bridge_scope_exits: access.exits.get(),
-        errno_before: ERRNO_MARKER, errno_after: access.errno.get() })
+        errno_before: ERRNO_MARKER, errno_after: access.errno.get() }, observations))
 }
 #[derive(Serialize)]
 struct Report<'a> { schema: u32, scope: &'static str, inputs: &'a Arguments, evidence: Evidence, results: Vec<ReplayResult>, limitations: [&'static str; 3] }
 fn execute() -> Result<()> {
     let arguments = Arguments::parse()?;
     let (tape, evidence) = prepare(&arguments)?;
-    let results = Capacity::ALL.into_iter().map(|capacity| replay(&tape, capacity)).collect::<Result<Vec<_>>>()?;
+    let mut journal = None;
+    let mut results = Vec::new();
+    for capacity in Capacity::ALL {
+        let (result, observations) = replay(&tape, capacity, arguments.abi.is_some() && matches!(capacity, Capacity::Original))?;
+        results.push(result);
+        journal = journal.or(observations);
+    }
+    if let (Some(path), Some(observations)) = (&arguments.abi, journal) {
+        #[derive(Serialize)]
+        struct FrontEndJournal<'a> { schema: u32, counterpart: Counterpart, executable_sha256: Digest, events_sha256: Digest, observations: &'a [Observation] }
+        let bytes = serde_json::to_vec_pretty(&FrontEndJournal { schema: 1, counterpart: Counterpart::RustFrontEnd,
+            executable_sha256: evidence.executable_sha256, events_sha256: evidence.events_sha256, observations: &observations })?;
+        let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
+        output.write_all(&bytes)?;
+        output.flush()?;
+    }
     let report = Report { schema: 1, scope: "host-production-stock-bridge-admitted-no-card-tape", inputs: &arguments, evidence, results,
         limitations: ["Native host execution of the production shared StockBridge, not A32 wrapper execution.",
             "Host serialized heap scopes, not retained RTOS locking or contention qualification.",

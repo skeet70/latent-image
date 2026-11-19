@@ -9,7 +9,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries, payloadForManifest
   , emulatorExperimentPayload
   , readRamPushManifest, parseRamPushManifest, readRamPushPrepublication, manifestPropertyCounts, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
@@ -352,11 +352,6 @@ afRingPayload = Payload
   , payloadBankVariant = Nothing
   }
 
--- | Hook slots an experiment payload has; each hook is one setup and one
--- activation publication.
-experimentHookCapacity :: Int
-experimentHookCapacity = 8
-
 -- | A developer experiment under experiments/NAME, relinked from the
 -- workspace sources with no review record.
 experimentPayload :: String -> Payload
@@ -364,8 +359,8 @@ experimentPayload name = Payload
   { payloadKind = Experiment
   , payloadAllocationSize = 0x8000
   , payloadAbiVersion = 7
-  , payloadSetupCount = experimentHookCapacity
-  , payloadActivationCount = experimentHookCapacity
+  , payloadSetupCount = 0
+  , payloadActivationCount = 0
   , payloadInstallerStart = \base -> (base + 0x5000 + 31) .&. 0xffffffe0
   , payloadReferenceBases = (0x00c40000, 0x00c4fc88)
   , payloadRelinkScript = "build-experiment-ram.sh"
@@ -411,6 +406,30 @@ payloadWithVariant variant size = do
         { payloadBankVariant = Just selected
         , payloadActivationCount = Layout.publicationActivationCountFor selected
         }
+
+payloadWithPublications :: Maybe Layout.BankVariant -> Int -> [Publication] -> IO Payload
+payloadWithPublications variant size publications = do
+  payload <- payloadWithVariant variant size
+  if payloadKind payload /= Experiment then pure payload else do
+    let count = length publications
+        hooks = count `div` 2
+    require (even count && count * 16 <= size - 0x5000) "experiment publication vector exceeds its installer allocation"
+    require (map publicationPhase publications == replicate hooks Setup ++ replicate hooks Activation)
+      "experiment publications must contain one setup and one activation per hook"
+    pure payload { payloadSetupCount = hooks, payloadActivationCount = hooks }
+
+payloadForManifest :: RamPushManifest -> IO Payload
+payloadForManifest manifest =
+  payloadWithPublications (manifestBankVariant manifest) (allocationSize manifest) (manifestPublications manifest)
+
+parsePayloadPublications :: Payload -> Value -> IO [Publication]
+parsePayloadPublications payload value = do
+  let fixed = payloadPublicationCount payload
+      (lower, upper) = if payloadKind payload == Experiment
+        then (0, (payloadAllocationSize payload - 0x5000) `div` 16)
+        else (fixed, fixed)
+  records <- array value lower upper
+  mapM (parsePublication (length records)) records
 
 parseManifestVariant :: Value -> Int -> IO (Maybe Layout.BankVariant)
 parseManifestVariant value size = do
@@ -586,7 +605,7 @@ validateManifest manifest = do
   extension <- either P.reject pure (manifestPropertyCounts manifest)
   (count, setups, activations) <- case extension of
     Nothing -> do
-      payload <- payloadWithVariant (manifestBankVariant manifest) size
+      payload <- payloadForManifest manifest
       pure (payloadPublicationCount payload, payloadSetupCount payload, payloadActivationCount payload)
     Just (_, counts) -> pure (Layout.publicationActualCount counts, Layout.publicationActualSetupCount counts,
       Layout.publicationActualActivationCount counts)
@@ -597,6 +616,10 @@ validateManifest manifest = do
   require (all (\address -> toInteger base <= toInteger address && toInteger address + 4 <= end) entryAddresses) "manifest entries must lie inside runtime.bin"
   require (all (\address -> address .&. 3 == 0) entryAddresses && length (unique entryAddresses) == 3) "manifest entries must be distinct aligned words"
   require (all (\address -> not (inside address base size) && address /= unAddress callbackSlotAddress && not (inside address (unAddress bootstrapAddress) 32)) addresses) "manifest publication overlaps loader-owned RAM"
+  when (size == payloadAllocationSize (experimentPayload "")) $ do
+    let installer = payloadInstallerStart (experimentPayload "") base
+    require (unAddress (installEntry entries) == installer + 0x600
+      && all (>= installer) entryAddresses) "experiment entries differ from its linked installer window"
   pure manifest
   where
     inside :: Word32 -> Word32 -> Int -> Bool
@@ -612,7 +635,8 @@ parseRamPushManifest path document runtime = do
 
 parseOrdinaryManifest :: FilePath -> B.ByteString -> B.ByteString -> Value -> IO RamPushManifest
 parseOrdinaryManifest path document runtime value = do
-  closed value (variantDocumentKeys value ["base","entry","publications","runtime_sha256","schema","size","source_identity"])
+  closed value (variantDocumentKeys value (["base","entry","publications","runtime_sha256","schema","size","source_identity"]
+    ++ ["experiment_layout" | field value "experiment_layout" /= Null]))
   _ <- integer (field value "schema") 1 1
   Address base <- Address <$> hex32 (field value "base")
   size <- integer (field value "size") (minimum (map payloadAllocationSize payloads)) (maximum (map payloadAllocationSize payloads))
@@ -622,8 +646,32 @@ parseOrdinaryManifest path document runtime value = do
   require (hexDigest digest) "runtime_sha256 must be lowercase SHA256"
   identity <- parseSourceIdentity (field value "source_identity")
   entries <- parseEntries (field value "entry")
-  publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
+  publications <- parsePayloadPublications payload (field value "publications")
+  validateExperimentLayout payload base runtime entries publications (field value "experiment_layout")
   validateManifest (RamPushManifest path (takeDirectory path </> "runtime.bin") (sha256 document) identity (Address base) size digest runtime entries publications variant)
+
+validateExperimentLayout :: Payload -> Word32 -> B.ByteString -> RamPushEntries -> [Publication] -> Value -> IO ()
+validateExperimentLayout _ _ _ _ _ Null = pure ()
+validateExperimentLayout payload base runtime entries publications layout = do
+  require (payloadKind payload == Experiment) "experiment_layout requires an experiment payload"
+  closed layout ["table_offset", "installer_end_offset"]
+  table <- hex32 (field layout "table_offset")
+  end <- hex32 (field layout "installer_end_offset")
+  let records = B.pack (concatMap (concatMap word32le . wordsOf) publications)
+      tableEnd = toInteger table + toInteger (B.length records)
+      installer = payloadInstallerStart payload base
+  require (toInteger base + toInteger end <= 0x100000000
+    && toInteger base + toInteger table >= toInteger installer
+    && table .&. 3 == 0 && tableEnd <= toInteger end && toInteger end <= toInteger (B.length runtime))
+    "experiment publication table escapes its installer layout"
+  require (all (\entry -> toInteger (unAddress entry) < toInteger base + toInteger table)
+    [installEntry entries, rollbackEntry entries, statusEntry entries])
+    "experiment entries overlap its publication table or mutable installer state"
+  require (B.take (B.length records) (B.drop (fromIntegral table) runtime) == records)
+    "experiment runtime publication table differs from its manifest"
+  where
+    wordsOf publication = [unAddress (publicationAddress publication), unWordValue (publicationOld publication),
+      unWordValue (publicationNew publication), if publicationPhase publication == Setup then 0 else 1]
 
 readRamPushManifest :: FilePath -> IO RamPushManifest
 readRamPushManifest path = do
@@ -957,7 +1005,7 @@ parseState document = do
   variant <- parseManifestVariant value size
   payload <- payloadWithVariant variant size
   entries <- parseEntries (field value "entry")
-  publications <- array (field value "publications") (payloadPublicationCount payload) (payloadPublicationCount payload) >>= mapM (parsePublication (payloadPublicationCount payload))
+  publications <- parsePayloadPublications payload (field value "publications")
   slot <- WordValue <$> hex32 (field value "slot_old")
   original <- parseHexBytes (field value "bootstrap") 32
   require (original == bootstrapBytes) "state bootstrap differs from the internally built allocator bootstrap"
@@ -1635,7 +1683,7 @@ runRamPushWith availability observer allocation manifest clock api directory
   | allocationSize manifest /= allocSize allocation = pure (RamPushRefused "manifest size differs from the retained allocation's extent")
   | allocationBase manifest /= allocBase allocation = pure (RamPushRefused "manifest base differs from the retained allocation")
   | Just _ <- payloadOfSize (allocSize allocation) = do
-      payload <- payloadWithVariant (manifestBankVariant manifest) (allocSize allocation)
+      payload <- payloadForManifest manifest
       let cap = ramPushJournalCapBytes payload
           count = payloadPublicationCount payload
           runtimeChunks = (allocationSize manifest+247) `div` 248
@@ -1777,7 +1825,7 @@ runRamUnloadWith availability state clock api directory
   | availability == PeerCacheUnbound = pure (RamUnloadRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
   | Nothing <- payloadOfSize (stateSize state) = pure (RamUnloadRefused ("installed state size "++show (stateSize state)++" is no payload's extent"))
   | Just _ <- payloadOfSize (stateSize state) = do
-      payload <- payloadWithVariant (stateBankVariant state) (stateSize state)
+      payload <- payloadWithPublications (stateBankVariant state) (stateSize state) (statePublications state)
       let count = payloadPublicationCount payload
           cap = ramUnloadJournalCapBytes payload; deadline = transferTimeoutMs*(600 + 2*count)
       session <- newSession clock api directory cap deadline

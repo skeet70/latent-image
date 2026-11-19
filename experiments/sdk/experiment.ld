@@ -38,3 +38,4 @@ SECTIONS {
 }
 ASSERT(__experiment_code_end <= RAM_PUSH_BASE + 0x5000, "experiment code and data exceed the 0x5000-byte window")
 ASSERT(__experiment_installer_end <= RAM_PUSH_BASE + 0x8000, "installer runs past the allocation")
+ASSERT(__ram_push_publications_end - __ram_push_publications_start == 16 * RAM_PUSH_PUBLICATION_COUNT, "publication table differs from the actual hook vector")

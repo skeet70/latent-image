@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "native-case.schema.json",
-  "title": "Bounded native case v1, Cortex-R5F ARM-only profile",
+  "title": "Bounded native case v1 and v2, Cortex-R5F ARM-only profile",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "id", "origin", "provenance", "cpu", "artifacts", "entry", "exit", "registers", "regions", "functions", "stubs", "limits", "expected", "exclusions"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"enum": [1, 2], "description": "Version 2 is version 1 plus regions[].uncached_alias."},
     "memory_profile": {"const": "resource8", "description": "Absent retains the default envelope. resource8 permits 8388608 mapped bytes, bytes per region/artifact and aggregate stub contract bytes, 41943040 wire bytes and 67108864 JSON bytes. Semantic sums, fences and permissions are checked by the host and SDK."},
     "id": {"$ref": "#/$defs/id"},
     "origin": {"enum": ["synthetic", "stock"]},
@@ -43,13 +43,16 @@
         "properties": {
           "id": {"$ref": "#/$defs/id"}, "address": {"$ref": "#/$defs/u32"},
           "size": {"$ref": "#/$defs/size"}, "permissions": {"enum": ["r", "rw", "rx", "device"], "description": "device: one interrupt-controller bank word 0xfffb30cc, 0xfffb40cc, 0xfffb30ec or 0xfffb40ec of a kernel case, size 4, taking aligned word stores only"},
+          "uncached_alias": {"const": true, "description": "Schema version 2 only. The region's backing is also mapped at address | 0x40000000 with the same permissions, coherently: no cache is modeled. The region is page-aligned in address and size, ends by 0x40000000 and is not a device word; no view may overlap another region's view, and an rx alias view must end by 0x7ffffffc. The alias view counts toward neither maxItems nor the mapped-byte total; observations report the region at address only."},
           "initial": {
             "oneOf": [
               {"type": "object", "additionalProperties": false, "required": ["zero"], "properties": {"zero": {"const": true}}},
               {"type": "object", "additionalProperties": false, "required": ["artifact", "offset", "length"], "properties": {"artifact": {"$ref": "#/$defs/id"}, "offset": {"type": "integer", "minimum": 0, "maximum": 8388608}, "length": {"$ref": "#/$defs/size"}}}
             ]
           }
-        }
+        },
+        "if": {"required": ["uncached_alias"]},
+        "then": {"properties": {"address": {"pattern": "^0x[0-3][0-9a-f]{4}000$"}, "size": {"multipleOf": 4096}, "permissions": {"enum": ["r", "rw", "rx"]}}}
       }
     },
     "functions": {
@@ -129,6 +132,10 @@
       },
       "then": {},
       "else": {"properties": {"expected": {"properties": {"registers": {"minProperties": 1}}}}}
+    },
+    {
+      "if": {"properties": {"regions": {"contains": {"required": ["uncached_alias"]}}}},
+      "then": {"properties": {"schema_version": {"const": 2}}}
     },
     {
       "if": {"not": {"required": ["memory_profile"]}},

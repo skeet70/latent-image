@@ -293,6 +293,57 @@ readOnlyRegressions runner=withTemporary "fuji-read-only-tests"$ \root->do
  (code,report)<-runCase runner path
  ensure(code==0 && get report "status"==s "passed" && get(get report "runner")"status"==s "memory_guard")("store to a read-only region: "++show report)
 
+-- A schema-2 region with an uncached alias: a store through the alias is read through the plain
+-- view and reported at the region's base; declarations outside the alias contract are refused.
+aliasRegressions :: FilePath -> FilePath -> IO ()
+aliasRegressions runner checker=withTemporary "fuji-alias-tests"$ \root->do
+ let words'=[0xe5810000,0xe5923000,0xe12fff1e]::[Word32]
+     bytes=B.pack[fromIntegral(word `shiftR` offset)|word<-words',offset<-[0,8,16,24]]
+ B.writeFile(root</>"alias.bin")bytes
+ digest<-sha256 bytes
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     codeSize=fromIntegral(B.length bytes)::Integer
+     zero=obj[("zero",b True)]
+     region name address size permissions=obj[("id",s name),("address",hex address),("size",n size),("permissions",s permissions),("initial",zero)]
+     shared=set "uncached_alias"(b True)(region "shared" 0xc000 0x1000 "rw")
+     codeRegion=obj[("id",s "code"),("address",hex 0x8000),("size",n codeSize),("permissions",s "rx"),("initial",obj[("artifact",s "alias"),("offset",n 0),("length",n codeSize)])]
+     registers=obj([("r"++show i,hex 0)|i<-[0..12::Int],i`notElem`[0,1,2]]++[("r0",hex 0xcafef00d),("r1",hex 0x4000c1b4),("r2",hex 0xc1b4),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
+     fixture regions=obj
+       [("schema_version",n 2),("id",s "uncached-alias"),("origin",s "synthetic")
+       ,("provenance",s "NativeTests.hs: store through the uncached alias, load through the plain view")
+       ,("cpu",obj[("architecture",s "arm"),("model",s "cortex-r5f"),("mode",s "arm"),("endian",s "little")])
+       ,("artifacts",arr[obj[("id",s "alias"),("path",s "alias.bin"),("size",n codeSize),("sha256",s digest)]])
+       ,("entry",hex 0x8000),("exit",hex 0xa000),("registers",registers)
+       ,("regions",arr([codeRegion,region "exit" 0xa000 4 "rx",region "stack" 0xb000 32 "rw"]++regions))
+       ,("functions",arr[obj[("address",hex 0x8000),("size",n codeSize)]])
+       ,("stubs",arr[])
+       ,("limits",obj[("instructions",n 1000),("wall_ms",n finishingWallMs)])
+       ,("expected",obj[("status",s "returned"),("registers",obj[("r3",hex 0xcafef00d),("pc",hex 0xa000)]),("memory",arr[obj[("region",s "shared"),("offset",n 0x1b4),("hex",s "0df0feca")]]),("events",arr[])])
+       ,("exclusions",arr[s "uncached alias control"])]
+     valid=fixture[shared]
+     path=root</>"alias.json"
+     schemaAccepts item wanted=do
+      B.writeFile path(encodeCanonical item)
+      (timed,code,_,_)<-runBounded 15000000(1024*1024)checker["--schemafile","schemas/native-case.schema.json",path]B.empty
+      ensure(not timed && code==(if wanted then ExitSuccess else ExitFailure 1))"uncached alias schema admission differs"
+     refused label item=do
+      B.writeFile path(encodeCanonical item)
+      (code,report)<-runCase runner path
+      ensure(code==1 && get report "status"==s "invalid_case")("uncached alias "++label++": "++show report)
+ schemaAccepts valid True
+ (code,report)<-runCase runner path
+ ensure(code==0 && get report "status"==s "passed")("uncached alias store and load: "++show report)
+ (_,_,wire,_)<-loadCase path
+ ensure(BC.pack "c000 1000 3 u 00" `B.isInfixOf` wire)"uncached alias wire marker missing"
+ schemaAccepts(set "schema_version"(n 1)valid)False
+ refused "in schema version 1"(set "schema_version"(n 1)valid)
+ refused "declared false"(fixture[set "uncached_alias"(b False)shared])
+ refused "off a page boundary"(fixture[set "address"(hex 0xc010)shared])
+ refused "of a partial page"(fixture[set "size"(n 0x800)shared])
+ refused "crossing 0x40000000"(fixture[set "uncached_alias"(b True)(region "shared" 0x3ffff000 0x2000 "rw")])
+ refused "under another region"(fixture[shared,region "other" 0x4000c100 4 "r"])
+ refused "of an executable region past 0x7ffffffc"(fixture[shared,set "uncached_alias"(b True)(region "high" 0x3ffff000 0x1000 "rx")])
+
 
 defaultWireRegression :: IO ()
 defaultWireRegression=do
@@ -1037,6 +1088,7 @@ main=do
  contractLimitRegressions runner
  regionCountRegressions runner checker
  readOnlyRegressions runner
+ aliasRegressions runner checker
  schemaContract
  batched<-fixtureBatch runner checker
  wallStopComparison
@@ -1067,7 +1119,7 @@ main=do
       region i=modifyAt "regions" i
       artifact=modifyAt "artifacts" 0
       highCode size=nest "regions"(\v->arr(list v++[obj[("id",s "high"),("address",s "0x7ffffff8"),("size",n size),("permissions",s "rx"),("initial",obj[("zero",b True)])]]))
-      mutations=[("version",set "schema_version"(n 2)),("extra",set "unreviewed"(b True)),("unknown origin",set "origin"(s "firmware")),("retired CPU",nest "cpu"(set "model"(s "arm926"))),("Thumb",nest "cpu"(set "mode"(s "thumb"))),("zero instructions",nest "limits"(set "instructions"(n 0))),("zero wall",nest "limits"(set "wall_ms"(n 0))),("boolean length",region 0(set "size"(b True))),("integer zero tag",region 1(set "initial"(obj[("zero",n 1)]))),("overflow",region 2(\v->merge v[("address",s "0xfffffffe"),("size",n 4)])),("overlap",region 2(set "address"(s "0x00001004"))),("RWX",region 0(set "permissions"(s "rwx"))),("misaligned entry",set "entry"(s "0x00001005")),("unbounded function",modifyAt "functions" 0(set "size"(n 16))),("unknown register",nest "registers"(set "sctlr"(s "0x00000000"))),("missing state",nest "registers"(remove "cpsr")),("unsupported flags",nest "registers"(set "cpsr"(s "0x00000030"))),("stack alignment",nest "registers"(set "sp"(s "0x0000301c"))),("stack bounds",nest "registers"(set "sp"(s "0x00004000"))),("wrong hash",artifact(set "sha256"(s(replicate 64 '0')))),("slice overflow",region 0(nest "initial"(set "offset"(n 1)))),("parent escape",artifact(set "path"(s "../arithmetic.bin"))),("empty expectation",nest "expected"(set "registers"(obj[]))),("unexpected write permission",nest "expected"(\v->set "memory"(arr(list(get v "memory")++[obj[("region",s "code"),("offset",n 0),("hex",s "00")]]))v))]
+      mutations=[("version",set "schema_version"(n 3)),("extra",set "unreviewed"(b True)),("unknown origin",set "origin"(s "firmware")),("retired CPU",nest "cpu"(set "model"(s "arm926"))),("Thumb",nest "cpu"(set "mode"(s "thumb"))),("zero instructions",nest "limits"(set "instructions"(n 0))),("zero wall",nest "limits"(set "wall_ms"(n 0))),("boolean length",region 0(set "size"(b True))),("integer zero tag",region 1(set "initial"(obj[("zero",n 1)]))),("overflow",region 2(\v->merge v[("address",s "0xfffffffe"),("size",n 4)])),("overlap",region 2(set "address"(s "0x00001004"))),("RWX",region 0(set "permissions"(s "rwx"))),("misaligned entry",set "entry"(s "0x00001005")),("unbounded function",modifyAt "functions" 0(set "size"(n 16))),("unknown register",nest "registers"(set "sctlr"(s "0x00000000"))),("missing state",nest "registers"(remove "cpsr")),("unsupported flags",nest "registers"(set "cpsr"(s "0x00000030"))),("stack alignment",nest "registers"(set "sp"(s "0x0000301c"))),("stack bounds",nest "registers"(set "sp"(s "0x00004000"))),("wrong hash",artifact(set "sha256"(s(replicate 64 '0')))),("slice overflow",region 0(nest "initial"(set "offset"(n 1)))),("parent escape",artifact(set "path"(s "../arithmetic.bin"))),("empty expectation",nest "expected"(set "registers"(obj[]))),("unexpected write permission",nest "expected"(\v->set "memory"(arr(list(get v "memory")++[obj[("region",s "code"),("offset",n 0),("hex",s "00")]]))v))]
       invalid label item=do
        B.writeFile path(encodeCanonical item)
        (code,report)<-runCase runner path

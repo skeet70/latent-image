@@ -1198,12 +1198,16 @@ decodeObservationSites owned =
   , Site 0x0121fec8 "jpeg-endpoint-loaded" "pinned playback_complete_jpeg_first after request handback"
   , Site (entry PC.JpegStart) "jpeg-start-store" "ordinary JPEG start entry before device write"
   , Site 0x011d3e9c "jpeg-preview-copy" "X-M1 1.50 plain image: EOI-trimmed final memcpy r0,r1,r2"
-  , Site 0x01220254 "jpeg-request-released" "X-M1 1.50 plain: return from channel9_release before the finish flag store"
-  , Site 0x01220288 "jpeg-request-cancelled" "X-M1 1.50 plain: return from channel9_release in the cancellation consumer" ]
+  , Site (released PC.PlaybackJpegFinishRequest 0x01220254) "jpeg-request-released" "return from channel9 release before the finish flag store"
+  , Site (released PC.PlaybackJpegCancelRequest 0x01220288) "jpeg-request-cancelled" "return from channel9 release in the cancellation consumer" ]
   where
     entry service = case [lo | (kind,lo,_) <- PO.deviceServices owned, kind == service] of
       [lo] -> lo
       _ -> error "validated JPEG service missing"
+    released kind stock = case owned of
+      Just package | PO.qualificationScope package == PO.JpegLifecycle ->
+        maybe (error "validated owned release observation missing") id (PO.releasedObservation package kind)
+      _ -> stock
 
 jpegBatch :: FilePath -> Bridge -> Journal -> Observed -> Maybe PO.Package -> Bool -> IO PJ.Batch
 jpegBatch directory bridge journal observed owned active = do
@@ -1222,13 +1226,20 @@ jpegBatch directory bridge journal observed owned active = do
   writeIORef (obsJpegCursor observed) next
   pure batch
 
-checkCompletionCaller :: Bridge -> IO ()
-checkCompletionCaller bridge = do
-  callback <- readGuest bridge 0x0121fec8 88
-  configure <- readGuest bridge 0x01220004 160
-  require (digestText (digest callback) == "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23"
-    && digestText (digest configure) == "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1")
-    "retained completion callback or binding caller differs from pinned bytes"
+checkCompletionCaller :: Bridge -> Journal -> Maybe PO.Package -> IO ()
+checkCompletionCaller bridge journal owned = do
+  case owned of
+    Just package | PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle] -> checkOwnedGuest bridge journal package
+    _ -> do
+      callback <- readGuest bridge 0x0121fec8 88
+      require (digestText (digest callback) == "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23")
+        "retained completion callback differs from pinned bytes"
+  case owned of
+    Just package | PO.qualificationScope package == PO.JpegLifecycle -> pure ()
+    _ -> do
+      configure <- readGuest bridge 0x01220004 160
+      require (digestText (digest configure) == "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1")
+        "retained completion binding caller differs from pinned bytes"
 
 newtype PlaybackPauseId = PlaybackPauseId Word64
 
@@ -1322,7 +1333,7 @@ playbackAdvance directory bridge journal observed target owned request = call br
                 Just (DecodeSampled a b p c s) -> pure (a,b,p,c,s)
                 _ -> harness "endpoint has no sampled completion from the same job"
               measured <- either harness pure (PJ.completion status bus)
-              checkCompletionCaller bridge
+              checkCompletionCaller bridge journal owned
               callbackBinding <- readGuest bridge 0x014eae78 8
               require (le callbackBinding 0 4 == 0x0121fec8 && le callbackBinding 4 4 == 0x0121ff20)
                 "completion callback publication changed before handback"
@@ -1497,8 +1508,8 @@ newFiles directory before after = fmap concat . forM (viewFolders after) $ \fold
                   , "extents" .= map extentValue (extentsOf (viewVolume after) clusters)
                   , "sha256" .= digestText (digest bytes), "soi" .= soi, "eoi" .= eoi, "fujifilm_in_first_64k" .= fujifilm ]))
 
-runRoute :: Options -> Maybe PO.Package -> IORef (Maybe PO.Witness) -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
-runRoute options owned ownedWitness directory original bridge journal observed = do
+runRoute :: Options -> Maybe PO.Package -> IORef (Maybe PO.Witness) -> IORef (Maybe PO.QualificationEvidence) -> FilePath -> FilePath -> Bridge -> Journal -> Observed -> IO ()
+runRoute options owned ownedPreparation ownedWitness directory original bridge journal observed = do
   let route = optRoute options
       sites = routeSites route ++ (if route == PlayRoute then decodeObservationSites owned else [])
   _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- sites]])
@@ -1564,13 +1575,17 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     writeIORef (obsCapture observed) (Just (CaptureProgress (CS.startCoverage at) Nothing CS.initialCursor False))
     _ <- captureObservationHits bridge journal observed
     pure ()
-  forM_ (zip (maybe [] pure owned) (maybe [] pure ownedPrefixAck)) $ \(package, ack) -> do
+  forM_ owned $ \package -> when (PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle]) $
+    observeConstructionState directory bridge journal
+  prefixWitness <- forM (zip (maybe [] pure owned) (maybe [] pure ownedPrefixAck)) $ \(package, ack) -> do
     state <- call bridge (command "watch-state" [])
     ended <- call bridge (command "watch-end" [])
     note journal "owned-playback-prefix-watch-state" (Object state)
     note journal "owned-playback-prefix-watch-end" (Object ended)
     prefixWitness <- either harness pure (PO.witness package ack (Object state) (Object ended))
     note journal "owned-playback-prefix-witness" (PO.witnessValue prefixWitness)
+    writeIORef ownedPreparation (Just prefixWitness)
+    pure prefixWitness
   ownedAck <- forM owned $ \package -> do
     checkOwnedGuest bridge journal package
     armed <- call bridge (PO.watchRequest package)
@@ -1578,7 +1593,7 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     note journal "owned-playback-watch-begin" (Object armed)
     pure (Object armed)
   when (route == PlayRoute) $ do
-    checkCompletionCaller bridge
+    checkCompletionCaller bridge journal owned
     when (maybe True ((== PO.RetainedJpegDevice) . PO.deviceOwnership) owned) $
       forM_ PC.jpegDeviceServices $ \service -> do
         let (PC.PinnedBody low high (PC.SourceSha256 expected), _) = PC.jpegDeviceContract service
@@ -1658,7 +1673,9 @@ runRoute options owned ownedWitness directory original bridge journal observed =
     ended <- call bridge (command "watch-end" [])
     note journal "owned-playback-watch-end" (Object ended)
     result <- either harness pure (PO.witness package ack (Object state) (Object ended))
-    writeIORef ownedWitness (Just result)
+    case prefixWitness of
+      [prefix] -> writeIORef ownedWitness (Just (PO.qualificationEvidence prefix result))
+      _ -> harness "owned preparation witness missing"
     note journal "owned-playback-witness" (PO.witnessValue result)
   writeIORef (obsSdFinal observed) (Just final)
   ledger <- readIORef (obsLedger observed)
@@ -1926,12 +1943,33 @@ checkOwnedGuest bridge journal package = do
   bodies <- forM (PO.originalBodies package) $ \(address, count) -> readMemory bridge address count
   either harness pure (PO.checkOriginalBodies package bodies)
 
+data ConstructionCell = ConstructorRecord | ConstructorRequest | ConstructorDriver
+
+observeConstructionState :: FilePath -> Bridge -> Journal -> IO ()
+observeConstructionState directory bridge journal = do
+  createDirectoryIfMissing True (directory </> "construction")
+  snapshots <- forM [ConstructorRecord, ConstructorRequest, ConstructorDriver] $ \selected -> do
+    let cell = case selected of
+          ConstructorRecord -> Cell "record" 0x015b0bf8 0x65 "0x00e8fee4 develop job4 producer"
+          ConstructorRequest -> Cell "request" 0x014c56f8 0x54 "0x00d98904 static request constructor"
+          ConstructorDriver -> Cell "driver" 0x014c56f0 0x210 "channel9 record/resource/request/IRQ/configuration state"
+        path = "construction" </> T.unpack (cellName cell) ++ ".bin"
+    bytes <- readGuest bridge (cellAddress cell) (cellWidth cell)
+    B.writeFile (directory </> path) bytes
+    pure (object ["cell" .= cellName cell, "address" .= hex32 (cellAddress cell)
+      , "bytes" .= B.length bytes, "sha256" .= digestText (digest bytes)
+      , "path" .= path, "source" .= cellSource cell])
+  note journal "owned-playback-construction-state" (object
+    ["interval" .= ("paused after natural preparation, before prefix guard end" :: T.Text)
+    , "snapshots" .= snapshots])
+
 main :: IO ()
 main = do
   options <- getArgs >>= parseOptions
   selection <- either harness pure (PO.selection (optRoute options == PlayRoute) (optInstalled options) (optOwnedPlayback options))
   owned <- mapM PO.loadPackage selection
   ownedWitness <- newIORef Nothing
+  ownedPreparation <- newIORef Nothing
   directory <- freshOutput (optOutput options)
   card <- makeAbsolute (optCard options)
   firmware <- makeAbsolute (optFirmware options)
@@ -1995,7 +2033,7 @@ main = do
     ready <- event bridge "ready"
     forM_ owned $ \(selected, _) -> either harness pure (PO.validateReady selected start (Object ready))
     note journal "ready" (object ["checkpoint" .= KM.lookup "checkpoint" ready, "pre_attach" .= KM.lookup "pre_attach" ready])
-    stopped <- try (runRoute options (snd <$> owned) ownedWitness directory card bridge journal observed)
+    stopped <- try (runRoute options (snd <$> owned) ownedPreparation ownedWitness directory card bridge journal observed)
     case stopped of
       Left (BridgeStopped message) -> do
         writeIORef (obsStop observed) (Just message)
@@ -2053,20 +2091,30 @@ main = do
   originalAfter <- cardStat card
   originalShaAfter <- fileDigest card
   (routeFindings, routeStopped) <- verdict (optRoute options) (optShootWithoutLens options) observed
-  pairWitness <- readIORef ownedWitness
+  epochEvidence <- readIORef ownedWitness
+  preparationWitness <- readIORef ownedPreparation
+  let pairWitness = PO.playWitness <$> epochEvidence
   let ownedFindings = case owned of
         Nothing -> []
-        Just (_, package) -> [Judged (Finding name Gate (maybe False predicate pairWitness) (maybe Null PO.witnessValue pairWitness)
+        Just (_, package) -> [Judged (Finding name Gate (maybe False predicate epochEvidence)
+          (if PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle]
+            then maybe Null PO.qualificationEvidenceValue epochEvidence
+            else maybe Null PO.witnessValue pairWitness)
           "installed package bytes and loss-accounted SDK execution watch")
-          (if maybe False predicate pairWitness then Nothing else Just "owned entry unobserved in the bounded PLAY interval")
-          | (name, predicate) <- PO.requiredObservations package]
+          (if maybe False predicate epochEvidence then Nothing else Just
+            (if PO.qualificationScope package `elem` [PO.JpegConsumers, PO.JpegLifecycle]
+              then "owned entry unobserved in its required preparation or PLAY interval"
+              else "owned entry unobserved in the bounded PLAY interval"))
+          | (name, predicate) <- PO.requiredEpochObservations package]
       findings = routeFindings ++ ownedFindings
       stopped = routeStopped <|> case owned of
         Nothing -> Nothing
-        Just (_, package) -> if maybe False (PO.qualificationObserved package) pairWitness then Nothing
+        Just (_, package) -> if maybe False (PO.qualificationEpochsObserved package) epochEvidence then Nothing
           else Just (GateName (case PO.qualificationScope package of
             PO.PreparationPair -> "owned-playback-pair-unobserved"
-            PO.JpegTransaction -> "owned-playback-jpeg-transaction-unobserved"))
+            PO.JpegTransaction -> "owned-playback-jpeg-transaction-unobserved"
+            PO.JpegConsumers -> "owned-playback-jpeg-consumers-unobserved"
+            PO.JpegLifecycle -> "owned-playback-jpeg-lifecycle-unobserved"))
   ledger <- readIORef (obsLedger observed)
   recoveredCount <- readIORef (obsRecovered observed)
   captureProgress <- readIORef (obsCapture observed)
@@ -2123,7 +2171,10 @@ main = do
         , "witness" .= fmap PO.witnessValue pairWitness
         , "integrated_pair" .= maybe False (\w -> PO.sourceObserved w && PO.modeObserved w) pairWitness
         , "qualification_scope" .= PO.qualificationScopeText (PO.qualificationScope package)
-        , "qualification_entries_observed" .= maybe False (PO.qualificationObserved package) pairWitness
+        , "qualification_entries_observed" .= maybe False (PO.qualificationEpochsObserved package) epochEvidence
+        , "epochs" .= object
+            [ "preparation" .= fmap PO.witnessValue preparationWitness
+            , "play" .= fmap PO.witnessValue pairWitness ]
         , "whole_playback_acceptance" .= False] | (selected, package) <- maybe [] pure owned ])
   forM_ findings $ \(Judged f unknown) -> putStrLn
     ((if isJust unknown then "unknown " else if findingHolds f then "holds " else "fails ")

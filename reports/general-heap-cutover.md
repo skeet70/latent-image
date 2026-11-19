@@ -47,10 +47,53 @@ The [generated heap evidence](../replacement/README.md#general-heap) is written 
 
 The positive pair tests cold boot, language/start-menu navigation and the shooting-menu endpoint. Its 4,490 malloc and 4,039 free calls agree in global order in both roles; realloc/calloc/trim each have zero cases, reported explicitly in `qualification.json` in stock/owned order. Neither role reports a guest/watch failure, and the rendered endpoint frames agree. The wrong binary stores errno 12 through the context on malloc, including successful allocations. It passes artifact/staging admission and every role-local check, executes 2,552,771 allocator fetches and reaches both menu endpoints. The comparator rejects it with `stock/owned interface calls differ at ordered call 0`. This is an executed traffic control, not the older malloc-to-trim variant rejected by the per-role errno invariant or a mutated journal.
 
+## Stock-ABI qualification
+
+The [generated record](../replacement/README.md#general-heap) is E-GENERAL-HEAP-ABI-QUALIFICATION-150.
+
+`heap-observe --abi-stock|--abi-owned` boots each role's DAT through the natural no-card route, presses Up on the final menu and halts at the next heap core entry. In both roles that is task 33 entering free `0x89e560` on core 0 with the heap lock free, so the heap holds the route's natural live state. The harness then calls the retained entries (malloc `0x89cda4`, free `0x89cdc4`, realloc `0x89da3c`, calloc `0xbf1c1c`, trim `0x89e464`) one at a time on a separate stack with interrupt delivery off, under the real retained lock, current-task and semaphore code. Every call must return to the harness, preserve r4-r11 and SP, run no core-1 instruction and fetch only bound spans whose bytes equal the role's image; one loader word differs from the decoded loader at the seed in both roles, so that span is a fetch bound only. The caller sets errno to a marker before each call and fills each allocation with a slot pattern, as a caller would.
+
+The 99-step scenario (`emulation/fujimod-xm1/src/heap_abi_scenario.rs`) covers zero malloc, shrink, grow, same-chunk and zero-size resize, realloc(NULL), failed resize preserving the old bytes, calloc zeroing including reused dirty memory, zero calloc, free(NULL), capacity rejection, exhaustion in 128 KiB blocks, failed resize and calloc at exhaustion, a fragmented request that must fail, coalescence of the released blocks, a second exhaustion that must reach the same count, a large calloc over reused memory, trim and the declared corrections. Per call it records the result class, alignment, movement, errno, owner/depth change and payload checks; allocation addresses are not compared. `--abi-check` requires the stock and owned journals to be equal step by step except at the declared corrections, and each role to keep its own invariants (aligned allocations, errno 12 exactly on failure, balanced lock, intact payloads, equal exhaustion counts).
+
+Results: the owned ABI matches stock at 94 steps and differs only as declared at 5. Executed stock bytes show the #147 leak: each oversized resize returns null/errno 12 with one more recursive depth, while owned stays balanced. Stock calloc allocates the wrapped products of 0x10000 x 0x10001 and 0x40000000 x 4; owned returns null/errno 12. Stock trim returned 0 here, so backing release was not exercised. Both roles reach 10 exhaustion successes, refuse the fragmented request, coalesce the released blocks into a 1.25 MiB allocation and reach 10 again. The Rust `GlobalAlloc` front end, run by `heap-bridge-replay --abi` after replaying the admitted tape into the production heap, matches stock at 75 steps; 19 steps have no front-end operation (16 null frees, 3 zero-size requests) and the calloc overflow is the caller's `Layout` failure. Over-alignment has no stock counterpart; the host suite covers alignments up to 16 KiB.
+
+`--abi-controls` corrupts the owned and front-end journals one property at a time (failed or errno-setting success, leaked free depth, lost resize prefix, lost failed-resize bytes, dirty calloc, moved shrink, trim returning 1, wrapped calloc, oversized-resize leak, missing and reordered steps); all 12 owned and 9 applicable front-end controls are refused on their target property. The executed traffic mutant, staged as the owned role, completes its run and is refused at the first step for writing errno 12 on a successful malloc.
+
+## Stack headroom
+
+`J7HeapCanonicalTests` walks stock bytes with `StockStack`. Entry demands including the retained lock/wait chain are owned/stock 536/504 at malloc `0x89cda4`, 472/464 at free `0x89cdc4`, 536/496 at `_malloc_r` `0x89cde4` and 472/456 at `_free_r` `0x89e560`: the owned frames add 32, 8, 40 and 16 bytes. Realloc 544, trim 456 and calloc 536 have no bounded stock counterpart in this walk.
+
+The walker now follows the constructs the earlier task walks stopped at. `0x4a960` is a kernel lock release whose lock address the routine spilled to `[r11, #-0x28]`; the walker tracks words a frame stores and reloads until a frame address is copied or a callee may write that far above its entry SP. `0x4360c` is the kernel abort's `svc #0x1010`; each loader's SVC handler stores 64 bytes on the task stack and calls its exception reporter `0x40cac`/`0xd0cac`, both checked from loader bytes. The reporter's hook (`0x4004f114`/`0x400df0d4`) holds only the image entry's mode-2 return `0x69cc6c` (S7: each hook's only store is its setter, called only after the loader's mode-2 call). `0x72b694` and `0x892c38` call words at fixed addresses; a word every scanned store writes with a constant, or with the argument a setter's every caller in stock or owned code passes, holds its image value, 0 inside the cold-boot clear `[0x89ec00,0xbf1a00)`, or those constants (S6), and a possibly zero word is called only after a zero test of its register. `0x829a0c` holds `0x72b210` or `0x72b318`, `0x890f14` holds `0x890ee8` and the diagnostic hook `0x89f794` holds 0 or `0xed4a8c`; with the owned image-5 initializer composed (J9), its own call of setter `0x69cf84` passes `0xed4a8c`. A path ends after a call when no path of the callee returns, as after a call of `0x43604`, whose `svc #0x1010` is followed by `b .`.
+
+No published heap-calling task has an established whole-task bound. Under S1-S7, tasks 1, 2, 3, 4, 7, 35, 43, 55, 56, 62, 64, 73 and 80 (stacks 0xc00-0x1400) reach the kernel abort `0x4d978`, whose fatal report recurses: SVC `0x43604`, reporter `0x40cac`, diagnostic callback `0x69cc6c`, hook `0xed4a8c`, `0xed468c`, `0x6ab794`, `0x6fb7c8` and `0x4d978` again; a report nested in a report has no static bound. Task 33 (0x1000) stops at `0x7250cc`, a call through the message-trace word `0x4089ea94` that a setter fills from its argument. Task 36 (0xc00) stops at `0xd80e68`, a USB state-table record field indexed by RAM state. Task 72 (0xc00) stops at `0x892c00`, a callback array in an object. Root and plain producer targets that reached the abort refuse at the same recursion. The only bounded task demands remain root 104 (856 of 1024 bytes) and the task-60 producers (672/520 of 3040), under S1-S5.
+
+S8 takes the fatal report as terminal: a nonzero SVC starts a report after which the task does not resume normal operation, so a bound under S8 covers the paths before the report. Under S1-S8 every task walk passes the abort and stops at a register branch. The constructs below are read from the instruction words before each branch.
+
+| Task | Entry | Stack | Refused at (S1-S8) |
+| --- | --- | --- | --- |
+| 1 | `0xc22f60` | 0xc00 | `0x6f16e0`, the argument callback under storage read `0x6a8f1c` |
+| 2 | `0xec2668` | 0x1000 | `0xec09b4`, a callback table indexed by a sign-extended byte id |
+| 3 | `0xe00a80` | 0x1000 | `0xdf7594`, the same callback-table construct |
+| 4 | `0x1215480` | 0x1000 | `0x11e8ca0`, a register call in the plain image |
+| 7 | `0xecc058` | 0xc00 | `0xec9bf8`, the same callback-table construct |
+| 33 | `0x1109130` | 0x1000 | `0x7250cc`, the message-trace word, as under S1-S7 |
+| 35 | `0xed2ce0` | 0xc00 | `0x7250cc`, the message-trace word |
+| 36 | `0xd81218` | 0xc00 | `0xd80e68`, the USB state table, as under S1-S7 |
+| 43 | `0xf01bc8` | 0x1000 | `0xefcb58`, a table indexed by a register value |
+| 55 | `0x106ceec` | 0xc00 | `0x106d000`, a callback loaded from an object's first word |
+| 56 | `0x1071ca4` | 0x1400 | `0x10724b8`, a callback at object offset `0x2698` |
+| 62 | `0x1064224` | 0x1000 | `0x106444c`, an object callback |
+| 64 | `0x1054cf4` | 0xc00 | `0x10548ec`, a table indexed by a register value |
+| 72 | `0x892110` | 0xc00 | `0x892c00`, the object callback array, as under S1-S7 |
+| 73 | `0x6d7540` | 0x1000 | `0x6d6fec`, a callback list walked from a constant address |
+| 80 | `0x69f0e0` | 0xc00 | `0x89bf08`, `bx lr` with lr reloaded from `[sp, #4]` |
+
+The one-level fatal path is unmeasured: with fatal reports excluded the abort `0x4d978` is bounded, but the reporter `0x40cac` stops at `0x6f16e0`.
+
 ## Final-pass queue
 
-- Reach calloc, realloc and trim from full-system scenarios where the current menu route does not enter them.
-- Exercise failure, resource exhaustion, cross-task/core contention and interrupt-context refusal without substituting injected-state probes for reachable scenarios.
+- Reach calloc, realloc and trim from full-system scenarios where the current menu route does not enter them. The stock-ABI qualification calls them at the retained entries from a natural seed; it does not show which retained callers reach them.
+- Exercise cross-task/core contention, interrupt-context refusal and stock trim's backing release; the stock-ABI qualification covers uncontended failure, exhaustion, coalescence and reuse on one task.
 - Extend capture/development/save/playback coverage at each supported emulator frontier; physical timing and unmodeled hardware require the camera.
 - Close unknown computed references, metadata readers beyond `payload-4`, external arena writers and address-sensitive clients before a firmware-wide retirement claim.
 - Exercise image-6 Wi-Fi clients, including hostapd and netstack, their 15 resize calls, calloc(1,20), malloc/free lifetimes and alias-pointer handling.
@@ -58,6 +101,6 @@ The positive pair tests cold boot, language/start-menu navigation and the shooti
 - Qualify `general-heap-fixed-image` at the `0x00a9fa00` ceiling with card-backed capture, saved-image playback and Wi-Fi heap demand. The current fixed-placement scenarios cover only cardless inputs.
 - Check DMA-loaded instruction visibility and later MPU changes on the camera before promoting the fixed-range image.
 - Close interior jumps into retired carriers after sealing, when guards no longer bind a fetch to an entry or pending invocation.
-- Close task-stack headroom: owned malloc reaches 128 bytes below its core-entry SP at the lock call (24 + 64 + 24 + 16), versus stock's 40, an 88-byte increase. `replacement/task_constructors/src.rs` declares 0xc00-byte stacks for tasks 1, 7, 35, 36, 55, 64 and 80; 0x1000 for 2, 3, 4, 43 and 62; 0x1400 for 56. This constructor subset neither attributes every heap caller to a task nor bounds the callers' live frames, retained lock/wait chain or interrupt reserve. The shortfall is a complete heap-calling-task census and each task's worst-case remaining headroom at heap entry, including Wi-Fi tasks. The finite menu pair is not that stack-budget proof.
+- Close task-stack headroom. Owned entry demands exceed stock by 32 (malloc), 8 (free), 40 (`_malloc_r`) and 16 (`_free_r`) bytes. Under S1-S7 thirteen published tasks reach the recursive fatal report through the kernel abort `0x4d978`, and tasks 33, 36 and 72 stop at an argument-filled callback word, a RAM-indexed state table and an object callback array. Under S8 all sixteen stop at the register branches the [stack-headroom table](#stack-headroom) names, and the reporter `0x40cac` stops at `0x6f16e0`; bounds need closed target sets for those branches. The census also lacks image-6 Wi-Fi tasks and any heap caller outside the published tables.
 
 The current no-card scenario does not claim a captured image or playback rendering. The [capability inventory](replacement-inventory-baseline.md#2-coarse-capability-outline) separately records blocked emulator playback/RAW conversion and incomplete sensor-backed capture. The final-pass scenarios must use their supported device routes as those frontiers close, not bypass heap calls or synthesize successful captures.
