@@ -35,9 +35,12 @@ mod owned_primitives {
 use owned_primitives::*;
 struct Device { immediate:Option<Engine>,force_clear:Option<Engine> }
 impl Device {fn plain()->Self{Self{immediate:None,force_clear:None}}}
+#[inline(always)]
 fn register_address(register:Register)->usize{let base=match register.bank{Bank::Scanout=>0xfff6b000,Bank::Timing=>0xfff6a000,Bank::Formatter=>0xfff69000};base+register.engine.index()*0x3000+usize::from(register.offset)}
 impl Hardware for Device {
+    #[inline(always)]
     fn read(&mut self,register:Register)->u32{unsafe{stock::word(register_address(register))}}
+    #[inline(always)]
     fn write(&mut self,register:Register,value:u32){unsafe{if register.bank==Bank::Timing{if self.immediate==Some(register.engine)&&register.offset==0x34{stock::put_word(stock::timing_base(register.engine)+0x50,value);}if self.force_clear==Some(register.engine)&&register.offset==0{stock::put_word(stock::timing_base(register.engine)+0x14,0);}}stock::put_word(register_address(register),value);}}
     fn enter_critical(&mut self)->u32{unsafe{scanout_enter_critical()}}
     fn leave_critical(&mut self,token:u32){unsafe{scanout_leave_critical(token);}}
