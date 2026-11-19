@@ -6,6 +6,7 @@ def heap_bridge_replay(name):
             "//:devenv.lock", "//build-support:nixpkgs.nix",
             "//emulation:fujimod-xm1/src/heap_state.rs",
             "//emulation:fujimod-xm1/src/heap_replay_state.rs",
+            "//emulation:fujimod-xm1/src/heap_abi_scenario.rs",
         ],
         outs = [name + ".bin"],
         cmd = """

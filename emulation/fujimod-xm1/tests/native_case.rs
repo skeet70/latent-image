@@ -106,6 +106,8 @@ struct Case {
     kernel: Option<String>,
     stack_contexts: Option<String>,
     resource8: bool,
+    /// Bases of regions whose wire row carries the uncached-alias marker.
+    aliases: Vec<u32>,
 }
 
 /// A kernel case's wire row; `None` is `n`.
@@ -163,6 +165,7 @@ impl Case {
             kernel: None,
             stack_contexts: None,
             resource8: false,
+            aliases: Vec::new(),
         }
     }
 
@@ -180,6 +183,11 @@ impl Case {
     fn region(mut self, address: u32, permission: u8, bytes: &[u8]) -> Self {
         self.regions.push(Region { address, size: bytes.len() as u32, permission, bytes: bytes.to_vec() });
         self
+    }
+
+    fn aliased(mut self, address: u32, permission: u8, bytes: &[u8]) -> Self {
+        self.aliases.push(address);
+        self.region(address, permission, bytes)
     }
 
     fn register(mut self, index: usize, value: u32) -> Self {
@@ -262,7 +270,8 @@ impl Case {
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len() + self.scripts.len());
         for (index, region) in self.regions.iter().enumerate() {
-            text += &format!("{:x} {:x} {} {}\n", region.address, region.size, region.permission, initial(index, region));
+            let marker = if self.aliases.contains(&region.address) { " u" } else { "" };
+            text += &format!("{:x} {:x} {}{marker} {}\n", region.address, region.size, region.permission, initial(index, region));
         }
         for (address, size) in &self.functions {
             text += &format!("{address:x} {size:x}\n");
@@ -3173,4 +3182,109 @@ fn bitmaps_record_nothing_outside_declared_extents() {
         ]
     );
     assert!(observed.observation.executed_unobserved.is_empty());
+}
+
+const ALIASED: u32 = 0x8000;
+const ALIASED_VIEW: u32 = 0x4000_8000;
+const PAGE_BYTES: usize = 0x1000;
+const STR_R0_R1: u32 = 0xe581_0000;
+const LDR_R3_R2: u32 = 0xe592_3000;
+const LDR_R4_R5: u32 = 0xe595_4000;
+const BLX_R12: u32 = 0xe12f_ff3c;
+
+/// One page whose first word is `0x11223344`.
+fn aliased_page() -> Vec<u8> {
+    let mut page = vec![0; PAGE_BYTES];
+    page[..4].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+    page
+}
+
+#[test]
+fn a_write_through_either_view_is_read_through_the_other() {
+    for (stored, loaded) in [(ALIASED_VIEW + 0x1b4, ALIASED + 0x1b4), (ALIASED + 0x1b4, ALIASED_VIEW + 0x1b4)] {
+        let observed = Case::new(&[STR_R0_R1, LDR_R3_R2, LDR_R4_R5, BX_LR])
+            .aliased(ALIASED, READ_WRITE, &aliased_page())
+            .register(0, 0xcafe_f00d)
+            .register(1, stored)
+            .register(2, loaded)
+            .register(5, ALIASED_VIEW)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r3"), 0xcafe_f00d, "{stored:#x}");
+        assert_eq!(observed.register("r4"), 0x1122_3344, "{stored:#x}");
+        assert_eq!(&observed.bytes(ALIASED)[2 * 0x1b4..2 * 0x1b8], "0df0feca");
+        assert!(observed.observation.memory.iter().all(|region| region.address != format!("0x{ALIASED_VIEW:08x}")));
+        assert_eq!(
+            observed.observation.memory_provenance,
+            [
+                access(CODE, Kind::Write, stored, 0xcafe_f00d),
+                access(CODE + 4, Kind::Read, loaded, 0xcafe_f00d),
+                access(CODE + 8, Kind::Read, ALIASED_VIEW, 0x1122_3344),
+            ]
+        );
+    }
+}
+
+#[test]
+fn both_views_carry_the_region_permission() {
+    for stored in [ALIASED_VIEW, ALIASED] {
+        let observed = Case::new(&[LDR_R3_R2, STR_R0_R1, BX_LR])
+            .aliased(ALIASED, READ, &aliased_page())
+            .register(1, stored)
+            .register(2, ALIASED_VIEW)
+            .run();
+        observed.assert_stopped(Status::MemoryGuard, CODE + 4);
+        assert_eq!(observed.register("r3"), 0x1122_3344);
+        assert_eq!(observed.bytes(ALIASED), hex_bytes(&aliased_page()));
+    }
+    let mut callee = vec![0; PAGE_BYTES];
+    callee[..8].copy_from_slice(&words(&[0xe3a0_0007, BX_LR]));
+    let call = Case::new(&[PUSH_LR, BLX_R12, POP_PC]).function(0x4000_9000, 8).register(12, 0x4000_9000);
+    let observed = call.clone().aliased(0x9000, READ_EXECUTE, &callee).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 7);
+    assert_eq!(call.region(0x9000, READ_EXECUTE, &callee).run().status(), Status::InvalidCase);
+}
+
+#[test]
+fn alias_declarations_outside_the_alias_contract_are_refused() {
+    Case::new(&[BX_LR]).aliased(ALIASED, READ_WRITE, &[0; PAGE_BYTES]).run().assert_returned();
+    Case::new(&[BX_LR]).region(0x3fff_f000, READ_EXECUTE, &[0; PAGE_BYTES]).run().assert_returned();
+    let refused = [
+        Case::new(&[BX_LR]).aliased(ALIASED + 0x10, READ_WRITE, &[0; PAGE_BYTES]),
+        Case::new(&[BX_LR]).aliased(ALIASED, READ_WRITE, &[0; PAGE_BYTES / 2]),
+        Case::new(&[BX_LR]).aliased(ALIASED_VIEW, READ_WRITE, &[0; PAGE_BYTES]),
+        Case::new(&[BX_LR]).aliased(0x3fff_f000, READ_WRITE, &[0; 2 * PAGE_BYTES]),
+        Case::new(&[BX_LR]).aliased(0x3fff_f000, READ_EXECUTE, &[0; PAGE_BYTES]),
+        Case::new(&[BX_LR]).region(ALIASED_VIEW + 0x100, READ, &[0; 4]).aliased(ALIASED, READ_WRITE, &[0; PAGE_BYTES]),
+        Case::new(&[BX_LR]).aliased(ALIASED, READ_WRITE, &[0; PAGE_BYTES]).region(ALIASED_VIEW + 0xffc, READ, &[0; 4]),
+    ];
+    for (index, case) in refused.iter().enumerate() {
+        assert_eq!(case.run().status(), Status::InvalidCase, "declaration {index}");
+    }
+}
+
+#[test]
+fn an_exclusive_reservation_covers_the_word_in_both_views() {
+    // ldrex r1, [r2]; add r1, r1, #1; strex r3, r1, [r4]
+    let observed = Case::new(&[LDREX_R1_R2, ADD_R1_1, 0xe184_3f91, BX_LR])
+        .kernel(Kernel::default())
+        .aliased(ALIASED, READ_WRITE, &aliased_page())
+        .register(2, ALIASED_VIEW)
+        .register(3, 9)
+        .register(4, ALIASED)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r3"), 0);
+    assert_eq!(&observed.bytes(ALIASED)[..8], "45332211");
+    // ldrex r1, [r2]; str r0, [r4]
+    let observed = Case::new(&[LDREX_R1_R2, 0xe584_0000, BX_LR])
+        .kernel(Kernel::default())
+        .aliased(ALIASED, READ_WRITE, &aliased_page())
+        .register(0, 0xdead_beef)
+        .register(2, ALIASED)
+        .register(4, ALIASED_VIEW)
+        .run();
+    observed.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
+    assert_eq!(observed.bytes(ALIASED), hex_bytes(&aliased_page()));
 }

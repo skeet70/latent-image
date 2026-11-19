@@ -66,6 +66,17 @@ Neither route enters `family-flag-poll`, `family-flag-wait`, `helper-block` or `
 
 In the aggregate the six mailbox extents are retained stock; in the standalone stage they are owned and three are entered (`send`, `receive`, `timed receive`), while `create`, `delete` and `poll` are not. The boot route reaches no flag wait or poll. Run results, the four verdicts and the image identities are in E-RTOS-EVENT-FLAG-AGGREGATE-150.
 
+The [six-mailbox aggregate candidate](https://github.com/skeet70/latent-image/blob/fa9e035cd/replacement/rtos.md#mailbox-inclusive-placement-boundary) is not integrated. Its unchanged global placement search exhausts 50,000 nodes without producing a layout; arithmetic headroom does not prove that its indivisible sections fit:
+
+| Domain | Emitted sections, bytes | Carrier-body capacity, bytes | Full flag/mailbox-family sections, bytes |
+| --- | ---: | ---: | ---: |
+| A | 37,247 | 37,424 | 7,160 |
+| B | 37,323 | 37,432 | 7,212 |
+
+Early-boot contiguous placement remains an architectural question. The existing fixed-image bank loads after image4; its availability before the first kernel calls in both domains is not established. No new address, search-budget increase, aggregate image or natural mailbox acceptance is established. The existing aggregate qualification remains bound to its previous images; `E-RTOS-EVENT-FLAG-AGGREGATE-150` retains the failed candidate's placement evidence.
+
+The standalone family retains the stock timer seam. Its timed-wait oracle checks timeout, output and heap effects, not an owned timer core's detached-index representation. Main's corrected standalone suite passes 100 caller comparisons and 416 observation controls. The separate mailbox candidate adds twelve comparisons; neither result supplies its missing linked aggregate.
+
 ### Declared differences
 
 **A removed timer entry's index.** Trigger: the stock timer tick expires the heap head (`kernel_timer_tick`, A `0x44d8c` / B `0xd4d4c`), and stock `kernel_remove_timer` (A `0x44ca8` / B `0xd4c68`) removes an armed entry. Original behaviour: both leave the removed entry's index word at its last heap position. Intended behaviour: the owned timer core (`replacement/rtos_timer/src/lib.rs`) writes `TimerIndex::Detached` (0) when an entry leaves the heap and refuses to insert an entry still marked linked. Remaining retained boundary: the entry record is shared with retained stock callers through the `timer_*` veneers, so the owned tick and remove write a word stock owns; no retained stock caller reads it. A consumer that depended on the stale value would show a retained load of `entry+0x00` or an owned `insert` returning `AlreadyLinked`; `reports/rtos-platform-options.md` records the same stale `entry->index` as the stock race `timeout-entry-not-cleared`, where a waker in the window removes slot 1 or underflows the count. If one appears, recreate the stale write at a named shim with a removal condition. The family suite clears that one word (A `0x40055a3c` in the last observed kernel region) before comparing a `WakerTick` case and compares every other kernel word; the owned `insert` refusal is covered by the timer host tests.
