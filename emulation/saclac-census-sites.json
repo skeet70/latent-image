@@ -449,6 +449,7 @@
       {"address":"0x00ee8ba0","kind":"service-request","arguments":[{"kind":"word"}]},
       {"address":"0x00744c48","kind":"service-request","arguments":[{"kind":"word"}]},
       {"address":"0x00eeccc0","kind":"service-request","arguments":[{"kind":"word"},{"kind":"word"},{"kind":"word"},{"kind":"word"}]},
+      {"address":"0x0064982c","kind":"service-request","arguments":[{"kind":"word"},{"kind":"word"}]},
       {"address":"0x00f156b4","kind":"callback"},
       {"address":"0x00f46be0","kind":"callback"},
       {"address":"0x00f46c00","kind":"callback"},

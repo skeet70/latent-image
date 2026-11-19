@@ -48,6 +48,8 @@ module Replacement.Saclac.CycleStep
   , CasePlan (..)
   , caseValue
   , trampoline
+  , serviceRecorder
+  , serviceMarker
   , hexValue
   , hexTextOf
   , hexBytes
@@ -107,6 +109,7 @@ data Event
   | EventPeerRequest Int Int [Word8]
   | EventCallback Integer
   | EventClientReply Integer Integer
+  | EventServiceRequest Integer [Word32]
   | EventStore Integer [Word8]
   | EventOther String
   deriving (Eq, Show)
@@ -125,6 +128,7 @@ parseEvent event = case str (get event "kind") of
   "peer-request" -> EventPeerRequest (fromIntegral (num (get event "queue"))) (fromIntegral (num (get event "operation"))) (payload (get event "payload"))
   "callback" -> EventCallback (addressOf (get event "entry"))
   "client-reply" -> EventClientReply (addressOf (get event "entry")) (addressOf (get event "target"))
+  "service-request" -> EventServiceRequest (addressOf (get event "entry")) [fromIntegral (num (get argument "value")) | argument <- list (get event "arguments"), str (get argument "kind") == "word"]
   "store" -> EventStore (addressOf (get event "address")) (payload (get event "bytes"))
   other -> EventOther other
   where
@@ -437,6 +441,7 @@ data CasePlan = CasePlan
   , casePlanStubs :: [StubPlan]
   , casePlanArtifacts :: [(String, B.ByteString)]
   , casePlanBudget :: Word32
+  , casePlanCoverage :: Bool
   }
   deriving (Eq, Show)
 
@@ -451,16 +456,29 @@ hexBytes = concatMap byte . B.unpack
   where
     byte value = let digits = showHex value "" in replicate (2 - length digits) '0' ++ digits
 
+-- | Captured state and pinned code are mapped with their bit-30 uncached alias, as the step
+-- reaches pipeline buffers through both views; only page-aligned regions below 0x40000000 can
+-- carry one. The harness's record, stack, exit word and trampoline stay single-view.
+aliased :: RegionPlan -> Bool
+aliased region =
+  regionBase region `mod` 0x1000 == 0
+    && regionSize region `mod` 0x1000 == 0
+    && fromIntegral (regionBase region) + fromIntegral (regionSize region) <= (0x40000000 :: Integer)
+    && regionPermission region `elem` ["rw", "rx"]
+    && regionId region `notElem` ["record", "stack", "exit", "tramp"]
+
 regionValue :: RegionPlan -> Value
 regionValue region = obj
-  [ ("id", s (regionId region))
-  , ("address", hexValue (regionBase region))
-  , ("size", n (fromIntegral (regionSize region)))
-  , ("permissions", s (regionPermission region))
-  , ("initial", case regionArtifact region of
-      Nothing -> obj [("zero", Bool True)]
-      Just (artifact, offset) -> obj [("artifact", s artifact), ("offset", n (fromIntegral offset)), ("length", n (fromIntegral (regionSize region)))])
-  ]
+  ( [ ("id", s (regionId region))
+    , ("address", hexValue (regionBase region))
+    , ("size", n (fromIntegral (regionSize region)))
+    , ("permissions", s (regionPermission region))
+    , ("initial", case regionArtifact region of
+        Nothing -> obj [("zero", Bool True)]
+        Just (artifact, offset) -> obj [("artifact", s artifact), ("offset", n (fromIntegral offset)), ("length", n (fromIntegral (regionSize region)))])
+    ]
+      ++ [("uncached_alias", Bool True) | aliased region]
+  )
 
 stubValue :: StubPlan -> Value
 stubValue (LegacyStub address outputs) = obj
@@ -482,8 +500,8 @@ stubValue (ScriptStub address calls) = obj
       ]
 
 caseValue :: CasePlan -> Value
-caseValue plan = obj
-  [ ("schema_version", n 1)
+caseValue plan = obj $
+  [ ("schema_version", n (if casePlanCoverage plan || any aliased (casePlanRegions plan) then 2 else 1))
   , ("id", s (casePlanId plan))
   , ("origin", s "synthetic")
   , ("provenance", s (casePlanProvenance plan))
@@ -500,6 +518,7 @@ caseValue plan = obj
   , ("expected", obj [("status", s "returned"), ("registers", obj [("r0", hexValue 0)]), ("memory", arr []), ("events", arr [])])
   , ("exclusions", arr (map s (casePlanExclusions plan)))
   ]
+    ++ [("access_coverage", Bool True) | casePlanCoverage plan]
 
 -- | The recording trampoline that replaces the kernel post. It saves r4-r7, advances the call
 -- counter at 'recordBase', records r0-r3 and the descriptor's header, length and payload
@@ -534,4 +553,37 @@ trampoline =
   , 0xE8BD00F0 -- pop {r4, r5, r6, r7}
   , 0xE12FFF1E -- bx lr
   , fromIntegral recordBase
+  ]
+
+-- | The queue word of a record slot that holds a recorded service call, not a post.
+serviceMarker :: Word32
+serviceMarker = 0xffffffff
+
+-- | A recording stub placed at a retained service entry the step calls across a device
+-- boundary. It takes the next record slot, stores 'serviceMarker' as its queue word, the
+-- entry address as its header word, 16 as its length and r0-r3 as its payload, and returns
+-- zero. Encodings checked with llvm-mc (armv7).
+serviceRecorder :: Word32 -> [Word32]
+serviceRecorder entry =
+  [ 0xE52D4004 -- push {r4}
+  , 0xE59F4040 -- ldr r4, [pc, #0x40]   ; recordBase
+  , 0xE594C000 -- ldr r12, [r4]
+  , 0xE28CC001 -- add r12, r12, #1
+  , 0xE584C000 -- str r12, [r4]
+  , 0xE084458C -- add r4, r4, r12, lsl #11
+  , 0xE3E0C000 -- mvn r12, #0           ; serviceMarker
+  , 0xE584C000 -- str r12, [r4]
+  , 0xE59FC028 -- ldr r12, [pc, #0x28]  ; entry
+  , 0xE584C010 -- str r12, [r4, #16]
+  , 0xE3A0C010 -- mov r12, #16
+  , 0xE584C014 -- str r12, [r4, #20]
+  , 0xE5840020 -- str r0, [r4, #32]
+  , 0xE5841024 -- str r1, [r4, #36]
+  , 0xE5842028 -- str r2, [r4, #40]
+  , 0xE584302C -- str r3, [r4, #44]
+  , 0xE3A00000 -- mov r0, #0
+  , 0xE49D4004 -- pop {r4}
+  , 0xE12FFF1E -- bx lr
+  , fromIntegral recordBase
+  , entry
   ]
