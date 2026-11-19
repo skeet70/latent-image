@@ -108,6 +108,8 @@ struct Case {
     resource8: bool,
     /// Bases of regions whose wire row carries the uncached-alias marker.
     aliases: Vec<u32>,
+    /// The wire's access-coverage marker; region rows then name generated ids.
+    coverage: bool,
 }
 
 /// A kernel case's wire row; `None` is `n`.
@@ -166,6 +168,7 @@ impl Case {
             stack_contexts: None,
             resource8: false,
             aliases: Vec::new(),
+            coverage: false,
         }
     }
 
@@ -188,6 +191,11 @@ impl Case {
     fn aliased(mut self, address: u32, permission: u8, bytes: &[u8]) -> Self {
         self.aliases.push(address);
         self.region(address, permission, bytes)
+    }
+
+    fn coverage(mut self) -> Self {
+        self.coverage = true;
+        self
     }
 
     fn register(mut self, index: usize, value: u32) -> Self {
@@ -247,12 +255,15 @@ impl Case {
     }
 
     fn wire_with(&self, initial: impl Fn(usize, &Region) -> String) -> String {
-        let header = match (self.resource8, self.scripts.is_empty()) {
+        let mut header = match (self.resource8, self.scripts.is_empty()) {
             (false, true) => "FUJI_NATIVE_V1",
             (false, false) => "FUJI_NATIVE_SCRIPT_V1",
             (true, true) => "FUJI_NATIVE_RESOURCE8_V1",
             (true, false) => "FUJI_NATIVE_RESOURCE8_SCRIPT_V1",
-        };
+        }.to_owned();
+        if self.coverage {
+            header += " a";
+        }
         let mut text = format!(
             "{header}\ncortex-r5f-arm-le\n{:x} {:x} {} {}\n",
             self.entry, self.exit, self.instructions, self.wall_ms
@@ -270,8 +281,9 @@ impl Case {
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len() + self.scripts.len());
         for (index, region) in self.regions.iter().enumerate() {
+            let id = if self.coverage { format!(" region{index}") } else { String::new() };
             let marker = if self.aliases.contains(&region.address) { " u" } else { "" };
-            text += &format!("{:x} {:x} {}{marker} {}\n", region.address, region.size, region.permission, initial(index, region));
+            text += &format!("{:x} {:x} {}{id}{marker} {}\n", region.address, region.size, region.permission, initial(index, region));
         }
         for (address, size) in &self.functions {
             text += &format!("{address:x} {size:x}\n");
@@ -432,6 +444,14 @@ struct KernelRegisters {
     reserved: Option<String>,
 }
 
+/// One declared region's complete access bitmaps, one bit per region byte.
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+struct CoverageRow {
+    id: String,
+    read: String,
+    written: String,
+}
+
 #[derive(Deserialize)]
 struct Observation {
     wire_version: u32,
@@ -445,6 +465,8 @@ struct Observation {
     executed: Vec<ExecutedExtent>,
     #[serde(default)]
     executed_unobserved: Vec<UnobservedExtent>,
+    #[serde(default)]
+    coverage: Option<Vec<CoverageRow>>,
     memory_provenance_total: String,
     memory_provenance: Vec<Row>,
     #[serde(default)]
@@ -505,6 +527,16 @@ impl Observed {
 
     fn kernel(&self) -> &KernelRegisters {
         self.observation.kernel.as_ref().expect("a kernel observation")
+    }
+
+    fn coverage(&self, id: &str) -> &CoverageRow {
+        self.observation
+            .coverage
+            .as_ref()
+            .expect("a coverage observation")
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap_or_else(|| panic!("missing coverage row {id}"))
     }
 }
 
@@ -3287,4 +3319,96 @@ fn an_exclusive_reservation_covers_the_word_in_both_views() {
         .run();
     observed.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
     assert_eq!(observed.bytes(ALIASED), hex_bytes(&aliased_page()));
+}
+
+/// The hex bitmap of the given byte spans: bit `i` of byte `i / 8` is byte `i`.
+fn bitmap(size: u32, spans: &[(u32, u32)]) -> String {
+    let mut bits = vec![0u8; (size as usize + 7) / 8];
+    for &(start, len) in spans {
+        for index in start..start + len {
+            bits[(index / 8) as usize] |= 1 << (index % 8);
+        }
+    }
+    hex_bytes(&bits)
+}
+
+#[test]
+fn access_coverage_records_exact_plain_alias_transfer_exclusive_and_stub_bytes() {
+    const OUTPUT: u32 = 0x9000;
+    let mut pointer = [0u8; 4];
+    pointer.copy_from_slice(&OUTPUT.to_le_bytes());
+    let call = ScriptCall {
+        inputs: vec![],
+        outputs: vec![],
+        reads: vec![],
+        writes: vec![ScriptMemory::new(MemoryTarget::Indirect(9), 0, &[0xaa, 0xbb, 0xcc])],
+    };
+    let observed = Case::new(&[
+        PUSH_LR,
+        LDR_R0_R1,
+        0xe595_3000, // ldr r3, [r5], the alias view at ALIASED_VIEW + 4
+        STR_R0_R1,
+        0xe894_0060, // ldmia r4, {r5, r6}
+        0xe884_0060, // stmia r4, {r5, r6}
+        0xe192_7f9f, // ldrex r7, [r2]
+        0xe287_7001, // add r7, r7, #1
+        0xe182_8f97, // strex r8, r7, [r2]
+        branch(0x1024, STUB, true),
+        POP_PC,
+    ])
+    .kernel(Kernel::default())
+    .coverage()
+    .aliased(ALIASED, READ_WRITE, &vec![0u8; PAGE_BYTES])
+    .region(OUTPUT, READ_WRITE, &pointer)
+    .script(STUB, vec![call])
+    .register(1, ALIASED)
+    .register(2, ALIASED)
+    .register(5, ALIASED_VIEW + 4)
+    .register(4, ALIASED + 8)
+    .register(9, OUTPUT)
+    .run();
+    observed.assert_returned();
+    assert_eq!(observed.observation.coverage.as_ref().unwrap().len(), 4);
+    assert_eq!(observed.coverage("region2").read, bitmap(PAGE_BYTES as u32, &[(0, 16)]));
+    assert_eq!(observed.coverage("region2").written, bitmap(PAGE_BYTES as u32, &[(0, 4), (8, 8)]));
+    assert_eq!(observed.coverage("region3").read, bitmap(4, &[(0, 4)]));
+    assert_eq!(observed.coverage("region3").written, bitmap(4, &[(0, 3)]));
+    assert_eq!(observed.coverage("region1").read, bitmap(0x100, &[(0xfc, 4)]));
+    assert_eq!(observed.coverage("region1").written, bitmap(0x100, &[(0xfc, 4)]));
+    assert_eq!(observed.coverage("region0").read, bitmap(0x100, &[]));
+    assert_eq!(observed.coverage("region0").written, bitmap(0x100, &[]));
+}
+
+#[test]
+fn access_coverage_is_absent_without_the_wire_marker() {
+    let case = Case::new(&[LDR_R0_R1, BX_LR]).region(0x4000, READ_WRITE, &[1, 2, 3, 4]).register(1, 0x4000);
+    let plain_wire = case.wire();
+    assert!(!plain_wire.lines().next().unwrap().ends_with(" a"));
+    let plain_text = String::from_utf8(native_case::run(plain_wire.as_bytes()).json).unwrap();
+    assert!(!plain_text.contains("\"coverage\""));
+    let plain: Observation = serde_json::from_str(&plain_text).unwrap();
+    assert!(plain.coverage.is_none());
+
+    let covered_wire = case.clone().coverage().wire();
+    assert!(covered_wire.lines().next().unwrap().ends_with(" a"));
+    let covered_text = String::from_utf8(native_case::run(covered_wire.as_bytes()).json).unwrap();
+    let mut covered: serde_json::Value = serde_json::from_str(&covered_text).unwrap();
+    assert_eq!(covered["coverage"].as_array().unwrap().len(), 3);
+    covered.as_object_mut().unwrap().remove("coverage");
+    covered.as_object_mut().unwrap().remove("elapsed_ns");
+    let mut plain_value: serde_json::Value = serde_json::from_str(&plain_text).unwrap();
+    plain_value.as_object_mut().unwrap().remove("elapsed_ns");
+    assert_eq!(plain_value, covered);
+}
+
+#[test]
+fn refused_accesses_set_no_coverage_bits() {
+    let observed = Case::new(&[STR_R0_R1, BX_LR])
+        .coverage()
+        .region(0x4000, READ, &[0; 4])
+        .register(1, 0x4000)
+        .run();
+    observed.assert_stopped(Status::MemoryGuard, CODE);
+    assert_eq!(observed.coverage("region2").read, "00");
+    assert_eq!(observed.coverage("region2").written, "00");
 }

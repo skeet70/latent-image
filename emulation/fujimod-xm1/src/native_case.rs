@@ -453,6 +453,8 @@ struct Region {
     span: Span,
     permission: Permission,
     views: Views,
+    /// The case's region id, carried only by an access-coverage wire.
+    id: Option<Box<str>>,
     initial: Box<[u8]>,
 }
 
@@ -521,7 +523,8 @@ struct MemoryContract {
 }
 
 impl MemoryContract {
-    fn address(&self, cpu: &dyn Cpu, case: &Case, need: Need) -> Result<u32, Step> {
+    /// The resolved address, reporting the word read for an indirect target.
+    fn address(&self, cpu: &dyn Cpu, case: &Case, need: Need, mut pointer_read: impl FnMut(u32)) -> Result<u32, Step> {
         let base = match self.target {
             MemoryTarget::Absolute(address) => address.0,
             MemoryTarget::Register(register) | MemoryTarget::Indirect(register) => read(cpu, register.register())?,
@@ -532,7 +535,9 @@ impl MemoryContract {
             if address % 4 != 0 || !Self::covered(case, address, 4, Need::Read) {
                 return Err(Step::Stop(Status::MemoryGuard));
             }
+            let pointer = address;
             address = read_word(cpu, u64::from(address))?;
+            pointer_read(pointer);
         }
         if !Self::covered(case, address, self.bytes.len() as u64, need) {
             return Err(Step::Stop(Status::MemoryGuard));
@@ -798,6 +803,8 @@ struct Case {
     functions: Box<[Span]>,
     stubs: Box<[Stub]>,
     stack_contexts: Option<StackContexts>,
+    /// The case asks for complete per-region byte access bitmaps.
+    access_coverage: bool,
 }
 
 impl Case {
@@ -830,6 +837,23 @@ impl Case {
     fn canonical(&self, address: u32) -> u32 {
         let aliased = self.regions.iter().filter_map(Region::alias).any(|alias| alias.contains(u64::from(address), 1));
         if aliased { address - UNCACHED_ALIAS } else { address }
+    }
+
+    /// The declared region and byte offset of an address in either of its views.
+    fn coverage_offset(&self, address: u64) -> Option<(usize, u32)> {
+        if address > u64::from(u32::MAX) {
+            return None;
+        }
+        let address = address as u32;
+        self.regions.iter().enumerate().find_map(|(index, region)| {
+            let offset = |span: Span| {
+                (u64::from(address) >= u64::from(span.base) && u64::from(address) < span.end())
+                    .then_some(address - span.base)
+            };
+            offset(region.span)
+                .or_else(|| region.alias().and_then(offset))
+                .map(|offset| (index, offset))
+        })
     }
 
     fn stops_at(&self, address: u32) -> bool {
@@ -962,6 +986,18 @@ fn hex_word(token: &[u8]) -> Result<u32, WireError> {
     })
 }
 
+/// A case region id: one lowercase letter, then up to 63 lowercase letters, digits or hyphens.
+fn region_id(token: &[u8]) -> Option<Box<str>> {
+    let (first, rest) = token.split_first()?;
+    if !first.is_ascii_lowercase() || rest.len() > 63 {
+        return None;
+    }
+    if !rest.iter().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-') {
+        return None;
+    }
+    std::str::from_utf8(token).ok().map(Box::from)
+}
+
 impl Kernel {
     /// `STOP TPIDRURW CPACR FPEXC`, each `n` or a word.
     fn parse(tokens: &mut Tokens<'_>) -> Result<Self, WireError> {
@@ -1003,6 +1039,12 @@ fn parse_case(
         b"FUJI_NATIVE_RESOURCE8_V1" => (MemoryEnvelope::Resource8, false),
         b"FUJI_NATIVE_RESOURCE8_SCRIPT_V1" => (MemoryEnvelope::Resource8, true),
         _ => return Err(WireError("unsupported native wire version")),
+    };
+    let access_coverage = if tokens.peek() == Some(b"a") {
+        tokens.next()?;
+        true
+    } else {
+        false
     };
     if matches!((allowed, envelope), (MemoryEnvelope::Default, MemoryEnvelope::Resource8)) {
         return Err(WireError("resource8 case requires resource8 batch framing"));
@@ -1081,6 +1123,17 @@ fn parse_case(
         if permission == Permission::Device && (bytes != 4 || !BANK_WORDS.contains(&base)) {
             return Err(WireError("a device region is one interrupt-controller bank word"));
         }
+        let id = if access_coverage {
+            let id = region_id(tokens.next()?).ok_or(WireError(
+                "an access-coverage region id is one lowercase letter then lowercase letters, digits or hyphens",
+            ))?;
+            if regions.iter().any(|prior| prior.id.as_deref() == Some(&*id)) {
+                return Err(WireError("an access-coverage region id is declared twice"));
+            }
+            Some(id)
+        } else {
+            None
+        };
         let views = if tokens.peek() == Some(b"u") {
             tokens.next()?;
             Views::UncachedAlias
@@ -1095,7 +1148,7 @@ fn parse_case(
         {
             return Err(WireError("an uncached alias needs a non-device, page-aligned region below 0x40000000"));
         }
-        let region = Region { span, permission, views, initial: Box::default() };
+        let region = Region { span, permission, views, id, initial: Box::default() };
         let executable_end = region.alias().unwrap_or(span).end();
         if permission == Permission::ReadExecute && executable_end > EXECUTABLE_END {
             return Err(WireError("executable region must end by 0x7ffffffc"));
@@ -1173,6 +1226,7 @@ fn parse_case(
         functions: functions.into(),
         stubs: stubs.into(),
         stack_contexts: None,
+        access_coverage,
     };
     validate(&case)?;
     if let Some(bounds) = stack_contexts {
@@ -1731,6 +1785,10 @@ struct Observation<'a> {
     executed: Vec<ExecutedExtentReport>,
     /// Declared function extents this case did not observe because their bitmap did not fit.
     executed_unobserved: Vec<UnobservedExtentReport>,
+    /// One row per declared region for an access-coverage case: the bytes the case read
+    /// and wrote, in region order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    coverage: Option<Vec<CoverageReport<'a>>>,
     /// Present exactly for an executed kernel case.
     #[serde(skip_serializing_if = "Option::is_none")]
     kernel: Option<KernelRegisters>,
@@ -1742,13 +1800,24 @@ impl<'a> Observation<'a> {
     }
 
     /// An engine refusal before execution: entry registers and unread regions.
-    fn refused(case: &Case, registers: FinalRegisters, detail: String) -> Self {
+    fn refused(case: &'a Case, registers: FinalRegisters, detail: String) -> Observation<'a> {
         let memory = case
             .regions
             .iter()
             .map(|region| FinalRegion { address: Word(region.span.base), bytes: None })
             .collect();
-        Self::empty(Status::EngineError, detail, registers, memory)
+        let mut observation = Self::empty(Status::EngineError, detail, registers, memory);
+        observation.coverage = case.access_coverage.then(|| {
+            case.regions
+                .iter()
+                .map(|region| CoverageReport {
+                    id: region.id.as_deref().unwrap_or(""),
+                    read: HexBytes(vec![0; (region.span.bytes as usize + 7) / 8]),
+                    written: HexBytes(vec![0; (region.span.bytes as usize + 7) / 8]),
+                })
+                .collect()
+        });
+        observation
     }
 
     fn empty(status: Status, detail: String, registers: FinalRegisters, memory: Vec<FinalRegion>) -> Self {
@@ -1770,6 +1839,7 @@ impl<'a> Observation<'a> {
             memory_provenance: Vec::new(),
             executed: Vec::new(),
             executed_unobserved: Vec::new(),
+            coverage: None,
             kernel: None,
         }
     }
@@ -2138,6 +2208,40 @@ impl SystemState {
     }
 }
 
+/// One declared region's complete byte access bitmaps: bit `i` of byte `i / 8` is byte `i`.
+struct CoverageRegion {
+    read: Vec<u8>,
+    written: Vec<u8>,
+}
+
+impl CoverageRegion {
+    fn new(bytes: u32) -> Self {
+        let bitmap = (bytes as usize + 7) / 8;
+        Self { read: vec![0; bitmap], written: vec![0; bitmap] }
+    }
+
+    fn mark(&mut self, offset: u32, size: u32, need: Need) {
+        let bits = match need {
+            Need::Read => &mut self.read,
+            Need::Write => &mut self.written,
+            Need::Execute => return,
+        };
+        let end = (offset as usize).saturating_add(size as usize);
+        for index in offset as usize..end {
+            if let Some(byte) = bits.get_mut(index / 8) {
+                *byte |= 1 << (index % 8);
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct CoverageReport<'a> {
+    id: &'a str,
+    read: HexBytes,
+    written: HexBytes,
+}
+
 struct State {
     status: Option<Status>,
     detail: Option<String>,
@@ -2153,6 +2257,7 @@ struct State {
     access_total: u64,
     provenance: Vec<LogEntry>,
     provenance_total: u64,
+    coverage: Vec<CoverageRegion>,
     instruction: Instruction,
     monitor: Monitor,
     reserved: Option<u32>,
@@ -2183,6 +2288,11 @@ impl State {
             access_total: 0,
             provenance: Vec::with_capacity(PROVENANCE_SIZE),
             provenance_total: 0,
+            coverage: if case.access_coverage {
+                case.regions.iter().map(|region| CoverageRegion::new(region.span.bytes)).collect()
+            } else {
+                Vec::new()
+            },
             instruction: Instruction { pc: 0, word: 0, transfer: None },
             monitor: Monitor::Open,
             reserved: None,
@@ -2227,6 +2337,19 @@ impl State {
             self.provenance.push(entry);
         }
         self.provenance_total += 1;
+    }
+
+    /// Marks the bytes of one admitted guest access, attributed to its region's plain view.
+    fn mark_coverage(&mut self, case: &Case, need: Need, address: u64, size: u32) {
+        if !case.access_coverage || size == 0 {
+            return;
+        }
+        let Some((index, offset)) = case.coverage_offset(address) else {
+            return;
+        };
+        if let Some(region) = self.coverage.get_mut(index) {
+            region.mark(offset, size, need);
+        }
     }
 
     fn record_access(&mut self, kind: ProvenanceKind, address: u32, size: i32, value: u64) {
@@ -2336,6 +2459,7 @@ impl State {
                     return Err(Step::Stop(Status::MemoryGuard));
                 }
                 let value = read_word(cpu, u64::from(address))?;
+                self.mark_coverage(case, Need::Read, u64::from(address), 4);
                 self.record_access(ProvenanceKind::Read, address, 4, u64::from(value));
                 write(cpu, arm::CORE[target], value)?;
                 self.monitor = Monitor::Exclusive(case.canonical(address));
@@ -2356,6 +2480,7 @@ impl State {
                 if stored {
                     self.log(AccessType::Write, u64::from(address), 4, i64::from(value));
                     cpu.write_memory(u64::from(address), &value.to_le_bytes())?;
+                    self.mark_coverage(case, Need::Write, u64::from(address), 4);
                     self.record_access(ProvenanceKind::Write, address, 4, u64::from(value));
                 }
                 write(cpu, arm::CORE[status], u32::from(!stored))?;
@@ -2557,7 +2682,10 @@ impl State {
         }
         let mut buffer = [0u8; 1024];
         for memory in call.reads.iter() {
-            let address = memory.address(cpu, case, Need::Read)?;
+            let address = memory.address(cpu, case, Need::Read, |pointer| {
+                self.mark_coverage(case, Need::Read, u64::from(pointer), 4);
+            })?;
+            self.mark_coverage(case, Need::Read, u64::from(address), memory.bytes.len() as u32);
             for (index, expected) in memory.bytes.chunks(buffer.len()).enumerate() {
                 let actual = &mut buffer[..expected.len()];
                 cpu.read_memory(u64::from(address) + (index * 1024) as u64, actual)?;
@@ -2568,7 +2696,9 @@ impl State {
         }
         let mut targets = [0u32; 64];
         for (target, memory) in targets.iter_mut().zip(call.writes.iter()) {
-            *target = memory.address(cpu, case, Need::Write)?;
+            *target = memory.address(cpu, case, Need::Write, |pointer| {
+                self.mark_coverage(case, Need::Read, u64::from(pointer), 4);
+            })?;
         }
         for (target, memory) in targets.iter().zip(call.writes.iter()) {
             if self.monitor.clobbered(None, u64::from(case.canonical(*target)), memory.bytes.len() as u64) {
@@ -2596,6 +2726,7 @@ impl State {
         self.stub_calls[index] += 1;
         for (target, memory) in targets.iter().zip(call.writes.iter()) {
             cpu.write_memory(u64::from(*target), &memory.bytes)?;
+            self.mark_coverage(case, Need::Write, u64::from(*target), memory.bytes.len() as u32);
         }
         for binding in call.outputs.iter() {
             write(cpu, binding.register.register(), binding.value)?;
@@ -2681,7 +2812,7 @@ impl State {
                 self.status.get_or_insert(Status::UnsupportedInstruction);
                 return refuse(cpu);
             }
-            Ok(true) => {}
+            Ok(true) => self.mark_coverage(case, need, address, size as u32),
             Ok(false) => {
                 self.status.get_or_insert(Status::MemoryGuard);
                 return refuse(cpu);
@@ -2813,6 +2944,20 @@ impl State {
         for extent in std::mem::take(&mut self.executed) {
             extent.report(&mut executed, &mut executed_unobserved);
         }
+        let coverage = case.access_coverage.then(|| {
+            let mut bitmaps = std::mem::take(&mut self.coverage);
+            case.regions
+                .iter()
+                .enumerate()
+                .map(|(index, region)| {
+                    let (read, written) = bitmaps
+                        .get_mut(index)
+                        .map(|bitmap| (std::mem::take(&mut bitmap.read), std::mem::take(&mut bitmap.written)))
+                        .unwrap_or_default();
+                    CoverageReport { id: region.id.as_deref().unwrap_or(""), read: HexBytes(read), written: HexBytes(written) }
+                })
+                .collect()
+        });
         Observation {
             wire_version: 1,
             status: self.status.unwrap_or(Status::EngineError),
@@ -2841,6 +2986,7 @@ impl State {
             memory_provenance: std::mem::take(&mut self.provenance),
             executed,
             executed_unobserved,
+            coverage,
             kernel: case.profile.kernel().map(|_| KernelRegisters {
                 tpidrurw: self.system.tpidrurw.map(|value| Word(value.0)),
                 fpexc: self.system.fpexc.map(|value| Word(value.0)),

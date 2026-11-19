@@ -48,6 +48,11 @@ memoryProfile c
  | "memory_profile" `notElem` keys c = pure DefaultMemory
  | get c "memory_profile"==s "resource8" = pure Resource8
  | otherwise = failH "unsupported memory_profile"
+-- The observation cap covers final memory hex (twice the mapped bytes), the
+-- access-coverage bitmaps (half the mapped bytes in hex for both kinds), the
+-- executed bitmaps and the fixed logs. Access coverage raises the default cap
+-- from 8 MiB so a full 4 MiB default mapping still fits; resource8's 40 MiB
+-- already covers its 8 MiB.
 profileSizeBytes, profileTotalBytes, profileJsonBytes, profileOutputBytes :: MemoryProfile -> Int
 profileSizeBytes DefaultMemory=sizeBytes
 profileSizeBytes Resource8=8*1024*1024
@@ -55,7 +60,7 @@ profileTotalBytes DefaultMemory=totalBytes
 profileTotalBytes Resource8=8*1024*1024
 profileJsonBytes DefaultMemory=caseBytes
 profileJsonBytes Resource8=64*1024*1024
-profileOutputBytes DefaultMemory=8*1024*1024
+profileOutputBytes DefaultMemory=16*1024*1024
 profileOutputBytes Resource8=40*1024*1024
 profileInstructions :: MemoryProfile -> Integer
 profileInstructions DefaultMemory=4000000
@@ -215,10 +220,16 @@ loadCaseWith reader input = do
  ensure(B.length raw<=profileJsonBytes envelope) "case JSON bytes exceed the limit"
  let sizeBytes=profileSizeBytes envelope; totalBytes=profileTotalBytes envelope
      byteString=profileByteString envelope
-     optional=[key|key<-["cp14_identity","kernel","memory_profile"],key `elem` keys c]
+     optional=[key|key<-["cp14_identity","kernel","memory_profile","access_coverage"],key `elem` keys c]
      ignored=["ignored_memory"|"ignored_memory" `elem` keys c]
  fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional++ignored)) "case"
  version<-integer(get c "schema_version")1 2 "schema version"
+ accessCoverage<-case "access_coverage" `elem` keys c of
+  False->pure False
+  True->do
+   ensure(version==2) "access_coverage needs schema version 2"
+   ensure(get c "access_coverage"==b True) "access_coverage must be true"
+   pure True
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
  ensure(validId(get c "id")) "invalid case id"
  ensure(not(null(str(get c "provenance")))) "provenance required"
@@ -234,7 +245,7 @@ loadCaseWith reader input = do
    identity<-if "cp14_identity" `notElem` optional then pure Nothing else Just . Cp14Identity<$>address(get c "cp14_identity")
    kernel<-if "kernel" `notElem` optional then pure Nothing else Just<$>kernelEntry(get c "kernel")
    pure(PrivilegedEntry mode identity kernel)
- ensure(profile/=UserEntry || all(=="memory_profile")optional) "a CP14 identity or kernel needs a privileged entry"
+ ensure(profile/=UserEntry || all(`elem` ["memory_profile","access_coverage"])optional) "a CP14 identity or kernel needs a privileged entry"
  ensure(reg "lr"==exit && reg "sp" `mod` 8==0) "LR must be exit and SP eight-byte aligned"
  fields(get c "limits") "instructions wall_ms" "limits"
  budget<-integer(get(get c "limits")"instructions")1(profileInstructions envelope) "instructions"
@@ -351,11 +362,14 @@ loadCaseWith reader input = do
   void(address(get event "address")); void(bindings(get event "inputs")(take (if scripted then 15 else 13) regs)); void(bindings(get event "outputs")(take 13 regs))
  exclusions<-arrayCheck(get c "exclusions")1 1000000 "coverage exclusions required"
  ensure(all(not.null.str)exclusions) "coverage exclusions required"
- let rows=[wireHeader envelope scripted,"cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
+ let mappedBytes=sum(map regionSize regions)
+     coverageHex=sum[4*((regionSize r+7)`div`8)|r<-regions]
+ when accessCoverage$ensure(2*mappedBytes+coverageHex+2*1024*1024<=fromIntegral(profileOutputBytes envelope)) "access-coverage bitmaps do not fit the observation output bound"
+ let rows=[wireHeader envelope scripted++(if accessCoverage then " a" else ""),"cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]
      stubRows=concatMap(stubWire scripted)stubs
      after=functionRows++stubRows
-     wire=BL.toStrict(BB.toLazyByteString(BB.string7(unlines rows)<>mconcat[BB.string7(regionHead r)<>BB.char7 ' '<>BB.byteStringHex(regionBytes r)<>BB.char7 '\n'|r<-regions]<>BB.string7(unlines after)))
+     wire=BL.toStrict(BB.toLazyByteString(BB.string7(unlines rows)<>mconcat[BB.string7(regionHead r accessCoverage)<>BB.char7 ' '<>BB.byteStringHex(regionBytes r)<>BB.char7 '\n'|r<-regions]<>BB.string7(unlines after)))
  ensure(B.length wire<=profileWireBytes envelope scripted) "case wire bytes exceed the limit"
  let digest=sha256Hex(sha256 raw); wireDigest=sha256Hex(sha256 wire)
  pure LoadedCase
@@ -366,9 +380,9 @@ loadCaseWith reader input = do
   , loadedJsonBytes=B.length raw
   , loadedRows=(rows,after)
   }
--- A wire region row up to its initial bytes.
-regionHead :: Region -> String
-regionHead r=unwords([hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";"device"->"10";_->"5"]++["u"|regionViewsOf r==UncachedAliasView])
+-- A wire region row up to its initial bytes. An access-coverage row names the region id before the alias marker.
+regionHead :: Region -> Bool -> String
+regionHead r accessCoverage=unwords([hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";"device"->"10";_->"5"]++[str(get(description r)"id")|accessCoverage]++["u"|regionViewsOf r==UncachedAliasView])
 -- The entry profile a case's CPSR names.
 data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identity) (Maybe KernelEntry) deriving (Eq,Show)
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
@@ -709,9 +723,10 @@ batchArtifacts admitted=reverse(snd(foldl' add(M.empty,[])[artifact|a<-admitted,
 
 -- The case's wire with each region's bytes replaced by `z` or `s ARTIFACT OFFSET LENGTH`.
 batchBody :: M.Map ArtifactDigest Int -> Admitted -> B.ByteString
-batchBody index a=BL.toStrict(BB.toLazyByteString(BB.string7(unlines before)<>mconcat[BB.string7(regionHead(materialize plan)++initial source++"\n")|plan@(_,_,_,source)<-admittedRegions a]<>BB.string7(unlines after)))
+batchBody index a=BL.toStrict(BB.toLazyByteString(BB.string7(unlines before)<>mconcat[BB.string7(regionHead(materialize plan) coverage++initial source++"\n")|plan@(_,_,_,source)<-admittedRegions a]<>BB.string7(unlines after)))
  where
   (before,after)=admittedRows a
+  coverage=get(admittedValue a)"access_coverage"==b True
   initial ZeroSource=" z"
   initial(SliceSource artifact offset len)=unwords["","s",show(index M.! artifactDigest artifact),show offset,show len]
 

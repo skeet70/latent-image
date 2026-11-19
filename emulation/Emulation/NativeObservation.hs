@@ -30,6 +30,7 @@ module Emulation.NativeObservation
   , WriteValue (..)
   , Ordered (..)
   , KernelObservation (..)
+  , Coverage (..)
   , NativeObservation (..)
   , lookupRegister
   , ObservationError (..)
@@ -212,6 +213,13 @@ data KernelObservation = KernelObservation
   }
   deriving (Eq, Show)
 
+-- | One region's complete access bitmaps: bit @i@ of byte @i / 8@ is region byte @i@.
+data Coverage = Coverage
+  { coverageRead :: B.ByteString
+  , coverageWritten :: B.ByteString
+  }
+  deriving (Eq, Show)
+
 data NativeObservation = NativeObservation
   { nativeStatus :: RunnerStatus
   , nativeRegisters :: M.Map Register Word32
@@ -219,6 +227,8 @@ data NativeObservation = NativeObservation
   , nativeProvenance :: Provenance
   , nativeInstructions :: InstructionCount
   , nativeEngineError :: EngineError
+  , -- | One row per declared region, in region order, for an access-coverage case.
+    nativeCoverage :: Maybe [(RegionId, Coverage)]
   , -- | Present exactly for a kernel case.
     nativeKernel :: Maybe KernelObservation
   }
@@ -260,6 +270,11 @@ data ObservationError
   | MalformedSystemWrite
   | KernelRowOutsideKernel
   | MalformedKernelRegisters
+  | MalformedCoverage
+  | CoverageRegionCountMismatch Int Int
+  | CoverageRegionIdMismatch RegionId
+  | MalformedCoverageBitmap RegionId
+  | CoverageBitmapSizeMismatch RegionId
   deriving (Eq, Show)
 
 lookupRegister :: Register -> NativeObservation -> Maybe Word32
@@ -289,6 +304,7 @@ observeNative exit regions value = do
   registers <- parseRegisters (get value "registers")
   memory <- parseMemory regions (get value "memory")
   (provenance, ordered) <- parseProvenance total (get value "memory_provenance")
+  coverage <- parseCoverage regions (get value "coverage")
   kernel <- case get value "kernel" of
     Null -> do
       when (any kernelRow ordered) (Left KernelRowOutsideKernel)
@@ -307,6 +323,7 @@ observeNative exit regions value = do
       , nativeProvenance = provenance
       , nativeInstructions = InstructionCount instructions
       , nativeEngineError = engineValue
+      , nativeCoverage = coverage
       , nativeKernel = kernel
       }
   where
@@ -329,6 +346,11 @@ evaluateObservation observation = do
       pure ()
   _ <- evaluate (instructionCount (nativeInstructions observation))
   _ <- evaluate (engineError (nativeEngineError observation))
+  case nativeCoverage observation of
+    Nothing -> pure ()
+    Just coverage -> do
+      _ <- evaluate (sum [B.length (coverageRead c) + B.length (coverageWritten c) | (_, c) <- coverage])
+      pure ()
   case nativeKernel observation of
     Nothing -> pure ()
     Just kernel -> do
@@ -391,6 +413,12 @@ renderObservationError errorValue = case errorValue of
   MalformedSystemWrite -> "malformed provenance system register write"
   KernelRowOutsideKernel -> "provenance barrier or system register write outside a kernel case"
   MalformedKernelRegisters -> "malformed kernel registers"
+  MalformedCoverage -> "malformed coverage"
+  CoverageRegionCountMismatch expected actual ->
+    "coverage region count " ++ show actual ++ " differs from " ++ show expected
+  CoverageRegionIdMismatch ident -> "coverage region " ++ regionName ident ++ " id mismatch"
+  MalformedCoverageBitmap ident -> "malformed coverage bitmap for region " ++ regionName ident
+  CoverageBitmapSizeMismatch ident -> "coverage bitmap for region " ++ regionName ident ++ " size mismatch"
 
 parseStatus :: Value -> Either ObservationError RunnerStatus
 parseStatus value =
@@ -451,6 +479,24 @@ parseMemory regions value = case value of
       pure (ident, bytes)
     pure pairs
   _ -> Left MissingMemory
+
+-- | One coverage row per declared region, in region order, when the case opted in.
+parseCoverage :: [Region] -> Value -> Either ObservationError (Maybe [(RegionId, Coverage)])
+parseCoverage _ Null = Right Nothing
+parseCoverage regions value = case value of
+  Array _ -> do
+    let entries = list value
+    when (length entries /= length regions) (Left (CoverageRegionCountMismatch (length regions) (length entries)))
+    pairs <- forM (zip regions entries) $ \(region, entry) -> do
+      let ident = regionIdOf region
+          expected = fromIntegral ((regionSize region + 7) `div` 8) :: Int
+      when (str (get entry "id") /= regionName ident) (Left (CoverageRegionIdMismatch ident))
+      readBytes <- maybe (Left (MalformedCoverageBitmap ident)) Right (unhex (str (get entry "read")))
+      writtenBytes <- maybe (Left (MalformedCoverageBitmap ident)) Right (unhex (str (get entry "written")))
+      when (B.length readBytes /= expected || B.length writtenBytes /= expected) (Left (CoverageBitmapSizeMismatch ident))
+      pure (ident, Coverage readBytes writtenBytes)
+    pure (Just pairs)
+  _ -> Left MalformedCoverage
 
 parseProvenance :: Word64 -> Value -> Either ObservationError (Provenance, [Ordered])
 parseProvenance total value = case value of

@@ -345,6 +345,81 @@ aliasRegressions runner checker=withTemporary "fuji-alias-tests"$ \root->do
  refused "of an executable region past 0x7ffffffc"(fixture[shared,set "uncached_alias"(b True)(region "high" 0x3ffff000 0x1000 "rx")])
 
 
+-- A schema-2 case may ask for complete per-region access bitmaps. The loader
+-- writes the wire marker and region ids, the runner reports one row per region,
+-- and the observation parser exposes the same rows. A case without the flag
+-- reports none, and schema version 1 or a false flag is refused.
+coverageRegressions :: FilePath -> FilePath -> IO ()
+coverageRegressions runner checker=withTemporary "fuji-coverage-tests"$ \root->do
+ let words'=[0xe5910000,0xe5923000,0xe5813000,0xe12fff1e]::[Word32]
+     bytes=B.pack[fromIntegral(word `shiftR` offset)|word<-words',offset<-[0,8,16,24]]
+ B.writeFile(root</>"coverage.bin")bytes
+ digest<-sha256 bytes
+ let hex value=s("0x"++replicate(8-length text)'0'++text) where text=showHex(value::Word32)""
+     codeSize=fromIntegral(B.length bytes)::Integer
+     zero=obj[("zero",b True)]
+     region name address size permissions=obj[("id",s name),("address",hex address),("size",n size),("permissions",s permissions),("initial",zero)]
+     shared=set "uncached_alias"(b True)(region "shared" 0x4000 0x1000 "rw")
+     codeRegion=obj[("id",s "code"),("address",hex 0x8000),("size",n codeSize),("permissions",s "rx"),("initial",obj[("artifact",s "coverage"),("offset",n 0),("length",n codeSize)])]
+     registers=obj([("r"++show i,hex 0)|i<-[0..12::Int],i`notElem`[1,2]]++[("r1",hex 0x4000),("r2",hex 0x40004004),("sp",hex 0xb010),("lr",hex 0xa000),("cpsr",hex 0x10)])
+     fixture coverage=obj(
+       [("schema_version",n 2),("id",s "access-coverage"),("origin",s "synthetic")
+       ,("provenance",s "NativeTests.hs: read and write one region through its plain and uncached alias views")
+       ,("cpu",obj[("architecture",s "arm"),("model",s "cortex-r5f"),("mode",s "arm"),("endian",s "little")])
+       ,("artifacts",arr[obj[("id",s "coverage"),("path",s "coverage.bin"),("size",n codeSize),("sha256",s digest)]])
+       ,("entry",hex 0x8000),("exit",hex 0xa000),("registers",registers)
+       ,("regions",arr[codeRegion,shared,region "exit" 0xa000 4 "rx",region "stack" 0xb000 32 "rw"])
+       ,("functions",arr[obj[("address",hex 0x8000),("size",n codeSize)]])
+       ,("stubs",arr[])
+       ,("limits",obj[("instructions",n 1000),("wall_ms",n finishingWallMs)])
+       ,("expected",obj[("status",s "returned"),("registers",obj[("pc",hex 0xa000)]),("memory",arr[]),("events",arr[])])
+       ,("exclusions",arr[s "access coverage control"])]
+       ++[("access_coverage",b True)|coverage])
+     bitmap size spans=B.pack[foldl' (\value bit->if hit(8*byte+bit)then value .|. (1 `shiftL` bit)else value)0[0..7]|byte<-[0..fromIntegral((size+7)`div`8)-1]]
+      where hit index=any(\(start,len)->start<=fromIntegral index && fromIntegral index<start+len)spans
+     covered=fixture True
+     plain=fixture False
+     path=root</>"coverage.json"
+     schemaAccepts item wanted=do
+      B.writeFile path(encodeCanonical item)
+      (timed,code,_,_)<-runBounded 15000000(1024*1024)checker["--schemafile","schemas/native-case.schema.json",path]B.empty
+      ensure(not timed && code==(if wanted then ExitSuccess else ExitFailure 1))"access-coverage schema admission differs"
+     refused label item=do
+      B.writeFile path(encodeCanonical item)
+      (code,report)<-runCase runner path
+      ensure(code==1 && get report "status"==s "invalid_case")(label++": "++show report)
+ schemaAccepts covered True
+ schemaAccepts(set "schema_version"(n 1)covered)False
+ schemaAccepts(set "access_coverage"(b False)covered)False
+ B.writeFile path(encodeCanonical covered)
+ (code,report)<-runCase runner path
+ ensure(code==0 && get report "status"==s "passed")("access coverage case: "++show report)
+ (_,regions,wire,_)<-loadCase path
+ ensure(BC.pack "FUJI_NATIVE_V1 a" `B.isPrefixOf` wire)"access-coverage wire marker missing"
+ ensure(BC.pack "4000 1000 3 shared u 00" `B.isInfixOf` wire)"access-coverage region id missing"
+ let rows=get(get report "runner")"coverage"
+     row ident=head[r|r<-list rows,get r "id"==s ident]
+ ensure(length(list rows)==length regions)"one coverage row per region"
+ ensure(get(row "shared")"read"==s(hexBytes(bitmap 0x1000[(0,8)])))"shared read bitmap differs"
+ ensure(get(row "shared")"written"==s(hexBytes(bitmap 0x1000[(0,4)])))"shared written bitmap differs"
+ ensure(get(row "code")"read"==s(hexBytes(bitmap codeSize[])) && get(row "code")"written"==s(hexBytes(bitmap codeSize[])))"code coverage differs"
+ ensure(get(row "exit")"read"==s(hexBytes(bitmap 4[])) && get(row "exit")"written"==s(hexBytes(bitmap 4[])))"exit coverage differs"
+ ensure(get(row "stack")"read"==s(hexBytes(bitmap 32[])) && get(row "stack")"written"==s(hexBytes(bitmap 32[])))"stack coverage differs"
+ observed<-either(fail.N.renderObservationError)pure(N.observeNative ExitSuccess regions(get report "runner"))
+ let expectedRows=[(N.regionIdOf r,N.Coverage (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,8)]else[])) (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,4)]else[])))|r<-regions]
+ case N.nativeCoverage observed of
+  Just parsed->ensure(parsed==expectedRows)"observation coverage accessor differs"
+  Nothing->fail "observation coverage accessor missing"
+ B.writeFile path(encodeCanonical plain)
+ (code',report')<-runCase runner path
+ ensure(code'==0 && get report' "status"==s "passed")("coverage-free case: "++show report')
+ ensure(get(get report' "runner")"coverage"==Null)"a case without access_coverage reported coverage"
+ (_,_,wire',_)<-loadCase path
+ ensure(not(BC.pack "FUJI_NATIVE_V1 a" `B.isPrefixOf` wire'))"coverage-free wire has the marker"
+ ensure(not(BC.pack "4000 1000 3 shared" `B.isInfixOf` wire'))"coverage-free wire names region ids"
+ refused "access coverage in schema version 1"(set "schema_version"(n 1)covered)
+ refused "access coverage declared false"(set "access_coverage"(b False)covered)
+
 defaultWireRegression :: IO ()
 defaultWireRegression=do
  (_,_,wire,_)<-loadCase "emulation/fixtures/arithmetic.json"
@@ -1089,6 +1164,7 @@ main=do
  regionCountRegressions runner checker
  readOnlyRegressions runner
  aliasRegressions runner checker
+ coverageRegressions runner checker
  schemaContract
  batched<-fixtureBatch runner checker
  wallStopComparison

@@ -6,7 +6,8 @@
   "additionalProperties": false,
   "required": ["schema_version", "id", "origin", "provenance", "cpu", "artifacts", "entry", "exit", "registers", "regions", "functions", "stubs", "limits", "expected", "exclusions"],
   "properties": {
-    "schema_version": {"enum": [1, 2], "description": "Version 2 is version 1 plus regions[].uncached_alias."},
+    "schema_version": {"enum": [1, 2], "description": "Version 2 is version 1 plus regions[].uncached_alias and access_coverage."},
+    "access_coverage": {"const": true, "description": "Schema version 2 only. The runner adds one observation row per declared region, in region order: {\"id\":REGION_ID,\"read\":HEX_BITMAP,\"written\":HEX_BITMAP}. Bit i of byte i/8 is byte i of the region, counted in the plain view; every guest data access admitted through either alias view, including exclusives, LDM/STM and stub memory contract reads and writes, sets its bytes, while instruction fetches and refused accesses set nothing. The bitmaps are complete regardless of the 4096-row provenance log. Coverage hex is at most half the mapped bytes for both kinds (2 MiB default, 4 MiB resource8); a case whose bitmaps cannot fit the observation bound is refused at load. The wire header gains a trailing \" a\" and each region row names its id before the optional \"u\" alias marker."},
     "memory_profile": {"const": "resource8", "description": "Absent retains the default envelope. resource8 permits 8388608 mapped bytes, bytes per region/artifact and aggregate stub contract bytes, 41943040 wire bytes and 67108864 JSON bytes. Semantic sums, fences and permissions are checked by the host and SDK."},
     "id": {"$ref": "#/$defs/id"},
     "origin": {"enum": ["synthetic", "stock"]},
@@ -135,6 +136,10 @@
     },
     {
       "if": {"properties": {"regions": {"contains": {"required": ["uncached_alias"]}}}},
+      "then": {"properties": {"schema_version": {"const": 2}}}
+    },
+    {
+      "if": {"required": ["access_coverage"]},
       "then": {"properties": {"schema_version": {"const": 2}}}
     },
     {
