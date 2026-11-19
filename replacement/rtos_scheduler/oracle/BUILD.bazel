@@ -206,6 +206,29 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "s3b-service",
+    srcs = ["Replacement/RtosScheduler/S3bService.hs"],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_test(
+    name = "s3b-service-tests",
+    size = "small",
+    srcs = ["S3bServiceTests.hs"],
+    main_file = "S3bServiceTests.hs",
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":s3b-service",
+        "//host:base",
+    ],
+)
+
 haskell_binary(
     name = "s3b-oracle",
     srcs = ["Replacement/RtosScheduler/S3b.hs"],
@@ -217,6 +240,7 @@ haskell_binary(
         "//replacement/rtos_scheduler:s3b-b.bin",
     ],
     deps = [
+        ":s3b-service",
         ":scheduler-oracle-lib",
         "//emulation:case-sha256",
         "//emulation:judge-lib",
