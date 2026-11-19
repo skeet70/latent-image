@@ -3,7 +3,7 @@
 module Replacement.StartupArtifact.Joins
   ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith, constructorInitializer
   , stockDemand, stockDemandConditions, suppliedOf, depthsIn, indirectOf, stockCodeOfEvidence, composedSegments, ownedOf
-  , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded
+  , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded, fatalReportCycle
   , kernelSlotSupplied
   ) where
 
@@ -47,7 +47,6 @@ import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
 import qualified Replacement.StartupDispatch.Admission as DA
-import qualified StackWalk as W
 import qualified StartupStageContract as Stage
 import qualified StockStack as SS
 import qualified Replacement.TaskConstructors.Artifact as TC
@@ -751,7 +750,8 @@ stockCodeOfEvidence :: JoinEvidence -> SS.StockCode
 stockCodeOfEvidence evidence = SB.stockCodeOf (composedSegments evidence) (concatMap pieceCarriers (evidencePieces evidence))
 
 -- | Table A from its owned publisher if present, otherwise the canonical publisher, and table B from the
--- canonical loader-B initializer, each at its loader header's root.
+-- canonical loader-B initializer, each at its loader header's root. Loaded words in the dispatcher's
+-- cold-boot clear start at 0.
 indirectOf :: JoinEvidence -> Maybe SS.IndirectTargets
 indirectOf evidence = do
   rootA <- targetWord (evidenceCanonical evidence) LoaderA rootHeader
@@ -763,7 +763,8 @@ indirectOf evidence = do
       pure [(guest, value) | PS.Publication (PS.Guest guest) value _ <- emitted]
   stores <- either (const Nothing) Just (I.originalStores (targetOf (evidenceCanonical evidence) LoaderB))
   let tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
-  either (const Nothing) Just (SB.indirectTargetsOf (stockCodeOfEvidence evidence) (SB.rootSlotTargets rootA tableA rootB tableB))
+  either (const Nothing) Just (SB.indirectTargetsOf (composedSegments evidence) (concatMap pieceCarriers (evidencePieces evidence))
+    [DA.clearInterval] (SB.rootSlotTargets rootA tableA rootB tableB))
 
 -- | Owned entries with proved depths, before the wrapper: the record-2 critical pair, idle and root.
 baseSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth
@@ -956,13 +957,18 @@ rootTargets evidence = case [linked | RootTaskFacts linked _ <- map pieceFacts (
 rootStackBytes :: Integer
 rootStackBytes = 0x400
 
--- | Root targets whose closures StockStack refuses: the `svc #0x1010` at 0x4360c under 0x6490dc, 0x69cfa4,
--- 0x69f204, 0x6a5920, 0x6a59b8 and 0x6a5c08, and the argument callback 0x772d58 under 0x69ca44.
+-- | Root targets whose closures StockStack refuses: the fatal-report recursion under 0x6490dc, 0x69cfa4,
+-- 0x69f204, 0x6a5920, 0x6a59b8 and 0x6a5c08, and the argument callback 0x772d58 under 0x69ca44. Each
+-- shares the first walk's refusal, entered from 0x6490dc.
 rootUnbounded :: [(Word32, SS.StackRefusal)]
-rootUnbounded = [(0x69ca44, SS.UnresolvedBranch 0x772d58)] ++ [(entry, svc) | entry <- [0x6490dc, 0x69cfa4, 0x69f204, 0x6a5920, 0x6a59b8, 0x6a5c08]]
+rootUnbounded = [(0x69ca44, SS.UnresolvedBranch 0x772d58)]
+  ++ [(entry, SS.Recursion ([0x6490dc, 0x649154, 0x723ffc] ++ fatalReportCycle)) | entry <- [0x6490dc, 0x69cfa4, 0x69f204, 0x6a5920, 0x6a59b8, 0x6a5c08]]
 
-svc :: SS.StackRefusal
-svc = SS.Refusal 0x4360c W.SupervisorCall
+-- | The abort 0x4d978 traps with `svc #0x1010` (0x43604); the SVC reporter 0x40cac calls the loader's
+-- hook, the image entry's diagnostic callback 0x69cc6c, whose own hook 0xed4a8c reaches 0x4d978 again
+-- through 0xed468c, 0x6ab794 and 0x6fb7c8.
+fatalReportCycle :: [Word32]
+fatalReportCycle = [0x4d978, 0x43604, 0x40cac, 0x69cc6c, 0xed4a8c, 0xed468c, 0x6ab794, 0x6fb7c8, 0x4d978]
 
 rootRetainedDepth :: JoinEvidence -> Bool
 rootRetainedDepth evidence = case (rootFrame evidence, rootTargets evidence) of
@@ -1000,10 +1006,13 @@ task60Budget :: Integer
 task60Budget = 0xa1c1e0 - 0xa1b600
 
 -- | Producer services whose closures StockStack refuses: the argument callback 0x6f16e0 under storage read
--- 0x6a8f1c, the message-trace callback word under progress 0x73b924, and the `svc` at 0x4360c under 0x69b9c4.
+-- 0x6a8f1c, the message-trace callback word under progress 0x73b924, and the fatal-report recursion,
+-- entered at its trap 0x43604 through the abort 0x4da6c, under 0x69b9c4.
 image5Unbounded, plainUnbounded :: [(Word32, SS.StackRefusal)]
 image5Unbounded = [(0x6a8f1c, SS.UnresolvedBranch 0x6f16e0)]
-plainUnbounded = [(0x69b9c4, svc), (0x6a8f1c, SS.UnresolvedBranch 0x6f16e0), (0x73b924, SS.UnresolvedBranch 0x7250cc)]
+plainUnbounded =
+  [ (0x69b9c4, SS.Recursion ([0x69b9c4, 0x89bed0, 0x89bf50, 0x89c484, 0x4da6c] ++ drop 1 fatalReportCycle ++ [0x43604]))
+  , (0x6a8f1c, SS.UnresolvedBranch 0x6f16e0), (0x73b924, SS.UnresolvedBranch 0x7250cc) ]
 
 producerFrame :: Producers.Producer -> JoinEvidence -> Maybe Int
 producerFrame producer evidence = case (producer, [facts | facts <- map pieceFacts (evidencePieces evidence), matches facts]) of

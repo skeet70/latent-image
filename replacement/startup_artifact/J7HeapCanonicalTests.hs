@@ -30,7 +30,7 @@ import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers, contractValue, record5Media)
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
-import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets)
+import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets, composedSegments, ownedOf, fatalReportCycle)
 import qualified Replacement.StartupArtifact.StackBounds as SB
 import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.PlainLoad.Admission as PLA
@@ -294,6 +294,13 @@ main = do
     (not (Heap.ownedNamesNoRetired (targetOf namesBreak Image4)))
 
   -- Stack: supplied depths with the heap (design 6.1).
+  let composed = composedSegments evidence
+      closed = SB.closedWords composed (ownedOf evidence) [(0x89ec00, 0xbf1a00)]
+  ok "the diagnostic hook word 0x89f794 holds 0 or 0xed4a8c, which its setter 0x69cf84's sole caller passes"
+    (closed 0x89f794 == Just [0, 0xed4a8c])
+  ok "the callback words task 33 and task 72 call close: 0x829a0c holds 0x72b210 or 0x72b318, 0x890f14 holds 0x890ee8"
+    (closed 0x829a0c == Just [0x72b210, 0x72b318] && closed 0x890f14 == Just [0x890ee8])
+  ok "the message-trace callback word 0x4089ea94 stays open" (closed 0x4089ea94 == Nothing)
   case suppliedOf evidence of
     Nothing -> H.failH "suppliedOf refused on the J7 composition"
     Just supplied -> do
@@ -338,14 +345,19 @@ main = do
           else "bounded closure reaches no heap entry, headroom " ++ show bytes) result)
       ok "every bounded task closure leaves stack after its demand and the IRQ peak"
         (and [bytes > 0 | (_, _, _, Right (_, bytes)) <- headroom])
-      let refusedAt result = case result of
-            Left (SS.Refusal site _) -> Just site
-            Left (SS.UnresolvedBranch site) -> Just site
-            _ -> Nothing
-          pinned :: Int -> Word32
-          pinned task = case task of { 1 -> 0x4360c; 33 -> 0x72b694; 36 -> 0xd80e68; 72 -> 0x892c38; _ -> 0x4a960 }
-      ok "no published heap-calling task has an established whole-task bound: the walks refuse at the pinned sites"
-        ([(task, refusedAt result) | ((task, _, _), (_, result)) <- zip tasks walks]
+      -- Tasks 33, 36 and 72 stop at a callback word a setter fills from its argument (0x4089ea94), a state-table
+      -- record field at a RAM-state index, and a callback array in an object. The others share the first walk's
+      -- fatal-report recursion, entered from task 1 through the kernel abort 0x4d978 (Joins.fatalReportCycle).
+      let fatalReport = SS.Recursion ([ 0xc22f60, 0xbfb124, 0xd36310, 0xd0b8b4, 0x61c91c, 0x6309c4, 0x624694, 0x61d944, 0x72b3d0
+                                      , 0x6a6f3c, 0x6a6ddc, 0x6a59b8, 0x6a57e4, 0x6a5750, 0x64bf40, 0x723ffc ] ++ fatalReportCycle)
+          pinned :: Int -> SS.StackRefusal
+          pinned task = case task of
+            33 -> SS.UnresolvedBranch 0x7250cc
+            36 -> SS.UnresolvedBranch 0xd80e68
+            72 -> SS.UnresolvedBranch 0x892c00
+            _ -> fatalReport
+      ok "no published heap-calling task has an established whole-task bound: the walks refuse at the pinned constructs"
+        ([(task, either Just (const Nothing) result) | ((task, _, _), (_, result)) <- zip tasks walks]
           == [(task, Just (pinned task)) | (task, _, _) <- tasks])
       pure ()
   -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the

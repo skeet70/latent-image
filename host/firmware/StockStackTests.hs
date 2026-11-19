@@ -26,7 +26,10 @@ branch :: Word32 -> Int -> Int -> Word32
 branch cond from to = cond .|. 0x0a000000 .|. (((at to - (at from + 8)) `shiftR` 2) .&. 0x00ffffff)
 
 noTargets :: IndirectTargets
-noTargets = IndirectTargets 0x96bd20 M.empty M.empty []
+noTargets = IndirectTargets 0x96bd20 M.empty M.empty [] (const Nothing) []
+
+slotTargets :: M.Map SlotOffset [Word32] -> IndirectTargets
+slotTargets slots = noTargets {rootSlots = slots}
 
 depth :: [Word32] -> Supplied -> IndirectTargets -> SwitchModel -> Either StackRefusal StackReport
 depth words' supplied indirect switches = stockDepth (code words') supplied indirect switches base
@@ -60,7 +63,43 @@ main = do
         , ("recursion refuses", case depth [pushR4Lr, bl 1 0, popR4Pc] none noTargets noSwitches of
             Left (Recursion _) -> True
             _ -> False)
-        , ("svc refuses", depth [pushR4Lr, 0xef001010, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.SupervisorCall))
+        , ("svc without a supervisor entry refuses", depth [pushR4Lr, 0xef001010, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.SupervisorCall))
+        , ("svc adds the handler frame and the reporter's depth, and continues after it",
+            -- push {r4, lr}; svc #0x1010; pop {r4, pc}; reporter: push {r4, lr}; resume: mov sp, r4
+            bytesOf (depth [pushR4Lr, 0xef001010, popR4Pc, pushR4Lr, 0xe1a0d004] none (supervised 64) noSwitches) == Just 80)
+        , ("svc #0 refuses with a supervisor entry",
+            depth [pushR4Lr, 0xef000000, popR4Pc, pushR4Lr, 0xe1a0d004] none (supervised 64) noSwitches == Left (Refusal (at 1) W.SupervisorCall))
+        , ("a register call through a closed loaded word resolves under S6",
+            -- push {r4, lr}; movw r3, #0; movt r3, #2; ldr r3, [r3]; blx r3; pop {r4, pc}; target
+            case depth [pushR4Lr, 0xe3003000, 0xe3403002, 0xe5933000, 0xe12fff33, popR4Pc, push47Lr, pop47Pc] none
+                   noTargets {loadedWords = \word -> if word == 0x20000 then Just [at 6] else Nothing} noSwitches of
+              Right report -> reportDepth report == StackDepth 28 && reportConditions report == S.singleton LoadedWordsClosed
+              _ -> False)
+        , ("a register call through an open loaded word refuses",
+            depth [pushR4Lr, 0xe3003000, 0xe3403002, 0xe5933000, 0xe12fff33, popR4Pc] none noTargets noSwitches == Left (UnresolvedBranch (at 4)))
+        , ("a loaded word that may be zero is called only past a zero test of its register",
+            -- push {r4, lr}; movw r3, #0; movt r3, #2; ldr r3, [r3]; cmp r3, #0; beq 7; blx r3; 7: pop {r4, pc}; target
+            bytesOf (depth [pushR4Lr, 0xe3003000, 0xe3403002, 0xe5933000, 0xe3530000, branch eq 5 7, 0xe12fff33, popR4Pc, push47Lr, pop47Pc] none
+              (zeroOr (at 8)) noSwitches) == Just 28)
+        , ("a loaded word that may be zero refuses without a zero test",
+            depth [pushR4Lr, 0xe3003000, 0xe3403002, 0xe5933000, 0xe12fff33, popR4Pc, push47Lr, pop47Pc] none (zeroOr (at 6)) noSwitches
+              == Left (UnresolvedBranch (at 4)))
+        , ("reloading the register after its zero test forgets the test",
+            -- the beq is followed by movw r3, #0; movt r3, #2; ldr r3, [r3] before the call
+            depth [ pushR4Lr, 0xe3003000, 0xe3403002, 0xe5933000, 0xe3530000, branch eq 5 10, 0xe3003000, 0xe3403002, 0xe5933000
+                  , 0xe12fff33, popR4Pc, push47Lr, pop47Pc ] none (zeroOr (at 11)) noSwitches == Left (UnresolvedBranch (at 9)))
+        , ("a slot pointer spilled to the frame survives a call and resolves when reloaded",
+            bytesOf (depth (spilled [bxLr]) none (slotTargets (M.singleton (SlotOffset 0x10) [at 13])) noSwitches) == Just 36)
+        , ("a callee writing above its entry SP clobbers the spilled slot",
+            -- callee: str r0, [sp, #4]; bx lr
+            depth (spilled [0xe58d0004, bxLr]) none (slotTargets (M.singleton (SlotOffset 0x10) [at 14])) noSwitches == Left (UnresolvedBranch (at 9)))
+        , ("a callee storing through its caller's r11 clobbers the spilled slot",
+            -- callee: str r0, [r11, #-4]; bx lr
+            depth (spilled [0xe50b0004, bxLr]) none (slotTargets (M.singleton (SlotOffset 0x10) [at 14])) noSwitches == Left (UnresolvedBranch (at 9)))
+        , ("a frame address copied before the call forgets the spilled slot",
+            -- the bl at 7 becomes add r0, sp, #0 and the callee runs inline
+            depth (take 7 (spilled []) ++ [0xe28d0000] ++ drop 8 (spilled [bxLr])) none (slotTargets (M.singleton (SlotOffset 0x10) [at 13])) noSwitches
+              == Left (UnresolvedBranch (at 9)))
         , ("blx immediate refuses", depth [pushR4Lr, 0xfa000000, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.ThumbCall))
         , ("an exception return refuses", depth [0xe1b0f00e] none noTargets noSwitches == Left (Refusal (at 0) W.ExceptionReturn))
         , ("an unresolved register call refuses", depth [pushR4Lr, 0xe12fff33, popR4Pc] none noTargets noSwitches == Left (UnresolvedBranch (at 1)))
@@ -98,13 +137,13 @@ main = do
         , ("a root-slot call resolves through the table and records its condition",
             -- push {r4, lr}; movw r4, #0xbd20; movt r4, #0x96; ldr r3, [r4]; ldr r3, [r3, #0x10]; blx r3; pop {r4, pc}; callee
             case depth [pushR4Lr, 0xe30b4d20, 0xe3404096, 0xe5943000, 0xe5933010, 0xe12fff33, popR4Pc, push47Lr, pop47Pc]
-                   none (IndirectTargets 0x96bd20 (M.singleton (SlotOffset 0x10) [at 7]) M.empty []) noSwitches of
+                   none (slotTargets (M.singleton (SlotOffset 0x10) [at 7])) noSwitches of
               Right report -> reportDepth report == StackDepth 28 && reportConditions report == S.singleton SlotWordsFixed
               _ -> False)
         , ("a conditional load splits the path so each resolution counts",
             -- push {r4, lr}; movw r4; movt r4; ldr r2, [r4]; cmp r0, #0; ldreq r3, [r2, #0x10]; ldrne r3, [r2, #0x14]; blx r3; pop; deep; shallow
             case depth [pushR4Lr, 0xe30b4d20, 0xe3404096, 0xe5942000, cmp0, 0x05923010, 0x15923014, 0xe12fff33, popR4Pc, push47Lr, pop47Pc, pushR4Lr, popR4Pc]
-                   none (IndirectTargets 0x96bd20 (M.fromList [(SlotOffset 0x10, [at 11]), (SlotOffset 0x14, [at 9])]) M.empty []) noSwitches of
+                   none (slotTargets (M.fromList [(SlotOffset 0x10, [at 11]), (SlotOffset 0x14, [at 9])])) noSwitches of
               Right report -> reportDepth report == StackDepth 28
               _ -> False)
         , ("a return that leaves bytes reserved refuses",
@@ -138,6 +177,12 @@ main = do
         , ("pop of r11 forgets the frame",
             depth [0xe92d4800, 0xe28db004, 0xe8bd0800, 0xe24bd004, bxLr] none noTargets noSwitches == Left (FrameUnknown (at 3)))
         ]
+      -- push {r4, lr}; sub sp, #8; movw r3, #0xbd20; movt r3, #0x96; ldr r3, [r3]; ldr r3, [r3, #0x10];
+      -- str r3, [sp, #4]; bl callee; ldr r3, [sp, #4]; blx r3; add sp, #8; pop {r4, pc}; callee; target
+      spilled callee = [pushR4Lr, 0xe24dd008, 0xe30b3d20, 0xe3403096, 0xe5933000, 0xe5933010, 0xe58d3004, bl 7 12
+                       , 0xe59d3004, 0xe12fff33, 0xe28dd008, popR4Pc] ++ callee ++ [push47Lr, pop47Pc]
+      supervised frame = noTargets {supervisorEntries = [SupervisorEntry (CodeRange base (at 5)) frame (at 3) (at 4)]}
+      zeroOr target = noTargets {loadedWords = \word -> if word == 0x20000 then Just [0, target] else Nothing}
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures
   unless (null failures) exitFailure

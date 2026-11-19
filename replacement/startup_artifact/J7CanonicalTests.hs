@@ -168,6 +168,18 @@ main = do
       && all (\site -> any (\(formed, value) -> formed < site && formed + 12 >= site && value == 0x6470fc)
                          (SB.addressFormations segments [] (== 0x6470fc))) [0x647390, 0x6473cc])
 
+  -- reporter-hook-writers on canonical bytes (S7): each hook word is stored only by its setter, which
+  -- only its loader calls, at base + 0xa6c after @mov r0, #2; blx r4@, the image entry's mode-2 return.
+  forM_ (zip [0x40000, 0xd0000] SB.reporterHooks) $ \(base, hook) -> do
+    let word = SB.hookWord hook; setter = SB.hookSetter hook
+    putStrLn ("stores reaching " ++ hex word ++ ": " ++ show (map hex (SB.storesReaching segments [] word)))
+    ok ("the only store to the reporter hook word " ++ hex word ++ " is in its setter " ++ hex setter)
+      (SB.storesReaching segments [] word == [setter + 0x10])
+    ok ("no code forms the address of the reporter hook setter " ++ hex setter) (null (SB.addressFormations segments [] (== setter)))
+    ok ("the reporter hook setter " ++ hex setter ++ " is called only after the image entry's mode-2 call at " ++ hex (base + 0xa68))
+      (SB.branchSites segments [] (== setter) == [(base + 0xa6c, setter)]
+        && map wordAt [base + 0xa64, base + 0xa68] == [Just 0xe3a00002, Just 0xe12fff34])
+
   -- Canonical wrapper callers: the 67 sites, two of them data-driven.
   ok "the canonical images call the wrapper at the 67 pinned sites"
     (sort (map fst (SB.branchSites segments [] (== SB.wrapperEntry))) == sort wrapperCallSites)
