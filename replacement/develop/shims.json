@@ -2209,9 +2209,9 @@
             18700368,
             18700572,
             18700596,
-            117988376,
-            118131736,
-            118143092
+            117996124,
+            118143732,
+            118155124
           ],
           "contract": "replacement/develop/develop.ld",
           "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
@@ -2237,6 +2237,12 @@
         "symbols": ["xm1_loading_deadline_after_ms", "xm1_loading_request_sync"],
         "contract": "replacement/develop/develop.ld",
         "requirement": "Develop states its own Initialize timeout in milliseconds (pipeline.rs LOADING_INITIALIZE_TIMEOUT: no recoverable Develop requirement, so the startup-class hang bound, named explicitly). The owner converts it once through the timer contract and consumes that exact absolute deadline. No loader default, loading publication or retained fallback is permitted."
+      }, {
+        "image": "//replacement/develop:develop-candidate",
+        "kind": "export",
+        "symbols": ["XM1_LOADING_DEADLINE_CALLS", "XM1_LOADING_ENVELOPES"],
+        "contract": "replacement/develop/develop.ld",
+        "requirement": "The linked sender's per-kind envelope records and formed-deadline count are the loading owner's state in this composition."
       }],
       "predicates": {
         "caller_closure": "unestablished",

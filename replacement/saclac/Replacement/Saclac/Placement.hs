@@ -51,7 +51,11 @@ renderLinkerScript union = case (entries, extents) of
     ]
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
-           any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_", "xm1_loading_", "xm1_lower_read_"]
+           any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_"]
+         ]
+      ++ [ "PROVIDE(" ++ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ");"
+         | external <- retainedExternals ++ retainedData,
+           any (`isPrefixOf` retainedName external) ["xm1_loading_", "xm1_lower_read_"]
          ]
       ++ [ "EXTERN(" ++ Agg.carrierEntrySymbol entry ++ ")"
          | (_, domainEntries) <- domainUnion, entry <- domainEntries, Agg.carrierEntryBody entry == Agg.BankBody
