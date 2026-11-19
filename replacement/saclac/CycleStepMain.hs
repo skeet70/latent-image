@@ -467,7 +467,7 @@ data RunResult = RunResult
   , runDetail :: String
   , runInstructions :: Integer
   , runMemory :: M.Map String B.ByteString
-  , runCoverage :: M.Map String (B.ByteString, B.ByteString)
+  , runCoverage :: M.Map String (B.ByteString, B.ByteString, B.ByteString)
   , runRegionBases :: M.Map String Word32
   , runPc :: Word32
   , runAccesses :: [Value]
@@ -507,7 +507,7 @@ runPlanned options plan = do
               , runDetail = str (get runner "detail")
               , runInstructions = fromIntegral count
               , runMemory = M.fromList [(regionName ident, bytes) | (ident, bytes) <- nativeMemory observation]
-              , runCoverage = M.fromList [(regionName ident, (coverageRead c, coverageWritten c)) | (ident, c) <- fromMaybe [] (nativeCoverage observation)]
+              , runCoverage = M.fromList [(regionName ident, (coverageRead c, coverageWritten c, coverageExposed c)) | (ident, c) <- fromMaybe [] (nativeCoverage observation)]
               , runRegionBases = M.fromList [(regionId region, regionBase region) | region <- casePlanRegions plan]
               , runPc = fromMaybe 0 (lookupRegister Pc observation)
               , runAccesses = list (get runner "accesses")
@@ -653,6 +653,7 @@ data CycleReport = CycleReport
   , reportStateRead :: [Integer]
   , reportStateWritten :: [Integer]
   , reportImageRead :: [Integer]
+  , reportStateExposed :: [Integer]
   , reportNativeInstructions :: Integer
   , reportExecuted :: Integer
   , reportLevelPredicted :: Maybe Word32
@@ -858,9 +859,10 @@ runLane options images spans arity declaration store lane = case laneError lane 
                             , reportRunnerSha = runRunnerSha run
                             , reportAccessTotal = runProvenanceTotal run
                             , reportTrace = if runStatus run == "stub_contract" then [] else runTrace run
-                            , reportStateRead = fst (coverageAddresses isStateRegion run)
-                            , reportStateWritten = snd (coverageAddresses isStateRegion run)
-                            , reportImageRead = fst (coverageAddresses isImageRegion run)
+                            , reportStateRead = coverageRead' (coverageAddresses isStateRegion run)
+                            , reportStateWritten = coverageWritten' (coverageAddresses isStateRegion run)
+                            , reportImageRead = coverageRead' (coverageAddresses isImageRegion run)
+                            , reportStateExposed = coverageExposed' (coverageAddresses isStateRegion run)
                             , reportNativeInstructions = runInstructions run
                             , reportExecuted = executedBytes (runExecuted run)
                             , reportLevelPredicted = stateWord predicted levelAddress
@@ -954,9 +956,11 @@ cycleValue report = obj
   , ("coverage", obj
       [ ("state_read_bytes", n (fromIntegral (length (reportStateRead report))))
       , ("state_written_bytes", n (fromIntegral (length (reportStateWritten report))))
+      , ("state_exposed_bytes", n (fromIntegral (length (reportStateExposed report))))
       , ("image_read_bytes", n (fromIntegral (length (reportImageRead report))))
       , ("state_read", rangesValue (reportStateRead report))
       , ("state_written", rangesValue (reportStateWritten report))
+      , ("state_exposed", rangesValue (reportStateExposed report))
       , ("image_read", rangesValue (reportImageRead report))
       ])
   , ("native_instructions", n (reportNativeInstructions report))
@@ -967,15 +971,21 @@ cycleValue report = obj
   , ("closure_rounds", n (fromIntegral (reportRounds report)))
   ]
 
--- | The addresses a run read (first) or wrote (second) through regions whose id the predicate
--- admits, ascending, from the runner's complete access coverage.
-coverageAddresses :: (String -> Bool) -> RunResult -> ([Integer], [Integer])
+coverageRead', coverageWritten', coverageExposed' :: ([Integer], [Integer], [Integer]) -> [Integer]
+coverageRead' (value, _, _) = value
+coverageWritten' (_, value, _) = value
+coverageExposed' (_, _, value) = value
+
+-- | The addresses a run read, wrote and read before writing, through regions whose id the
+-- predicate admits, ascending, from the runner's complete access coverage.
+coverageAddresses :: (String -> Bool) -> RunResult -> ([Integer], [Integer], [Integer])
 coverageAddresses admit run =
-  ( concat [bits base readBits | (name, (readBits, _)) <- selected, Just base <- [M.lookup name (runRegionBases run)]]
-  , concat [bits base writtenBits | (name, (_, writtenBits)) <- selected, Just base <- [M.lookup name (runRegionBases run)]]
+  ( concat [bits base readBits | (name, (readBits, _, _)) <- selected, Just base <- [M.lookup name (runRegionBases run)]]
+  , concat [bits base writtenBits | (name, (_, writtenBits, _)) <- selected, Just base <- [M.lookup name (runRegionBases run)]]
+  , concat [bits base exposedBits | (name, (_, _, exposedBits)) <- selected, Just base <- [M.lookup name (runRegionBases run)]]
   )
   where
-    selected = [(name, pair) | (name, pair) <- M.toAscList (runCoverage run), admit name]
+    selected = [(name, bitmaps) | (name, bitmaps) <- M.toAscList (runCoverage run), admit name]
     bits base bitmap =
       [ fromIntegral base + fromIntegral (8 * index + bit)
       | (index, byte) <- zip [0 :: Int ..] (B.unpack bitmap), byte /= 0
