@@ -1,0 +1,104 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_SOURCES = ["src/handles.rs", "src/stock.rs"]
+
+# Deliberately wrong owned variants; each must fail a case with a returned status.
+_CONTROLS = [
+    "sequence_wrap",
+    "skip_allocated",
+    "no_free_slot_advance",
+    "release_after_failed_wait",
+]
+
+xm1_rust_rlib(
+    name = "file-service",
+    src = "src/lib.rs",
+    crate_name = "xm1_file_service",
+    data = _SOURCES,
+)
+
+[xm1_rust_staticlib(
+    name = "file-service-rust" + suffix,
+    src = "src/lib.rs",
+    crate_name = "xm1_file_service",
+    rustc_flags = ["--cfg", "file_service_image"] + flags,
+    data = _SOURCES,
+) for suffix, flags in [("", [])] + [
+    ("-control-" + control.replace("_", "-"), ["--cfg", "file_service_control_" + control])
+    for control in _CONTROLS
+]]
+
+[xm1_rust_elf(
+    name = "file-service-image" + suffix,
+    rust_staticlib = ":file-service-rust" + suffix,
+    entry = "xm1_file_service_tag_allocate",
+    extra_ldflags = ["-Wl,--gc-sections"],
+    link_includes = ["imports.ld"],
+    link_script = "file-service.ld",
+) for suffix in [""] + ["-control-" + control.replace("_", "-") for control in _CONTROLS]]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+haskell_library(
+    name = "native-lib",
+    srcs = [
+        "Replacement/FileService/Handles.hs",
+        "Replacement/FileService/Native.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "file-service-suite",
+    srcs = ["SuiteMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "SuiteMain.hs",
+    deps = [
+        ":native-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":file-service",
+        ":file-service-image",
+        ":file-service-suite",
+        ":host-tests",
+    ] + [":file-service-image-control-" + control.replace("_", "-") for control in _CONTROLS],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)
