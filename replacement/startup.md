@@ -166,10 +166,10 @@ devenv shell -- run-output exec --label lower-read-root-bank-gate -- bash -c "$H
   //replacement/develop:pipeline-tests //replacement/develop:model-catalogue-test \
   //replacement/shim_check:shim-check-tests //replacement/saclac:saclac-placement-tests"
 devenv shell -- run-output exec --label lower-read-loading-runtime -- \
-  bash replacement/executable_loading/loading-runtime-runs.sh CANONICAL_DAT CANONICAL_IMAGE4 CANONICAL_IMAGE5 BOOT_ROM
+  bash replacement/executable_loading/loading-runtime-runs.sh CANONICAL_DAT CANONICAL_IMAGE4 CANONICAL_IMAGE5 BOOT_ROM STOCK_LOADER_A STOCK_LOADER_B
 ```
 
-The run script (after building `saclac-image-loading-*`, the stagers, `runtime-{native,retention}`, `runtime-native-qualify`, `native-runner`, `emulator-slot` and `loading-runtime-observer`) executes `runtime-native-qualify` under one native slot, stages each Root-bank variant through `stage-saclac` and `stage-fixed-image` on the first-stage DAT, checks it with `runtime-artifact contract`, and runs `loading-runtime-observer` from reset under one full-system slot. The native harness covers released success and primary-error-plus-expired-drain retention with synthetic device leaves. The observer sees the natural stock wrapper calls, the owned task60 constructor/receiver, the producer's segment lookup, decoder feed/IRQ/finish, NAND traffic, callbacks, latches and final storage ownership. Its retention role changes only the linked drain policy; it injects no message and reloads no code.
+The run script (after building `saclac-image-loading-*`, `rtos_platform:platform-{a,b}-loading-*`, the stagers, `runtime-{native,retention}`, `runtime-native-qualify`, `native-runner`, `emulator-slot` and `loading-runtime-observer`) executes `runtime-native-qualify` under one native slot, stages each Root-bank variant through `stage-saclac`, `stage-platform` with that variant's loader pair, and `stage-fixed-image` with the platform bank entries, checks it with `runtime-artifact contract`, and runs `loading-runtime-observer` from reset under one full-system slot. The native harness covers released success and primary-error-plus-expired-drain retention with synthetic device leaves. The observer sees the natural stock wrapper calls, the owned task60 constructor/receiver, the producer's segment lookup, decoder feed/IRQ/finish, NAND traffic, callbacks, latches and final storage ownership. Its retention role changes only the linked drain policy; it injects no message and reloads no code.
 
 ## Asynchronous image5 decoder composition
 
