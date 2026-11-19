@@ -2,6 +2,7 @@
 //! and the stock/owned comparison. Laws come from reports/display-render-contracts/scanout.md (image-4 bytes).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// Retired stock bodies of image 4, half-open, at x70view 55436fc8 `function-ranges.json` extents.
 pub const CARRIERS: [(u32, u32); 5] = [(0x6c6eb0, 0x6c75f0), (0x6c926c, 0x6c994c), (0x6c9cf4, 0x6ca04c), (0x6ca3e0, 0x6cb0ec), (0x6cb8b4, 0x6cb9cc)];
@@ -19,6 +20,25 @@ pub const fn timing(engine: u32) -> u32 { 0x9429f4 + engine * 0x58 }
 pub const fn scanout_bank(engine: u32) -> u32 { if engine == 0 { 0xfff6b000 } else { 0xfff6e000 } }
 
 pub fn in_carriers(address: u32) -> bool { CARRIERS.iter().any(|(low, high)| *low <= address && address < *high) }
+
+/// Core 0's ATCM window; its top is the first-level IRQ stack `0x40250` loads from `0x40370`.
+pub const IRQ_STACK: (u32, u32) = (0x7000_0000, 0x7000_2000);
+
+/// Words whose changes a call reports and whose entry values it is compared on: runtime, input, saved, timing and
+/// scheduler records, the blanking selector, the engine selection and VGLIB's front byte and stage-0 images.
+pub const REGIONS: [(u32, u32); 10] = [(runtime(0), 0xb0), (input(0), 0x478), (saved(0), 0x348), (timing(0), 0xb0), (SCHEDULER, 0x94),
+    (0x916610, 4), (SELECTION + 0x10, 4), (SELECTION + 0x28, 4), (FRONT & !3, 4), (STAGE_IMAGES, 8)];
+
+pub fn region_addresses() -> impl Iterator<Item = u32> {
+    REGIONS.into_iter().flat_map(|(start, length)| (0..length / 4).map(move |word| start + 4 * word))
+}
+
+pub fn in_regions(address: u32) -> bool { REGIONS.iter().any(|(start, length)| *start <= address && address < start + length) }
+
+/// The execution context a call ran in: on the IRQ stack, or on a task's stack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Context { Interrupt, Task }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -115,6 +135,26 @@ pub struct Call {
     /// The caller's `sp` at entry.
     #[serde(default)]
     pub stack: u32,
+    /// The `REGIONS` words at entry, in `region_addresses` order.
+    #[serde(default)]
+    pub entry_words: Vec<u32>,
+    /// `REGIONS` word addresses the CPU read (`reads`) and wrote (`writes`) while this call was open in its own context on its core.
+    #[serde(default)]
+    pub reads: BTreeSet<u32>,
+    #[serde(default)]
+    pub writes: BTreeSet<u32>,
+    /// The instruction counter at entry and at return.
+    #[serde(default)]
+    pub instructions: [u64; 2],
+}
+
+impl Call {
+    pub fn context(&self) -> Context {
+        if (IRQ_STACK.0..IRQ_STACK.1).contains(&self.stack) { Context::Interrupt } else { Context::Task }
+    }
+    /// Calls a unit body made into the unit's own entries are not compared unless they head a commit, which is how
+    /// an ISR's persistent commit callback appears in both roles.
+    pub fn compared(&self) -> bool { self.caller != Caller::Unit || self.head }
 }
 
 pub fn selected_engine(selection: [u32; 2]) -> u32 { u32::from(selection[1] == 0 && selection[0] == 1) }
@@ -231,7 +271,8 @@ pub fn laws(calls: &[Call]) -> Vec<Finding> {
     findings
 }
 
-/// The fields of a boundary call that the stock/owned comparison requires equal.
+/// The fields of a boundary call that the stock/owned comparison requires equal; its record words compare through
+/// `word_difference`.
 #[derive(Debug, Eq, PartialEq, Serialize)]
 pub struct Projection<'a> {
     pub entry: Entry,
@@ -245,7 +286,6 @@ pub struct Projection<'a> {
     pub front: Option<FrontState>,
     pub bus: Vec<Bus>,
     pub callbacks: &'a [Callback],
-    pub changes: Vec<[u32; 3]>,
     pub returned: bool,
 }
 
@@ -276,41 +316,117 @@ impl HandleNames {
     }
 }
 
-pub fn projection<'a>(call: &'a Call, names: &mut HandleNames) -> Projection<'a> {
-    let changes = call.changes.iter().map(|&[address, before, after]| {
-        if HANDLE_CELLS.contains(&address) { [address, names.name(before), names.name(after)] } else { [address, before, after] }
-    }).collect();
+pub fn projection(call: &Call) -> Projection<'_> {
     Projection {
         entry: call.entry, arguments: if call.entry == Entry::SchedulerRegister { &[] } else { &call.arguments },
         request: call.request, output: call.output, result: if call.entry.returns() { call.result } else { None },
         selection: call.selection, slots: &call.slots, pending: call.pending, front: call.front, bus: collapsed_polls(&call.bus),
-        callbacks: &call.callbacks, changes, returned: call.returned,
+        callbacks: &call.callbacks, returned: call.returned,
     }
 }
 
-/// The deepest owned entry below the stock entry at the same compared position, in bytes; meaningful when no
-/// compared call differs.
+/// One context's compared calls in entry order.
+pub fn in_context(calls: &[Call], context: Context) -> Vec<&Call> {
+    calls.iter().filter(|call| call.compared() && call.context() == context).collect()
+}
+
+/// The deepest owned entry below the stock entry of the same kind at the same position of its context, in bytes.
 pub fn stack_excess(stock: &[Call], owned: &[Call]) -> i64 {
-    let boundary = |calls: &[Call]| calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(|call| call.stack).collect::<Vec<_>>();
-    boundary(stock).into_iter().zip(boundary(owned)).map(|(stock, owned)| i64::from(stock) - i64::from(owned)).max().unwrap_or(0)
+    [Context::Interrupt, Context::Task].into_iter().flat_map(|context| {
+        in_context(stock, context).into_iter().zip(in_context(owned, context)).filter(|(stock, owned)| stock.entry == owned.entry)
+            .map(|(stock, owned)| i64::from(stock.stack) - i64::from(owned.stack))
+    }).max().unwrap_or(0)
+}
+
+/// How two paired calls' record words differ. Words are `[address, stock, owned]`; handle cells compare as names.
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum WordMismatch {
+    /// A call carries no entry words.
+    Unsampled,
+    /// `inputs`: entry words either call read. `outputs`: words either call wrote, at return. `unwritten`: words one
+    /// call wrote and changed that the other did not write.
+    Differ { inputs: Vec<[u32; 3]>, outputs: Vec<[u32; 3]>, unwritten: Vec<u32> },
+}
+
+fn word_difference(stock: &Call, owned: &Call, names: &mut (HandleNames, HandleNames)) -> Option<WordMismatch> {
+    let count = region_addresses().count();
+    if stock.entry_words.len() != count || owned.entry_words.len() != count { return Some(WordMismatch::Unsampled); }
+    let mut equal = |address: u32, left: u32, right: u32| {
+        if HANDLE_CELLS.contains(&address) { names.0.name(left) == names.1.name(right) } else { left == right }
+    };
+    let returned = |call: &Call, index: usize, address: u32| {
+        call.changes.iter().find(|change| change[0] == address).map_or(call.entry_words[index], |change| change[2])
+    };
+    let changed = |call: &Call, address: u32| call.changes.iter().any(|change| change[0] == address);
+    let (mut inputs, mut outputs, mut unwritten) = (Vec::new(), Vec::new(), Vec::new());
+    for (index, address) in region_addresses().enumerate() {
+        if (stock.reads.contains(&address) || owned.reads.contains(&address)) && !equal(address, stock.entry_words[index], owned.entry_words[index]) {
+            inputs.push([address, stock.entry_words[index], owned.entry_words[index]]);
+        }
+        if stock.writes.contains(&address) || owned.writes.contains(&address) {
+            let (left, right) = (returned(stock, index, address), returned(owned, index, address));
+            if !equal(address, left, right) { outputs.push([address, left, right]); }
+            let one_sided = |wrote: &Call, other: &Call| wrote.writes.contains(&address) && changed(wrote, address) && !other.writes.contains(&address);
+            if one_sided(stock, owned) || one_sided(owned, stock) { unwritten.push(address); }
+        }
+    }
+    (!(inputs.is_empty() && outputs.is_empty() && unwritten.is_empty())).then_some(WordMismatch::Differ { inputs, outputs, unwritten })
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
-pub struct Difference { pub boundary_call: usize, pub stock: Option<serde_json::Value>, pub owned: Option<serde_json::Value> }
+pub struct Difference {
+    pub context: Context,
+    /// Position within the context's compared calls.
+    pub boundary_call: usize,
+    pub stock: Option<serde_json::Value>,
+    pub owned: Option<serde_json::Value>,
+    pub words: Option<WordMismatch>,
+}
 
-/// The first compared call whose projection differs. Calls a unit body made into the unit's own entries are excluded
-/// unless they head a commit, which is how an ISR's persistent commit callback appears in both roles.
+/// The first paired call, interrupt context first, whose projection or record words differ. Each context's calls
+/// pair in order, compared on their projections, the words they read at entry and the words they wrote, not on
+/// changes another context made during them. The order between contexts follows interrupt arrival against task
+/// progress and is not compared. One handle renaming per role spans the interrupt calls, then the task calls.
 pub fn first_difference(stock: &[Call], owned: &[Call]) -> Option<Difference> {
-    fn boundary(calls: &[Call]) -> Vec<Projection<'_>> {
-        let mut names = HandleNames::default();
-        calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(|call| projection(call, &mut names)).collect()
+    let mut names = (HandleNames::default(), HandleNames::default());
+    for context in [Context::Interrupt, Context::Task] {
+        let (left, right) = (in_context(stock, context), in_context(owned, context));
+        for index in 0..left.len().max(right.len()) {
+            let (stock_call, owned_call) = (left.get(index).copied(), right.get(index).copied());
+            let (stock_projection, owned_projection) = (stock_call.map(projection), owned_call.map(projection));
+            let words = match (stock_call, owned_call) {
+                (Some(stock), Some(owned)) if stock_projection == owned_projection => word_difference(stock, owned, &mut names),
+                _ => None,
+            };
+            if stock_projection != owned_projection || words.is_some() {
+                return Some(Difference {
+                    context, boundary_call: index, words,
+                    stock: stock_projection.and_then(|value| serde_json::to_value(value).ok()),
+                    owned: owned_projection.and_then(|value| serde_json::to_value(value).ok()),
+                });
+            }
+        }
     }
-    let (left, right) = (boundary(stock), boundary(owned));
-    (0..left.len().max(right.len())).find(|index| left.get(*index) != right.get(*index)).map(|index| Difference {
-        boundary_call: index,
-        stock: left.get(index).and_then(|value| serde_json::to_value(value).ok()),
-        owned: right.get(index).and_then(|value| serde_json::to_value(value).ok()),
-    })
+    None
+}
+
+/// The first position where the two roles' compared calls, in entry order across both contexts, name different entries.
+pub fn cross_context_order(stock: &[Call], owned: &[Call]) -> Option<usize> {
+    let order = |calls: &[Call]| calls.iter().filter(|call| call.compared()).map(|call| (call.entry, call.context())).collect::<Vec<_>>();
+    let (left, right) = (order(stock), order(owned));
+    (0..left.len().max(right.len())).find(|index| left.get(*index) != right.get(*index))
+}
+
+/// Compared calls and the instructions between their entry and return, per entry.
+pub fn instruction_spans(calls: &[Call]) -> std::collections::BTreeMap<Entry, [u64; 2]> {
+    let mut spans = std::collections::BTreeMap::new();
+    for call in calls.iter().filter(|call| call.compared() && call.returned) {
+        let span: &mut [u64; 2] = spans.entry(call.entry).or_default();
+        span[0] += 1;
+        span[1] += call.instructions[1].saturating_sub(call.instructions[0]);
+    }
+    spans
 }
 
 #[cfg(test)]

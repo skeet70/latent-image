@@ -29,10 +29,8 @@ const BUS_LIMIT: usize = 1 << 20;
 const WATCH_LIMIT: usize = 1 << 20;
 const HIT_LIMIT: usize = 1 << 16;
 const KEY_HOLD: u64 = 8_000_000;
-/// Words whose changes a call reports: runtime, input, saved, timing and scheduler records, the blanking selector,
-/// the engine selection and VGLIB's front byte and stage-0 images.
-const REGIONS: [(u32, u32); 10] = [(runtime(0), 0xb0), (input(0), 0x478), (saved(0), 0x348), (timing(0), 0xb0), (SCHEDULER, 0x94),
-    (0x916610, 4), (SELECTION + 0x10, 4), (SELECTION + 0x28, 4), (FRONT & !3, 4), (STAGE_IMAGES, 8)];
+/// Receipts whose calls carry entry words, record reads and instruction spans.
+const RECEIPT_SCHEMA: u32 = 2;
 
 fn require(condition: bool, reason: &str) -> Result<(), String> { if condition { Ok(()) } else { Err(reason.into()) } }
 
@@ -148,13 +146,18 @@ fn menu(machine: &Machine) -> Result<Option<[u32; 3]>, String> {
 #[serde(rename_all = "kebab-case")]
 enum Access { CpuFetch, CpuWrite, CpuRead, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Deserialize)]
-struct AccessRecord { source: Access, physical: u64, size: u64 }
+struct AccessRecord { source: Access, physical: u64, size: u64, core: Option<usize> }
 #[derive(Deserialize)]
 struct AccessBatch { enabled: bool, violation: Option<String>, records: Vec<AccessRecord> }
 
+/// The guard's fetch/write classes, and CPU reads and writes of the compared record words.
 fn guard_ranges(body: (u32, u32)) -> Vec<WatchRange> {
     CARRIERS.iter().map(|(low, high)| WatchRange { start: u64::from(*low), end: u64::from(*high), kinds: WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) })
-        .chain([WatchRange { start: u64::from(body.0), end: u64::from(body.1), kinds: WatchKinds::CPU_FETCH }]).collect()
+        .chain([WatchRange { start: u64::from(body.0), end: u64::from(body.1), kinds: WatchKinds::CPU_FETCH }])
+        .chain(REGIONS.iter().map(|(start, length)| WatchRange {
+            start: u64::from(*start), end: u64::from(start + length), kinds: WatchKinds::CPU_READ.union(WatchKinds::CPU_WRITE),
+        }))
+        .collect()
 }
 
 /// `fetches` counts instruction fetches per address in the retired bodies and the owned range.
@@ -235,6 +238,32 @@ impl Observer {
         Ok(())
     }
 
+    /// Each CPU access to a compared record word belongs to every call open on its core in the innermost call's
+    /// context: a call spans its callees and callbacks, not an interrupt that preempts it.
+    fn accesses(&mut self, batch: &AccessBatch) -> Result<(), String> {
+        for row in &batch.records {
+            let write = match row.source { Access::CpuRead => false, Access::CpuWrite => true, _ => continue };
+            let low = u32::try_from(row.physical).map_err(|error| error.to_string())? & !ALIAS;
+            let high = low.checked_add(u32::try_from(row.size).map_err(|error| error.to_string())?).ok_or("access row overflows")?;
+            if !in_regions(low & !3) && !in_regions((high - 1) & !3) { continue; }
+            let core = row.core.ok_or("CPU access row carries no core")?.min(1);
+            let Some((innermost, _)) = self.innermost(core) else { continue };
+            let context = self.calls[innermost].context();
+            let calls = &mut self.calls;
+            for open in self.open[core].iter().rev() {
+                let Open::Frame { call, .. } = open else { continue };
+                if calls[*call].context() != context { break; }
+                let words = if write { &mut calls[*call].writes } else { &mut calls[*call].reads };
+                let mut word = low & !3;
+                while word < high {
+                    if in_regions(word) { words.insert(word); }
+                    word += 4;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A commit's register writes end at the first callback into, or return from, its scope.
     fn sample(&mut self, machine: &Machine, core: usize) -> Result<(), String> {
         let Some((_, scope)) = self.innermost(core) else { return Ok(()) };
@@ -255,6 +284,7 @@ impl Observer {
                 record.changes = before.iter().zip(&after).filter(|(old, new)| old.1 != new.1).map(|(old, new)| [old.0, old.1, new.1]).collect();
                 record.result = Some(register(machine, core, 0)?);
                 record.returned = true;
+                record.instructions[1] = machine.instructions();
                 if let (Entry::SchedulerRegister, [_, output]) = (record.entry, record.arguments.as_slice()) {
                     record.output = Some(core_words(machine, core, *output, 1)?[0]);
                 }
@@ -319,16 +349,19 @@ impl Observer {
                 pending: match engine { Some(engine) if head => machine.word(u64::from(runtime(engine.min(1)) + 0x0c))?, _ => 0 },
                 front: match engine { Some(engine) if head => Some(front_state(machine, engine)?), _ => None },
                 saved: Vec::new(), before_drain: 0, bus: Vec::new(), callbacks: Vec::new(), changes: Vec::new(), item, returned: false,
-                request: None, output: None, stack: sp,
+                request: None, output: None, stack: sp, entry_words: Vec::new(), reads: BTreeSet::new(), writes: BTreeSet::new(),
+                instructions: [machine.instructions(), 0],
             };
             call.slots = drain_words(machine, &call)?;
             if let (Entry::SchedulerRegister, [request, _]) = (entry, call.arguments.as_slice()) {
                 let words = core_words(machine, core, *request, 4)?;
                 call.request = Some([words[0], words[1], words[2], words[3]]);
             }
+            let before = region_words(machine)?;
+            call.entry_words = before.iter().map(|(_, value)| *value).collect();
             sites.extend(call.slots.iter().copied().filter(|word| *word != 0));
             self.calls.push(call);
-            self.open[core].push(Open::Frame { call: index, scope, lr, sp, before: region_words(machine)?, sampled: false });
+            self.open[core].push(Open::Frame { call: index, scope, lr, sp, before, sampled: false });
             sites.push(lr);
         }
         Ok(sites)
@@ -365,7 +398,7 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
-    /// Attributes the bus rows and admits the guard rows since the previous stop.
+    /// Attributes the bus and record-access rows and admits the guard rows since the previous stop.
     fn drain(&mut self, restart: bool) -> Result<(), String> {
         let board = &self.machine.session.board;
         let batch = board.transaction_watch_end()?;
@@ -376,6 +409,7 @@ impl Run<'_> {
         board.memory_watch_end(&mut active)?;
         let records: AccessBatch = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
         self.observer.guard.batch(&records, self.inputs.role, &self.inputs.entries, self.inputs.body)?;
+        self.observer.accesses(&records)?;
         if restart { self.begin()?; }
         Ok(())
     }
@@ -505,14 +539,14 @@ fn execute(inputs: &Inputs, output: &Path) -> Result<(), String> {
         .or_else(|| (!carriers_match).then(|| "retired body bytes differ from the role's image 4".into()))
         .or_else(|| (!executed).then(|| "the role did not execute the code its image publishes".into()));
     let receipt = Receipt {
-        schema: 1, role: inputs.role, complete: error.is_none() && machine.failure.is_none(),
+        schema: RECEIPT_SCHEMA, role: inputs.role, complete: error.is_none() && machine.failure.is_none(),
         error, machine_failure: machine.failure.clone(), contract_sha256: inputs.contract_sha256.clone(), update_sha256: sha256(&inputs.dat.0),
         run_sha256: sha256(&inputs.run), rom_sha256: sha256(&inputs.rom),
         observer_sha256: sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?),
         schedule_sha256: inputs.schedule.as_ref().map(|(_, digest)| digest.clone()),
         instructions: machine.instructions(), points, checkpoints, guard_carrier_fetches: guard.carrier_fetches, guard_body_fetches: guard.body_fetches,
         guard_installation_writes: guard.installation_writes, guard_carriers_match: carriers_match,
-        calls: observer.calls.len(), compared_calls: observer.calls.iter().filter(|call| call.caller != Caller::Unit || call.head).count(), open_calls,
+        calls: observer.calls.len(), compared_calls: observer.calls.iter().filter(|call| call.compared()).count(), open_calls,
         entry_counts, calls_sha256: sha256(&calls_bytes), unattributed_writes: observer.unattributed.len(), unattributed_sha256: sha256(&unattributed_bytes),
     };
     write(&output.join("receipt.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
@@ -527,6 +561,7 @@ fn check(stock_dir: &Path, owned_dir: &Path) -> Result<serde_json::Value, String
     let (stock_calls, owned_calls) = (calls(stock_dir)?, calls(owned_dir)?);
     let mut reasons = Vec::new();
     if stock.role != Role::Stock || owned.role != Role::Owned { reasons.push("roles are not stock and owned".to_owned()); }
+    if stock.schema != RECEIPT_SCHEMA || owned.schema != RECEIPT_SCHEMA { reasons.push("a receipt predates entry-word and read sampling".to_owned()); }
     for (name, role) in [("stock", &stock), ("owned", &owned)] {
         if !role.complete { reasons.push(format!("{name} role is incomplete: {:?}", role.error)); }
     }
@@ -555,15 +590,18 @@ fn check(stock_dir: &Path, owned_dir: &Path) -> Result<serde_json::Value, String
     let drained = |calls: &[Call]| calls.iter().filter(|call| call.head).map(|call| call.callbacks.len()).sum::<usize>();
     let summary = |role: &Receipt, calls: &[Call], findings: &[Finding]| serde_json::json!({
         "complete": role.complete, "update_sha256": role.update_sha256, "contract_sha256": role.contract_sha256, "calls_sha256": role.calls_sha256,
-        "compared_calls": role.compared_calls, "commits": heads(calls), "pending_commits": pending(calls), "drained_callbacks": drained(calls),
+        "compared_calls": role.compared_calls, "interrupt_calls": in_context(calls, Context::Interrupt).len(), "task_calls": in_context(calls, Context::Task).len(),
+        "commits": heads(calls), "pending_commits": pending(calls), "drained_callbacks": drained(calls),
         "instructions": role.instructions, "route_end_tick": role.points.last().map(|point| point.tick),
-        "carrier_fetches": role.guard_carrier_fetches, "body_fetches": role.guard_body_fetches, "entry_counts": role.entry_counts, "laws": findings,
+        "carrier_fetches": role.guard_carrier_fetches, "body_fetches": role.guard_body_fetches, "entry_counts": role.entry_counts,
+        "instruction_spans": instruction_spans(calls), "laws": findings,
     });
     Ok(serde_json::json!({
-        "schema": 1, "verdict": if reasons.is_empty() { "equal" } else { "refused" }, "reasons": reasons,
+        "schema": 2, "verdict": if reasons.is_empty() { "equal" } else { "refused" }, "reasons": reasons,
         "stock": summary(&stock, &stock_calls, &stock_laws), "owned": summary(&owned, &owned_calls, &owned_laws),
         "checkpoints": stock.checkpoints.len(), "checkpoints_equal": checkpoints_equal, "unattributed_writes_equal": unattributed_equal,
         "stack_excess_bytes": stack_excess(&stock_calls, &owned_calls), "difference": difference,
+        "cross_context_order_difference": cross_context_order(&stock_calls, &owned_calls),
     }))
 }
 
@@ -579,7 +617,7 @@ fn qualify(arguments: &[String]) -> Result<(), String> {
     let controls = serde_json::json!({ "register-order": control(&arguments[3], "register-sequence")?, "skipped-drain": control(&arguments[4], "drain")? });
     let qualified = positive["verdict"] == "equal"
         && ["register-order", "skipped-drain"].iter().all(|name| controls[name]["returned"] == true && controls[name]["detected"] == true);
-    let report = serde_json::json!({ "schema": 1, "qualified": qualified, "positive": positive, "controls": controls });
+    let report = serde_json::json!({ "schema": 2, "qualified": qualified, "positive": positive, "controls": controls });
     write(Path::new(&arguments[5]), &serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?)?;
     require(qualified, "scanout cutover is not qualified")
 }

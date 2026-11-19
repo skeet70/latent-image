@@ -1,13 +1,24 @@
 use super::*;
 
-/// A returned retained call; a commit-family entry heads its commit on engine one.
+/// A returned retained task-context call with zero entry words; a commit-family entry heads its commit on engine one.
 fn call(entry: Entry) -> Call {
     let engine = entry.committed_engine(&[1]);
     Call {
         entry, caller: Caller::Retained, head: engine.is_some(), engine, arguments: Vec::new(), result: None, selection: [1, 0], slots: Vec::new(),
         pending: 0, front: None, saved: Vec::new(), before_drain: 0, bus: Vec::new(), callbacks: Vec::new(), changes: Vec::new(), item: None, returned: true,
-        request: None, output: None, stack: 0,
+        request: None, output: None, stack: 0, entry_words: vec![0; region_addresses().count()], reads: BTreeSet::new(), writes: BTreeSet::new(),
+        instructions: [0, 0],
     }
+}
+
+fn interrupt(entry: Entry) -> Call { Call { stack: 0x7000_1ffc, ..call(entry) } }
+
+/// `call` with the entry word at `address` set to `value`.
+fn entered(call: Call, address: u32, value: u32) -> Call {
+    let index = region_addresses().position(|word| word == address).unwrap();
+    let mut entry_words = call.entry_words.clone();
+    entry_words[index] = value;
+    Call { entry_words, ..call }
 }
 
 fn saved_image() -> Vec<u32> { (0..0x1a4 / 4).map(|word| 0x5100_0000 | word).collect() }
@@ -182,21 +193,21 @@ fn registration_compares_its_request_and_output_not_the_caller_stack() {
     let at = |stack: u32, request: [u32; 4], output: u32| Call {
         arguments: vec![stack + 4, stack], request: Some(request), output: Some(output), result: Some(0), stack, ..call(Entry::SchedulerRegister)
     };
-    let stock = at(0x7000_2048, [0x6d7f30, 0, 2, 0], 3);
-    assert_eq!(first_difference(&[stock.clone()], &[at(0x7000_1950, [0x6d7f30, 0, 2, 0], 3)]), None);
-    assert_eq!(stack_excess(&[stock.clone()], &[at(0x7000_1950, [0x6d7f30, 0, 2, 0], 3)]), 0x6f8);
-    assert!(first_difference(&[stock.clone()], &[at(0x7000_2048, [0x6d7f30, 0, 2, 1], 3)]).is_some());
-    assert!(first_difference(&[stock], &[at(0x7000_2048, [0x6d7f30, 0, 2, 0], 4)]).is_some());
+    let stock = at(0x7000_1f48, [0x6d7f30, 0, 2, 0], 3);
+    assert_eq!(first_difference(&[stock.clone()], &[at(0x7000_1850, [0x6d7f30, 0, 2, 0], 3)]), None);
+    assert_eq!(stack_excess(&[stock.clone()], &[at(0x7000_1850, [0x6d7f30, 0, 2, 0], 3)]), 0x6f8);
+    assert!(first_difference(&[stock.clone()], &[at(0x7000_1f48, [0x6d7f30, 0, 2, 1], 3)]).is_some());
+    assert!(first_difference(&[stock], &[at(0x7000_1f48, [0x6d7f30, 0, 2, 0], 4)]).is_some());
 }
 
 #[test]
 fn retained_interrupt_handles_compare_up_to_one_consistent_renaming() {
-    let isr = |before: u32, after: u32| Call { changes: vec![[SCHEDULER, before, after]], ..call(Entry::IsrOne) };
+    let isr = |before: u32, after: u32| Call { changes: vec![[SCHEDULER, before, after]], writes: [SCHEDULER].into_iter().collect(), ..call(Entry::IsrOne) };
     let stock = [isr(0, 9073), isr(9073, 9138), isr(9138, 9073)];
     assert_eq!(first_difference(&stock, &[isr(0, 9076), isr(9076, 9141), isr(9141, 9076)]), None);
     assert!(first_difference(&stock, &[isr(0, 9076), isr(9076, 9141), isr(9141, 9200)]).is_some());
     assert!(first_difference(&stock, &[isr(0, 9076), isr(9076, 9076), isr(9076, 9076)]).is_some());
-    let other = |value: u32| Call { changes: vec![[SCHEDULER + 8, 0, value]], ..call(Entry::IsrOne) };
+    let other = |value: u32| Call { changes: vec![[SCHEDULER + 8, 0, value]], writes: [SCHEDULER + 8].into_iter().collect(), ..call(Entry::IsrOne) };
     assert!(first_difference(&[other(1)], &[other(2)]).is_some());
 }
 
@@ -234,4 +245,82 @@ fn void_results_are_not_compared() {
     let stock = Call { result: Some(0), ..call(Entry::Capture) };
     let owned = Call { result: Some(1), ..call(Entry::Capture) };
     assert!(first_difference(&[stock], &[owned]).is_some());
+}
+
+#[test]
+fn an_interrupt_arriving_on_the_other_side_of_task_calls_compares_equal() {
+    let word = runtime(1) + 0x0c;
+    let pend = Call { changes: vec![[word, 0, 1]], writes: [word].into_iter().collect(), ..interrupt(Entry::IsrOne) };
+    let publish = Call { caller: Caller::Vglib, arguments: vec![1, 1, 0, 0x4243_0000], result: Some(0), ..call(Entry::ItemConfiguration) };
+    let stock = [pend.clone(), publish.clone(), interrupt(Entry::CommitOne)];
+    let owned = [publish.clone(), pend.clone(), interrupt(Entry::CommitOne)];
+    assert_eq!(first_difference(&stock, &owned), None);
+    assert_eq!(cross_context_order(&stock, &owned), Some(0));
+    let other = Call { arguments: vec![1, 1, 1, 0x4243_0000], ..publish };
+    let difference = first_difference(&stock, &[other, pend, interrupt(Entry::CommitOne)]).unwrap();
+    assert_eq!((difference.context, difference.boundary_call), (Context::Task, 0));
+}
+
+#[test]
+fn task_calls_keep_their_order() {
+    let (first, second) = (call(Entry::RangePacket), call(Entry::RangeEnabled));
+    assert!(first_difference(&[first.clone(), second.clone()], &[second, first]).is_some());
+}
+
+#[test]
+fn an_interrupt_must_see_the_words_it_reads_as_stock_did() {
+    let word = saved(1) + 0xb0;
+    let read = |call: Call| Call { reads: [word].into_iter().collect(), ..call };
+    let stock = entered(interrupt(Entry::IsrOne), word, 1);
+    let owned = entered(interrupt(Entry::IsrOne), word, 2);
+    assert_eq!(first_difference(&[stock.clone()], &[owned.clone()]), None);
+    let difference = first_difference(&[read(stock.clone())], &[owned.clone()]).unwrap();
+    assert_eq!(difference.words, Some(WordMismatch::Differ { inputs: vec![[word, 1, 2]], outputs: Vec::new(), unwritten: Vec::new() }));
+    assert!(first_difference(&[stock.clone()], &[read(owned)]).is_some());
+    assert_eq!(first_difference(&[read(stock.clone())], &[read(stock)]), None);
+}
+
+#[test]
+fn a_written_word_compares_at_return_whatever_another_context_left_there() {
+    let word = runtime(1) + 0x0c;
+    let wrote = |call: Call| Call { writes: [word].into_iter().collect(), ..call };
+    let stock = wrote(Call { changes: vec![[word, 0, 1]], ..interrupt(Entry::IsrOne) });
+    let already = entered(interrupt(Entry::IsrOne), word, 1);
+    assert_eq!(first_difference(&[stock.clone()], &[wrote(already.clone())]), None);
+    let difference = first_difference(&[stock.clone()], &[already]).unwrap();
+    assert_eq!(difference.words, Some(WordMismatch::Differ { inputs: Vec::new(), outputs: Vec::new(), unwritten: vec![word] }));
+    let other = wrote(Call { changes: vec![[word, 0, 2]], ..interrupt(Entry::IsrOne) });
+    let difference = first_difference(&[stock], &[other]).unwrap();
+    assert_eq!(difference.words, Some(WordMismatch::Differ { inputs: Vec::new(), outputs: vec![[word, 1, 2]], unwritten: Vec::new() }));
+}
+
+#[test]
+fn a_change_another_context_made_during_a_call_is_not_its_output() {
+    let word = runtime(1) + 0x0c;
+    let preempted = Call { changes: vec![[word, 0, 1]], ..call(Entry::RangeEnabled) };
+    assert_eq!(first_difference(&[preempted], &[call(Entry::RangeEnabled)]), None);
+}
+
+#[test]
+fn read_handle_cells_compare_as_names() {
+    let read = |value: u32| Call { reads: [SCHEDULER].into_iter().collect(), ..entered(interrupt(Entry::IsrOne), SCHEDULER, value) };
+    assert_eq!(first_difference(&[read(9073), read(9073)], &[read(9076), read(9076)]), None);
+    assert!(first_difference(&[read(9073), read(9073)], &[read(9076), read(9141)]).is_some());
+}
+
+#[test]
+fn a_call_without_entry_words_is_refused() {
+    let unsampled = Call { entry_words: Vec::new(), ..interrupt(Entry::IsrOne) };
+    assert_eq!(first_difference(&[interrupt(Entry::IsrOne)], &[unsampled]).and_then(|difference| difference.words), Some(WordMismatch::Unsampled));
+}
+
+#[test]
+fn a_publication_consumed_one_frame_later_is_refused() {
+    let slot = runtime(1) + 0x3c;
+    let drain = |queued: bool| {
+        let call = Call { reads: [slot].into_iter().collect(), ..interrupt(Entry::CommitOne) };
+        if queued { Call { slots: vec![0, 0, 0, 0, 0, 0, 0x6d80f0, 0, 0, 0, 0, 0], ..entered(call, slot, 0x6d80f0) } } else { call }
+    };
+    let difference = first_difference(&[drain(true), drain(false)], &[drain(false), drain(true)]).unwrap();
+    assert_eq!((difference.context, difference.boundary_call), (Context::Interrupt, 0));
 }
