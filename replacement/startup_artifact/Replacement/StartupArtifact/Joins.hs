@@ -3,7 +3,7 @@
 module Replacement.StartupArtifact.Joins
   ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith, constructorInitializer
   , stockDemand, stockDemandConditions, suppliedOf, depthsIn, indirectOf, stockCodeOfEvidence, composedSegments, ownedOf
-  , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded, fatalReportCycle
+  , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded, fatalReportCycle, refusalCycle
   , kernelSlotSupplied
   ) where
 
@@ -933,7 +933,7 @@ retainedFitsWith :: JoinEvidence -> Integer -> Integer -> [SS.Condition] -> [(Wo
 retainedFitsWith evidence frame budget allowed unbounded entries extra = case suppliedOf evidence >>= \supplied -> depthsIn evidence supplied (nub entries) of
   Nothing -> False
   Just results ->
-    let refused = sortOn fst [(entry, refusal) | (entry, Left refusal) <- results]
+    let refused = sortOn fst [(entry, refusalCycle refusal) | (entry, Left refusal) <- results]
         bounded = [report | (_, Right report) <- results]
         depths = [toInteger bytes | report <- bounded, let SS.StackDepth bytes = SS.reportDepth report]
      in refused == sortOn fst unbounded && usesOnly allowed (Set.unions (map SS.reportConditions bounded))
@@ -958,17 +958,22 @@ rootStackBytes :: Integer
 rootStackBytes = 0x400
 
 -- | Root targets whose closures StockStack refuses: the fatal-report recursion under 0x6490dc, 0x69cfa4,
--- 0x69f204, 0x6a5920, 0x6a59b8 and 0x6a5c08, and the argument callback 0x772d58 under 0x69ca44. Each
--- shares the first walk's refusal, entered from 0x6490dc.
+-- 0x69f204, 0x6a5920, 0x6a59b8 and 0x6a5c08, and the argument callback 0x772d58 under 0x69ca44.
 rootUnbounded :: [(Word32, SS.StackRefusal)]
 rootUnbounded = [(0x69ca44, SS.UnresolvedBranch 0x772d58)]
-  ++ [(entry, SS.Recursion ([0x6490dc, 0x649154, 0x723ffc] ++ fatalReportCycle)) | entry <- [0x6490dc, 0x69cfa4, 0x69f204, 0x6a5920, 0x6a59b8, 0x6a5c08]]
+  ++ [(entry, SS.Recursion fatalReportCycle) | entry <- [0x6490dc, 0x69cfa4, 0x69f204, 0x6a5920, 0x6a59b8, 0x6a5c08]]
 
 -- | The abort 0x4d978 traps with `svc #0x1010` (0x43604); the SVC reporter 0x40cac calls the loader's
 -- hook, the image entry's diagnostic callback 0x69cc6c, whose own hook 0xed4a8c reaches 0x4d978 again
 -- through 0xed468c, 0x6ab794 and 0x6fb7c8.
 fatalReportCycle :: [Word32]
 fatalReportCycle = [0x4d978, 0x43604, 0x40cac, 0x69cc6c, 0xed4a8c, 0xed468c, 0x6ab794, 0x6fb7c8, 0x4d978]
+
+-- | A recursion as its cycle, from the first entry the chain repeats; the path into it depends on walk order.
+refusalCycle :: SS.StackRefusal -> SS.StackRefusal
+refusalCycle refusal = case refusal of
+  SS.Recursion chain@(_ : _) -> SS.Recursion (dropWhile (/= last chain) chain)
+  other -> other
 
 rootRetainedDepth :: JoinEvidence -> Bool
 rootRetainedDepth evidence = case (rootFrame evidence, rootTargets evidence) of
@@ -1011,7 +1016,7 @@ task60Budget = 0xa1c1e0 - 0xa1b600
 image5Unbounded, plainUnbounded :: [(Word32, SS.StackRefusal)]
 image5Unbounded = [(0x6a8f1c, SS.UnresolvedBranch 0x6f16e0)]
 plainUnbounded =
-  [ (0x69b9c4, SS.Recursion ([0x69b9c4, 0x89bed0, 0x89bf50, 0x89c484, 0x4da6c] ++ drop 1 fatalReportCycle ++ [0x43604]))
+  [ (0x69b9c4, SS.Recursion (drop 1 fatalReportCycle ++ [0x43604]))
   , (0x6a8f1c, SS.UnresolvedBranch 0x6f16e0), (0x73b924, SS.UnresolvedBranch 0x7250cc) ]
 
 producerFrame :: Producers.Producer -> JoinEvidence -> Maybe Int

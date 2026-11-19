@@ -32,7 +32,7 @@ caseFrameDepth ownedRanges supplied spec =
 
 -- | The stock interface root table and the slot stubs the property cases enter.
 indirect :: S.IndirectTargets
-indirect = S.IndirectTargets H.kernelRootBase (M.fromList [(S.SlotOffset offset, [address]) | (offset, address) <- H.slotStubs]) M.empty [] (const Nothing) []
+indirect = S.IndirectTargets H.kernelRootBase (M.fromList [(S.SlotOffset offset, [address]) | (offset, address) <- H.slotStubs]) M.empty [] (const Nothing) [] False
 
 -- | Declares the top @depth@ bytes of the case's writable stack region as its private frame. That
 -- region ends at the entry SP and holds no expected byte.

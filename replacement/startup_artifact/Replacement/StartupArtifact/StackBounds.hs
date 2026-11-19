@@ -119,6 +119,7 @@ conditionsPhrase conditions = case map phrase conditions of
       ContextLocksFixed -> "fixed context lock methods called on one context (S5)"
       LoadedWordsClosed -> "words loaded from constant addresses holding only their image values and their scanned stores' constants (S6)"
       ReporterHookClosed -> "the exception-reporter hook set (S7)"
+      FatalReportExcluded -> "excluding the fatal report a nonzero SVC starts, after which the task does not resume (S8)"
 
 -- | The image5 producer's fill flag and the fill-done callback that sets it.
 fillFlag, fillDoneCallback :: Word32
@@ -137,7 +138,7 @@ indirectTargetsOf segments carriers cleared slots = do
   let code = stockCodeOf segments carriers
   locks <- mapM (\(kernel, initializer) -> ContextLocks kernel <$> contextLockMethods code initializer) kernelInitializers
   supervisors <- mapM (supervisorEntryOf code . fst) kernelInitializers
-  pure (IndirectTargets rootTable slots callbacks locks (closedWords segments (ownedRanges carriers) cleared) supervisors)
+  pure (IndirectTargets rootTable slots callbacks locks (closedWords segments (ownedRanges carriers) cleared) supervisors False)
   where
     callbacks = M.fromList ((errorDispatchSite, CallbackSite errorCallbacks ErrorCallbackClosed)
       : [(traceDispatch kernel, CallbackSite traceCallbacks TraceCallbackClosed) | kernel <- traceCallbackKernels]
@@ -289,9 +290,9 @@ storesReaching segments owned target =
   S.toList (S.fromList (map fst (storesFrom segments owned target [formation | formation@(_, _, value) <- baseFormations segments owned, near target value])))
 
 -- | The values a word can hold when every store `storesReaching` finds writes the whole word with a
--- constant, or with an argument register of a setter whose every caller passes a constant: its image
--- value (0 inside a range cleared before any task runs) and those constants. A word outside the
--- segments and the cleared ranges, or one a store writes otherwise, is open.
+-- constant, or with an argument register of a setter whose every caller, in stock or owned code, passes
+-- a constant: its image value (0 inside a range cleared before any task runs) and those constants. A
+-- word outside the segments and the cleared ranges, or one a store writes otherwise, is open.
 closedWords :: [Segment] -> [(Word32, Word32)] -> [(Word32, Word32)] -> Word32 -> Maybe [Word32]
 closedWords segments owned cleared = \word -> do
   let target = physical word
@@ -305,7 +306,7 @@ closedWords segments owned cleared = \word -> do
     index = M.fromListWith (++) [(physical value, [formation]) | formation@(_, _, value) <- baseFormations segments owned]
     nearby target = concat (M.elems (M.takeWhileAntitone (<= target + 4095)
       (M.dropWhileAntitone (\value -> value + 4095 < target) index)))
-    entered = S.fromList (map snd (branchSites segments owned (const True)))
+    entered = S.fromList (map snd (branchSites segments [] (const True)))
     instructionAt site = (\word -> (word, A32.decode site word)) <$> segmentWordAt segments site
     storedValues (site, stored) = case stored of
       StoredConstant value -> Just [value]
@@ -317,9 +318,9 @@ closedWords segments owned cleared = \word -> do
     setterArguments site register = do
       guard (register `elem` [A32.Reg n | n <- [0 .. 3]] && not (S.member site entered))
       entry <- entryBefore register (site - 4) (16 :: Int)
-      let callers = map fst (branchSites segments owned (== entry))
+      let callers = map fst (branchSites segments [] (== entry))
           fallsFrom = not (inOwned owned (entry - 4)) && fallsInto segments entry
-      guard (not (null callers) && not fallsFrom && null (addressFormations segments owned (== entry)))
+      guard (not (null callers) && not fallsFrom && null (addressFormations segments [] (== entry)))
       mapM (\caller -> argumentAt register (caller - 4) (16 :: Int)) callers
     entryBefore register at budget = do
       guard (budget > 0)

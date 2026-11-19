@@ -220,7 +220,7 @@ main = do
     (failsWith "producer-retained-depth" [(0x66609c, reserve1024)])
 
   -- Refused retained entries are the pinned lists; the deepest bounded entries give the margins.
-  let refused results = sortOn fst [(entry, refusal) | (entry, Left refusal) <- results]
+  let refused results = sortOn fst [(entry, refusalCycle refusal) | (entry, Left refusal) <- results]
       deepest results = maximum [(bytes, entry) | (entry, Right walked) <- results, let SS.StackDepth bytes = SS.reportDepth walked]
   ok "root's refused targets are the pinned list" (refused rootResults == sortOn fst rootUnbounded)
   ok "image5's refused services are the pinned list" (refused image5Results == sortOn fst image5Unbounded)

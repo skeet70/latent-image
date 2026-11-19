@@ -30,7 +30,7 @@ import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers, contractValue, record5Media)
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
-import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets, composedSegments, ownedOf, fatalReportCycle)
+import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets, composedSegments, ownedOf, fatalReportCycle, indirectOf, stockCodeOfEvidence, refusalCycle)
 import qualified Replacement.StartupArtifact.StackBounds as SB
 import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.PlainLoad.Admission as PLA
@@ -346,10 +346,9 @@ main = do
       ok "every bounded task closure leaves stack after its demand and the IRQ peak"
         (and [bytes > 0 | (_, _, _, Right (_, bytes)) <- headroom])
       -- Tasks 33, 36 and 72 stop at a callback word a setter fills from its argument (0x4089ea94), a state-table
-      -- record field at a RAM-state index, and a callback array in an object. The others share the first walk's
-      -- fatal-report recursion, entered from task 1 through the kernel abort 0x4d978 (Joins.fatalReportCycle).
-      let fatalReport = SS.Recursion ([ 0xc22f60, 0xbfb124, 0xd36310, 0xd0b8b4, 0x61c91c, 0x6309c4, 0x624694, 0x61d944, 0x72b3d0
-                                      , 0x6a6f3c, 0x6a6ddc, 0x6a59b8, 0x6a57e4, 0x6a5750, 0x64bf40, 0x723ffc ] ++ fatalReportCycle)
+      -- record field at a RAM-state index, and a callback array in an object. The others reach the kernel
+      -- abort 0x4d978 and its fatal-report recursion (Joins.fatalReportCycle).
+      let fatalReport = SS.Recursion fatalReportCycle
           pinned :: Int -> SS.StackRefusal
           pinned task = case task of
             33 -> SS.UnresolvedBranch 0x7250cc
@@ -357,8 +356,37 @@ main = do
             72 -> SS.UnresolvedBranch 0x892c00
             _ -> fatalReport
       ok "no published heap-calling task has an established whole-task bound: the walks refuse at the pinned constructs"
-        ([(task, either Just (const Nothing) result) | ((task, _, _), (_, result)) <- zip tasks walks]
+        ([(task, either (Just . refusalCycle) (const Nothing) result) | ((task, _, _), (_, result)) <- zip tasks walks]
           == [(task, Just (pinned task)) | (task, _, _) <- tasks])
+      -- Under S8 a nonzero SVC ends the path: the bounds cover the paths before a fatal report.
+      excluding <- maybe (H.failH "no indirect targets") (\indirect -> pure indirect {SS.excludeFatalReports = True}) (indirectOf evidence)
+      let walkExcluding starts = SS.stockDepths (stockCodeOfEvidence evidence) (SS.Supplied supplied) excluding SB.switchModel starts
+          nonFatal = walkExcluding [entry | (_, entry, _) <- tasks]
+      forM_ (zip tasks nonFatal) $ \((task, entry, stack), (_, result)) -> putStrLn ("heap task non-fatal bound under S8: task " ++ show task
+        ++ " entry 0x" ++ showHex entry "" ++ " stack " ++ show stack ++ ": " ++ either (("refused: " ++) . show)
+          (\walked -> let SS.StackDepth bytes = SS.reportDepth walked in "demand " ++ show bytes ++ ", headroom " ++ show (stack - toInteger bytes - 88)
+            ++ " after the 88-byte IRQ peak; heap entries reached " ++ show (filter (`elem` heapEntries) (SS.reportSupplied walked))
+            ++ "; conditions " ++ show (Set.toList (SS.reportConditions walked))) result)
+      -- Past the fatal report every walk stops at a register branch: the argument callback 0x6f16e0, the
+      -- message-trace word at 0x7250cc, callback tables indexed by a message or state (0xdf7594, 0xec09b4,
+      -- 0xec9bf8, 0xefcb58, 0x10548ec, 0xd80e68), object callback fields (0x106444c, 0x106d000, 0x10724b8,
+      -- 0x892c00), a callback list at a constant address (0x6d6fec), a return through a reloaded lr
+      -- (0x89bf08) and a plain-image call 0x11e8ca0.
+      let nonFatalRefusals = [ (1, 0x6f16e0), (2, 0xec09b4), (3, 0xdf7594), (4, 0x11e8ca0), (7, 0xec9bf8), (33, 0x7250cc)
+                             , (35, 0x7250cc), (36, 0xd80e68), (43, 0xefcb58), (55, 0x106d000), (56, 0x10724b8), (62, 0x106444c)
+                             , (64, 0x10548ec), (72, 0x892c00), (73, 0x6d6fec), (80, 0x89bf08) ]
+      ok "under S8 every task walk refuses at its pinned register branch, tasks 33, 36 and 72 at their S1-S7 constructs"
+        ([(task, either Just (const Nothing) result) | ((task, _, _), (_, result)) <- zip tasks nonFatal]
+          == [(task, Just (SS.UnresolvedBranch site)) | (task, site) <- nonFatalRefusals]
+          && all (\task -> fmap SS.UnresolvedBranch (lookup task nonFatalRefusals) == Just (pinned task)) [33, 36, 72])
+      -- One fatal report, to the abort's first re-entry: the abort's own demand, the 64-byte handler
+      -- frame and the reporter's demand with the nested report excluded. A measurement, not a bound on nesting.
+      case walkExcluding [0x4d978, 0x40cac] of
+        [(_, Right abortWalk), (_, Right reporterWalk)] -> do
+          let SS.StackDepth abort = SS.reportDepth abortWalk; SS.StackDepth reporter = SS.reportDepth reporterWalk
+          putStrLn ("fatal report to its first re-entry of 0x4d978: at most " ++ show (abort + 64 + reporter)
+            ++ " bytes below the abort's entry SP (abort " ++ show abort ++ ", handler 64, reporter " ++ show reporter ++ ")")
+        results -> putStrLn ("fatal report to its first re-entry of 0x4d978: unmeasured, " ++ show [(showHex entry "", either show (const "bounded") result) | (entry, result) <- results])
       pure ()
   -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the
   -- J6 pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).

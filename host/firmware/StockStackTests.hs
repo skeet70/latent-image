@@ -26,7 +26,7 @@ branch :: Word32 -> Int -> Int -> Word32
 branch cond from to = cond .|. 0x0a000000 .|. (((at to - (at from + 8)) `shiftR` 2) .&. 0x00ffffff)
 
 noTargets :: IndirectTargets
-noTargets = IndirectTargets 0x96bd20 M.empty M.empty [] (const Nothing) []
+noTargets = IndirectTargets 0x96bd20 M.empty M.empty [] (const Nothing) [] False
 
 slotTargets :: M.Map SlotOffset [Word32] -> IndirectTargets
 slotTargets slots = noTargets {rootSlots = slots}
@@ -64,6 +64,23 @@ main = do
             Left (Recursion _) -> True
             _ -> False)
         , ("svc without a supervisor entry refuses", depth [pushR4Lr, 0xef001010, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.SupervisorCall))
+        , ("svc ends the path under S8 when fatal reports are excluded",
+            -- push {r4, lr}; svc #0x1010; push {r4-r11, lr} (after the report); pop; reporter: push {r4, lr}; resume
+            case depth [pushR4Lr, 0xef001010, 0xe92d4ff0, 0xe8bd8ff0, pushR4Lr, 0xe1a0d004] none ((supervised 64) {excludeFatalReports = True}) noSwitches of
+              Right report -> reportDepth report == StackDepth 8 && reportConditions report == S.singleton FatalReportExcluded
+              _ -> False)
+        , ("the path ends after a call to a function that never returns",
+            -- push {r4, lr}; bl f; sub sp, #16; add sp, #16; pop {r4, pc}; f: push {r4, lr}; b .
+            bytesOf (depth [pushR4Lr, bl 1 5, sub16, add16, popR4Pc, pushR4Lr, branch always 6 6] none noTargets noSwitches) == Just 16)
+        , ("the path continues after a call to a function that returns on some path",
+            -- push {r4, lr}; bl f; sub sp, #16; add sp, #16; pop {r4, pc}; f: push {r4, lr}; cmp; beq spin; pop {r4, pc}; spin: b .
+            bytesOf (depth [pushR4Lr, bl 1 5, sub16, add16, popR4Pc, pushR4Lr, cmp0, branch eq 7 9, popR4Pc, branch always 9 9] none noTargets noSwitches) == Just 24)
+        , ("under S8 the path ends after a call to a function whose only exit is a fatal report",
+            -- push {r4, lr}; bl f; sub sp, #16; add sp, #16; pop {r4, pc}; f: svc #0x1010; b .; reporter: push {r4, lr}; resume
+            case depth [pushR4Lr, bl 1 5, sub16, add16, popR4Pc, 0xef001010, branch always 6 6, pushR4Lr, 0xe1a0d004] none
+                   noTargets {supervisorEntries = [SupervisorEntry (CodeRange base (at 9)) 64 (at 7) (at 8)], excludeFatalReports = True} noSwitches of
+              Right report -> reportDepth report == StackDepth 8 && reportConditions report == S.singleton FatalReportExcluded
+              _ -> False)
         , ("svc adds the handler frame and the reporter's depth, and continues after it",
             -- push {r4, lr}; svc #0x1010; pop {r4, pc}; reporter: push {r4, lr}; resume: mov sp, r4
             bytesOf (depth [pushR4Lr, 0xef001010, popR4Pc, pushR4Lr, 0xe1a0d004] none (supervised 64) noSwitches) == Just 80)

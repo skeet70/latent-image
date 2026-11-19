@@ -88,6 +88,9 @@ data Condition
     LoadedWordsClosed
   | -- | Each kernel's exception-reporter hook word holds only the targets its writer check names (S7).
     ReporterHookClosed
+  | -- | A nonzero SVC starts a fatal report after which the task does not resume normal operation;
+    -- a bound under it covers the paths before the report (S8).
+    FatalReportExcluded
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | Code addresses [low, high).
@@ -128,6 +131,8 @@ data IndirectTargets = IndirectTargets
     loadedWords :: Word32 -> Maybe [Word32]
   , -- | An SVC in a kernel's range enters that kernel's handler; one outside every range may enter any.
     supervisorEntries :: [SupervisorEntry]
+  , -- | Whether a nonzero SVC ends the path under S8 instead of entering its handler.
+    excludeFatalReports :: Bool
   }
 
 data SwitchModel = SwitchModel
@@ -241,7 +246,13 @@ setsFlags instruction = case instruction of
   A32.Rejected _ -> True
   _ -> False
 
-data Result = Result StackDepth [Word32] [Word32] (S.Set Condition) (S.Set Word32) Reach
+-- | Whether some path of a walk returns to its caller.
+data Returning = Returns | NeverReturns deriving (Eq, Show)
+
+eitherReturns :: Returning -> Returning -> Returning
+eitherReturns a b = if a == Returns || b == Returns then Returns else NeverReturns
+
+data Result = Result StackDepth [Word32] [Word32] (S.Set Condition) (S.Set Word32) Reach Returning
 
 type Memo = M.Map Word32 (Either StackRefusal Result)
 
@@ -259,13 +270,13 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
     go memo (entry : rest) =
       let (result, memo') = depthOf memo [] entry
        in (entry, report <$> result) : go memo' rest
-    report (Result depth reached chain conditions entered _) = StackReport depth (S.toList (S.fromList reached)) chain conditions (S.toList entered)
+    report (Result depth reached chain conditions entered _ _) = StackReport depth (S.toList (S.fromList reached)) chain conditions (S.toList entered)
 
     resumes = S.fromList (map supervisorResume (supervisorEntries indirect))
 
     depthOf :: Memo -> [Word32] -> Word32 -> (Either StackRefusal Result, Memo)
     depthOf memo stack entry
-      | Just depth <- M.lookup entry supplied = (Right (Result depth [entry] [entry] S.empty S.empty Anywhere), memo)
+      | Just depth <- M.lookup entry supplied = (Right (Result depth [entry] [entry] S.empty S.empty Anywhere Returns), memo)
       | Just known <- M.lookup entry memo = (known, memo)
       | entry `elem` stack = (Left (Recursion (reverse (entry : stack))), memo)
       | owned code entry = (Left (OwnedCode entry), memo)
@@ -277,7 +288,7 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
     -- tracked registers with the condition outcomes the path has assumed since flags were last set.
     walk :: Memo -> [Word32] -> Word32 -> (Either StackRefusal Result, Memo)
     walk memo0 stack entry = loop memo0 [(entry, 0, Nothing, Machine entryRegisters M.empty (Slots M.empty) Nothing)] M.empty S.empty
-      (Result (StackDepth 0) [] [entry] S.empty (S.singleton entry) (Above 0))
+      (Result (StackDepth 0) [] [entry] S.empty (S.singleton entry) (Above 0) NeverReturns)
       where
         entryRegisters = M.fromList [(A32.lr, EntryLink), (framePointer, CallerFrame)]
         loop :: Memo -> [(Word32, Int, Maybe Int, Machine)] -> M.Map Word32 (Int, Maybe Int) -> S.Set (Word32, Machine) -> Result
@@ -287,10 +298,10 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
           | S.member (address, machine) seen && M.lookup address offsets == Just (offset, frame) = loop memo rest offsets seen best
           | Just (known, knownFrame) <- M.lookup address offsets, (known, knownFrame) /= (offset, frame) =
               (Left (if known /= offset then OffsetMismatch address else FrameUnknown address), memo)
-          | S.member address (switchEnds switches) || S.member address resumes = loop memo rest offsets' seen' best'
+          | S.member address (switchEnds switches) || S.member address resumes = loop memo rest offsets' seen' (returned best')
           | Just (StackDepth depth) <- M.lookup address supplied =
               loop memo rest offsets' seen'
-                (deeper best (Result (StackDepth (fromIntegral offset + depth)) [address] [entry, address] S.empty S.empty Anywhere))
+                (deeper best (Result (StackDepth (fromIntegral offset + depth)) [address] [entry, address] S.empty S.empty Anywhere Returns))
           | owned code address = (Left (OwnedCode address), memo)
           | otherwise = case codeWord code address of
               Nothing -> (Left (NoCode address), memo)
@@ -317,21 +328,24 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
             outcomes cond = case decided cond flags of
               Just taken -> [(taken, machine)]
               Nothing -> [(True, Machine registers (assume cond True flags) slots tested), (False, Machine registers (assume cond False flags) slots tested)]
-            -- Each (call offset, target) walked; the continuation receives the deepest result and the widest callee reach.
+            -- Each (call offset, target) walked; the continuation receives the deepest result, the widest callee
+            -- reach and whether some target returns.
             callTo memo' targets k = do
               let visit (acc, m) (at, target) = case acc of
                     Left refusal -> (Left refusal, m)
-                    Right (deepest, reached, conditions, reach) ->
+                    Right (deepest, reached, conditions, reach, returns) ->
                       let (result, m') = depthOf m stack target
                        in case result of
                             Left refusal -> (Left refusal, m')
-                            Right (Result (StackDepth depth) more chain extra entered calleeReach) ->
-                              let candidate = Result (StackDepth (fromIntegral at + depth)) [] (entry : chain) S.empty entered (shifted at calleeReach)
-                               in (Right (deeper deepest candidate, reached ++ more, S.union conditions extra, widest reach (shifted (at - offset) calleeReach)), m')
-                  (outcome, memo'') = foldl visit (Right (best', [], S.empty, Above 0), memo') targets
+                            Right (Result (StackDepth depth) more chain extra entered calleeReach calleeReturns) ->
+                              let candidate = Result (StackDepth (fromIntegral at + depth)) [] (entry : chain) S.empty entered (shifted at calleeReach) NeverReturns
+                               in (Right (deeper deepest candidate, reached ++ more, S.union conditions extra, widest reach (shifted (at - offset) calleeReach), eitherReturns returns calleeReturns), m')
+                  (outcome, memo'') = foldl visit (Right (best', [], S.empty, Above 0, NeverReturns), memo') targets
                in case outcome of
                     Left refusal -> (Left refusal, memo'')
-                    Right (deepest, reached, conditions, reach) -> k memo'' (addReached reached (addConditions conditions deepest)) reach
+                    Right (deepest, reached, conditions, reach, returns) -> k memo'' (addReached reached (addConditions conditions deepest)) reach returns
+            -- The path continues after a call only when some target returns.
+            afterReturn returns states = if returns == Returns then states else []
             -- The caller-saved registers are clobbered; slots in [SP, SP + reach) may be overwritten.
             afterCall reach = Machine (clobber registers) M.empty (exposed reach) Nothing
             exposed reach = case (slots, reach) of
@@ -349,8 +363,8 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                 Nothing -> (Left (FrameUnknown address), memo)
               SetFrame amount -> continueWith memo here [(next, offset, Just (offset - fromIntegral amount), m) | m <- evolve word]
               Neutral -> continueWith memo here ([(next, offset, frameAfter word, m) | m <- evolve word] ++ resumed)
-              Call target -> callTo memo [(offset, target)] $ \memo' best'' reach ->
-                continueWith memo' best'' [(next, offset, frame, afterCall reach)]
+              Call target -> callTo memo [(offset, target)] $ \memo' best'' reach returns ->
+                continueWith memo' best'' (afterReturn returns [(next, offset, frame, afterCall reach)])
               Jump cond target
                 | S.member target (exceptionPaths switches) ->
                     continueWith memo (addConditions (S.singleton NoTaskException) best')
@@ -362,8 +376,8 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                 | otherwise -> returning cond bytes
               RegisterCall register -> case resolve register of
                 Nothing -> (Left (UnresolvedBranch address), memo)
-                Just (targets, conditions) -> callTo memo [(offset, target) | target <- targets] $ \memo' best'' reach ->
-                  continueWith memo' (addConditions conditions best'') [(next, offset, frame, afterCall reach)]
+                Just (targets, conditions) -> callTo memo [(offset, target) | target <- targets] $ \memo' best'' reach returns ->
+                  continueWith memo' (addConditions conditions best'') (afterReturn returns [(next, offset, frame, afterCall reach)])
               RegisterJump cond register -> registerJump cond register
               JumpTable cond index -> case tableBound cond index of
                 Nothing -> (Left (TableUnbounded address), memo)
@@ -375,8 +389,10 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                 | modeOf source == Just kernelMode -> continueWith memo here [(next, offset, frame, Machine registers M.empty slots Nothing)]
                 | otherwise -> (Left (ModeChange address), memo)
               Refuse SupervisorCall
-                | Just targets <- supervisorTargets word -> callTo memo targets $ \memo' best'' reach ->
-                    continueWith memo' best'' [(next, offset, frame, Machine M.empty M.empty (exposed reach) Nothing)]
+                | excludeFatalReports indirect, Just _ <- supervisorTargets word ->
+                    continueWith memo (addConditions (S.singleton FatalReportExcluded) best') []
+                | Just targets <- supervisorTargets word -> callTo memo targets $ \memo' best'' reach returns ->
+                    continueWith memo' best'' (afterReturn returns [(next, offset, frame, Machine M.empty M.empty (exposed reach) Nothing)])
               Refuse reason -> (Left (Refusal address reason), memo)
               Stop -> continueWith memo best' []
               where
@@ -385,13 +401,14 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
             -- A return releases its bytes back to the entry's SP.
             returning cond bytes
               | any fst (outcomes cond) && offset /= fromIntegral bytes = (Left (UnbalancedReturn address), memo)
-              | otherwise = continueWith memo best' [(next, offset, frame, m) | (False, m) <- outcomes cond]
+              | otherwise = continueWith memo (if any fst (outcomes cond) then returned best' else best') [(next, offset, frame, m) | (False, m) <- outcomes cond]
             registerJump cond register
               | M.lookup register registers == Just EntryLink = returning cond (0 :: Word32)
               | otherwise = case resolve register of
                   Nothing -> (Left (UnresolvedBranch address), memo)
-                  Just (targets, conditions) -> callTo memo [(offset, target) | target <- targets] $ \memo' best'' _ ->
-                    continueWith memo' (addConditions conditions best'') [(next, offset, frame, m) | (False, m) <- outcomes cond]
+                  Just (targets, conditions) -> callTo memo [(offset, target) | target <- targets] $ \memo' best'' _ returns ->
+                    let tail' = if any fst (outcomes cond) && returns == Returns then returned best'' else best''
+                     in continueWith memo' (addConditions conditions tail') [(next, offset, frame, m) | (False, m) <- outcomes cond]
             resolve register = case M.lookup address (callbackSites indirect) of
               Just site -> Just (callbackTargets site, S.singleton (callbackCondition site))
               Nothing -> case M.lookup register registers of
@@ -439,7 +456,7 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                         candidate
                           | setsFlags candidate || index `elem` writes (address - 4 * back) w || isBranch candidate -> Nothing
                           | otherwise -> guardAt (back + 1)
-            atOffset value = Result (StackDepth (fromIntegral value)) [] [entry] S.empty S.empty (Above 0)
+            atOffset value = Result (StackDepth (fromIntegral value)) [] [entry] S.empty S.empty (Above 0) NeverReturns
 
     clobber registers = foldr M.delete registers [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
 
@@ -639,13 +656,14 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
       _ -> False
       where framed register = register == A32.sp || (register == framePointer && isJust frame)
 
-    deeper a@(Result (StackDepth x) reachedA _ condA enteredA reachA) b@(Result (StackDepth y) reachedB _ condB enteredB reachB) =
+    deeper a@(Result (StackDepth x) reachedA _ condA enteredA reachA returnsA) b@(Result (StackDepth y) reachedB _ condB enteredB reachB returnsB) =
       let pick = if y > x then b else a
-          Result depth _ chain _ _ _ = pick
-       in Result depth (reachedA ++ reachedB) chain (S.union condA condB) (S.union enteredA enteredB) (widest reachA reachB)
-    addConditions extra (Result depth reached chain conditions entered reach) = Result depth reached chain (S.union conditions extra) entered reach
-    addReached more (Result depth reached chain conditions entered reach) = Result depth (reached ++ more) chain conditions entered reach
-    addReach extra (Result depth reached chain conditions entered reach) = Result depth reached chain conditions entered (widest reach extra)
+          Result depth _ chain _ _ _ _ = pick
+       in Result depth (reachedA ++ reachedB) chain (S.union condA condB) (S.union enteredA enteredB) (widest reachA reachB) (eitherReturns returnsA returnsB)
+    addConditions extra (Result depth reached chain conditions entered reach returns) = Result depth reached chain (S.union conditions extra) entered reach returns
+    addReached more (Result depth reached chain conditions entered reach returns) = Result depth (reached ++ more) chain conditions entered reach returns
+    addReach extra (Result depth reached chain conditions entered reach returns) = Result depth reached chain conditions entered (widest reach extra) returns
+    returned (Result depth reached chain conditions entered reach _) = Result depth reached chain conditions entered reach Returns
 
 -- | The condition of a store, the instructions whose frame effect `evolveMachine` applies directly.
 conditionOf :: A32.Instruction -> A32.Cond
