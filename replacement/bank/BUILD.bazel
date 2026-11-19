@@ -1,6 +1,7 @@
 load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("//replacement/file_service:controls.bzl", "file_service_suffixes")
 
 _RLIB_DEPS = {
     "capture": "//replacement/capture:arm",
@@ -301,6 +302,15 @@ xm1_rust_staticlib(
     rlib_deps = dict(_RLIB_DEPS, xm1_image5_decoder = "//replacement/image5_load:decoder-arm"),
     visibility = ["//replacement/image5_load:__pkg__"],
 )
+
+[xm1_rust_staticlib(
+    name = "bank-file-service" + suffix,
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = ["--cfg", "rb_file_service_owned"],
+    rlib_deps = dict(_RLIB_DEPS, xm1_file_service = "//replacement/file_service:arm" + suffix),
+    visibility = ["//replacement/file_service:__pkg__"],
+) for suffix in file_service_suffixes()]
 
 rust_source_boundary_test(
     name = "unsafe-boundary-check",

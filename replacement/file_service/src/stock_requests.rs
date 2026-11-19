@@ -235,8 +235,6 @@ impl Posting for StockPosting {
 
 /// The open payload, stored in stock's order: a path past 48 bytes overwrites the
 /// result-slot words at +0x40, while +0x34..+0x40 and +0x4c are stored after it.
-#[inline(never)]
-#[link_section = ".text.file_service_post_open"]
 #[allow(clippy::too_many_arguments)]
 fn post_open(code: RequestCode, source: u32, callback: Callback, path: u32, mode: u32, tag: u32, slot: Option<ResultSlot>, word: u32) {
     let mut payload = core::mem::MaybeUninit::<[u32; 20]>::uninit();
@@ -251,8 +249,6 @@ fn post_open(code: RequestCode, source: u32, callback: Callback, path: u32, mode
     send_payload(code, source, at, 0x50);
 }
 
-#[inline(never)]
-#[link_section = ".text.file_service_post_transfer"]
 fn post_transfer(code: RequestCode, source: u32, callback: Callback, handle: u32, second: u32, third: u32, slot: Option<ResultSlot>) {
     let mut payload = core::mem::MaybeUninit::<[u32; 7]>::uninit();
     let at = payload.as_mut_ptr() as u32;
@@ -266,8 +262,6 @@ fn post_transfer(code: RequestCode, source: u32, callback: Callback, handle: u32
 
 /// The close payload, stored in stock's order: a name longer than 20 bytes runs over the
 /// result-slot words.
-#[inline(never)]
-#[link_section = ".text.file_service_post_close"]
 fn post_close(code: RequestCode, source: u32, callback: Callback, handle: u32, word: u32, name: u32, slot: Option<ResultSlot>) {
     let mut payload = core::mem::MaybeUninit::<[u32; 10]>::uninit();
     let at = payload.as_mut_ptr() as u32;
@@ -514,21 +508,71 @@ pub extern "C" fn xm1_file_service_open_intercept(status: u32, handle: u32) {
 /// The media task body, entered at 0x71fe7c by the task created at 0x71fd40.
 #[no_mangle]
 pub extern "C" fn xm1_file_service_media_task() -> ! {
+    let mut header = core::mem::MaybeUninit::<[u32; 3]>::uninit();
+    let mut payload = core::mem::MaybeUninit::<[u32; 21]>::uninit();
+    let header = header.as_mut_ptr() as u32;
+    write_word(header + 4, 0x50);
     unsafe { wait(DONE_SEMAPHORE, FOREVER) };
-    let mut payload = [0u32; 21];
-    let mut header = [0u32; 3];
-    header[1] = 0x50;
     loop {
-        unsafe { core::ptr::write_volatile(&mut header[2], payload.as_mut_ptr() as u32) };
-        let received = unsafe { file_service_receive_request(header.as_mut_ptr()) };
+        write_word(header + 8, payload.as_mut_ptr() as u32);
+        let received = unsafe { file_service_receive_request(header as *mut u32) };
         write_word(MEDIA_BUSY, 1);
         if received == 0 {
-            let code = RequestCode(unsafe { core::ptr::read_volatile(header.as_ptr() as *const u16) });
-            if let Some(worker) = routing::worker(code) {
-                call1(worker, header.as_ptr() as u32);
+            if let Some(worker) = routing::worker(RequestCode(read_half(header))) {
+                call1(worker, header);
             }
         }
         unsafe { file_service_ticks(MEDIA_TICKS) };
         write_word(MEDIA_BUSY, 0);
     }
+}
+
+/// One 4-byte A32 branch at a stock entry address to the body in the fixed bank.
+#[cfg(target_arch = "arm")]
+macro_rules! entry_veneer {
+    ($($section:literal => $body:literal),* $(,)?) => {
+        core::arch::global_asm!($(concat!(
+            ".pushsection .text.file_service_entry_", $section, ", \"ax\", %progbits\n",
+            ".arm\n",
+            ".global xm1_file_service_entry_", $section, "\n",
+            ".type xm1_file_service_entry_", $section, ", %function\n",
+            "xm1_file_service_entry_", $section, ":\n",
+            "b ", $body, "\n",
+            ".size xm1_file_service_entry_", $section, ", 4\n",
+            ".popsection\n",
+        )),*);
+    };
+}
+
+#[cfg(target_arch = "arm")]
+entry_veneer! {
+    "result_acquire" => "xm1_file_service_result_acquire",
+    "result_release" => "xm1_file_service_result_release",
+    "result_wait" => "xm1_file_service_result_wait",
+    "read" => "xm1_file_service_read",
+    "write" => "xm1_file_service_write",
+    "close" => "xm1_file_service_close",
+    "open" => "xm1_file_service_open",
+    "result_done" => "xm1_file_service_result_done",
+    "open_async" => "xm1_file_service_open_async",
+    "open_wait" => "xm1_file_service_open_wait",
+    "open_unflagged" => "xm1_file_service_open_unflagged",
+    "open_unflagged_wait" => "xm1_file_service_open_unflagged_wait",
+    "read_async" => "xm1_file_service_read_async",
+    "read_wait" => "xm1_file_service_read_wait",
+    "write_async" => "xm1_file_service_write_async",
+    "write_wait" => "xm1_file_service_write_wait",
+    "close_async" => "xm1_file_service_close_async",
+    "close_wait" => "xm1_file_service_close_wait",
+    "translate" => "xm1_file_service_translate",
+    "media_ready" => "xm1_file_service_media_ready",
+    "post" => "xm1_file_service_post",
+    "media_task" => "xm1_file_service_media_task",
+    "route" => "xm1_file_service_route",
+    "intercept" => "xm1_file_service_open_intercept",
+    "map_bind" => "xm1_file_service_map_bind",
+    "map_unbind" => "xm1_file_service_map_unbind",
+    "map_lookup" => "xm1_file_service_map_lookup",
+    "tag_allocate" => "xm1_file_service_tag_allocate",
+    "tag_release" => "xm1_file_service_tag_release",
 }

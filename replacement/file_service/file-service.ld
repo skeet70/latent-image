@@ -1,70 +1,50 @@
-ENTRY(xm1_file_service_route)
+/* Each retired extent holds 4-byte entry branches at its stock entries and traps
+   elsewhere; the bodies are in OWNED_FIXED. */
+ENTRY(xm1_file_service_entry_route)
 INCLUDE imports.ld
+MEMORY {
+  RETIRED (rx) : ORIGIN = 0x71bc2c, LENGTH = 0x721834 - 0x71bc2c
+  INCLUDE fixed-memory.ld
+}
 SECTIONS {
   .compiler_builtins 0 : { *compiler_builtins*(.text* .rodata* .data* .bss*) }
-  .result_acquire 0x71bc2c : { KEEP(*(.text.xm1_file_service_result_acquire)) }
-  .result_release 0x71bc6c : { KEEP(*(.text.xm1_file_service_result_release)) }
-  .result_wait 0x71bc90 : { KEEP(*(.text.xm1_file_service_result_wait)) }
-  .read 0x71be74 : { KEEP(*(.text.xm1_file_service_read)) }
-  .write 0x71bfe0 : { KEEP(*(.text.xm1_file_service_write)) }
-  .close 0x71c134 : { KEEP(*(.text.xm1_file_service_close)) }
-  .open 0x71c2b0 : { KEEP(*(.text.xm1_file_service_open)) *(.text._R*8requests*) }
-  .result_done 0x71c634 : { KEEP(*(.text.xm1_file_service_result_done)) }
-  .open_async 0x71c648 : { KEEP(*(.text.xm1_file_service_open_async)) }
-  .open_wait 0x71c670 : { KEEP(*(.text.xm1_file_service_open_wait)) }
-  .open_unflagged 0x71c6a4 : { KEEP(*(.text.xm1_file_service_open_unflagged)) }
-  .open_unflagged_wait 0x71c6c8 : { KEEP(*(.text.xm1_file_service_open_unflagged_wait)) }
-  .read_async 0x71c6fc : { KEEP(*(.text.xm1_file_service_read_async)) }
-  .read_wait 0x71c720 : { KEEP(*(.text.xm1_file_service_read_wait)) }
-  .write_async 0x71c75c : { KEEP(*(.text.xm1_file_service_write_async)) }
-  .write_wait 0x71c780 : { KEEP(*(.text.xm1_file_service_write_wait)) }
-  .close_async 0x71c7bc : { KEEP(*(.text.xm1_file_service_close_async)) }
-  .close_wait 0x71c7e0 : { KEEP(*(.text.xm1_file_service_close_wait)) }
-  .translate 0x71d450 : { KEEP(*(.text.xm1_file_service_translate)) *(.text._R*10completion*) *(.rodata._R*10completion*) . = ALIGN(4); }
-  .media_ready 0x71ddf0 : { KEEP(*(.text.xm1_file_service_media_ready)) }
-  .bind 0x71ea34 : { KEEP(*(.text.xm1_file_service_map_bind)) }
-  .unbind 0x71eaac : { KEEP(*(.text.xm1_file_service_map_unbind)) }
-  .lookup 0x71eb28 : { KEEP(*(.text.xm1_file_service_map_lookup)) }
-  .allocate 0x71ef18 : { KEEP(*(.text.xm1_file_service_tag_allocate)) *(.text._R*7handles*) *(.text._R*5stock*) }
-  .release 0x71eff4 : { KEEP(*(.text.xm1_file_service_tag_release)) }
-  .post 0x71fde4 : { KEEP(*(.text.xm1_file_service_post)) }
-  .media_task 0x71fe7c : { KEEP(*(.text.xm1_file_service_media_task)) }
-  .mediamsg 0x721108 : { *(.text._* .text) *(.rodata*) . = ALIGN(4); }
-  .route 0x721578 : { KEEP(*(.text.xm1_file_service_route)) }
-  .intercept 0x7217f0 : { KEEP(*(.text.xm1_file_service_open_intercept)) }
-  .data : { *(.data*) *(.sdata*) *(.got*) }
-  .bss : { *(.bss*) *(.sbss*) *(COMMON) }
+  .result_acquire 0x71bc2c : { KEEP(*(.text.file_service_entry_result_acquire)) . = 0x71bc6c; } > RETIRED =0xf000f0e7
+  .result_release 0x71bc6c : { KEEP(*(.text.file_service_entry_result_release)) . = 0x71bc90; } > RETIRED =0xf000f0e7
+  .result_wait 0x71bc90 : { KEEP(*(.text.file_service_entry_result_wait)) . = 0x71bcc8; } > RETIRED =0xf000f0e7
+  .read 0x71be74 : { KEEP(*(.text.file_service_entry_read)) . = 0x71bfe0; } > RETIRED =0xf000f0e7
+  .write 0x71bfe0 : { KEEP(*(.text.file_service_entry_write)) . = 0x71c134; } > RETIRED =0xf000f0e7
+  .close 0x71c134 : { KEEP(*(.text.file_service_entry_close)) . = 0x71c2b0; } > RETIRED =0xf000f0e7
+  .open 0x71c2b0 : { KEEP(*(.text.file_service_entry_open)) . = 0x71c504; } > RETIRED =0xf000f0e7
+  .result_done 0x71c634 : { KEEP(*(.text.file_service_entry_result_done)) . = 0x71c648; } > RETIRED =0xf000f0e7
+  .open_async 0x71c648 : { KEEP(*(.text.file_service_entry_open_async)) . = 0x71c670; } > RETIRED =0xf000f0e7
+  .open_wait 0x71c670 : { KEEP(*(.text.file_service_entry_open_wait)) . = 0x71c6a4; } > RETIRED =0xf000f0e7
+  .open_unflagged 0x71c6a4 : { KEEP(*(.text.file_service_entry_open_unflagged)) . = 0x71c6c8; } > RETIRED =0xf000f0e7
+  .open_unflagged_wait 0x71c6c8 : { KEEP(*(.text.file_service_entry_open_unflagged_wait)) . = 0x71c6fc; } > RETIRED =0xf000f0e7
+  .read_async 0x71c6fc : { KEEP(*(.text.file_service_entry_read_async)) . = 0x71c720; } > RETIRED =0xf000f0e7
+  .read_wait 0x71c720 : { KEEP(*(.text.file_service_entry_read_wait)) . = 0x71c75c; } > RETIRED =0xf000f0e7
+  .write_async 0x71c75c : { KEEP(*(.text.file_service_entry_write_async)) . = 0x71c780; } > RETIRED =0xf000f0e7
+  .write_wait 0x71c780 : { KEEP(*(.text.file_service_entry_write_wait)) . = 0x71c7bc; } > RETIRED =0xf000f0e7
+  .close_async 0x71c7bc : { KEEP(*(.text.file_service_entry_close_async)) . = 0x71c7e0; } > RETIRED =0xf000f0e7
+  .close_wait 0x71c7e0 : { KEEP(*(.text.file_service_entry_close_wait)) . = 0x71c81c; } > RETIRED =0xf000f0e7
+  .translate 0x71d450 : { KEEP(*(.text.file_service_entry_translate)) . = 0x71d66c; } > RETIRED =0xf000f0e7
+  .media_ready 0x71ddf0 : { KEEP(*(.text.file_service_entry_media_ready)) . = 0x71ded4; } > RETIRED =0xf000f0e7
+  .bind 0x71ea34 : { KEEP(*(.text.file_service_entry_map_bind)) . = 0x71eaac; } > RETIRED =0xf000f0e7
+  .unbind 0x71eaac : { KEEP(*(.text.file_service_entry_map_unbind)) . = 0x71eb28; } > RETIRED =0xf000f0e7
+  .lookup 0x71eb28 : { KEEP(*(.text.file_service_entry_map_lookup)) . = 0x71eba0; } > RETIRED =0xf000f0e7
+  .allocate 0x71ef18 : { KEEP(*(.text.file_service_entry_tag_allocate)) . = 0x71eff4; } > RETIRED =0xf000f0e7
+  .release 0x71eff4 : { KEEP(*(.text.file_service_entry_tag_release)) . = 0x71f078; } > RETIRED =0xf000f0e7
+  .post 0x71fde4 : { KEEP(*(.text.file_service_entry_post)) . = 0x71fe2c; } > RETIRED =0xf000f0e7
+  .media_task 0x71fe7c : { KEEP(*(.text.file_service_entry_media_task)) . = 0x71ff3c; } > RETIRED =0xf000f0e7
+  .mediamsg 0x721108 : { . = 0x721578; } > RETIRED =0xf000f0e7
+  .route 0x721578 : { KEEP(*(.text.file_service_entry_route)) . = 0x721744; } > RETIRED =0xf000f0e7
+  .intercept 0x7217f0 : { KEEP(*(.text.file_service_entry_intercept)) . = 0x721834; } > RETIRED =0xf000f0e7
+  .text : { __fixed_body_start = .; *(.text*) *(.rodata*) } > OWNED_FIXED
+  .data : { *(.data*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED
+  .bss (NOLOAD) : { __fixed_bss_start = .; *(.bss*) *(COMMON) . = ALIGN(4); __fixed_bss_end = .; } > OWNED_FIXED
   /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.eh_frame*) *(.ARM.attributes) *(.note*) *(.comment*) *(.debug*) *(.llvm_addrsig) }
 }
-ASSERT(ADDR(.result_acquire) + SIZEOF(.result_acquire) <= 0x71bc6c, "result_acquire overflows")
-ASSERT(ADDR(.result_release) + SIZEOF(.result_release) <= 0x71bc90, "result_release overflows")
-ASSERT(ADDR(.result_wait) + SIZEOF(.result_wait) <= 0x71bcc8, "result_wait overflows")
-ASSERT(ADDR(.read) + SIZEOF(.read) <= 0x71bfe0, "read overflows")
-ASSERT(ADDR(.write) + SIZEOF(.write) <= 0x71c134, "write overflows")
-ASSERT(ADDR(.close) + SIZEOF(.close) <= 0x71c2b0, "close overflows")
-ASSERT(ADDR(.open) + SIZEOF(.open) <= 0x71c504, "open and request code overflow [0x71c2b0,0x71c504)")
-ASSERT(ADDR(.result_done) + SIZEOF(.result_done) <= 0x71c648, "result_done overflows")
-ASSERT(ADDR(.open_async) + SIZEOF(.open_async) <= 0x71c670, "open_async overflows")
-ASSERT(ADDR(.open_wait) + SIZEOF(.open_wait) <= 0x71c6a4, "open_wait overflows")
-ASSERT(ADDR(.open_unflagged) + SIZEOF(.open_unflagged) <= 0x71c6c8, "open_unflagged overflows")
-ASSERT(ADDR(.open_unflagged_wait) + SIZEOF(.open_unflagged_wait) <= 0x71c6fc, "open_unflagged_wait overflows")
-ASSERT(ADDR(.read_async) + SIZEOF(.read_async) <= 0x71c720, "read_async overflows")
-ASSERT(ADDR(.read_wait) + SIZEOF(.read_wait) <= 0x71c75c, "read_wait overflows")
-ASSERT(ADDR(.write_async) + SIZEOF(.write_async) <= 0x71c780, "write_async overflows")
-ASSERT(ADDR(.write_wait) + SIZEOF(.write_wait) <= 0x71c7bc, "write_wait overflows")
-ASSERT(ADDR(.close_async) + SIZEOF(.close_async) <= 0x71c7e0, "close_async overflows")
-ASSERT(ADDR(.close_wait) + SIZEOF(.close_wait) <= 0x71c81c, "close_wait overflows")
-ASSERT(ADDR(.translate) + SIZEOF(.translate) <= 0x71d66c, "translate overflows")
-ASSERT(ADDR(.media_ready) + SIZEOF(.media_ready) <= 0x71ded4, "media_ready overflows")
-ASSERT(ADDR(.bind) + SIZEOF(.bind) <= 0x71eaac, "bind overflows")
-ASSERT(ADDR(.unbind) + SIZEOF(.unbind) <= 0x71eb28, "unbind overflows")
-ASSERT(ADDR(.lookup) + SIZEOF(.lookup) <= 0x71eba0, "lookup overflows")
-ASSERT(ADDR(.allocate) + SIZEOF(.allocate) <= 0x71eff4, "allocate and handle code overflow [0x71ef18,0x71eff4)")
-ASSERT(ADDR(.release) + SIZEOF(.release) <= 0x71f078, "release overflows")
-ASSERT(ADDR(.post) + SIZEOF(.post) <= 0x71fe2c, "post overflows")
-ASSERT(ADDR(.media_task) + SIZEOF(.media_task) <= 0x71ff3c, "media_task overflows")
-ASSERT(ADDR(.mediamsg) + SIZEOF(.mediamsg) <= 0x721578, "shared code overflows [0x721108,0x721578)")
-ASSERT(ADDR(.route) + SIZEOF(.route) <= 0x721744, "route overflows")
-ASSERT(ADDR(.intercept) + SIZEOF(.intercept) <= 0x721834, "intercept overflows")
+ASSERT(xm1_file_service_entry_result_acquire == 0x71bc2c && xm1_file_service_entry_result_release == 0x71bc6c && xm1_file_service_entry_result_wait == 0x71bc90 && xm1_file_service_entry_read == 0x71be74 && xm1_file_service_entry_write == 0x71bfe0 && xm1_file_service_entry_close == 0x71c134 && xm1_file_service_entry_open == 0x71c2b0 && xm1_file_service_entry_result_done == 0x71c634 && xm1_file_service_entry_open_async == 0x71c648 && xm1_file_service_entry_open_wait == 0x71c670 && xm1_file_service_entry_open_unflagged == 0x71c6a4 && xm1_file_service_entry_open_unflagged_wait == 0x71c6c8 && xm1_file_service_entry_read_async == 0x71c6fc && xm1_file_service_entry_read_wait == 0x71c720 && xm1_file_service_entry_write_async == 0x71c75c && xm1_file_service_entry_write_wait == 0x71c780 && xm1_file_service_entry_close_async == 0x71c7bc && xm1_file_service_entry_close_wait == 0x71c7e0 && xm1_file_service_entry_translate == 0x71d450 && xm1_file_service_entry_media_ready == 0x71ddf0 && xm1_file_service_entry_map_bind == 0x71ea34 && xm1_file_service_entry_map_unbind == 0x71eaac && xm1_file_service_entry_map_lookup == 0x71eb28 && xm1_file_service_entry_tag_allocate == 0x71ef18 && xm1_file_service_entry_tag_release == 0x71eff4 && xm1_file_service_entry_post == 0x71fde4 && xm1_file_service_entry_media_task == 0x71fe7c && xm1_file_service_entry_route == 0x721578 && xm1_file_service_entry_intercept == 0x7217f0, "entry veneer moved")
+ASSERT(__fixed_body_start == ORIGIN(OWNED_FIXED), "fixed body does not start at the fixed origin")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "file service has writable statics")
+ASSERT(__fixed_bss_end <= ORIGIN(OWNED_FIXED) + LENGTH(OWNED_FIXED), "file service exceeds fixed reservation")
 ASSERT(SIZEOF(.compiler_builtins) == 0, "file service links compiler-builtins")

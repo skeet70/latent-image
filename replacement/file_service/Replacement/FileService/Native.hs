@@ -38,6 +38,7 @@ import Data.Word (Word32)
 import qualified Emulation.NativeCase as Native
 import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
+import qualified Replacement.FixedImage.Layout as Layout
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 
@@ -178,14 +179,34 @@ codeBytes image code role extent@(Extent low high) = case role of
         && address < E.sectionAddress section + E.sectionSize section
         && extentContains extent (E.sectionAddress section)
 
+-- | The owned link's fixed-bank sections as one region from the lowest section to the end of the highest.
+fixedBody :: E.Elf -> Maybe (Word32, B.ByteString)
+fixedBody elf = case sections of
+  [] -> Nothing
+  _ ->
+    let low = minimum (map E.sectionAddress sections)
+        high = maximum [E.sectionAddress section + E.sectionSize section | section <- sections]
+     in Just (low, B.pack [maybe 0 id (E.byteAt elf address) | address <- [low .. high - 1]])
+  where
+    sections =
+      [ section
+      | section <- E.elfSections elf
+      , E.sectionAllocated section
+      , E.sectionSize section > 0
+      , extentContains ownedFixed (E.sectionAddress section)
+      ]
+
+ownedFixed :: Extent
+ownedFixed = Extent (Layout.imageBase + Layout.headerBytes) Layout.imageLimit
+
 functionsOf :: Code -> Role -> [(Word32, Word32)]
 functionsOf code Stock = codeStockFunctions code
-functionsOf code (Owned _ elf) =
+functionsOf code (Owned _ elf) = nub
   [ (E.symbolValue symbol, E.symbolSize symbol)
   | symbol <- E.elfSymbols elf
   , E.symbolKind symbol == E.FunctionSymbol
   , E.symbolSize symbol > 0
-  , any (\(_, extent) -> extentContains extent (E.symbolValue symbol)) (codeExtents code)
+  , any (\extent -> extentContains extent (E.symbolValue symbol)) (ownedFixed : map snd (codeExtents code))
   ]
 
 rowValue :: MemoryRow -> Value
@@ -203,6 +224,7 @@ caseDocument code image role scenario = (document, artifacts)
     driver = words32le (driverWords (scenarioCalls scenario))
     regions =
       [Region name low "rx" (codeBytes image code role extent) | (name, extent@(Extent low _)) <- codeExtents code]
+        ++ [Region "owned-fixed" low "rx" bytes | Owned _ elf <- [role], Just (low, bytes) <- [fixedBody elf]]
         ++ [Region (dataName region) (dataAddress region) "rw" (dataInitial region) | region <- scenarioData scenario]
         ++ [ Region "driver" driverBase "rx" driver
            , Region "results" resultsBase "rw" (B.replicate 0x100 0)
@@ -302,7 +324,7 @@ observe report = Observation
       _ -> []
   , observationInstructions = case field "instructions" runner of
       Number count -> truncate count
-      String count | [(value, "")] <- reads (T.unpack count) -> value
+      String count | [(parsed, "")] <- reads (T.unpack count) -> parsed
       _ -> 0
   , observationMemory = case field "memory" runner of
       Array items -> [(text (field "address" item), text (field "bytes" item)) | item <- V.toList items]

@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib")
+load(":controls.bzl", "FILE_SERVICE_CONTROLS", "file_service_suffixes")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -12,40 +13,29 @@ _SOURCES = [
     "src/stock_requests.rs",
 ]
 
-# Deliberately wrong owned variants; each must fail a case after reaching the case exit.
-_CONTROLS = [
-    "sequence_wrap",
-    "skip_allocated",
-    "no_free_slot_advance",
-    "release_after_failed_wait",
-]
-
-xm1_rust_rlib(
-    name = "file-service",
+[xm1_rust_rlib(
+    name = "arm" + suffix,
     src = "src/lib.rs",
     crate_name = "xm1_file_service",
     data = _SOURCES,
-)
-
-[xm1_rust_staticlib(
-    name = "file-service-rust" + suffix,
-    src = "src/lib.rs",
-    crate_name = "xm1_file_service",
-    rustc_flags = ["--cfg", "file_service_image"] + flags,
-    data = _SOURCES,
+    out = "arm%s/libxm1_file_service.rlib" % suffix,
+    rustc_flags = flags,
 ) for suffix, flags in [("", [])] + [
     ("-control-" + control.replace("_", "-"), ["--cfg", "file_service_control_" + control])
-    for control in _CONTROLS
+    for control in FILE_SERVICE_CONTROLS
 ]]
 
+# One final link through the bank root: in-place tag code and entry veneers over the
+# retired extents, request bodies in OWNED_FIXED.
 [xm1_rust_elf(
     name = "file-service-image" + suffix,
-    rust_staticlib = ":file-service-rust" + suffix,
-    entry = "xm1_file_service_tag_allocate",
-    extra_ldflags = ["-Wl,--gc-sections"],
-    link_includes = ["imports.ld"],
+    rust_staticlib = "//replacement/bank:bank-file-service" + suffix,
+    entry = "xm1_file_service_entry_route",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+    link_includes = ["imports.ld", "//replacement/fixed_image:memory-region"],
     link_script = "file-service.ld",
-) for suffix in [""] + ["-control-" + control.replace("_", "-") for control in _CONTROLS]]
+    link_map = True,
+) for suffix in file_service_suffixes()]
 
 genrule(
     name = "host-tests",
@@ -74,6 +64,7 @@ haskell_library(
         "//host:text",
         "//host:vector",
         "//host/firmware:bank-allowlist",
+        "//replacement/fixed_image:contract",
     ],
 )
 
@@ -97,11 +88,9 @@ haskell_binary(
 filegroup(
     name = "all",
     srcs = [
-        ":file-service",
-        ":file-service-image",
         ":file-service-suite",
         ":host-tests",
-    ] + [":file-service-image-control-" + control.replace("_", "-") for control in _CONTROLS],
+    ] + [":file-service-image" + suffix for suffix in file_service_suffixes()],
 )
 
 filegroup(

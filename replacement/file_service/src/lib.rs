@@ -14,9 +14,3 @@ pub mod stock_requests;
 mod tests;
 #[cfg(test)]
 mod routing_tests;
-
-#[cfg(all(not(test), file_service_image))]
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}

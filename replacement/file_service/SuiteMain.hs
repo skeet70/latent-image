@@ -34,11 +34,11 @@ increments :: [(String, Increment)]
 increments =
   [ ( "handles"
     , Increment Handles.code Handles.scenarios
-        [ ("xm1_file_service_map_bind", 0x71ea34)
-        , ("xm1_file_service_map_unbind", 0x71eaac)
-        , ("xm1_file_service_map_lookup", 0x71eb28)
-        , ("xm1_file_service_tag_allocate", 0x71ef18)
-        , ("xm1_file_service_tag_release", 0x71eff4)
+        [ ("xm1_file_service_entry_map_bind", 0x71ea34)
+        , ("xm1_file_service_entry_map_unbind", 0x71eaac)
+        , ("xm1_file_service_entry_map_lookup", 0x71eb28)
+        , ("xm1_file_service_entry_tag_allocate", 0x71ef18)
+        , ("xm1_file_service_entry_tag_release", 0x71eff4)
         ]
     )
   ]
