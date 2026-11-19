@@ -48,14 +48,12 @@ module Replacement.Saclac.CycleStep
   , CasePlan (..)
   , caseValue
   , trampoline
-  , loopFrame
-  , findLoopStack
   , hexValue
   , hexTextOf
   , hexBytes
-  , stackLow, stackHigh
+  , stackBase, stackSize
   , entryAddress, postAddress, receiveAddress, taskIdAddress
-  , recordBase, recordSize, trampolineBase, trampolineSize
+  , recordBase, recordSize, recordSlotBytes, recordPayloadBytes, trampolineBase, trampolineSize
   , levelAddress, decadeAddress
   , groupBase
   ) where
@@ -63,7 +61,7 @@ module Replacement.Saclac.CycleStep
 import Data.Aeson (Value (..))
 import qualified Data.Set as Set
 import qualified Data.ByteString as B
-import Data.Bits (shiftL, shiftR, (.|.))
+import Data.Bits (shiftL, (.|.))
 import Data.List (sortOn)
 import Data.Word (Word32, Word8)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -236,34 +234,13 @@ pairCycles dumps events = go Nothing [] [] ordered
 -- ---------------------------------------------------------------------------
 -- Retained state: the ranges a dump declares, one segment each.
 
--- | The low RAM range holding the task-43 stack.
-stackLow, stackHigh :: Integer
-stackLow = 0x00900000
-stackHigh = 0x00b00000
-
--- | The task-43 loop's stack frame signature: r5, r6 and r7 pushed at entry.
-loopFrame :: [Word32]
-loopFrame = [0x0169d370, 0x0169d380, 0x0169d374]
-
--- | The stack word of the loop frame: r5, r6 and r7 are the three constants the loop keeps,
--- pushed at task entry and preserved across the kernel receive. Exactly one eight-byte
--- aligned address in the dumped low range may hold them.
-findLoopStack :: State -> Either String Word32
-findLoopStack state = case matches of
-  [sp] -> Right (fromIntegral sp)
-  [] -> Left "no task-43 loop frame signature (r5=0x169d370, r6=0x169d380, r7=0x169d374) in the dumped stack range"
-  found -> Left ("ambiguous task-43 loop frame signature at " ++ unwords (map hexTextOf found) ++ " (" ++ show (length found) ++ " candidates)")
-  where
-    signature = B.concat (map (leWord . fromIntegral) loopFrame)
-    matches =
-      [ sp
-      | sp <- [stackLow + 8, stackLow + 16 .. stackHigh - 32]
-      , frameAt sp
-      ]
-    frameAt sp = stateSlice state (sp + 4) 12 == Just signature
-
-leWord :: Integer -> B.ByteString
-leWord value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]
+-- | The stack the native step runs on: a harness region outside every captured range. The
+-- stock loop at 0xf01be4 keeps its constants in r5-r7 and never reads its own frame, so the
+-- step reads only the stack its callees write.
+stackBase :: Word32
+stackBase = 0x00580000
+stackSize :: Int
+stackSize = 0x10000
 
 entryAddress, postAddress, receiveAddress, taskIdAddress :: Word32
 entryAddress = 0x00f01be4
@@ -274,12 +251,18 @@ taskIdAddress = 0x00723cb8
 recordBase :: Word32
 recordBase = 0x00500000
 recordSize :: Int
-recordSize = 0x1000
+recordSize = 0x10000
+
+-- | A post's record slot: queue, descriptor, r2, r3, header, length and payload pointer, then the
+-- payload copied at the post, at most 'recordPayloadBytes'.
+recordSlotBytes, recordPayloadBytes :: Int
+recordSlotBytes = 0x800
+recordPayloadBytes = 0x7e0
 
 trampolineBase :: Word32
 trampolineBase = postAddress
 trampolineSize :: Int
-trampolineSize = 0x40
+trampolineSize = 4 * length trampoline
 
 -- | The group-27 shared level and decade words.
 levelAddress, decadeAddress :: Integer
@@ -429,7 +412,7 @@ data RegionPlan = RegionPlan
   , regionBase :: Word32
   , regionSize :: Word32
   , regionPermission :: String
-  , regionArtifact :: Maybe String
+  , regionArtifact :: Maybe (String, Word32)
   }
   deriving (Eq, Show)
 
@@ -476,7 +459,7 @@ regionValue region = obj
   , ("permissions", s (regionPermission region))
   , ("initial", case regionArtifact region of
       Nothing -> obj [("zero", Bool True)]
-      Just artifact -> obj [("artifact", s artifact), ("offset", n 0), ("length", n (fromIntegral (regionSize region)))])
+      Just (artifact, offset) -> obj [("artifact", s artifact), ("offset", n (fromIntegral offset)), ("length", n (fromIntegral (regionSize region)))])
   ]
 
 stubValue :: StubPlan -> Value
@@ -518,31 +501,37 @@ caseValue plan = obj
   , ("exclusions", arr (map s (casePlanExclusions plan)))
   ]
 
--- | The recording trampoline that replaces the kernel post. It saves r4/r5, advances the
--- call counter, records r0-r3 and the descriptor's header, length and payload pointer in
--- one 32-byte slot, returns zero and restores the callee-saved registers. Slot @n@ (from
--- one) starts at @recordBase + 32*n@.
+-- | The recording trampoline that replaces the kernel post. It saves r4-r7, advances the call
+-- counter at 'recordBase', records r0-r3 and the descriptor's header, length and payload
+-- pointer in slot @n@ (from one) at @recordBase + 0x800*n@, copies at most 0x7e0 payload bytes
+-- after them, so a payload buffer the step reuses later is recorded as posted, and returns zero.
 trampoline :: [Word32]
 trampoline =
-  [ 0xE92D0030 -- push {r4, r5}
-  , 0xE59F4044 -- ldr r4, [pc, #0x44]   ; recordBase
+  [ 0xE92D00F0 -- push {r4, r5, r6, r7}
+  , 0xE59F405C -- ldr r4, [pc, #0x5c]   ; recordBase
   , 0xE594C000 -- ldr r12, [r4]         ; call counter
   , 0xE28CC001 -- add r12, r12, #1
   , 0xE584C000 -- str r12, [r4]
-  , 0xE1A0C28C -- mov r12, r12, lsl #5
-  , 0xE084400C -- add r4, r4, r12       ; slot base
+  , 0xE084458C -- add r4, r4, r12, lsl #11 ; slot base
   , 0xE5840000 -- str r0, [r4, #0]      ; queue
   , 0xE5841004 -- str r1, [r4, #4]      ; descriptor
   , 0xE5842008 -- str r2, [r4, #8]
   , 0xE584300C -- str r3, [r4, #12]
   , 0xE5910000 -- ldr r0, [r1, #0]      ; header
   , 0xE5840010 -- str r0, [r4, #16]
-  , 0xE5910004 -- ldr r0, [r1, #4]      ; length
-  , 0xE5840014 -- str r0, [r4, #20]
-  , 0xE5910008 -- ldr r0, [r1, #8]      ; payload pointer
-  , 0xE5840018 -- str r0, [r4, #24]
+  , 0xE5915004 -- ldr r5, [r1, #4]      ; length
+  , 0xE5845014 -- str r5, [r4, #20]
+  , 0xE5916008 -- ldr r6, [r1, #8]      ; payload pointer
+  , 0xE5846018 -- str r6, [r4, #24]
+  , 0xE3550E7E -- cmp r5, #0x7e0
+  , 0x83A05E7E -- movhi r5, #0x7e0
+  , 0xE2847020 -- add r7, r4, #32
+  , 0xE2555001 -- subs r5, r5, #1
+  , 0x54D6C001 -- ldrbpl r12, [r6], #1
+  , 0x54C7C001 -- strbpl r12, [r7], #1
+  , 0x5AFFFFFB -- bpl subs
   , 0xE3A00000 -- mov r0, #0
-  , 0xE8BD0030 -- pop {r4, r5}
+  , 0xE8BD00F0 -- pop {r4, r5, r6, r7}
   , 0xE12FFF1E -- bx lr
   , fromIntegral recordBase
   ]

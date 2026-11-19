@@ -6,10 +6,9 @@
 module Main (main) where
 
 import Control.Monad (unless)
-import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import Data.List (isInfixOf)
-import Data.Word (Word32, Word8)
+import Data.Word (Word8)
 import Replacement.Saclac.CycleStep
 import System.Exit (exitFailure)
 
@@ -35,10 +34,6 @@ emptyState = State [Segment (spanLow span') (B.replicate (fromIntegral (spanByte
 
 withByte :: State -> Integer -> Word8 -> State
 withByte state address byte = either (const state) id (overlayState state address (B.singleton byte))
-
-withWord :: State -> Integer -> Word32 -> State
-withWord state address value =
-  either (const state) id (overlayState state address (B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]))
 
 refusalsOf :: [Dump] -> [TimedEvent] -> [String]
 refusalsOf dumps events = map refusalReason (snd (pairCycles dumps events))
@@ -78,12 +73,6 @@ main = do
     , do
         let dumps = [dump "wake" 0 1001, dump "frame" 0 1003, dump "window-completion" 0 1101]
         check "an overlapping wake is refused" (any ("later 0x3b4b wake" `isInfixOf`) (refusalsOf dumps [queueIn 1000 0x3b4b 47, queueIn 1090 0x3b4b 47, queueIn 1100 0x3b8d 44]))
-    , do
-        let placed = withWord (withWord (withWord emptyState 0xa72004 0x0169d370) 0xa72008 0x0169d380) 0xa7200c 0x0169d374
-            doubled = withWord (withWord (withWord placed 0xa72104 0x0169d370) 0xa72108 0x0169d380) 0xa7210c 0x0169d374
-        _ <- check "the loop frame is found" (findLoopStack placed == Right 0xa72000)
-        _ <- check "an absent loop frame is refused" (case findLoopStack emptyState of Left _ -> True; _ -> False)
-        check "two loop frames are refused" (case findLoopStack doubled of Left _ -> True; _ -> False)
     , do
         let bytes = B.pack [fromIntegral (index `mod` 251) | index <- [0 .. 0x600000 - 1 :: Int]]
             split = splitState layout bytes

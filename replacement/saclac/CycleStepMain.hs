@@ -27,6 +27,9 @@ import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import Prelude hiding (cycle)
 import Replacement.Saclac.CycleStep
+import qualified Replacement.Saclac.PayloadProjection as Payload
+import qualified Data.Text as T
+import qualified FujiAF.FirstStage as F
 import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory, removeFile, renameFile)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -35,7 +38,9 @@ import System.FilePath ((</>))
 -- ---------------------------------------------------------------------------
 -- Options
 
-data LaneSpec = LaneSpec {laneName :: String, laneResult :: FilePath, laneCensus :: FilePath, laneInputs :: FilePath}
+-- | One compared lane; an owned lane names its linked symbol table, which resolves the owned
+-- identities the payload contract declares.
+data LaneSpec = LaneSpec {laneName :: String, laneResult :: FilePath, laneCensus :: FilePath, laneInputs :: FilePath, laneSymbols :: Maybe FilePath}
 
 data Options = Options
   { optionRunner :: FilePath
@@ -51,20 +56,22 @@ data Options = Options
   , optionRounds :: Int
   , optionDiscoverData :: Bool
   , optionClosure :: Maybe FilePath
+  , optionFields :: FilePath
   }
 
 usage :: String
-usage = "usage: saclac-cycle-step --runner RUNNER --id5 IMAGE5 --id4 IMAGE4 --loader LOADER_A --sites SITES --work DIR --out JSON --lane NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR [--lane ...] [--chain NAME] [--stub ADDRESS=VALUE]... [--rounds N] [--discover-data] [--closure FILE]"
+usage = "usage: saclac-cycle-step --runner RUNNER --id5 IMAGE5 --id4 IMAGE4 --loader LOADER_A --sites SITES --fields PAYLOAD_FIELDS --work DIR --out JSON --lane NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR[:SYMBOLS] [--lane ...] [--chain NAME] [--stub ADDRESS=VALUE]... [--rounds N] [--discover-data] [--closure FILE]"
 
 parseOptions :: [String] -> IO Options
 parseOptions arguments = go empty arguments
   where
-    empty = Options "" "" "" "" "" "" "" [] Nothing [] 6 False Nothing
+    empty = Options "" "" "" "" "" "" "" [] Nothing [] 6 False Nothing ""
     go options ("--runner" : value : rest) = go options {optionRunner = value} rest
     go options ("--id5" : value : rest) = go options {optionId5 = value} rest
     go options ("--id4" : value : rest) = go options {optionId4 = value} rest
     go options ("--loader" : value : rest) = go options {optionLoader = value} rest
     go options ("--sites" : value : rest) = go options {optionSites = value} rest
+    go options ("--fields" : value : rest) = go options {optionFields = value} rest
     go options ("--work" : value : rest) = go options {optionWork = value} rest
     go options ("--out" : value : rest) = go options {optionOut = value} rest
     go options ("--chain" : value : rest) = go options {optionChain = Just value} rest
@@ -75,11 +82,12 @@ parseOptions arguments = go empty arguments
       (address, '=' : number) -> go options {optionStubs = optionStubs options ++ [(fromIntegral (readAddress address), fromIntegral (readAddress number))]} rest
       _ -> failH "--stub takes ADDRESS=VALUE"
     go options ("--lane" : value : rest) = case splitOn ':' value of
-      [name, result, census, inputs] -> go options {optionLanes = optionLanes options ++ [LaneSpec name result census inputs]} rest
-      _ -> failH "--lane takes NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR"
+      [name, result, census, inputs] -> go options {optionLanes = optionLanes options ++ [LaneSpec name result census inputs Nothing]} rest
+      [name, result, census, inputs, symbols] -> go options {optionLanes = optionLanes options ++ [LaneSpec name result census inputs (Just symbols)]} rest
+      _ -> failH "--lane takes NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR[:SYMBOLS]"
     go _ (other : _) = failH ("unknown option " ++ other)
     go options [] = do
-      forM_ [("--runner", optionRunner options), ("--id5", optionId5 options), ("--id4", optionId4 options), ("--loader", optionLoader options), ("--sites", optionSites options), ("--work", optionWork options), ("--out", optionOut options)] $ \(name, value) ->
+      forM_ [("--runner", optionRunner options), ("--id5", optionId5 options), ("--id4", optionId4 options), ("--loader", optionLoader options), ("--sites", optionSites options), ("--fields", optionFields options), ("--work", optionWork options), ("--out", optionOut options)] $ \(name, value) ->
         ensure (not (null value)) ("missing " ++ name ++ "; " ++ usage)
       ensure (not (null (optionLanes options))) usage
       pure options
@@ -196,10 +204,18 @@ data Lane = Lane
   , laneEvents :: [TimedEvent]
   , laneFrameWrites :: [Integer]
   , laneError :: Maybe String
+  , laneRole :: Payload.Role
+  , laneSymbolsDigest :: Maybe String
   }
 
 loadLane :: LaneSpec -> IO Lane
 loadLane spec = do
+  (role, digest) <- case laneSymbols spec of
+    Nothing -> pure (Payload.StockRole, Nothing)
+    Just path -> do
+      bytes <- readRegular (16 * 1024 * 1024) path
+      symbols <- either failH pure (F.parseSymbols bytes)
+      pure (Payload.OwnedRole (\name -> F.symbolAddress <$> F.lookupSymbol symbols (T.unpack name)), Just (sha256Hex (sha256 bytes)))
   resultBytes <- readRegular (64 * 1024 * 1024) (laneResult spec)
   result <- jsonRead resultBytes
   censusBytes <- readRegular (64 * 1024 * 1024) (laneCensus spec)
@@ -215,6 +231,8 @@ loadLane spec = do
     , laneEvents = parseEvents census
     , laneFrameWrites = sortOn id writes
     , laneError = failure
+    , laneRole = role
+    , laneSymbolsDigest = digest
     }
 
 dumpBytes :: Lane -> Dump -> IO (Either String B.ByteString)
@@ -273,7 +291,7 @@ data PlanInput = PlanInput
   }
 
 exitAddress :: Word32
-exitAddress = 0x00501000
+exitAddress = 0x00511000
 
 entryFunctionSize :: Word32
 entryFunctionSize = 0x80
@@ -301,16 +319,19 @@ dataRegionId base = "data-" ++ drop 2 (hexText (fromIntegral base))
 regionsOf :: Images -> PlanInput -> Either String [(RegionPlan, Maybe B.ByteString)]
 regionsOf images input = do
   windows5 <- mapM (windowPlan (image5 images) id5Base "id5") (zip [0 :: Int ..] (closureWindows5 (planClosure input)))
-  windows4 <- mapM (windowPlan (image4 images) id4Base "id4") (zip [0 :: Int ..] (closureWindows4 (planClosure input)))
+  windows4 <- mapM (windowPlan (image4 images) id4Base "id4") (zip [0 :: Int ..] (clearTrampoline (closureWindows4 (planClosure input))))
   windows0 <- mapM (windowPlan (image0 images) loaderBase "ld") (zip [0 :: Int ..] (closureWindows0 (planClosure input)))
   state <- mapM dataRegion (dataRuns input)
   let regions =
         [ (RegionPlan "record" recordBase (fromIntegral recordSize) "rw" Nothing, Nothing)
         , (RegionPlan "exit" exitAddress 4 "rx" Nothing, Nothing)
-        , (RegionPlan "tramp" trampolineBase (fromIntegral trampolineSize) "rx" (Just "tramp"), Just trampolineBytes)
+        , (RegionPlan "stack" stackBase (fromIntegral stackSize) "rw" Nothing, Nothing)
+        , (RegionPlan "tramp" trampolineBase (fromIntegral trampolineSize) "rx" Nothing, Just trampolineBytes)
         ]
           ++ state
-          ++ [(RegionPlan ("scratch-" ++ show index) page 0x1000 "rw" Nothing, Nothing) | (index, page) <- zip [0 :: Int ..] (sortOn id (closureScratch (planClosure input)))]
+          ++ [ (RegionPlan ("scratch-" ++ show index) page 0x1000 "rw" Nothing, Nothing)
+             | (index, page) <- zip [0 :: Int ..] (sortOn id (filter (not . stateHolds (planState input) . fromIntegral) (closureScratch (planClosure input))))
+             ]
           ++ windows5
           ++ windows4
           ++ windows0
@@ -322,9 +343,9 @@ regionsOf images input = do
     trampolineBytes = B.concat (map leWord (map fromIntegral trampoline))
     windowPlan image base tag (index, window) = do
       bytes <- imageSlice base image window
-      pure (RegionPlan (tag ++ "-" ++ show index) (windowBase window) (windowSize window) "rx" (Just (tag ++ "-" ++ show index)), Just bytes)
+      pure (RegionPlan (tag ++ "-" ++ show index) (windowBase window) (windowSize window) "rx" Nothing, Just bytes)
     dataRegion (base, size) = case stateSlice (planState input) (fromIntegral base) (fromIntegral size) of
-      Just bytes -> Right (RegionPlan (dataRegionId base) base size "rw" (Just (dataRegionId base)), Just bytes)
+      Just bytes -> Right (RegionPlan (dataRegionId base) base size "rw" Nothing, Just bytes)
       Nothing -> Left ("state granule " ++ hexText (fromIntegral base) ++ " is not captured")
 
 -- | The input state with every mapped state region's final bytes written over it.
@@ -342,7 +363,7 @@ predictedState input run = foldl' apply (Right (planState input)) (dataRuns inpu
 -- word is cut out: the runner admits no stub inside a declared function.
 functionsOf :: PlanInput -> [(Word32, Word32)]
 functionsOf input =
-  filter ((`notElem` stubs) . fst) (concatMap partitions (closureWindows5 closure ++ closureWindows4 closure ++ closureWindows0 closure))
+  filter ((`notElem` stubs) . fst) (concatMap partitions (closureWindows5 closure ++ clearTrampoline (closureWindows4 closure) ++ closureWindows0 closure))
     ++ [(trampolineBase, fromIntegral trampolineSize)]
   where
     closure = planClosure input
@@ -366,10 +387,26 @@ receiveCall (operation, sender, payload) = StubCall
       ]
   }
 
+-- | Region bytes packed into three artifacts, captured state, code and the trampoline: a case
+-- names at most 20 artifacts, and a region reads its bytes at an offset into one.
+packArtifacts :: [(RegionPlan, Maybe B.ByteString)] -> ([RegionPlan], [(String, B.ByteString)])
+packArtifacts regions = (reverse placed, [(name, B.concat (reverse parts)) | (name, parts) <- M.toList packed])
+  where
+    (placed, packed) = foldl' place ([], M.empty) regions
+    place (done, artifacts) (region, Nothing) = (region {regionArtifact = Nothing} : done, artifacts)
+    place (done, artifacts) (region, Just bytes) =
+      let name = artifactOf (regionId region)
+          parts = M.findWithDefault [] name artifacts
+          offset = fromIntegral (sum (map B.length parts))
+       in (region {regionArtifact = Just (name, offset)} : done, M.insert name (bytes : parts) artifacts)
+    artifactOf ident
+      | take 5 ident == "data-" = "state"
+      | ident == "tramp" = "tramp"
+      | otherwise = "code"
+
 planCase :: Images -> PlanInput -> Either String (CasePlan, [(String, B.ByteString)])
 planCase images input = do
-  regions <- regionsOf images input
-  let artifacts = [(artifact, bytes) | (RegionPlan _ _ _ _ (Just artifact), Just bytes) <- regions]
+  (regions, artifacts) <- packArtifacts <$> regionsOf images input
   pure
     ( CasePlan
         { casePlanId = planId input
@@ -391,18 +428,21 @@ planCase images input = do
             , ("lr", exitAddress)
             , ("cpsr", 0x10)
             ]
-        , casePlanRegions = map fst regions
+        , casePlanRegions = regions
         , casePlanFunctions = functionsOf input
         , casePlanStubs =
             [ ScriptStub taskIdAddress (replicate 32 (StubCall [] [("r0", 43)] []))
             , ScriptStub receiveAddress [receiveCall (planMessage input)]
             ]
-              ++ [ScriptStub address (replicate 32 (StubCall [] [("r0", value)] [])) | (address, value) <- planExtraStubs input]
+              ++ [ScriptStub address (replicate extraCalls (StubCall [] [("r0", value)] [])) | (address, value) <- planExtraStubs input]
         , casePlanArtifacts = artifacts
         , casePlanBudget = 16000000
         }
     , artifacts
     )
+  where
+    -- A case's stubs hold at most 128 script calls; the task-id stub takes 32 and receive 1.
+    extraCalls = (128 - 33) `div` max 1 (length (planExtraStubs input))
 
 withStack :: Word32 -> CasePlan -> CasePlan
 withStack sp plan = plan
@@ -540,15 +580,16 @@ extension discover images input closure run = case runStatus run of
       let low = max base ((address - 0x1000) .&. 0xfffff000)
           high = min (base + fromIntegral length') ((address + 0x2000) .&. 0xfffff000)
        in Window low (high - low) : windows
-    -- The recording trampoline owns the kernel post bytes; no image window may map them.
-    clearTrampoline = concatMap $ \window ->
-      let low = windowBase window
-          high = low + windowSize window
-          tramp = trampolineBase
-          trampEnd = trampolineBase + fromIntegral trampolineSize
-       in if trampEnd <= low || high <= tramp
-            then [window]
-            else [Window low (tramp - low) | tramp > low] ++ [Window trampEnd (high - trampEnd) | high > trampEnd]
+
+-- | The recording trampoline owns the kernel post bytes; no image window may map them.
+clearTrampoline :: [Window] -> [Window]
+clearTrampoline = concatMap $ \window ->
+  let low = windowBase window
+      high = low + windowSize window
+      trampEnd = trampolineBase + fromIntegral trampolineSize
+   in if trampEnd <= low || high <= trampolineBase
+        then [window]
+        else [Window low (trampolineBase - low) | trampolineBase > low] ++ [Window trampEnd (high - trampEnd) | high > trampEnd]
 
 -- ---------------------------------------------------------------------------
 -- Comparison
@@ -589,30 +630,45 @@ declaredSpans sites =
   ]
     ++ [Span 0x0169d374 0x0169d4fe, Span groupBase 0x00919a20]
 
--- | The posts the recording trampoline kept in the record region, their payloads read from the
--- predicted state.
-postRecords :: RunResult -> State -> [(Int, Int, [Word8], String)]
-postRecords run state = case M.lookup "record" (runMemory run) of
+-- | The posts the recording trampoline kept in the record region, each payload as copied at
+-- its post.
+postRecords :: RunResult -> [(Int, Int, [Word8], String)]
+postRecords run = case M.lookup "record" (runMemory run) of
   Just record | B.length record >= 4 -> mapMaybe (slot record) [1 .. min maxSlots (fromIntegral (wordAt record 0))]
   _ -> []
   where
-    maxSlots = (recordSize `div` 32) - 1
+    maxSlots = recordSize `div` recordSlotBytes - 1
     slot record index
-      | 32 * index + 28 <= B.length record =
-          let at offset = wordAt record (32 * index + offset)
+      | recordSlotBytes * (index + 1) <= B.length record =
+          let base = recordSlotBytes * index
+              at offset = wordAt record (base + offset)
               queue = fromIntegral (at 0) :: Int
               header = at 16
               length' = fromIntegral (at 20) :: Int
-              pointer = at 24
-           in Just (queue, fromIntegral (header .&. 0xffff), payloadAt pointer length', payloadProblem pointer length')
+              copied = min length' recordPayloadBytes
+              payload = B.unpack (B.take copied (B.drop (base + 32) record))
+              problem = if length' > recordPayloadBytes then "payload of " ++ show length' ++ " bytes exceeds the record slot" else ""
+           in Just (queue, fromIntegral (header .&. 0xffff), payload, problem)
       | otherwise = Nothing
-    payloadAt pointer length' = maybe [] B.unpack (stateSlice state (fromIntegral pointer) length')
-    payloadProblem pointer length' = case stateSlice state (fromIntegral pointer) length' of
-      Just _ -> ""
-      Nothing -> "payload at " ++ hexText (fromIntegral pointer) ++ " (" ++ show length' ++ " bytes) is outside the dumped state"
 
 observedPosts :: Cycle -> [(Int, Int, [Word8])]
 observedPosts cycle = [(queue, operation, payload) | TimedEvent _ (EventPeerRequest queue operation payload) <- cyclePosts cycle]
+
+-- | Posts projected through the payload contract as the interface comparison projects them:
+-- the native step's in the stock role, a lane's observed posts in that lane's role.
+projectNative :: Payload.Declaration -> [(Int, Int, [Word8], String)] -> [(Int, Int, [Word8], String)]
+projectNative declaration = map $ \(queue, operation, payload, problem) ->
+  case projectPost Payload.StockRole declaration queue operation payload of
+    Right projected -> (queue, operation, projected, problem)
+    Left reason -> (queue, operation, payload, if null problem then "native payload: " ++ reason else problem)
+
+projectObserved :: Payload.Role -> Payload.Declaration -> [(Int, Int, [Word8])] -> Either String [(Int, Int, [Word8])]
+projectObserved role declaration = mapM $ \(queue, operation, payload) ->
+  (\projected -> (queue, operation, projected)) <$> projectPost role declaration queue operation payload
+
+projectPost :: Payload.Role -> Payload.Declaration -> Int -> Int -> [Word8] -> Either String [Word8]
+projectPost role declaration queue operation =
+  Payload.projectPayload role declaration Payload.Outgoing (Payload.QueueId (fromIntegral queue)) (Payload.Operation (fromIntegral operation))
 
 postsEqual :: [(Int, Int, [Word8], String)] -> [(Int, Int, [Word8])] -> Bool
 postsEqual native observed = length native == length observed && and (zipWith same native observed)
@@ -647,6 +703,7 @@ executedBytes rows = sum [4 * fromIntegral (popCount (hexBytesOf (get row "execu
 
 data LaneOutput = LaneOutput
   { laneOutputName :: String
+  , laneOutputSymbols :: Maybe String
   , laneOutputQualified :: Bool
   , laneOutputCycles :: [Value]
   , laneOutputRefusals :: [Value]
@@ -656,9 +713,9 @@ data LaneOutput = LaneOutput
   , laneOutputError :: Maybe String
   }
 
-runLane :: Options -> Images -> [Span] -> ClosureStore -> Lane -> IO LaneOutput
-runLane options images spans store lane = case laneError lane of
-  Just problem -> pure (LaneOutput (laneName (laneSpec lane)) False [] [] [] (obj []) [] (Just problem))
+runLane :: Options -> Images -> [Span] -> Payload.Declaration -> ClosureStore -> Lane -> IO LaneOutput
+runLane options images spans declaration store lane = case laneError lane of
+  Just problem -> pure (LaneOutput (laneName (laneSpec lane)) (laneSymbolsDigest lane) False [] [] [] (obj []) [] (Just problem))
   Nothing -> do
     let (cycles, refusals) = pairCycles (laneDumps lane) (laneEvents lane)
         refusalValues = [obj [("cycle", s (refusalWhere refusal)), ("reason", s (refusalReason refusal))] | refusal <- refusals]
@@ -670,6 +727,7 @@ runLane options images spans store lane = case laneError lane of
     closure <- readIORef (storeRef store)
     pure LaneOutput
       { laneOutputName = laneName (laneSpec lane)
+      , laneOutputSymbols = laneSymbolsDigest lane
       , laneOutputQualified = qualified
       , laneOutputCycles = map (cycleValue . cycleRunReport) successes ++ [obj [("cycle", n (fromIntegral index)), ("error", s problem)] | (index, problem) <- failures]
       , laneOutputRefusals = refusalValues
@@ -693,12 +751,10 @@ runLane options images spans store lane = case laneError lane of
       loaded <- cycleInput lane cycle
       case loaded of
         Left problem -> pure (Left problem)
-        Right input -> case findLoopStack input of
-          Left problem -> pure (Left problem)
-          Right sp -> do
+        Right input -> let sp = harnessSp in do
             let planInput = PlanInput
                   { planState = input
-                  , planSeeds = seedsOf spans sp
+                  , planSeeds = seedsOf spans
                   , planMessage = messageOf cycle
                   , planClosure = initialClosure
                   , planId = "cycle-" ++ laneName (laneSpec lane) ++ "-" ++ show index
@@ -718,9 +774,9 @@ runLane options images spans store lane = case laneError lane of
                     else do
                       let changed = netChanged input predicted
                           differences = compareState spans changed predicted observed
-                          posts = postRecords run predicted
-                          observed' = observedPosts cycle
-                          report = CycleReport
+                          posts = projectNative declaration (postRecords run)
+                      observed' <- projectObserved (laneRole lane) declaration (observedPosts cycle)
+                      let report = CycleReport
                             { reportIndex = index
                             , reportWake = cycleWake cycle
                             , reportFrame = cycleFrame cycle
@@ -763,12 +819,13 @@ cycleInput lane cycle = do
   frame <- dumpState lane (cycleFrame cycle)
   pure (do w <- wake; f <- frame; overlayStates w f)
 
--- | Addresses whose granules every case maps: the loop stack, the receive staging the stub
--- writes and the declared retained spans.
-seedsOf :: [Span] -> Word32 -> [Integer]
-seedsOf spans sp =
-  [fromIntegral sp, fromIntegral sp - 0x2000, 0x0169d374]
-    ++ concat [[spanLow span', spanHigh span' - 1] | span' <- spans]
+-- | Addresses whose granules every case maps: the receive staging the stub writes and the
+-- declared retained spans.
+seedsOf :: [Span] -> [Integer]
+seedsOf spans = 0x0169d374 : concat [[spanLow span', spanHigh span' - 1] | span' <- spans]
+
+harnessSp :: Word32
+harnessSp = stackBase + fromIntegral stackSize
 
 -- | Frame identity, latency and slip metrics for one cycle.
 metricOf :: Lane -> (Int, Cycle) -> Value
@@ -814,6 +871,7 @@ cycleValue report = obj
   , ("compared_bytes", n (fromIntegral (reportComparedBytes report)))
   , ("differing_count", n (fromIntegral (length (reportDifferences report))))
   , ("differing_bytes", arr (map differenceValue (take 64 (reportDifferences report))))
+  , ("differing_ranges", arr [obj [("start", s (hexText low)), ("end", s (hexText high))] | (low, high) <- take 64 (ranges (map differenceAddress (reportDifferences report)))])
   , ("native_status", s (reportNativeStatus report))
   , ("native_instructions", n (reportNativeInstructions report))
   , ("executed_bytes", n (reportExecuted report))
@@ -822,6 +880,13 @@ cycleValue report = obj
   , ("case_sha256", s (reportCaseSha report))
   , ("closure_rounds", n (fromIntegral (reportRounds report)))
   ]
+
+-- | Ascending addresses grouped into half-open runs of consecutive bytes.
+ranges :: [Integer] -> [(Integer, Integer)]
+ranges = foldr add []
+  where
+    add address ((low, high) : rest) | address + 1 == low = (address, high) : rest
+    add address runs = (address, address + 1) : runs
 
 differenceValue :: Difference -> Value
 differenceValue difference = obj
@@ -862,10 +927,8 @@ runChain options images spans store lane runs = go 0 Nothing [] runs
                   Left problem -> pure (ChainResult (reverse entries) False (Just problem))
                   Right input -> runStep input
       where
-        runStep input = case findLoopStack input of
-          Left problem -> pure (ChainResult (reverse entries) False (Just problem))
-          Right sp -> do
-            let planInput = PlanInput input (seedsOf spans sp) (0x3b4b, 47, wakePayload (cycleRunCycle run)) initialClosure ("chain-" ++ laneName (laneSpec lane) ++ "-" ++ show index) (optionStubs options)
+        runStep input = let sp = harnessSp in do
+            let planInput = PlanInput input (seedsOf spans) (0x3b4b, 47, wakePayload (cycleRunCycle run)) initialClosure ("chain-" ++ laneName (laneSpec lane) ++ "-" ++ show index) (optionStubs options)
             outcome <- runCycle options images store planInput sp
             closure <- readIORef (storeRef store)
             case outcome >>= \(result, _) -> predictedState planInput {planClosure = closure} result of
@@ -972,8 +1035,9 @@ main = do
       spans = declaredSpans sites
   createDirectoryIfMissing True (optionWork options)
   lanes <- mapM loadLane (optionLanes options)
+  declaration <- either failH pure . Payload.parseDeclaration =<< readRegular (4 * 1024 * 1024) (optionFields options)
   store <- closureStore options images
-  outputs <- forM lanes $ \lane -> runLane options images spans store lane
+  outputs <- forM lanes $ \lane -> runLane options images spans declaration store lane
   let named name = case [output | output <- outputs, laneOutputName output == name] of
         output : _ -> Just output
         [] -> Nothing
@@ -1026,9 +1090,11 @@ main = do
         , ("discovery", b (optionDiscoverData options))
         , ("frame_identity_slip", arr slip)
         , ("exclusions", arr (map s
-            [ "The record region 0x00500000 is the trampoline's harness scratch and is not retained state."
+            [ "The record region 0x00500000 and the stack 0x00580000 are harness regions, not retained state: the stock loop at 0xf01be4 never reads its frame, so the step runs on a fresh stack."
             , "Outside the declared retained spans only the step's net changes are compared; the runner's provenance log truncates at 4096 accesses, so a byte the step wrote and restored is not compared."
             , "Code bytes come from the pinned image 5, image 4 and loader A; captured state is mapped in 64 KiB granules the step touches, and an unmapped byte is unchanged by construction."
+            , "Posts are compared through payload-fields.json as saclac-interface-compare compares them: the native step's in the stock role, each lane's in its own role; undeclared payload bytes are not compared."
+            , "The kernel receive, post, task id, cache maintenance and critical sections are outside the step: receive and post are scripted, the others are declared --stub returns."
             ]))
         ]
   B.writeFile (optionOut options) (encodeCanonical overall)
@@ -1037,6 +1103,7 @@ main = do
   where
     laneValue output = obj
       [ ("lane", s (laneOutputName output))
+      , ("symbols_sha256", maybe Null s (laneOutputSymbols output))
       , ("qualified", b (laneOutputQualified output))
       , ("error", maybe Null s (laneOutputError output))
       , ("refusals", arr (laneOutputRefusals output))

@@ -464,6 +464,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         ":cycle-step",
+        ":payload-projection",
         "//emulation:case-sha256",
         "//emulation:native-adapter",
         "//emulation:native-observation",
@@ -473,8 +474,10 @@ haskell_binary(
         "//host:containers",
         "//host:directory",
         "//host:filepath",
+        "//host:first-stage",
         "//host:host-support",
         "//host:json",
+        "//host:text",
     ],
 )
 
