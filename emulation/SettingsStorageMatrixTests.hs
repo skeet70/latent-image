@@ -64,7 +64,7 @@ activeA = BankImage (B.replicate 0x1c2 0x11)
 activeB = BankImage (B.replicate 0x1c2 0x22)
 backingA = BankImage (B.replicate 410 0x11 <> B.replicate 40 0)
 backingB = BankImage (replaceBytes 0x140 (B.replicate 40 0x22) (replaceBytes 0 (B.replicate 0x118 0x22) (bankBytes backingA)))
-restoredBacking = BankImage (replaceBytes 0 (B.take 0x118 (B.drop 16 (bankBytes activeA))) (bankBytes backingB))
+restoredBacking = BankImage (replaceBytes 0x10 (B.take 0x118 (B.drop 16 (bankBytes activeA))) (bankBytes backingB))
 
 blankRecord, appendCandidate, sealedRecord, savedWorking :: RecordImage
 blankRecord = RecordImage (B.replicate 52 0)
@@ -841,9 +841,12 @@ matrixConsumerCases =
   , stepRefusalCase "alternate restore requires the captured image" RestoreAlternate
       (alterFirstSite (StorageSite Storage.ExchangeAlternateEntry)
         (wireMemory [bankBytes activeB,flippedByte 449 (bankBytes activeA),B.replicate 450 0,bankBytes backingB]))
-  , stepRefusalCase "alternate restore compares all 280 backing bytes" RestoreAlternate
+  , stepRefusalCase "alternate restore compares the first backing ordinary byte" RestoreAlternate
       (alterFirstSite (StorageSite Storage.ExchangeAlternateReturn)
-        (wireMemory [bankBytes activeA,bankBytes activeA,B.replicate 450 0,flippedByte 279 (bankBytes restoredBacking)]))
+        (wireMemory [bankBytes activeA,bankBytes activeA,B.replicate 450 0,flippedByte 0x10 (bankBytes restoredBacking)]))
+  , stepRefusalCase "alternate restore compares the last backing ordinary byte" RestoreAlternate
+      (alterFirstSite (StorageSite Storage.ExchangeAlternateReturn)
+        (wireMemory [bankBytes activeA,bankBytes activeA,B.replicate 450 0,flippedByte 0x127 (bankBytes restoredBacking)]))
   , stepRefusalCase "C selection requires record zero" SelectCustom (alterFirstSite GetterEntry (fixtureArgument 3 1))
   , stepRefusalCase "live selection requires record one" SelectLive (alterFirstSite GetterEntry (fixtureArgument 3 0))
   , stepRefusalCase "C getter requires its actual default-getter caller" SelectCustom

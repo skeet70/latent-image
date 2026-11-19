@@ -691,10 +691,12 @@ data PairState = PairState
   , pairDone :: M.Map Int Returned
   , pairApplyFrames :: M.Map ApplyFrameKey [ApplyFrame]
   , pairApplyDone :: M.Map Int CallerContext
+  -- | Setter entries reached through the apply's tail branch.
+  , pairSetterTails :: S.Set Int
   }
 
 emptyPairState :: PairState
-emptyPairState = PairState M.empty M.empty M.empty M.empty
+emptyPairState = PairState M.empty M.empty M.empty M.empty S.empty
 
 hitTaskId :: Hit -> Maybe LogicalTaskId
 hitTaskId hit = case hitTask hit of
@@ -731,8 +733,7 @@ bankCaller :: Maybe StorageBoundaries.BankApplyBoundary -> Role -> Hit -> Either
 bankCaller Nothing _ _ = Right False
 bankCaller (Just boundary) role hit
   | caller > 0x6309c4 && caller <= 0x630a34 =
-      if role == RetainedRole && caller == 0x630a04 then Right True
-      else if role == RetainedRole && caller == 0x630a2c then Right False
+      if role == RetainedRole && caller `elem` [0x630a04,0x630a2c] then Right True
       else Left ApplyCallerInvalid
   | caller > entry && caller <= end =
       if role /= RetainedRole && StorageBoundaries.bankApplyCallReturn boundary (GuestAddress caller)
@@ -743,13 +744,32 @@ bankCaller (Just boundary) role hit
     GuestAddress entry = StorageBoundaries.bankApplyEntry boundary
     GuestAddress end = StorageBoundaries.bankApplyEnd boundary
 
+-- | An owned setter entered through the admitted apply's tail branch: it carries the innermost
+-- apply frame's stack pointer and return address, before any setter of that frame.
+setterTail :: Maybe StorageBoundaries.BankApplyBoundary -> Role -> PairState -> Hit -> Bool
+setterTail boundary role state hit = role /= RetainedRole
+  && maybe False StorageBoundaries.bankApplySetterTail boundary
+  && case M.lookup (hitCore hit,hitTaskId hit) (pairApplyFrames state) of
+    Just (ApplyFrame entry []:_) -> hitCore entry == hitCore hit && hitSp entry == hitSp hit
+      && physicalAddress (hitLr entry) == physicalAddress (hitLr hit)
+    _ -> False
+
+-- | The apply return also returns from the setter its tail branch entered.
+closeSetterTail :: Int -> Hit -> PairState -> PairState
+closeSetterTail index hit state = case (hitSite hit,M.lookup key (pairOpen state)) of
+  (PlanSite label@(StorageSite Storage.BankApplyReturn),Just (expected,entry,_)) | expected == label ->
+    state { pairOpen = M.delete key (pairOpen state)
+          , pairDone = M.insert entry (Returned index (sum (take 1 (hitArguments hit)))) (pairDone state) }
+  _ -> state
+  where key = (hitCore hit,hitTaskId hit,hitSp hit,hitAddress hit)
+
 pairApply :: Plan -> Maybe StorageBoundaries.BankApplyBoundary -> Int -> Hit -> PairState -> Either Refusal PairState
 pairApply plan boundary index hit state = case hitSite hit of
   PlanSite (StorageSite Storage.BankApplyEntry) ->
     pure state {pairApplyFrames=M.insertWith (++) key [ApplyFrame hit []] (pairApplyFrames state)}
   PlanSite SetterEntry -> do
     isBank <- fault (bankCaller boundary (planRole plan) hit)
-    if not isBank then pure state else do
+    if not (isBank || setterTail boundary (planRole plan) state hit) then pure state else do
       current <- fault (executionTask hit)
       frames <- maybe (Left (BankApplyContextRefused index ApplyEntryMissing)) Right (M.lookup key (pairApplyFrames state))
       case frames of
@@ -791,7 +811,7 @@ callsIn :: Plan -> Maybe StorageBoundaries.BankApplyBoundary -> V.Vector Hit -> 
 callsIn plan boundary hits state indices label = forM [index | index <- indices, hitSite (hits V.! index) == PlanSite label] $ \index -> do
   let hit = hits V.! index
   isBank <- if label == SetterEntry
-    then either (Left . BankApplyContextRefused index) Right (bankCaller boundary (planRole plan) hit)
+    then (|| S.member index (pairSetterTails state)) <$> either (Left . BankApplyContextRefused index) Right (bankCaller boundary (planRole plan) hit)
     else pure False
   context <- if isBank then maybe (Left (BankApplyContextRefused index ApplyReturnMissing)) Right (M.lookup index (pairApplyDone state)) else pure ExactCaller
   pure (Call (hitArguments hit) (hitLr hit) (returnValue <$> M.lookup index (pairDone state)) context)
@@ -816,14 +836,17 @@ pairHits plan boundary hits (from, to) initial = foldM visit initial [from .. to
   visit state index = do
     let hit = hits V.! index
     kind <- classifyHit plan index hit
-    applied <- pairApply plan boundary index hit state
+    applied <- pairApply plan boundary index hit (closeSetterTail index hit state)
     case kind of
       GuardHit -> Left (GuardedFetch index)
       EntryHit returnLabel -> do
-        unless (M.lookup (hitLr hit) (planSites plan) == Just returnLabel) (Left (UnarmedReturn index))
+        let tailed = returnLabel == SetterReturn && setterTail boundary (planRole plan) state hit
+        unless (tailed || M.lookup (hitLr hit) (planSites plan) == Just returnLabel) (Left (UnarmedReturn index))
         let key = (hitCore hit,hitTaskId hit,hitSp hit,hitLr hit)
+            expected = if tailed then StorageSite Storage.BankApplyReturn else returnLabel
         when (M.member key (pairOpen applied)) (Left (DuplicateOpenCall index))
-        pure applied { pairOpen = M.insert key (returnLabel, index, hitArguments hit) (pairOpen applied) }
+        pure applied { pairOpen = M.insert key (expected, index, hitArguments hit) (pairOpen applied)
+                     , pairSetterTails = if tailed then S.insert index (pairSetterTails applied) else pairSetterTails applied }
       ReturnHit label -> case M.lookup (hitCore hit,hitTaskId hit,hitSp hit,hitAddress hit) (pairOpen applied) of
         Just (expected, entry, _) | expected == label -> do
           isBank <- either (Left . BankApplyContextRefused index) Right (bankCaller boundary (planRole plan) (hits V.! entry))
@@ -2331,7 +2354,7 @@ copyWitness family direction call = do
             Storage.PreviousImage -> newPrevious == active && newAlternate == alternate
             Storage.AlternateImage -> newAlternate == active && newPrevious == previous
         Storage.Restore -> newActive == source && newAlternate == alternate && newPrevious == previous
-          && B.take 0x118 newBacking == B.take 0x118 (B.drop 16 source)
+          && B.take 0x118 (B.drop 16 newBacking) == B.take 0x118 (B.drop 16 source)
   if argumentMatches && copyMatches && sameExecution (boundaryEntry call) (boundaryReturn call)
     then Just (CopyWitness family direction before after (boundaryEntryIndex call) (boundaryReturnIndex call)) else Nothing
 
@@ -2624,6 +2647,7 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
   let paired=emptyPairState
         { pairDone=M.unions (map pairDone sessionStates)
         , pairApplyDone=M.unions (map pairApplyDone sessionStates)
+        , pairSetterTails=S.unions (map pairSetterTails sessionStates)
         }
   events <- fmap concat . forM manifests $ \manifest ->
     normalizePersistenceLocated contract [(index,hits V.! index) | index <- window (manifestHitRange manifest)]

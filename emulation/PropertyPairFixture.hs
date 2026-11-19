@@ -237,7 +237,7 @@ composedBoundaries =
 composedCanonical :: B.ByteString
 composedCanonical = foldl' (\image (address,instruction) -> putWord address instruction image)
   (canonicalHull4 <> B.replicate (0x100000-B.length canonicalHull4) 0)
-  (composedStatusWords ++ [(bankApplyRootCall,branchLink bankApplyRootCall 0x6309c4),(0x630a00,branchLink 0x630a00 setterEntry)])
+  (composedStatusWords ++ [(bankApplyRootCall,branchLink bankApplyRootCall 0x6309c4),(0x630a00,branchLink 0x630a00 setterEntry),(0x630a28,branchLink 0x630a28 setterEntry)])
 composedEntries :: [(Word32,Word32)]
 composedEntries = [(address,0xea000000 .|. (((target-address-8) `shiftR` 2) .&. 0xffffff))
   | (address,_) <- StorageBoundaries.bankEntries ++ StorageBoundaries.customEntries ++ StorageBoundaries.recordEntries
@@ -718,6 +718,17 @@ bankCallerCases =
   , ("retained caller LR must follow its actual property BL", isLeft (bankQualified RetainedRole
       (traceAt 1 (wireField ["lr"] (A.toJSON (hex 0x630a08))) retained)))
   , ("a skip branch landing on the root return site is not a root return", isRight (landingQualified (owned ++ drop 3 owned)))
+  , ("an inactive-bank tail call and the retained inactive-bank call compare as one bank caller", case (tailRole RetainedRole inactive,tailQualified tailed) of
+      (Right left,Right right) -> isRight (compareRoles left right) && case (setter left,setter right) of
+        (Just old,Just new) -> callReturn old == 0x630a2c && callReturn new == bankApplyRootCall + 4
+          && case (callContext old,callContext new) of (BankApplyCaller _ _,BankApplyCaller _ _) -> True; _ -> False
+        _ -> False
+      _ -> False)
+  , ("a setter entry carrying the apply frame's LR is unarmed without an admitted tail branch", bankQualified OwnedRole tailed `refusedAs` UnarmedReturn 1)
+  , ("a tail-call setter must carry the apply frame's SP", tailQualified (traceAt 1 (sp 0x3ff8) tailed) `refusedAs` UnarmedReturn 1)
+  , ("a tail-call setter must carry the apply frame's LR", tailQualified (traceAt 1 (wireField ["lr"] (A.toJSON (hex (bankApplyRootCall + 8)))) tailed) `refusedAs` UnarmedReturn 1)
+  , ("a tail-call setter requires an open apply frame", tailQualified (drop 1 tailed) `refusedAs` UnarmedReturn 0)
+  , ("a tail-call setter requires the apply return", tailQualified (take 2 tailed) `refusedAs` BankApplyContextRefused 1 ApplyReturnMissing)
   ] ++ [(label,isLeft (bankQualified OwnedRole changed)) | (label,changed) <- negatives]
   where
     retained = bankHits RetainedRole
@@ -748,6 +759,32 @@ bankCallerCases =
     landingQualified hits = do
       context <- admitBindings landing
       qualify context OwnedRole (reboundArtifactObservation landing (chainBound composedBindings OwnedRole [bankStep hits]))
+    inactive =
+      [ taskHit RetainedRole (StorageSite Storage.BankApplyEntry) 0x6309c4 [] 0x2000 (bankApplyRootCall + 4)
+      , taskHit RetainedRole SetterEntry setterEntry [5,1,1] 0x1fe0 0x630a2c
+      , taskHit RetainedRole SetterReturn 0x630a2c [0] 0x1fe0 0
+      , taskHit RetainedRole (StorageSite Storage.BankApplyReturn) (bankApplyRootCall + 4) [0] 0x2000 0
+      ]
+    tailed =
+      [ taskHit OwnedRole (StorageSite Storage.BankApplyEntry) bankApplyBody [] 0x4000 (bankApplyRootCall + 4)
+      , taskHit OwnedRole SetterEntry setterEntry [5,1,1] 0x4000 (bankApplyRootCall + 4)
+      , taskHit OwnedRole (StorageSite Storage.BankApplyReturn) (bankApplyRootCall + 4) [0] 0x4000 0
+      ]
+    tailWord = 0x1a000000 .|. (((0x624694 - (bankApplyBody + 16)) `shiftR` 2) .&. 0xffffff)
+    tailBound = bankArtifactBindings (putWord (bankApplyBody + 8) tailWord composedImage)
+      (B.take 0x108 elf <> littleWords [tailWord] <> B.drop 0x10c elf) names
+    tailQualified = tailRole OwnedRole
+    tailRole role hits = do
+      context <- admitBindings tailBound
+      let source = chainBound composedBindings role [bankStep hits]
+          rebound = reboundArtifactObservation tailBound source
+          receiptOf trace = maybe (error "tail fixture receipt is invalid") id (A.decodeStrict (obsReceipt trace))
+          roleImage = case receiptOf source of
+            Object fields | Just (Object inputs) <- KM.lookup "inputs" fields, Just value <- KM.lookup "role_image4_sha256" inputs -> value
+            _ -> error "tail fixture receipt lacks its role image"
+      qualify context role (if role == RetainedRole
+        then rebound {obsReceipt=BL.toStrict (A.encode (wireField ["inputs","role_image4_sha256"] roleImage (receiptOf rebound)))}
+        else rebound)
     negatives =
       [ ("bank caller without a root entry refuses", drop 1 owned)
       , ("bank caller without a root return refuses", take 3 owned)
