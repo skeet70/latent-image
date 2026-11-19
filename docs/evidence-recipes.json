@@ -4887,5 +4887,428 @@
         ]
       }
     ]
+  },
+  {
+    "id": "E-RTOS-BANK-FAMILY-CUTOVER-150",
+    "claim": "The mailbox-inclusive flag/mailbox family placed in the fixed bank behind joint bank/loader admission, staged as candidate {{firmware_sha256}}, passes its native cohorts with the bank mapped and the natural from-reset boot pair. Native: Objects {{objects_verdict}} with {{objects_cases}} cases, {{objects_failures}} failures and {{objects_controls}} observation controls; Semaphore {{semaphore_verdict}} with {{semaphore_cases}} cases and {{semaphore_failures}} failures; FixedPool {{fixed_pool_verdict}} with {{fixed_pool_cases}} cases and {{fixed_pool_failures}} failures; S3b per service passed, with owned matches, on slice A {{s3b_a_candidate}} and slice B {{s3b_b_candidate}} with fixed body {{s3b_a_bank}} (domain A run) and {{s3b_b_bank}} (domain B run): domain A Activate {{s3b_a_activate_passed}} ({{s3b_a_activate_owned}} owned matches), InterruptActivate {{s3b_a_interrupt_activate_passed}} ({{s3b_a_interrupt_activate_owned}} owned matches), CancelActivation {{s3b_a_cancel_activation_passed}} ({{s3b_a_cancel_activation_owned}} owned matches), Wake {{s3b_a_wake_passed}} ({{s3b_a_wake_owned}} owned matches), InterruptWake {{s3b_a_interrupt_wake_passed}} ({{s3b_a_interrupt_wake_owned}} owned matches), CancelWake {{s3b_a_cancel_wake_passed}} ({{s3b_a_cancel_wake_owned}} owned matches); domain B Activate {{s3b_b_activate_passed}} ({{s3b_b_activate_owned}} owned matches), InterruptActivate {{s3b_b_interrupt_activate_passed}} ({{s3b_b_interrupt_activate_owned}} owned matches), CancelActivation {{s3b_b_cancel_activation_passed}} ({{s3b_b_cancel_activation_owned}} owned matches), Wake {{s3b_b_wake_passed}} ({{s3b_b_wake_owned}} owned matches), InterruptWake {{s3b_b_interrupt_wake_passed}} ({{s3b_b_interrupt_wake_owned}} owned matches), CancelWake {{s3b_b_cancel_wake_passed}} ({{s3b_b_cancel_wake_owned}} owned matches); domain B judge {{s3b_b_verdict}}. Natural pair all-required {{boot_all}}: stock {{stock_instructions}} instructions and {{stock_entries}} entries, owned {{owned_instructions}} instructions and {{owned_entries}} entries, owned shooting menu {{owned_menu}}. Domain A declares {{a_entries}} family entries ({{a_mailbox}} mailbox), {{a_reached}} reached; domain B {{b_entries}} ({{b_mailbox}} mailbox), {{b_reached}} reached. The owned plan watches {{fill_words}} vacated original-body fill words; the recorded original-body fetch is {{owned_fill_fetch}}.",
+    "scope": "FujiMod cardless cold reset through the cold-start and shooting menus on one trajectory, one stock and one owned run with one observer binary, plus native per-entry family cohorts on the staged A/B loader slices; emulation, not silicon. The boot route enters no mailbox service in either role.",
+    "notes": "Core-1 instruction visibility of the bank is a physical limit: the first stage's post-load ICIALLU (replacement/first_stage/fixed_image.rs) invalidates only core 0's instruction cache, and no emulated run observes per-core instruction-cache state, so whether core 1 can hold stale lines over the bank on silicon is not established. Fill words are watched as CPU-fetch classes from each domain's loader-entry arming. The S3b domain A and domain B runs share every image input (inputs.sha256) and differ in their oracle and native-runner builds. Natural mailbox traffic and reset/delete/reuse remain unobserved.",
+    "artifacts": [
+      "private-data/scratch/RtosBankFamily/runs/20261118T191503Z-bank-boot-stock-2/result/stock-facts.json",
+      "private-data/scratch/RtosBankFamily/runs/20261118T192859Z-bank-boot-owned-2/result/owned-facts.json",
+      "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/result/inputs.sha256",
+      "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/inputs.sha256",
+      "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/inputs.sha256"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T192859Z-bank-boot-owned-2/result/owned-plan.json",
+        "pointer": [
+          "dat_sha256"
+        ]
+      },
+      {
+        "name": "objects_verdict",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Objects/results.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "objects_cases",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Objects/results.json",
+        "pointer": [
+          "cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "objects_failures",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Objects/results.json",
+        "pointer": [
+          "failures"
+        ]
+      },
+      {
+        "name": "objects_controls",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Objects/results.json",
+        "pointer": [
+          "observation_controls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "semaphore_verdict",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Semaphore/results.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "semaphore_cases",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Semaphore/results.json",
+        "pointer": [
+          "cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "semaphore_failures",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/Semaphore/results.json",
+        "pointer": [
+          "failures"
+        ]
+      },
+      {
+        "name": "fixed_pool_verdict",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/FixedPool/results.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "fixed_pool_cases",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/FixedPool/results.json",
+        "pointer": [
+          "cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "fixed_pool_failures",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T073943Z-bank-cohorts-2/result/FixedPool/results.json",
+        "pointer": [
+          "failures"
+        ]
+      },
+      {
+        "name": "s3b_a_activate_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseActivate.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_a_activate_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseActivate.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_a_interrupt_activate_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseInterruptActivate.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_a_interrupt_activate_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseInterruptActivate.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_a_cancel_activation_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseCancelActivation.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_a_cancel_activation_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseCancelActivation.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_a_wake_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseWake.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_a_wake_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseWake.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_a_interrupt_wake_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseInterruptWake.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_a_interrupt_wake_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseInterruptWake.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_a_cancel_wake_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseCancelWake.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_a_cancel_wake_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/FalseCancelWake.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_activate_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueActivate.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_b_activate_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueActivate.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_interrupt_activate_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueInterruptActivate.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_b_interrupt_activate_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueInterruptActivate.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_cancel_activation_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueCancelActivation.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_b_cancel_activation_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueCancelActivation.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_wake_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueWake.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_b_wake_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueWake.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_interrupt_wake_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueInterruptWake.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_b_interrupt_wake_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueInterruptWake.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_cancel_wake_passed",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueCancelWake.json",
+        "pointer": [
+          "passed"
+        ]
+      },
+      {
+        "name": "s3b_b_cancel_wake_owned",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/TrueCancelWake.json",
+        "pointer": [
+          "owned_matches"
+        ]
+      },
+      {
+        "name": "s3b_b_verdict",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/verdict-b.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "s3b_a_candidate",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/inputs-False.json",
+        "pointer": [
+          "candidate_sha256"
+        ]
+      },
+      {
+        "name": "s3b_b_candidate",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/inputs-True.json",
+        "pointer": [
+          "candidate_sha256"
+        ]
+      },
+      {
+        "name": "s3b_a_bank",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T035750Z-bank-s3b-28800-4/work/S3b/cases/inputs-False.json",
+        "pointer": [
+          "bank_sha256",
+          "0"
+        ]
+      },
+      {
+        "name": "s3b_b_bank",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261119T142738Z-bank-s3b-B-selected/result/S3b/inputs-True.json",
+        "pointer": [
+          "bank_sha256",
+          "0"
+        ]
+      },
+      {
+        "name": "boot_all",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "all_required"
+        ]
+      },
+      {
+        "name": "stock_instructions",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "totals",
+          "stock",
+          "instructions"
+        ]
+      },
+      {
+        "name": "stock_entries",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "totals",
+          "stock",
+          "entries"
+        ]
+      },
+      {
+        "name": "owned_instructions",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "totals",
+          "owned",
+          "instructions"
+        ]
+      },
+      {
+        "name": "owned_entries",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "totals",
+          "owned",
+          "entries"
+        ]
+      },
+      {
+        "name": "owned_menu",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "menus",
+          "owned",
+          "1",
+          "observed"
+        ]
+      },
+      {
+        "name": "a_entries",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "family_catalog",
+          "0",
+          "entries"
+        ]
+      },
+      {
+        "name": "a_mailbox",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "family_catalog",
+          "0",
+          "mailbox_entries"
+        ]
+      },
+      {
+        "name": "a_reached",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "family_catalog",
+          "0",
+          "reached"
+        ]
+      },
+      {
+        "name": "b_entries",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "family_catalog",
+          "1",
+          "entries"
+        ]
+      },
+      {
+        "name": "b_mailbox",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "family_catalog",
+          "1",
+          "mailbox_entries"
+        ]
+      },
+      {
+        "name": "b_reached",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "family_catalog",
+          "1",
+          "reached"
+        ]
+      },
+      {
+        "name": "fill_words",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "owned_fill_ranges"
+        ]
+      },
+      {
+        "name": "owned_fill_fetch",
+        "path": "private-data/scratch/RtosBankFamily/runs/20261118T193754Z-bank-boot-compare-2/result/boot-pair.json",
+        "pointer": [
+          "original_body_fetch",
+          "owned"
+        ]
+      }
+    ]
   }
 ]
