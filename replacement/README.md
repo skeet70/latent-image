@@ -245,9 +245,19 @@ devenv shell -- env XM1_NATIVE_MEMORY_MAX=2G run-output exec --label file-servic
 The media task cases stop at the worker and compare r0..r3 and sp there; each receive returns a scripted r2, and a worker is expected with r1 at its `0x814740` row, r2 at its code (the last receive's r2 for the open worker) and r3 at itself, as stock enters it.
 
 <!-- evidence-record E-FILE-SERVICE-HANDLES-150 -->
+
+E-FILE-SERVICE-HANDLES-150: The owned file-service tag allocator 0x71ef18/0x71eff4 and handle map 0x71ea34/0x71eaac/0x71eb28, linked in place over the stock tag slots 0x9101c0, sequence 0x910200 and map 0x910140, match the stock X-M1 1.50 image-4 bytes natively: the handles suite is equal on 61 cases and detects every one of 4 deliberately wrong controls. Owned ELF e0916f3631d2fafaf04fe59dbf24fcfea9decbb15f7ec7072aa5e116425e90b5, image 4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, decomp 55436fc85c0560dd252b0410af6f2427fe198cd3.
+
+Scope: Host-only native per-entry cases on the Cortex-R5F runner over scripted stock semaphore and file-cache services. The same image carries the request path of E-FILE-SERVICE-REQUESTS-150, whose cardless full-system route makes no tag or handle-map call.
+
 <!-- /evidence-record E-FILE-SERVICE-HANDLES-150 -->
 
 <!-- evidence-record E-FILE-SERVICE-REQUESTS-150 -->
+
+E-FILE-SERVICE-REQUESTS-150: The owned file-service request path (open, read, write and close posters and their ten caller entries, result-slot helpers, post, status translation, media readiness, mediamsg routing with deferral and replay, the open interceptor and the media task) matches the stock X-M1 1.50 image-4 bytes natively: the requests suite is equal on 278 cases and detects every one of 8 deliberately wrong controls (owned ELF e0916f3631d2fafaf04fe59dbf24fcfea9decbb15f7ec7072aa5e116425e90b5, image 4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16). On the cardless full-system route the owned DAT 82717132be6e8c1093155c2f8757e2b995315e4c71ee05b9edb4900211f12268 is equal to stock: 309 and 309 interface events, 203 and 203 watched writes and every screen equal, with 0 owned fetches of the retired extents against 5950 stock ones. A stock rerun is equal, and the same comparator finds the earlier owned DAT, which entered workers with r1 at the worker instead of its table row, different.
+
+Scope: Host-only X-M1 1.50. Native: per-entry cases over scripted stock services on the Cortex-R5F runner; media-task cases stop at the worker and compare r0..r3 and sp. Full system: FujiMod RAM-push fresh boot to attach, then PLAY, LEFT, LEFT, RIGHT, RIGHT, with no card, so the route reaches post, mediamsg routing, readiness, the media task and the 0x2c00 worker but no open, read or close request. The interface is every call returning outside the retired extents and the owned body, compared on entry arguments up to the owned arity, r0..r3 at returns except r3 at 0x7217c4, r0..r3 at worker entries, result-slot, session and open-set snapshots and writes, and screen digests.
+
 <!-- /evidence-record E-FILE-SERVICE-REQUESTS-150 -->
 
 The `handles` controls are `sequence_wrap`, `skip_allocated`, `no_free_slot_advance` and `release_after_failed_wait`. The `requests` controls are `translate_unknown_ok`, `readiness_absent_ok`, `result_release_keeps_owner`, `open_failure_keeps_tag`, `defer_no_count`, `intercept_keeps_callback`, `media_task_no_busy` and `media_task_worker_row`. These are native per-entry comparisons against the stock bytes.
