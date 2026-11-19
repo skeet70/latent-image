@@ -33,8 +33,8 @@ stage() {
     "$out/image5.bin" "$out/entry.DAT" "$out/saclac-contract.json" "$out/artifact/runtime.bin" "$out/publications.json"
   cp "$image.symbols" "$out/artifact/runtime.symbols"
   "$P/stage-platform" stage "$CARRIERS" \
-    "$P/platform-a.bin" "$P/platform-a.symbols" "$P/platform-a.disasm" "$P/placement-a.json" \
-    "$P/platform-b.bin" "$P/platform-b.symbols" "$P/platform-b.disasm" "$P/placement-b.json" \
+    "$P/platform-a-loading-$1.bin" "$P/platform-a-loading-$1.symbols" "$P/platform-a-loading-$1.disasm" "$P/placement-a-loading-$1.json" \
+    "$P/platform-b-loading-$1.bin" "$P/platform-b-loading-$1.symbols" "$P/platform-b-loading-$1.disasm" "$P/placement-b-loading-$1.json" \
     "$image.symbols" "$XM1_RUN_WORK/first-stage.DAT" "$STOCK_LOADER_A" "$STOCK_LOADER_B" "$out/platform"
   "$B/replacement/fixed_image/stage-fixed-image" "$B/lz/lz-encode" "$B/host/firmware/rebuild-update" "$B/lz/fflzd" \
     "$out/platform/candidate.DAT" "$out/artifact/runtime.bin" "$image.symbols" "$out/publications.json" \
