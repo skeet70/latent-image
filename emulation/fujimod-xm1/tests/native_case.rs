@@ -450,6 +450,7 @@ struct CoverageRow {
     id: String,
     read: String,
     written: String,
+    exposed: String,
 }
 
 #[derive(Deserialize)]
@@ -3371,12 +3372,49 @@ fn access_coverage_records_exact_plain_alias_transfer_exclusive_and_stub_bytes()
     assert_eq!(observed.observation.coverage.as_ref().unwrap().len(), 4);
     assert_eq!(observed.coverage("region2").read, bitmap(PAGE_BYTES as u32, &[(0, 16)]));
     assert_eq!(observed.coverage("region2").written, bitmap(PAGE_BYTES as u32, &[(0, 4), (8, 8)]));
+    assert_eq!(observed.coverage("region2").exposed, bitmap(PAGE_BYTES as u32, &[(0, 16)]));
     assert_eq!(observed.coverage("region3").read, bitmap(4, &[(0, 4)]));
     assert_eq!(observed.coverage("region3").written, bitmap(4, &[(0, 3)]));
+    assert_eq!(observed.coverage("region3").exposed, bitmap(4, &[(0, 4)]));
     assert_eq!(observed.coverage("region1").read, bitmap(0x100, &[(0xfc, 4)]));
     assert_eq!(observed.coverage("region1").written, bitmap(0x100, &[(0xfc, 4)]));
+    assert_eq!(observed.coverage("region1").exposed, bitmap(0x100, &[]));
     assert_eq!(observed.coverage("region0").read, bitmap(0x100, &[]));
     assert_eq!(observed.coverage("region0").written, bitmap(0x100, &[]));
+    assert_eq!(observed.coverage("region0").exposed, bitmap(0x100, &[]));
+}
+
+#[test]
+fn access_coverage_exposes_only_bytes_read_before_their_first_write() {
+    // strb r0, [r1]; ldr r2, [r1]; str r3, [r1]; ldr r4, [r1];
+    // ldr r5, [r6]; str r5, [r6]; bx lr
+    let observed = Case::new(&[
+        0xe5c1_0000, // strb r0, [r1]
+        0xe591_2000, // ldr r2, [r1]
+        0xe581_3000, // str r3, [r1]
+        0xe591_4000, // ldr r4, [r1]
+        0xe596_5000, // ldr r5, [r6]
+        0xe586_5000, // str r5, [r6]
+        BX_LR,
+    ])
+    .coverage()
+    .region(0x4000, READ_WRITE, &[0; 8])
+    .region(0x5000, READ_WRITE, &[0; 4])
+    .register(0, 0xaa)
+    .register(1, 0x4000)
+    .register(3, 0x1122_3344)
+    .register(6, 0x5000)
+    .run();
+    observed.assert_returned();
+    let first = observed.coverage("region2");
+    assert_eq!(first.read, "0f");
+    assert_eq!(first.written, "0f");
+    // The byte written by strb is not exposed; the word read afterwards exposes only bytes 1-3.
+    assert_eq!(first.exposed, "0e");
+    let second = observed.coverage("region3");
+    assert_eq!(second.read, "0f");
+    assert_eq!(second.written, "0f");
+    assert_eq!(second.exposed, "0f");
 }
 
 #[test]
@@ -3411,4 +3449,5 @@ fn refused_accesses_set_no_coverage_bits() {
     observed.assert_stopped(Status::MemoryGuard, CODE);
     assert_eq!(observed.coverage("region2").read, "00");
     assert_eq!(observed.coverage("region2").written, "00");
+    assert_eq!(observed.coverage("region2").exposed, "00");
 }

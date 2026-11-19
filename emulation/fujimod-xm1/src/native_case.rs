@@ -1814,6 +1814,7 @@ impl<'a> Observation<'a> {
                     id: region.id.as_deref().unwrap_or(""),
                     read: HexBytes(vec![0; (region.span.bytes as usize + 7) / 8]),
                     written: HexBytes(vec![0; (region.span.bytes as usize + 7) / 8]),
+                    exposed: HexBytes(vec![0; (region.span.bytes as usize + 7) / 8]),
                 })
                 .collect()
         });
@@ -2212,25 +2213,38 @@ impl SystemState {
 struct CoverageRegion {
     read: Vec<u8>,
     written: Vec<u8>,
+    /// Bytes read before their first write; a byte first written and then read stays clear.
+    exposed: Vec<u8>,
 }
 
 impl CoverageRegion {
     fn new(bytes: u32) -> Self {
         let bitmap = (bytes as usize + 7) / 8;
-        Self { read: vec![0; bitmap], written: vec![0; bitmap] }
+        Self { read: vec![0; bitmap], written: vec![0; bitmap], exposed: vec![0; bitmap] }
     }
 
     fn mark(&mut self, offset: u32, size: u32, need: Need) {
-        let bits = match need {
-            Need::Read => &mut self.read,
-            Need::Write => &mut self.written,
-            Need::Execute => return,
-        };
         let end = (offset as usize).saturating_add(size as usize);
-        for index in offset as usize..end {
-            if let Some(byte) = bits.get_mut(index / 8) {
-                *byte |= 1 << (index % 8);
+        match need {
+            Need::Read => {
+                for index in offset as usize..end {
+                    if index / 8 >= self.read.len() {
+                        break;
+                    }
+                    self.read[index / 8] |= 1 << (index % 8);
+                    if self.written[index / 8] & (1 << (index % 8)) == 0 {
+                        self.exposed[index / 8] |= 1 << (index % 8);
+                    }
+                }
             }
+            Need::Write => {
+                for index in offset as usize..end {
+                    if let Some(byte) = self.written.get_mut(index / 8) {
+                        *byte |= 1 << (index % 8);
+                    }
+                }
+            }
+            Need::Execute => {}
         }
     }
 }
@@ -2240,6 +2254,7 @@ struct CoverageReport<'a> {
     id: &'a str,
     read: HexBytes,
     written: HexBytes,
+    exposed: HexBytes,
 }
 
 struct State {
@@ -2950,11 +2965,22 @@ impl State {
                 .iter()
                 .enumerate()
                 .map(|(index, region)| {
-                    let (read, written) = bitmaps
+                    let (read, written, exposed) = bitmaps
                         .get_mut(index)
-                        .map(|bitmap| (std::mem::take(&mut bitmap.read), std::mem::take(&mut bitmap.written)))
+                        .map(|bitmap| {
+                            (
+                                std::mem::take(&mut bitmap.read),
+                                std::mem::take(&mut bitmap.written),
+                                std::mem::take(&mut bitmap.exposed),
+                            )
+                        })
                         .unwrap_or_default();
-                    CoverageReport { id: region.id.as_deref().unwrap_or(""), read: HexBytes(read), written: HexBytes(written) }
+                    CoverageReport {
+                        id: region.id.as_deref().unwrap_or(""),
+                        read: HexBytes(read),
+                        written: HexBytes(written),
+                        exposed: HexBytes(exposed),
+                    }
                 })
                 .collect()
         });

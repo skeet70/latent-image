@@ -49,10 +49,10 @@ memoryProfile c
  | get c "memory_profile"==s "resource8" = pure Resource8
  | otherwise = failH "unsupported memory_profile"
 -- The observation cap covers final memory hex (twice the mapped bytes), the
--- access-coverage bitmaps (half the mapped bytes in hex for both kinds), the
--- executed bitmaps and the fixed logs. Access coverage raises the default cap
--- from 8 MiB so a full 4 MiB default mapping still fits; resource8's 40 MiB
--- already covers its 8 MiB.
+-- access-coverage bitmaps (three quarters of the mapped bytes in hex for the
+-- three kinds), the executed bitmaps and the fixed logs. Access coverage raises
+-- the default cap from 8 MiB so a full 4 MiB default mapping still fits;
+-- resource8's 40 MiB already covers its 8 MiB.
 profileSizeBytes, profileTotalBytes, profileJsonBytes, profileOutputBytes :: MemoryProfile -> Int
 profileSizeBytes DefaultMemory=sizeBytes
 profileSizeBytes Resource8=8*1024*1024
@@ -363,7 +363,7 @@ loadCaseWith reader input = do
  exclusions<-arrayCheck(get c "exclusions")1 1000000 "coverage exclusions required"
  ensure(all(not.null.str)exclusions) "coverage exclusions required"
  let mappedBytes=sum(map regionSize regions)
-     coverageHex=sum[4*((regionSize r+7)`div`8)|r<-regions]
+     coverageHex=sum[6*((regionSize r+7)`div`8)|r<-regions]
  when accessCoverage$ensure(2*mappedBytes+coverageHex+2*1024*1024<=fromIntegral(profileOutputBytes envelope)) "access-coverage bitmaps do not fit the observation output bound"
  let rows=[wireHeader envelope scripted++(if accessCoverage then " a" else ""),"cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]

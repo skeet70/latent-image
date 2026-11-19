@@ -217,6 +217,8 @@ data KernelObservation = KernelObservation
 data Coverage = Coverage
   { coverageRead :: B.ByteString
   , coverageWritten :: B.ByteString
+  , -- | Bytes read before their first write in the run.
+    coverageExposed :: B.ByteString
   }
   deriving (Eq, Show)
 
@@ -349,7 +351,7 @@ evaluateObservation observation = do
   case nativeCoverage observation of
     Nothing -> pure ()
     Just coverage -> do
-      _ <- evaluate (sum [B.length (coverageRead c) + B.length (coverageWritten c) | (_, c) <- coverage])
+      _ <- evaluate (sum [B.length (coverageRead c) + B.length (coverageWritten c) + B.length (coverageExposed c) | (_, c) <- coverage])
       pure ()
   case nativeKernel observation of
     Nothing -> pure ()
@@ -493,8 +495,9 @@ parseCoverage regions value = case value of
       when (str (get entry "id") /= regionName ident) (Left (CoverageRegionIdMismatch ident))
       readBytes <- maybe (Left (MalformedCoverageBitmap ident)) Right (unhex (str (get entry "read")))
       writtenBytes <- maybe (Left (MalformedCoverageBitmap ident)) Right (unhex (str (get entry "written")))
-      when (B.length readBytes /= expected || B.length writtenBytes /= expected) (Left (CoverageBitmapSizeMismatch ident))
-      pure (ident, Coverage readBytes writtenBytes)
+      exposedBytes <- maybe (Left (MalformedCoverageBitmap ident)) Right (unhex (str (get entry "exposed")))
+      when (B.length readBytes /= expected || B.length writtenBytes /= expected || B.length exposedBytes /= expected) (Left (CoverageBitmapSizeMismatch ident))
+      pure (ident, Coverage readBytes writtenBytes exposedBytes)
     pure (Just pairs)
   _ -> Left MalformedCoverage
 

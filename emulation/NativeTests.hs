@@ -402,11 +402,12 @@ coverageRegressions runner checker=withTemporary "fuji-coverage-tests"$ \root->d
  ensure(length(list rows)==length regions)"one coverage row per region"
  ensure(get(row "shared")"read"==s(hexBytes(bitmap 0x1000[(0,8)])))"shared read bitmap differs"
  ensure(get(row "shared")"written"==s(hexBytes(bitmap 0x1000[(0,4)])))"shared written bitmap differs"
- ensure(get(row "code")"read"==s(hexBytes(bitmap codeSize[])) && get(row "code")"written"==s(hexBytes(bitmap codeSize[])))"code coverage differs"
- ensure(get(row "exit")"read"==s(hexBytes(bitmap 4[])) && get(row "exit")"written"==s(hexBytes(bitmap 4[])))"exit coverage differs"
- ensure(get(row "stack")"read"==s(hexBytes(bitmap 32[])) && get(row "stack")"written"==s(hexBytes(bitmap 32[])))"stack coverage differs"
+ ensure(get(row "shared")"exposed"==s(hexBytes(bitmap 0x1000[(0,8)])))"shared exposed bitmap differs"
+ ensure(get(row "code")"read"==s(hexBytes(bitmap codeSize[])) && get(row "code")"written"==s(hexBytes(bitmap codeSize[])) && get(row "code")"exposed"==s(hexBytes(bitmap codeSize[])))"code coverage differs"
+ ensure(get(row "exit")"read"==s(hexBytes(bitmap 4[])) && get(row "exit")"written"==s(hexBytes(bitmap 4[])) && get(row "exit")"exposed"==s(hexBytes(bitmap 4[])))"exit coverage differs"
+ ensure(get(row "stack")"read"==s(hexBytes(bitmap 32[])) && get(row "stack")"written"==s(hexBytes(bitmap 32[])) && get(row "stack")"exposed"==s(hexBytes(bitmap 32[])))"stack coverage differs"
  observed<-either(fail.N.renderObservationError)pure(N.observeNative ExitSuccess regions(get report "runner"))
- let expectedRows=[(N.regionIdOf r,N.Coverage (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,8)]else[])) (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,4)]else[])))|r<-regions]
+ let expectedRows=[(N.regionIdOf r,N.Coverage (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,8)]else[])) (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,4)]else[])) (bitmap(regionSize r)(if str(get(description r)"id")=="shared"then[(0,8)]else[])))|r<-regions]
  case N.nativeCoverage observed of
   Just parsed->ensure(parsed==expectedRows)"observation coverage accessor differs"
   Nothing->fail "observation coverage accessor missing"
