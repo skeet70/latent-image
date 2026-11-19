@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Retired stock bodies of image 4, half-open, at x70view 55436fc8 `function-ranges.json` extents.
 pub const CARRIERS: [(u32, u32); 5] = [(0x6c6eb0, 0x6c75f0), (0x6c926c, 0x6c994c), (0x6c9cf4, 0x6ca04c), (0x6ca3e0, 0x6cb0ec), (0x6cb8b4, 0x6cb9cc)];
-/// VGLIB's publication routine `0x6d76ec`, whose shadow write goes through `0x6c9cf4` on the selected engine.
-pub const VGLIB_PUBLICATION: (u32, u32) = (0x6d76ec, 0x6d7864);
+/// The engine-selection wrapper `0x6d03b8` that VGLIB's hand-off `0x6d76ec` calls first; its `bl 0x6c9cf4` returns to `0x6d0408`.
+pub const VGLIB_PUBLICATION: (u32, u32) = (0x6d03b8, 0x6d040c);
 pub const SELECTION: u32 = 0x955af8;
 pub const FRONT: u32 = 0x8e21f8;
 pub const STAGE_IMAGES: u32 = 0x8e2158;
@@ -252,7 +252,7 @@ pub struct Difference { pub boundary_call: usize, pub stock: Option<serde_json::
 /// The first compared call whose projection differs. Calls a unit body made into the unit's own entries are excluded
 /// unless they head a commit, which is how an ISR's persistent commit callback appears in both roles.
 pub fn first_difference(stock: &[Call], owned: &[Call]) -> Option<Difference> {
-    let boundary = |calls: &'_ [Call]| -> Vec<Projection<'_>> { calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(projection).collect() };
+    fn boundary(calls: &[Call]) -> Vec<Projection<'_>> { calls.iter().filter(|call| call.caller != Caller::Unit || call.head).map(projection).collect() }
     let (left, right) = (boundary(stock), boundary(owned));
     (0..left.len().max(right.len())).find(|index| left.get(*index) != right.get(*index)).map(|index| Difference {
         boundary_call: index,

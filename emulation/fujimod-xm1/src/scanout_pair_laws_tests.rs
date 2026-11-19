@@ -28,8 +28,8 @@ fn ran(target: u32, live: [u32; 12], after: [u32; 12]) -> Callback { Callback { 
 fn offset_map_matches_the_contract_shape() {
     let one = register_map(1);
     let zero = register_map(0);
-    assert_eq!(one.len(), 106);
-    assert_eq!(zero.len(), 105);
+    assert_eq!(one.len(), 105);
+    assert_eq!(zero.len(), 104);
     assert!(!zero.iter().any(|(_, register)| *register == 0x18));
     assert_eq!(&one[..8], &[(0, 0), (4, 4), (8, 8), (0xc, 0xc), (0x10, 0x10), (0x14, 0x14), (0x18, 0x18), (0x1c, 0x1c)]);
     let groups: Vec<u32> = one.iter().map(|(_, register)| *register).skip_while(|register| *register != 0x44).take(9).collect();
@@ -68,7 +68,7 @@ fn a_missing_or_wrong_value_is_refused() {
     let mut short = commit_writing(&register_map(1));
     short.bus.pop();
     short.before_drain -= 1;
-    assert!(matches!(laws(&[short]).as_slice(), [Finding::RegisterSequence { position: 105, observed: None, .. }]));
+    assert!(matches!(laws(&[short]).as_slice(), [Finding::RegisterSequence { position: 104, observed: None, .. }]));
     let mut stale = commit_writing(&register_map(1));
     stale.bus[3].value ^= 1;
     assert!(matches!(laws(&[stale]).as_slice(), [Finding::RegisterSequence { position: 3, .. }]));
@@ -177,7 +177,8 @@ fn unit_detection_covers_the_retired_bodies_and_the_owned_range() {
     let body = (0xba0020, 0xba4000);
     assert_eq!(Caller::of(0x6ca500, body), Caller::Unit);
     assert_eq!(Caller::of(0xba1000, body), Caller::Unit);
-    assert_eq!(Caller::of(0x6d7b3c, body), Caller::Vglib);
+    assert_eq!(Caller::of(0x6d0408, body), Caller::Vglib);
+    assert_eq!(Caller::of(0x6d7818, body), Caller::Retained);
     assert_eq!(Caller::of(0x72b680, body), Caller::Retained);
 }
 
