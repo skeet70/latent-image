@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module SettingsStorageS1Fixture
-  ( s1ApplicationHits, s1ReplayFrame, s1Mutations, s1ComparisonMutations
+  ( s1ApplicationHits, s1ReplayFrame, s1Mutations, s1ComparisonMutations, s1UntracedDequeueCaller
   ) where
 
 import Data.Aeson (Value(..), toJSON)
@@ -121,6 +121,12 @@ s1ComparisonMutations =
       . memory S1ApplicationDispatch [changedFrameByte 79,B.pack [3,0],B.pack [0,0]])
   , ("s1-entry-tail-cross-role", memory S1ActionEntry [changedFrameByte 79])
   ]
+
+-- | Two dequeue entries from stock's second caller, whose return 0xd3ad78 is not a traced site.
+s1UntracedDequeueCaller :: TraceMutation
+s1UntracedDequeueCaller hits = case break (isSite S1DequeueEntry) hits of
+  (before,entry:after) -> let other = wireField ["lr"] (toJSON (hex 0xd3ad78)) entry in before ++ [other,other,entry] ++ after
+  _ -> error "S1 trace has no dequeue entry"
 
 changedFrameByte :: Int -> B.ByteString
 changedFrameByte index = B.take index s1ReplayFrame <> B.singleton (B.index s1ReplayFrame index `xor` 1) <> B.drop (index+1) s1ReplayFrame

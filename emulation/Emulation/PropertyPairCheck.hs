@@ -2229,13 +2229,16 @@ pairedStorageCalls entrySite returnSite hits (from,to) = reverse . snd <$> foldM
           entryKey=(hitCore hit,hitTaskId hit,hitSp hit,hitLr hit)
           returnKey=(hitCore hit,hitTaskId hit,hitSp hit,hitAddress hit)
       in case storageSite hit of
-        Just site | site == entrySite -> do
+        Just site | site == entrySite && returnsToTracedSite hit -> do
           unless (M.notMember entryKey open) (Left (StorageShape "storage boundary reenters an active caller frame"))
           pure (M.insert entryKey (index,hit) open,done)
         Just site | site == returnSite -> case M.lookup returnKey open of
           Just (entered,first) -> pure (M.delete returnKey open,StorageCall entered index first hit:done)
           Nothing -> pure (open,done)
         _ -> pure (open,done)
+    -- Entries from callers whose return address is not the fixed return site cannot be paired.
+    fixedReturns = [address | (address,site) <- Storage.lifecycleSites, site == returnSite]
+    returnsToTracedSite hit = null fixedReturns || physicalAddress (hitLr hit) `elem` fixedReturns
 
 sameExecution :: Hit -> Hit -> Bool
 sameExecution first second = case (executionTask first,executionTask second) of

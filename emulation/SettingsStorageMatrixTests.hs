@@ -877,7 +877,10 @@ matrixConsumerCases =
   ++ [ comparisonCase "a C scanner row the firmware rewrites is admitted per role and compared across roles" RolesAgree
          (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) retainedMatrix) (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix)
      , comparisonCase "an owned C scanner row value that differs from retained is refused" StorageEvidenceDiffers retainedMatrix
-         (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix) ]
+         (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix)
+     , comparisonCase "dequeue entries from a caller without a traced return are not paired" RolesAgree
+         (matrixObservation RetainedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller))
+         (matrixObservation OwnedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller)) ]
   where
     rewritten = A.toJSON (wireBytes (littleWords [0x317,0,0x101,3,0x37243726,8,8]))
 
