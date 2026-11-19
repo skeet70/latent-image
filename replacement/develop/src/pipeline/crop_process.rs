@@ -254,7 +254,7 @@ impl ProcessingOperation {
     }
 }
 unsafe extern "C" {
-    fn xm1_pipeline_image_prepare_processing(stage: u32, request: *const ProcessingRequest, source: *mut ImagePlane, flags: *mut u32, operation: u32, option: u32, argument: i32, output: Address32, output_pointer: Address32, original: *const ImagePlane);
+    fn xm1_pipeline_image_prepare_processing(stage: u32, request: *const ProcessingRequest, source: *mut ImagePlane, flags: *mut u32, operation: u32, option: u32, argument: i32, output: Address32, output_pointer: Address32, original: *const ImagePlane) -> u32;
     fn xm1_pipeline_image_setup_processing(stage: u32, work_a: Address32, work_b: Address32, saved: Address32, operation: u32, scale: u32, option: u32, first_flags: u32, third_flags: u32, request_option: u32, output: Address32);
     fn xm1_pipeline_image_saved_request_submit(request: Address32);
     fn xm1_pipeline_image_sensor_initialize(mode: u32) -> i32;
@@ -322,7 +322,9 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_process_planes(stage: u32, re
                 }
                 _ => 0,
             };
-            unsafe { xm1_pipeline_image_prepare_processing(stage, request, &mut source, &mut flags, r.operation, r.option, argument, packet.offset(ByteOffset(0x90)), packet.offset(ByteOffset(0xc4)), first) };
+            if unsafe { xm1_pipeline_image_prepare_processing(stage, request, &mut source, &mut flags, r.operation, r.option, argument, packet.offset(ByteOffset(0x90)), packet.offset(ByteOffset(0xc4)), first) } == 0 {
+                return 0;
+            }
         }
     }
     unsafe { packet.offset(ByteOffset(0x84)).write_half(r.selection as u16) };

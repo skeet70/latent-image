@@ -97,6 +97,7 @@ filegroup(
         "//replacement/develop:shim-catalog-data",
         "//replacement/display_scanout:shim-catalog-data",
         "//replacement/embassy_platform:shim-catalog-data",
+        "//replacement/executable_loading:shim-catalog-data",
         "//replacement/embassy_trial:shim-catalog-data",
         "//replacement/first_stage:shim-catalog-data",
         "//replacement/fixed_image:shim-catalog-data",

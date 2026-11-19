@@ -6,6 +6,7 @@ _SOURCES = [
     "lib.rs",
     "jpeg_transaction.rs",
     "jpeg_device.rs",
+    "jpeg_consumers.rs",
     "jpeg-contract.json",
     "BUILD.bazel",
     "contract.json",
@@ -49,6 +50,7 @@ $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
   -u xm1_playback_source_entry -u xm1_playback_mode_entry \
   -u xm1_playback_jpeg_acquire -u xm1_playback_jpeg_restart \
   -u xm1_playback_jpeg_release -u xm1_playback_jpeg_interrupt \
+  -u xm1_playback_jpeg_build_request -u xm1_playback_jpeg_complete_first \
   $(@D)/libxm1_playback_jpeg.a -o $(location playback-jpeg.o)
 $(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-jpeg.sources.sha256)
 """,
@@ -73,6 +75,7 @@ $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
   -u xm1_playback_source_entry -u xm1_playback_mode_entry \
   -u xm1_playback_jpeg_acquire -u xm1_playback_jpeg_restart \
   -u xm1_playback_jpeg_release -u xm1_playback_jpeg_interrupt \
+  -u xm1_playback_jpeg_build_request -u xm1_playback_jpeg_complete_first \
   $(@D)/libxm1_playback_jpeg_no_source_bytes.a -o $(location playback-jpeg-no-source-bytes.o)
 $(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location playback-jpeg-no-source-bytes.sources.sha256)
 """,

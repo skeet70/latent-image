@@ -21,7 +21,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/capture:capture-candidate` | Production | capture | 4 |
 | `//replacement/completion_delay:completion-delay-image` | Production | completion_delay | 2 |
 | `//replacement/critical_pair:critical-pair-image` | Production | critical_pair, interface_initializer, loader_prefix, secondary_stage | 8 |
-| `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 27 |
+| `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 29 |
 | `//replacement/display_scanout:display-scanout` | Production | display_scanout | 4 |
 | `//replacement/display_scanout:display-scanout-panel` | Production | display_scanout | 4 |
 | `//replacement/first_stage:first-stage-fixed-image` | Production | first_stage | 7 |
@@ -129,13 +129,14 @@ These rows are derived from the C-ABI bridge declarations. Each removal predicat
 | Unit | Family | State | Removal predicate |
 | --- | --- | --- | --- |
 | application_nand | `xm1_app_nand_*` exports (14 functions in `src/lib.rs`) | required | unestablished |
-| application_nand | `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` | required | unestablished |
+| application_nand | `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs` | required | unestablished |
 | calibration_liveview | `xm1_calibration_u16`/`xm1_calibration_i16` exports | required | unestablished |
 | capture | `rb_capture_*` exports in `src/lib.rs` and `rb_capture_stock.S` | required | unestablished |
 | develop | `xm1_pipeline_image_*` exports | required | unestablished |
 | develop | `xm1_property_get`/`xm1_property_set` externs | required | unestablished |
 | develop | `xm1_save_facade` extern | required | unestablished |
 | develop | `rb_capture_*` externs in `src/pipeline` and `develop/src` | required | unestablished |
+| develop | xm1_loading_deadline_after_ms and xm1_loading_request_sync | required | unestablished |
 | display_scanout | `xm1_scanout_*` and `xm1_power_lcd_operation_action` exports (31 families in `src/abi.rs`, panel and formatter modules) | required | unestablished |
 | lens_transport | `xm1_power_current_task`, `xm1_power_interrupt_lock`, `xm1_power_interrupt_unlock`, `xm1_power_service_post`, `xm1_power_set_task_flags`, `xm1_power_resource_route_request` externs | required | unestablished |
 | menu_value | `rb_menu_value_cancel`/`rb_menu_value_confirm` exports | required | unestablished |
@@ -199,7 +200,8 @@ Classification: `reference-only`. [Declarations](application_nand/shims.json).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `xm1_app_nand_*` exports (14 functions in `src/lib.rs`) | C-ABI bridge between two owned units | power_lifecycle and vendor_protocol | yes | both callers link the NAND crate directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_app_nand_*` exports (14 functions in `src/lib.rs`) |
 | NAND register and profile-map layout (`NAND = 0xfff50000`, profile base `0x380`, `src/physical.rs`, `src/memory.rs`) | guest-memory layout view | the stock raw-NAND clients and the boot-time map that the controller must reproduce | partly | every stock raw-NAND client uses the owned flash layer and the map is initialized by owned startup | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. NAND register and profile-map layout (`NAND = 0xfff50000`, profile base `0x380`, `src/physical.rs`, `src/memory.rs`) |
-| `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` | C-ABI bridge between two owned units | power_lifecycle leaf | yes | the leaf is linked directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` |
+| `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs` | C-ABI bridge between two owned units | power_lifecycle leaf | yes | the leaf is linked directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `xm1_power_resource_route_request` and the other `xm1_power_*` externs in `src/lib.rs` and `src/dma_native.rs` |
+| `xm1_lower_read_clean_invalidate`, `xm1_lower_read_clock_mask` and `xm1_lower_read_clock_restore` | trampoline into retained stock | X-M1 core-0 cache and clock/critical leaves | no | the final composition supplies owned cache visibility and qualified monotonic clock leaves | required | unestablished | reference-only: The lower-read owner calls the source-bound cache endpoint and the paired core-0 clock mask/restore leaves. This reference-only registration establishes the ABI contract, not physical cache coherence or NAND quiescence. |
 
 ## application_pump
 
@@ -305,7 +307,7 @@ Classification: `linked`. [Declarations](develop/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `xm1_pipeline_image_*` exports | C-ABI bridge between two owned units | power_lifecycle | yes | power links the pipeline directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1159 symbols, 0 definite references) |
+| `xm1_pipeline_image_*` exports | C-ABI bridge between two owned units | power_lifecycle | yes | power links the pipeline directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1156 symbols, 0 definite references) |
 | `xm1_property_get`/`xm1_property_set` externs | C-ABI bridge between two owned units | property_service | yes | develop links the property service directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1 symbols, 0 definite references) |
 | `xm1_save_facade` extern | C-ABI bridge between two owned units | save | yes | develop links the save facade directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 1 symbols, 0 definite references) |
 | `rb_capture_*` externs in `src/pipeline` and `develop/src` | C-ABI bridge between two owned units | capture | yes | develop links the capture crate directly and both sides compare with stock in one image | required | unestablished | `//replacement/develop:develop-candidate` (RetainedEntry, 1 symbols, 0 definite references) |
@@ -316,8 +318,10 @@ Classification: `linked`. [Declarations](develop/shims.json).
 | `font_core` asset and glyph layout (`src/font_core`, `FontFdl_stock.S`, `FontBuiltin_stock.S`, `FontScripts_stock.S`) | guest-memory layout view | retained stock font resources and text consumers | no | owned assets and every text consumer are owned | required | unestablished | `//replacement/develop:develop-candidate` (Layout, 1 symbols, 0 definite references) |
 | `calibration_core` configuration/curve layout (`src/calibration_core`) | guest-memory layout view | retained calibration data and power/vendor consumers | partly | the calibration image and every consumer are owned | required | unestablished | `//replacement/develop:develop-candidate` (Layout, 1 symbols, 0 definite references) |
 | `develop.ld`, `services.ld` and `caller_observer.ld` placements | veneer or carrier at a stock address | stock callers of develop stages | no | owned code is reached directly | required | unestablished | `//replacement/develop:develop-candidate` (Publication, 1 symbols, 0 definite references) |
-| Additional linked unmangled ABI entry points | stock-ABI export | the publication or qualification consumers of the current linked image | partly | all consumers use owned typed interfaces and both sides have a qualified comparison in the same image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 549 symbols, 0 definite references) |
-| Definite retained references in the current linked instruction and relocation metadata | retained stock seam in assembly | retained code and guest address contracts reached by the composed image | partly | all declared retained targets have owned typed replacements and both sides are compared in the same image | required | unestablished | `//replacement/develop:develop-candidate` (RetainedEntry, 0 symbols, 122 definite references) |
+| Additional linked unmangled ABI entry points | stock-ABI export | the publication or qualification consumers of the current linked image | partly | all consumers use owned typed interfaces and both sides have a qualified comparison in the same image | required | unestablished | `//replacement/develop:develop-candidate` (Export, 546 symbols, 0 definite references) |
+| Definite retained references in the current linked instruction and relocation metadata | retained stock seam in assembly | retained code and guest address contracts reached by the composed image | partly | all declared retained targets have owned typed replacements and both sides are compared in the same image | required | unestablished | `//replacement/develop:develop-candidate` (RetainedEntry, 0 symbols, 138 definite references) |
+| xm1_loading_deadline_after_ms and xm1_loading_request_sync | C-ABI bridge between two owned units | executable_loading | yes | The typed loading client imports the single configured task-60 owner. | required | unestablished | `//replacement/develop:develop-candidate` (Export, 2 symbols, 0 definite references) |
+| X-M1 task60 and core-0 clock leaves used by executable_loading | trampoline into retained stock | retained X-M1 RTOS and core-0 clock services | no | the final composition supplies owned queue/task and qualified monotonic clock services | required | unestablished | `//replacement/develop:develop-candidate` (Import, 9 symbols, 0 definite references) |
 
 ## display_scanout
 
@@ -351,6 +355,18 @@ Classification: `module`. [Declarations](embassy_trial/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+
+## executable_loading
+
+The single typed task60 command, producer, completion and lower-read owner.
+
+Classification: `module`. [Declarations](executable_loading/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| xm1_loading_configuration, xm1_loading_startup, xm1_loading_ready, xm1_loading_legacy_request, xm1_loading_legacy_cancel, xm1_loading_configure, xm1_loading_deadline_after_ms, xm1_loading_initialize, xm1_loading_request, xm1_loading_request_sync, xm1_loading_cancel, xm1_loading_wait_channel and xm1_loading_observe_completion | stock-ABI export | startup construction, stock task60 wrapper callers and Develop loading callers | yes | all callers use the Rust API in one final composition | required | unestablished | reference-only: Reference-only until the Root bank's loading variant is bound in replacement/shim-images.json. //replacement/saclac:saclac-image-loading-* export these bodies; stage-saclac publishes the 0x73ac74/0x73ac94/0x73aca4 veneers only when all three are linked. The composition supplies schema2 configuration whose stock-wrapper timeout is the Root startup caller policy in milliseconds; each posted request converts its caller's timeout once through the timer contract into one finite absolute deadline and carries it unchanged through read and cleanup. A published completion latch answers as stock flashloader_request/cancel do, without posting. No duration, default or cleanup budget is fitted by the library. |
+| task60 queue, task, wait, signal and current-task leaves | trampoline into retained stock | retained RTOS message and semaphore services | partly | the kernel owns typed queue and wait APIs | required | unestablished | reference-only: Reference-only until the Root bank's loading variant is bound. Queue60 keeps the stock dispatch_create_channel geometry (0x30 messages of 16 bytes); each message carries (request id, kind) and the 24-byte envelope is the owned per-command record XM1_LOADING_ENVELOPES. Task startup preserves the nine reserved completion semaphores and task-id publication. |
+| NAND, decoder, segment, extent, progress and delegated-command leaves | trampoline into retained stock | retained X-M1 services; the owned image5 decoder and NAND owner are called directly in the same bank | partly | the corresponding device and delegated command units are owned | required | unestablished | reference-only: Reference-only until the Root bank's loading variant is bound. The DMA unit is 0x20000 bytes; plain backing 0x360000 and image5 staging 0x2e0000 bytes; 0x100000 is a controller budget. Producers use stock segment ids 5 (image5) and 6 (plain); the plain progress reporter is the source-inspected void ABI at 0x73b924. NAND and decoder are owned and linked in the same bank. |
 
 ## first_stage
 
@@ -627,7 +643,7 @@ Classification: `linked`. [Declarations](plain_load/shims.json).
 
 ## playback
 
-Emulator-only source/mode preparation, channel9 JPEG transaction and nominal MMIO services compiled into relocatable RAM experiment objects. Playback callers, command4 continuation, resource/kernel services, shared layouts and publication lifetimes remain retained boundaries.
+Emulator-only source/mode preparation, channel9 JPEG transaction, nominal MMIO services, static-record request construction and first Playback completion compiled into relocatable RAM experiment objects. Other Playback/develop callers, command4 continuation, resource/kernel services, shared layouts and publication lifetimes remain retained boundaries.
 
 Classification: `module`. [Declarations](playback/shims.json).
 
@@ -636,7 +652,8 @@ Classification: `module`. [Declarations](playback/shims.json).
 | Source and mode A32 entry exports and two-word publication veneers | stock-ABI export | Queue-4 loop, retained router and machine-1 action callers | partly | all entry callers link the typed owned preparation API directly | required | unestablished | reference-only: The relocatable object is linked at the experiment's allocated runtime base; installation and conditional caller receipts bind that package. |
 | Retained machine dispatch, output route, display preset and memory ABI | trampoline into retained stock | Stock dispatcher0x011e8bf8, route0x0064982c, preset0x006d1294 and memory0x0089d908 | partly | the packaged composition links the owned dispatch, output, preset and memory providers | required | unestablished | reference-only: The experiment binds these services to the retained addresses in the preparation contract. |
 | Queue-4 payload lifetime and shared playback globals | guest-memory layout view | Retained message storage and machine0/1/11 consumers | partly | the message producer and all shared-state consumers use the owned typed lifetime and layout contract | required | unestablished | reference-only: Queue4 serializes entry. Source-bound payload extents stay readable and disjoint from copied destinations; the experiment remains resident over the guarded PLAY interval. |
-| Channel9 acquire, restart, release and descriptor callback A32 exports | stock-ABI export | Retained Playback machine5, channel9 request builder0x00d98904 and descriptor0x48 IRQ registry | partly | all transaction callers and IRQ registration use the typed owned JPEG API directly | required | unestablished | reference-only: Native caller and installed PLAY receipts bind the transaction to the relinked six-hook package. |
+| Channel9 acquire, restart, release and descriptor callback A32 exports | stock-ABI export | Retained Playback machine5 and submit/release consumers, owned static-record builder and descriptor0x48 IRQ registry | partly | all transaction callers and IRQ registration use the typed owned JPEG API directly | required | unestablished | reference-only: Native caller and installed preparation/PLAY receipts bind the transaction and consumer entries to the relinked eight-hook package. |
+| Static-record request construction and first Playback completion A32 exports | stock-ABI export | Develop job4, retained Playback requirements initializer and finish/cancel consumers, nested critical providers and subscriber callbacks | partly | all producer and completion callers link the typed owned API directly; static-request and subscriber quiescence permits publication removal | required | unestablished | reference-only: Exact whole builder and first-completion bodies use the existing transaction. Qualification separates guarded natural preparation construction from both nominal PLAY handbacks; retained initializer, clear-record release, finish/cancel callers and lifetime obligations remain explicit. |
 | Retained JPEG continuation, resource routing, lock, cache and timer services | trampoline into retained stock | Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9 and IRQ registration/release | partly | the packaged transaction links owned service providers with qualified hardware laws | required | unestablished | reference-only: Nominal low-level MMIO services are defined in the owned transaction artifact. Native high-level callers keep explicit device-service boundaries; full-system polling and MMIO acceptance use the existing JPEG model. Command4 and status17/24 device behavior remain unqualified. |
 | Shared JPEG request/configuration layout and published IRQ lifetime | guest-memory layout view | Retained Playback request/completion consumers and interrupt release | partly | all shared-state consumers use owned layouts and IRQ quiescence permits publication removal | required | unestablished | reference-only: The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified. |
 

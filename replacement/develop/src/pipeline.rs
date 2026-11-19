@@ -65,6 +65,13 @@ mod warp_engine;
 
 use shared::{OperationCode, StageContext};
 
+/// Develop's own timeout for its Initialize (`0x4c06`) loads. No Develop
+/// user-visible or lifecycle requirement is recoverable: the stock callers used
+/// `flashloader_cancel`, which waits on the channel semaphore without bound.
+/// This is therefore the startup-class hang bound, chosen explicitly here.
+const LOADING_INITIALIZE_TIMEOUT: xm1_executable_loading::timeout::Milliseconds =
+    xm1_executable_loading::timeout::STARTUP_CLASS_HANG_BOUND;
+
 #[derive(Clone, Copy)]
 pub(super) enum PipelineStep {
     Preparation(preparation::Stage),

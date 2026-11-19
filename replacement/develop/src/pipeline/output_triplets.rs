@@ -658,19 +658,10 @@ pub(super) struct OverlayId(pub(super) u32);
 #[repr(transparent)]
 pub(super) struct OverlayTimeout(pub(super) u32);
 
-#[repr(C)]
-struct OverlayMessage {
-    event: u16,
-    sender: u8,
-    destination: u8,
-    length: u32,
-    payload: Address32,
-}
 
 unsafe extern "C" {
     fn xm1_pipeline_image_wait_reserved(handle: u32, timeout: u32) -> i32;
     fn xm1_pipeline_image_signal_reserved(handle: u32) -> i32;
-    fn xm1_pipeline_image_send_message(channel: u32, message: *const OverlayMessage) -> i32;
     fn xm1_pipeline_image_overlay_trace(text: Address32);
 }
 
@@ -713,38 +704,6 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_wait_overlay(overlay: Overlay
     0
 }
 
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn xm1_pipeline_image_wait_overlay_channel(channel: OverlayId) {
-    let semaphore = unsafe { Address32(0x00817700).offset(ByteOffset(channel.0.wrapping_mul(4))).word() };
-    if semaphore == 0 { loop {} }
-    unsafe {
-        xm1_pipeline_image_wait_reserved(semaphore, u32::MAX);
-        xm1_pipeline_image_signal_reserved(semaphore);
-    }
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn xm1_pipeline_image_cancel_overlay_channel(channel: OverlayId) -> i32 {
-    let flag = unsafe { Address32(0x00944440).offset(ByteOffset(channel.0.wrapping_mul(4))).word() };
-    if flag == 1 { return 0; }
-    if channel.0 > 8 { return -30; }
-    let request = [0u32; 2];
-    let message = OverlayMessage {
-        event: 0x4c00 + channel.0 as u16,
-        sender: unsafe { xm1_pipeline_image_current_task() } as u8,
-        destination: 0x3c,
-        length: 8,
-        payload: Address32(request.as_ptr() as u32),
-    };
-    if unsafe { xm1_pipeline_image_send_message(0x3c, &message) } != 0 { return -255; }
-    unsafe { xm1_pipeline_image_wait_overlay_channel(channel) };
-    0
-}
-
-#[unsafe(no_mangle)]
-pub(super) unsafe extern "C" fn xm1_pipeline_image_cancel_overlay(channel: OverlayId) -> i32 {
-    unsafe { xm1_pipeline_image_cancel_overlay_channel(channel) }
-}
 
 unsafe extern "C" {
     fn xm1_buffers_configuration_byte(key: u32) -> u32;
@@ -820,7 +779,9 @@ pub(super) unsafe extern "C" fn xm1_pipeline_image_prepare_output_stamp(
         unsafe { request.offset(ByteOffset(offset)).write_word(0) };
     }
     if unsafe { xm1_develop_capture_option_selection() } == 3 { return 1; }
-    unsafe { xm1_pipeline_image_cancel_overlay(OverlayId(6)) };
+    let kind = xm1_executable_loading::protocol::CommandKind::Initialize;
+    let Ok(deadline) = xm1_executable_loading::client::deadline_after(super::LOADING_INITIALIZE_TIMEOUT) else { return 0 };
+    if xm1_executable_loading::client::request_sync(kind, deadline).is_err() { return 0; }
     let packed = unsafe { word(job, 0x49c) } & 16 != 0;
     let offset = unsafe { word(job, 0x498) };
     let pixel_offset = if packed { (offset.wrapping_mul(3) as i32).wrapping_div(2) as u32 } else { offset.wrapping_mul(2) };

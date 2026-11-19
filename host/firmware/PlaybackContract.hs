@@ -1,6 +1,6 @@
 module PlaybackContract
   ( PlaybackEntry (..), SourceSha256 (..), playbackContract, playbackEntries
-  , preparationEntries, jpegEntries, PinnedBody (..), jpegInternalBodies
+  , preparationEntries, jpegEntries, consumerEntries, transactionEntries, PinnedBody (..), jpegInternalBodies
   , JpegDeviceService (..), jpegDeviceServices, jpegDeviceContract
   ) where
 
@@ -9,13 +9,16 @@ import Data.Word (Word32)
 data PlaybackEntry
   = PlaybackSource | PlaybackMode
   | PlaybackJpegAcquire | PlaybackJpegRestart | PlaybackJpegRelease | PlaybackJpegInterrupt
+  | PlaybackJpegBuildRequest | PlaybackJpegCompleteFirst
   deriving (Eq, Ord, Show)
 newtype SourceSha256 = SourceSha256 String deriving (Eq, Show)
 
-preparationEntries, jpegEntries, playbackEntries :: [PlaybackEntry]
+preparationEntries, jpegEntries, consumerEntries, transactionEntries, playbackEntries :: [PlaybackEntry]
 preparationEntries = [PlaybackSource, PlaybackMode]
 jpegEntries = [PlaybackJpegAcquire, PlaybackJpegRestart, PlaybackJpegRelease, PlaybackJpegInterrupt]
-playbackEntries = preparationEntries ++ jpegEntries
+consumerEntries = [PlaybackJpegBuildRequest, PlaybackJpegCompleteFirst]
+transactionEntries = preparationEntries ++ jpegEntries
+playbackEntries = transactionEntries ++ consumerEntries
 
 playbackContract :: PlaybackEntry -> (Word32, Word32, SourceSha256, String)
 playbackContract PlaybackSource =
@@ -30,6 +33,10 @@ playbackContract PlaybackJpegRelease =
   (0x00d988b8, 0x00d98904, SourceSha256 "db638b2a6dc404d71eda6c3da34001f8fa603e181da22555d6b8aaafdc04a7aa", "xm1_playback_jpeg_release")
 playbackContract PlaybackJpegInterrupt =
   (0x00d99570, 0x00d99714, SourceSha256 "4ff7a2b304d223fed19b7f99f081018f54b93be2e1e7d1827956794c2c9576a5", "xm1_playback_jpeg_interrupt")
+playbackContract PlaybackJpegBuildRequest =
+  (0x00d98904, 0x00d989f8, SourceSha256 "6392e76503ea8e6679b13f3003577a298a7e022d990194b7f484f686effef503", "xm1_playback_jpeg_build_request")
+playbackContract PlaybackJpegCompleteFirst =
+  (0x0121fec8, 0x0121ff20, SourceSha256 "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23", "xm1_playback_jpeg_complete_first")
 
 data PinnedBody = PinnedBody
   { bodyStart :: Word32

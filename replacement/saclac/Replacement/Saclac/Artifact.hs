@@ -9,6 +9,7 @@ module Replacement.Saclac.Artifact
   , fixedExtent
   , Entry (..)
   , entries
+  , loadingEntries
   , Retained (..)
   , retainedExternals
   , retainedData
@@ -105,6 +106,20 @@ decoderEntries =
   , (0x6ae3f4, "xm1_decoder_finish")
   ]
 
+-- | The stock task60 constructor, request and cancel wrappers. They are
+-- published only when the linked bank carries the loading owner; a partial
+-- owner is refused.
+loadingEntries :: [(Word32, String)]
+loadingEntries =
+  [ (0x73ac74, "xm1_loading_startup")
+  , (0x73ac94, "xm1_loading_legacy_request")
+  , (0x73aca4, "xm1_loading_legacy_cancel")
+  ]
+
+-- | The receiver task's stock-created stack (`0x725dd8` descriptor word 3).
+loadingTaskStackBytes :: Int
+loadingTaskStackBytes = 0xc00
+
 -- | A stock word the owned image reaches outside its extents.
 data Retained = Retained
   { retainedName :: String
@@ -131,6 +146,37 @@ retainedExternals =
   , Retained "xm1_decoder_marker" 0x42188
   , Retained "xm1_decoder_progress_entry" 0x6ae1dc
   , Retained "xm1_decoder_complete_entry" 0x6ae310
+  ] ++ loadingRetained
+
+-- | Source-inspected X-M1 1.50 leaves the task60 owner and its NAND port call.
+loadingRetained :: [Retained]
+loadingRetained =
+  [ Retained "xm1_loading_create_channel" 0x724cdc
+  , Retained "xm1_loading_create_task" 0x725dd8
+  , Retained "xm1_loading_send_message" 0x72503c
+  , Retained "xm1_loading_receive_message" 0x725318
+  , Retained "xm1_loading_current_task" 0x723cb8
+  , Retained "xm1_loading_wait_reserved" 0x724b68
+  , Retained "xm1_loading_signal_reserved" 0x724c00
+  , Retained "xm1_loading_segment" 0x657114
+  , Retained "xm1_loading_extents" 0x6571a0
+  , Retained "xm1_loading_mode" 0x657184
+  , Retained "xm1_loading_plain_progress" 0x73b924
+  , Retained "xm1_loading_take" 0x724b68
+  , Retained "xm1_loading_give" 0x724c00
+  , Retained "xm1_loading_delay" 0x723ce8
+  , Retained "xm1_loading_cache" 0x42634
+  , Retained "xm1_loading_action1" 0x6aa5b4
+  , Retained "xm1_loading_action2" 0x6aa5e4
+  , Retained "xm1_loading_section3" 0x6aa6f8
+  , Retained "xm1_loading_selected" 0x6aa63c
+  , Retained "xm1_loading_region" 0x6aa750
+  , Retained "xm1_loading_initialize_storage" 0x69f920
+  , Retained "xm1_loading_register_completion" 0x6c1444
+  , Retained "xm1_loading_auxiliary" 0x6aa838
+  , Retained "xm1_lower_read_clean_invalidate" 0x42634
+  , Retained "xm1_lower_read_clock_mask" 0x42560
+  , Retained "xm1_lower_read_clock_restore" 0x42568
   ]
 
 externalAddresses :: [Word32]
@@ -503,6 +549,30 @@ stackFailure problem = case problem of
   Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
   Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
   Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
+-- | Whether the linked bank carries the task60 loading owner: all wrapper
+-- bodies or none.
+loadingOwner :: [F.Symbol] -> Either PlacementError Bool
+loadingOwner symbols = case [name | (_, name) <- loadingEntries, Left _ <- [F.lookupSymbol symbols name]] of
+  [] -> Right True
+  missing | length missing == length loadingEntries -> Right False
+  (name : _) -> Left (EntryMissing name)
+
+-- | The image-4 veneers the linked bank publishes.
+image4Entries :: Admitted -> Either PlacementError [(Word32, String)]
+image4Entries admitted = do
+  loading <- loadingOwner (admittedSymbols admitted)
+  pure (decoderEntries ++ if loading then loadingEntries else [])
+
+-- | The receiver task's owned demand fits its stock-created stack.
+checkLoadingTask :: Admitted -> S.Set Word32 -> Either PlacementError ()
+checkLoadingTask admitted instructions = do
+  loading <- loadingOwner (admittedSymbols admitted)
+  when loading $ do
+    task <- either (const (Left (EntryMissing "xm1_loading_task"))) Right
+      (F.lookupSymbol (admittedSymbols admitted) "xm1_loading_task")
+    budget <- maybe (Left SectionsRejected) Right (stackBudget loadingTaskStackBytes)
+    checkStackEntry budget (F.symbolAddress task) admitted instructions
+
 -- | Admit layout, direct control-flow targets and the owned stack budget.
 admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
 admit elfBytes bin symbolsBytes disasm sectionsBytes = do
@@ -565,6 +635,7 @@ admit elfBytes bin symbolsBytes disasm sectionsBytes = do
   checkTaskStackContract admitted instructions
   budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
   checkStack budget admitted instructions
+  checkLoadingTask admitted instructions
   checkReferences elfBytes admitted
   checkControl admitted instructions dataWords
   pure admitted
@@ -733,11 +804,12 @@ decoderPublications image4 admitted = do
   H.ensure (B.length image4 == 0x282800
     && digest image4 == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
     "canonical image4 differs"
-  forM decoderEntries $ \(address, name) -> do
+  published <- either (H.failH . show) pure (image4Entries admitted)
+  forM published $ \(address, name) -> do
     target <- either H.failH pure (F.symbolAddress <$> F.lookupSymbol (admittedSymbols admitted) name)
-    H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("decoder entry leaves fixed body: " ++ name)
+    H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("image4 entry leaves fixed body: " ++ name)
     let delta = toInteger target - toInteger address - 8
-    H.ensure (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) ("decoder entry leaves A32 branch range: " ++ name)
+    H.ensure (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) ("image4 entry leaves A32 branch range: " ++ name)
     let old = U.word32At image4 (fromIntegral (address - 0x61c400))
         new = 0xea000000 .|. (fromInteger (delta `div` 4) .&. 0xffffff)
     either H.failH pure (Fixed.publication address old new)
@@ -804,6 +876,7 @@ contractValue imagePath datPath staged = object
   , "trap_word" .= trapWord
   , "entries" .= [object ["address" .= entryAddress entry, "veneer" .= entryVeneer entry, "body" .= entryBody entry] | entry <- entries]
   , "decoder_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- decoderEntries]
+  , "loading_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- either (const []) (filter (`elem` loadingEntries)) (image4Entries admitted)]
   , "retained_externals" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedExternals]
   , "retained_data" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedData]
   , "owned_bytes" .= sum [sectionBytes section | section <- admittedSections admitted, sectionAllocated section]

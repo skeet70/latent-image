@@ -74,6 +74,10 @@ name = "fujimod-xm1-loader-continuations"
 path = "src/loader_continuations.rs"
 
 [[bin]]
+name = "fujimod-xm1-loading-runtime"
+path = "src/loading_runtime_observer.rs"
+
+[[bin]]
 name = "fujimod-xm1-heap-replay"
 path = "src/heap_replay.rs"
 

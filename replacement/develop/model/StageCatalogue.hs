@@ -157,7 +157,7 @@ stages =
   , scenarioStage "output-expansion" "OutputExpansionScenarios" Bundle OutputExpansionScenarios.outputExpansionScenarios
   , scenarioStage "output-jpeg" "OutputJpegScenarios" Image5 OutputJpegScenarios.outputJpegScenarios
   , scenarioStage "output-metadata" "OutputMetadataScenarios" Bundle OutputMetadataScenarios.outputMetadataScenarios
-  , scenarioStage "output-triplets" "OutputTripletsScenarios" Image5 OutputTripletsScenarios.scenarios
+  , scenarioStage "output-triplets" "OutputTripletsScenarios" Image5 (\bytes resolve -> OutputTripletsScenarios.scenarios bytes resolve ++ OutputTripletsScenarios.loadingFailureScenarios)
   , scenarioStage "outputs" "OutputsScenarios" Image5 OutputsScenarios.outputsScenarios
   , scenarioStage "packed-software" "PackedSoftwareScenarios" Image5 PackedSoftwareScenarios.packedSoftwareScenarios
   , viewStage "permit" "PermitScenarios" Image5 (\bytes _ -> map transactionView (PermitScenarios.permitScenarios bytes))
@@ -174,7 +174,7 @@ stages =
   , scenarioStage "scan-processing" "ScanProcessingScenarios" Image5 ScanProcessingScenarios.scanProcessingScenarios
   , scenarioStage "sensor-calibration" "SensorCalibrationScenarios" Image5 SensorCalibrationScenarios.sensorCalibrationScenarios
   , scenarioStage "sensor-registers" "SensorRegistersScenarios" Image5 SensorRegistersScenarios.sensorRegisterScenarios
-  , scenarioStage "sensor-requests" "SensorRequestsScenarios" Bundle SensorRequestsScenarios.sensorRequestScenarios
+  , scenarioStage "sensor-requests" "SensorRequestsScenarios" Bundle (\bytes resolve -> SensorRequestsScenarios.sensorRequestScenarios bytes resolve ++ SensorRequestsScenarios.sensorLoadingFailureScenarios)
   , scenarioStage "sensor-settings" "SensorSettingsScenarios" Image5 (\bytes resolve -> SensorSettingsScenarios.sensorSettingsScenarios bytes resolve ++ SensorSettingsScenarios.sensorTemplateScenarios bytes)
   , viewStage "strip-planner" "StripPlannerScenarios" Image5 (\_ _ -> map failureView StripPlannerScenarios.failureScenarios)
   , viewStage "transaction" "TransactionScenarios" Image5 (\bytes _ -> map transactionView (TransactionScenarios.transactionScenarios bytes))
