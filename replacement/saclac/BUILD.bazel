@@ -458,7 +458,9 @@ haskell_binary(
         "$(rootpath //emulation:native-runner)",
     ],
     data = ["//emulation:native-runner"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    # The runner is fed and drained by threads while the process is awaited; without the
+    # threaded RTS the blocking wait stalls the feeder and the case never ends.
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
     deps = [
         ":cycle-step",
         "//emulation:case-sha256",

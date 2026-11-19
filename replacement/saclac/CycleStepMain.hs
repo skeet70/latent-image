@@ -14,6 +14,7 @@ import Control.Monad (forM, forM_, unless)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -40,6 +41,7 @@ data Options = Options
   { optionRunner :: FilePath
   , optionId5 :: FilePath
   , optionId4 :: FilePath
+  , optionLoader :: FilePath
   , optionSites :: FilePath
   , optionWork :: FilePath
   , optionOut :: FilePath
@@ -47,23 +49,26 @@ data Options = Options
   , optionChain :: Maybe String
   , optionStubs :: [(Word32, Word32)]
   , optionRounds :: Int
+  , optionDiscoverData :: Bool
   }
 
 usage :: String
-usage = "usage: saclac-cycle-step --runner RUNNER --id5 IMAGE5 --id4 IMAGE4 --sites SITES --work DIR --out JSON --lane NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR [--lane ...] [--chain NAME] [--stub ADDRESS=VALUE]... [--rounds N]"
+usage = "usage: saclac-cycle-step --runner RUNNER --id5 IMAGE5 --id4 IMAGE4 --loader LOADER_A --sites SITES --work DIR --out JSON --lane NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR [--lane ...] [--chain NAME] [--stub ADDRESS=VALUE]... [--rounds N] [--discover-data]"
 
 parseOptions :: [String] -> IO Options
 parseOptions arguments = go empty arguments
   where
-    empty = Options "" "" "" "" "" "" [] Nothing [] 6
+    empty = Options "" "" "" "" "" "" "" [] Nothing [] 6 False
     go options ("--runner" : value : rest) = go options {optionRunner = value} rest
     go options ("--id5" : value : rest) = go options {optionId5 = value} rest
     go options ("--id4" : value : rest) = go options {optionId4 = value} rest
+    go options ("--loader" : value : rest) = go options {optionLoader = value} rest
     go options ("--sites" : value : rest) = go options {optionSites = value} rest
     go options ("--work" : value : rest) = go options {optionWork = value} rest
     go options ("--out" : value : rest) = go options {optionOut = value} rest
     go options ("--chain" : value : rest) = go options {optionChain = Just value} rest
     go options ("--rounds" : value : rest) = go options {optionRounds = read value} rest
+    go options ("--discover-data" : rest) = go options {optionDiscoverData = True} rest
     go options ("--stub" : value : rest) = case break (== '=') value of
       (address, '=' : number) -> go options {optionStubs = optionStubs options ++ [(fromIntegral (readAddress address), fromIntegral (readAddress number))]} rest
       _ -> failH "--stub takes ADDRESS=VALUE"
@@ -72,7 +77,7 @@ parseOptions arguments = go empty arguments
       _ -> failH "--lane takes NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR"
     go _ (other : _) = failH ("unknown option " ++ other)
     go options [] = do
-      forM_ [("--runner", optionRunner options), ("--id5", optionId5 options), ("--id4", optionId4 options), ("--sites", optionSites options), ("--work", optionWork options), ("--out", optionOut options)] $ \(name, value) ->
+      forM_ [("--runner", optionRunner options), ("--id5", optionId5 options), ("--id4", optionId4 options), ("--loader", optionLoader options), ("--sites", optionSites options), ("--work", optionWork options), ("--out", optionOut options)] $ \(name, value) ->
         ensure (not (null value)) ("missing " ++ name ++ "; " ++ usage)
       ensure (not (null (optionLanes options))) usage
       pure options
@@ -147,32 +152,38 @@ initialWindows5, initialWindows4 :: [Window]
 initialWindows5 = [Window 0x00ef8000 0x000ff000]
 initialWindows4 = [Window 0x00740000 0x00040000]
 
-data Images = Images {image5 :: B.ByteString, image4 :: B.ByteString}
+-- | The pinned code images: image 5, image 4 and loader A at 0x00040000, whose kernel byte
+-- copy 0x0004357c the step calls.
+data Images = Images {image5 :: B.ByteString, image4 :: B.ByteString, image0 :: B.ByteString}
+
+loaderBase :: Word32
+loaderBase = 0x00040000
 
 imageWordAt :: Word32 -> B.ByteString -> Word32 -> Maybe Word32
 imageWordAt base image address
   | address >= base && fromIntegral (address - base) + 4 <= B.length image = Just (wordAt image (fromIntegral (address - base)))
   | otherwise = Nothing
 
-imageSlice :: Word32 -> B.ByteString -> Window -> Either String B.ByteString
-imageSlice base image (Window low size)
-  | low < base = Left ("window starts before its image at " ++ hexText (fromIntegral low))
-  | fromIntegral (low - base) + fromIntegral size > B.length image = Left ("window ends after its image at " ++ hexText (fromIntegral low))
-  | otherwise = Right (B.take (fromIntegral size) (B.drop (fromIntegral (low - base)) image))
-
 -- | The direct branch target of the instruction at a guest address, when the image holds it.
 branchTarget :: Images -> Word32 -> Maybe Word32
 branchTarget images address
   | Just word <- imageWordAt id5Base (image5 images) address = decode address word
   | Just word <- imageWordAt id4Base (image4 images) address = decode address word
+  | Just word <- imageWordAt loaderBase (image0 images) address = decode address word
   | otherwise = Nothing
   where
     decode pc word
       | word .&. 0x0E000000 == 0x0A000000 =
           let immediate = word .&. 0x00FFFFFF
               offset = if immediate .&. 0x00800000 /= 0 then fromIntegral immediate - 0x1000000 else fromIntegral immediate
-           in Just (fromIntegral (fromIntegral pc + 8 + 2 * offset :: Integer) :: Word32)
+           in Just (fromIntegral (fromIntegral pc + 8 + 4 * offset :: Integer) :: Word32)
       | otherwise = Nothing
+
+imageSlice :: Word32 -> B.ByteString -> Window -> Either String B.ByteString
+imageSlice base image (Window low size)
+  | low < base = Left ("window starts before its image at " ++ hexText (fromIntegral low))
+  | fromIntegral (low - base) + fromIntegral size > B.length image = Left ("window ends after its image at " ++ hexText (fromIntegral low))
+  | otherwise = Right (B.take (fromIntegral size) (B.drop (fromIntegral (low - base)) image))
 
 -- ---------------------------------------------------------------------------
 -- Lane inputs
@@ -218,11 +229,20 @@ dumpBytes lane dump = do
 -- ---------------------------------------------------------------------------
 -- Case planning
 
+-- | The code closure the stock step needs: the mapped image windows and the discovered call
+-- targets, each a declared function start. It only grows, and one closure serves every cycle
+-- and lane, so discovery converges once. `closureScratch` lists the zero-filled data pages a
+-- `--discover-data` run maps where the captured state has no bytes; such a run sizes the next
+-- capture and never yields a verdict.
+data Closure = Closure {closureWindows5 :: [Window], closureWindows4 :: [Window], closureWindows0 :: [Window], closureSplits :: [Word32], closureScratch :: [Word32]}
+
+initialClosure :: Closure
+initialClosure = Closure initialWindows5 initialWindows4 [] [] []
+
 data PlanInput = PlanInput
   { planState :: State
   , planMessage :: (Int, Int, [Word8])
-  , planWindows5 :: [Window]
-  , planWindows4 :: [Window]
+  , planClosure :: Closure
   , planId :: String
   , planExtraStubs :: [(Word32, Word32)]
   }
@@ -235,8 +255,9 @@ entryFunctionSize = 0x80
 
 regionsOf :: Images -> PlanInput -> Either String [(RegionPlan, Maybe B.ByteString)]
 regionsOf images input = do
-  windows5 <- mapM (windowPlan (image5 images) id5Base "id5") (zip [0 :: Int ..] (planWindows5 input))
-  windows4 <- mapM (windowPlan (image4 images) id4Base "id4") (zip [0 :: Int ..] (planWindows4 input))
+  windows5 <- mapM (windowPlan (image5 images) id5Base "id5") (zip [0 :: Int ..] (closureWindows5 (planClosure input)))
+  windows4 <- mapM (windowPlan (image4 images) id4Base "id4") (zip [0 :: Int ..] (closureWindows4 (planClosure input)))
+  windows0 <- mapM (windowPlan (image0 images) loaderBase "ld") (zip [0 :: Int ..] (closureWindows0 (planClosure input)))
   pure
     ( [ (RegionPlan "ram-low" (fromIntegral lowBase) (fromIntegral lowSize) "rw" (Just "ram-low"), Just (stateLow (planState input)))
       , (RegionPlan "ram-high" (fromIntegral highBase) (fromIntegral highSize) "rw" (Just "ram-high"), Just (stateHigh (planState input)))
@@ -244,8 +265,10 @@ regionsOf images input = do
       , (RegionPlan "exit" exitAddress 4 "rx" Nothing, Nothing)
       , (RegionPlan "tramp" trampolineBase (fromIntegral trampolineSize) "rx" (Just "tramp"), Just trampolineBytes)
       ]
+      ++ [(RegionPlan ("scratch-" ++ show index) page 0x1000 "rw" Nothing, Nothing) | (index, page) <- zip [0 :: Int ..] (sortOn id (closureScratch (planClosure input)))]
       ++ windows5
       ++ windows4
+      ++ windows0
     )
   where
     trampolineBytes = B.concat (map leWord (map fromIntegral trampoline))
@@ -253,19 +276,22 @@ regionsOf images input = do
       bytes <- imageSlice base image window
       pure (RegionPlan (tag ++ "-" ++ show index) (windowBase window) (windowSize window) "rx" (Just (tag ++ "-" ++ show index)), Just bytes)
 
+-- | Every window cut at the entry, the end of the entry's own partition and each discovered
+-- call target, so every call the step makes lands on a declared function start. A stub's
+-- word is cut out: the runner admits no stub inside a declared function.
 functionsOf :: PlanInput -> [(Word32, Word32)]
 functionsOf input =
-  [(entryAddress, entryFunctionSize)]
-    ++ concatMap partitions (planWindows5 input)
-    ++ [(windowBase window, windowSize window) | window <- planWindows4 input]
+  filter ((`notElem` stubs) . fst) (concatMap partitions (closureWindows5 closure ++ closureWindows4 closure ++ closureWindows0 closure))
     ++ [(trampolineBase, fromIntegral trampolineSize)]
   where
-    partitions window
-      | windowContains window entryAddress =
-          [ (windowBase window, entryAddress - windowBase window)
-          , (entryAddress + entryFunctionSize, windowBase window + windowSize window - (entryAddress + entryFunctionSize))
-          ]
-      | otherwise = [(windowBase window, windowSize window)]
+    closure = planClosure input
+    stubs = taskIdAddress : receiveAddress : map fst (planExtraStubs input)
+    cuts = entryAddress : entryAddress + entryFunctionSize : closureSplits closure ++ stubs ++ map (+ 4) stubs
+    partitions window =
+      let inside = nub (sortOn id [cut | cut <- cuts, windowContains window cut, cut /= windowBase window])
+          starts = windowBase window : inside
+          ends = inside ++ [windowBase window + windowSize window]
+       in zip starts (zipWith (-) ends starts)
 
 receiveCall :: (Int, Int, [Word8]) -> StubCall
 receiveCall (operation, sender, payload) = StubCall
@@ -369,50 +395,80 @@ runPlanned options plan = do
               , runCaseSha = digest
               })
 
--- | Runs one cycle, extending the code windows when the runner refuses a fetch or a data
--- access outside them, up to the declared round limit.
-runCycle :: Options -> Images -> PlanInput -> Word32 -> IO (Either String (RunResult, [Window], [Window], Int))
-runCycle options images input sp = go 0 (planWindows5 input) (planWindows4 input)
+-- | Runs one cycle, growing the shared closure whenever the runner refuses a fetch, a data
+-- access or a call outside it, up to the declared round limit. Every growth is kept in the
+-- shared closure at once, so a cycle that fails later still leaves its discovery behind.
+runCycle :: Options -> Images -> IORef Closure -> PlanInput -> Word32 -> IO (Either String (RunResult, Int))
+runCycle options images closureRef input sp = go 0
   where
-    go round' windows5 windows4 = case planCase images input {planWindows5 = windows5, planWindows4 = windows4} of
-      Left problem -> pure (Left problem)
-      Right (plan, _) -> do
-        result <- runPlanned options (withStack sp plan)
-        case result of
-          Left problem -> pure (Left problem)
-          Right run
-            | round' >= optionRounds options ->
-                pure (Left ("closure did not close after " ++ show round' ++ " rounds: " ++ runStatus run ++ " at " ++ hexText (fromIntegral (runPc run)) ++ " " ++ runDetail run))
-            | otherwise -> case extension images windows5 windows4 run of
-                Nothing -> pure (Right (run, windows5, windows4, round'))
-                Just (Left problem) -> pure (Left problem)
-                Just (Right (windows5', windows4')) -> go (round' + 1) windows5' windows4'
+    go round' = do
+      closure <- readIORef closureRef
+      case planCase images input {planClosure = closure} of
+        Left problem -> pure (Left problem)
+        Right (plan, _) -> do
+          result <- runPlanned options (withStack sp plan)
+          case result of
+            Left problem -> pure (Left problem)
+            Right run -> case extension (optionDiscoverData options) images closure run of
+              Nothing -> pure (Right (run, round'))
+              Just (Left problem) -> pure (Left problem)
+              Just (Right closure')
+                | round' >= optionRounds options ->
+                    pure (Left ("closure did not close after " ++ show round' ++ " rounds: " ++ runStatus run ++ " at " ++ hexText (fromIntegral (runPc run)) ++ " " ++ runDetail run))
+                | otherwise -> writeIORef closureRef closure' >> go (round' + 1)
 
--- | The window extension a runner refusal asks for, or Nothing when the run ended.
-extension :: Images -> [Window] -> [Window] -> RunResult -> Maybe (Either String ([Window], [Window]))
-extension images windows5 windows4 run = case runStatus run of
+-- | The closure growth a runner refusal asks for, or Nothing when the run ended. A refused
+-- fetch or data access maps the surrounding image bytes; with `discover`, a refused data access
+-- outside the images maps a zero-filled scratch page. An unknown call stops at the call
+-- instruction: its direct target inside the pinned images becomes a declared function start,
+-- mapped first when outside the windows; any other target needs a declared stub.
+extension :: Bool -> Images -> Closure -> RunResult -> Maybe (Either String Closure)
+extension discover images closure run = case runStatus run of
   "fetch_guard" -> Just (extend (runPc run))
   "memory_guard" -> case reverse (runAccesses run) of
-    row : _ -> Just (extend (fromIntegral (addressOf (get row "address"))))
+    row : _ ->
+      let address = fromIntegral (addressOf (get row "address"))
+          page = address .&. 0xfffff000
+       in Just $ if discover && not (inImage5 address || inImage4 address)
+            then if page `elem` closureScratch closure
+              then Left ("refused access at " ++ hexText (fromIntegral address) ++ " inside a scratch page")
+              else Right closure {closureScratch = page : closureScratch closure}
+            else extend address
     [] -> Just (Left "memory_guard without a recorded access")
-  "unknown_call" ->
-    let target = branchTarget images (runPc run)
-     in Just (Left ("unmapped call at " ++ hexText (fromIntegral (runPc run))
-          ++ maybe "" (\address -> " to " ++ hexText (fromIntegral address)) target
-          ++ ": declare --stub or extend the windows"))
+  "unknown_call" -> Just $ case branchTarget images (runPc run) of
+    Just target
+      | not (inImage5 target || inImage4 target || inImage0 target) ->
+          Left ("call at " ++ hexText (fromIntegral (runPc run)) ++ " to " ++ hexText (fromIntegral target) ++ " outside the pinned images: declare --stub")
+      | target `elem` closureSplits closure ->
+          Left ("unknown call at " ++ hexText (fromIntegral (runPc run)) ++ " to declared start " ++ hexText (fromIntegral target))
+      | otherwise -> (\grown -> grown {closureSplits = target : closureSplits grown}) <$> (if mapped target then Right closure else extend target)
+    Nothing -> Left ("unknown control transfer at " ++ hexText (fromIntegral (runPc run)) ++ " " ++ runDetail run)
   _ -> Nothing
   where
+    mapped target = any (`windowContains` target) (closureWindows5 closure ++ closureWindows4 closure ++ closureWindows0 closure)
     extend address
-      | inImage5 address = Right (mergeWindows (grow id5Base (fromIntegral (B.length (image5 images))) address windows5), windows4)
-      | inImage4 address = Right (windows5, mergeWindows (grow id4Base (fromIntegral (B.length (image4 images))) address windows4))
+      | inImage5 address = Right closure {closureWindows5 = mergeWindows (grow id5Base (fromIntegral (B.length (image5 images))) address (closureWindows5 closure))}
+      | inImage4 address = Right closure {closureWindows4 = clearTrampoline (mergeWindows (grow id4Base (fromIntegral (B.length (image4 images))) address (closureWindows4 closure)))}
+      | inImage0 address = Right closure {closureWindows0 = mergeWindows (grow loaderBase (fromIntegral (B.length (image0 images))) address (closureWindows0 closure))}
       | otherwise = Left ("refused access at " ++ hexText (fromIntegral address) ++ " outside the pinned images")
     inImage5 address = address >= id5Base && fromIntegral address < fromIntegral id5Base + B.length (image5 images)
     inImage4 address = address >= id4Base && fromIntegral address < fromIntegral id4Base + B.length (image4 images)
+    inImage0 address = address >= loaderBase && fromIntegral address < fromIntegral loaderBase + B.length (image0 images)
+    -- Four KiB either side: the dumped state already fills most of the 8 MiB case map.
     grow :: Word32 -> Int -> Word32 -> [Window] -> [Window]
     grow base length' address windows =
-      let low = max base (address - 0x10000)
-          high = min (base + fromIntegral length') (address + 0x10000)
+      let low = max base ((address - 0x1000) .&. 0xfffff000)
+          high = min (base + fromIntegral length') ((address + 0x2000) .&. 0xfffff000)
        in Window low (high - low) : windows
+    -- The recording trampoline owns the kernel post bytes; no image window may map them.
+    clearTrampoline = concatMap $ \window ->
+      let low = windowBase window
+          high = low + windowSize window
+          tramp = trampolineBase
+          trampEnd = trampolineBase + fromIntegral trampolineSize
+       in if trampEnd <= low || high <= tramp
+            then [window]
+            else [Window low (tramp - low) | tramp > low] ++ [Window trampEnd (high - trampEnd) | high > trampEnd]
 
 -- ---------------------------------------------------------------------------
 -- Comparison
@@ -423,8 +479,6 @@ data CycleRun = CycleRun
   , cycleRunPredicted :: State
   , cycleRunObserved :: State
   , cycleRunReport :: CycleReport
-  , cycleRunWindows5 :: [Window]
-  , cycleRunWindows4 :: [Window]
   }
 
 data CycleReport = CycleReport
@@ -520,8 +574,8 @@ data LaneOutput = LaneOutput
   , laneOutputError :: Maybe String
   }
 
-runLane :: Options -> Images -> [Span] -> Lane -> IO LaneOutput
-runLane options images spans lane = case laneError lane of
+runLane :: Options -> Images -> [Span] -> IORef Closure -> Lane -> IO LaneOutput
+runLane options images spans closureRef lane = case laneError lane of
   Just problem -> pure (LaneOutput (laneName (laneSpec lane)) False [] [] [] (obj []) [] (Just problem))
   Nothing -> do
     let (cycles, refusals) = pairCycles (laneDumps lane) (laneEvents lane)
@@ -530,9 +584,8 @@ runLane options images spans lane = case laneError lane of
     let successes = [run | (_, Right run) <- runs]
         failures = [(index, problem) | (index, Left problem) <- runs]
         metrics = map (metricOf lane) (zip [0 :: Int ..] cycles)
-        windows5 = nub (concatMap cycleRunWindows5 successes)
-        windows4 = nub (concatMap cycleRunWindows4 successes)
         qualified = null failures && not (null successes) && all (\run -> reportStateEqual (cycleRunReport run) && reportOutputsEqual (cycleRunReport run)) successes
+    closure <- readIORef closureRef
     pure LaneOutput
       { laneOutputName = laneName (laneSpec lane)
       , laneOutputQualified = qualified
@@ -540,11 +593,14 @@ runLane options images spans lane = case laneError lane of
       , laneOutputRefusals = refusalValues
       , laneOutputMetrics = metrics
       , laneOutputClosure = obj
-          [ ("windows", arr ([obj [("image", s "image5"), ("base", s (hexText (fromIntegral (windowBase window)))), ("size", n (fromIntegral (windowSize window)))] | window <- (if null windows5 then initialWindows5 else windows5)]
-              ++ [obj [("image", s "image4"), ("base", s (hexText (fromIntegral (windowBase window)))), ("size", n (fromIntegral (windowSize window)))] | window <- (if null windows4 then initialWindows4 else windows4)]))
+          [ ("windows", arr ([obj [("image", s "image5"), ("base", s (hexText (fromIntegral (windowBase window)))), ("size", n (fromIntegral (windowSize window)))] | window <- closureWindows5 closure]
+              ++ [obj [("image", s "image4"), ("base", s (hexText (fromIntegral (windowBase window)))), ("size", n (fromIntegral (windowSize window)))] | window <- closureWindows4 closure]
+              ++ [obj [("image", s "loader-a"), ("base", s (hexText (fromIntegral (windowBase window)))), ("size", n (fromIntegral (windowSize window)))] | window <- closureWindows0 closure]))
+          , ("function_starts", arr [s (hexText (fromIntegral start)) | start <- sortOn id (closureSplits closure)])
+          , ("scratch_pages", arr [s (hexText (fromIntegral page)) | page <- sortOn id (closureScratch closure)])
           , ("executed_bytes", n (sum [reportExecuted (cycleRunReport run) | run <- successes]))
           , ("cycles", n (fromIntegral (length successes)))
-          , ("stubs", arr (map s ["0x00723cb8 task id returns 43", "0x00725318 receive is scripted", "0x0072503c post is the recording trampoline"] ++ [s ("0x" ++ hexText (fromIntegral address) ++ " returns " ++ show value) | (address, value) <- optionStubs options]))
+          , ("stubs", arr (map s ["0x00723cb8 task id returns 43", "0x00725318 receive is scripted", "0x0072503c post is the recording trampoline"] ++ [s (hexText (fromIntegral address) ++ " returns " ++ show value) | (address, value) <- optionStubs options]))
           ]
       , laneOutputRuns = successes
       , laneOutputError = Nothing
@@ -559,18 +615,18 @@ runLane options images spans lane = case laneError lane of
           Right input -> case findLoopStack input of
             Left problem -> pure (Left problem)
             Right sp -> do
+              current <- readIORef closureRef
               let planInput = PlanInput
                     { planState = input
                     , planMessage = messageOf cycle
-                    , planWindows5 = initialWindows5
-                    , planWindows4 = initialWindows4
+                    , planClosure = current
                     , planId = "cycle-" ++ laneName (laneSpec lane) ++ "-" ++ show index
                     , planExtraStubs = optionStubs options
                     }
-              outcome <- runCycle options images planInput sp
+              outcome <- runCycle options images closureRef planInput sp
               case outcome of
                 Left problem -> pure (Left problem)
-                Right (run, windows5, windows4, rounds) -> do
+                Right (run, rounds) -> do
                   observedResult <- completionState cycle
                   case observedResult of
                     Left problem -> pure (Left problem)
@@ -609,8 +665,6 @@ runLane options images spans lane = case laneError lane of
                             , cycleRunPredicted = predicted
                             , cycleRunObserved = observed
                             , cycleRunReport = report
-                            , cycleRunWindows5 = windows5
-                            , cycleRunWindows4 = windows4
                             })
     loadCycleDumps cycle = do
       wake <- dumpBytes lane (cycleWake cycle)
@@ -702,8 +756,8 @@ data ChainRun = ChainRun {chainInput :: State, chainPredicted :: State, chainObs
 -- the owned wake state with its frame overlaid; each later cycle starts from the previous
 -- prediction with the owned lane's observed changes since its completion applied outside
 -- the step's own write set.
-runChain :: Options -> Images -> Lane -> [CycleRun] -> IO ChainResult
-runChain options images lane runs = go 0 Nothing [] runs
+runChain :: Options -> Images -> IORef Closure -> Lane -> [CycleRun] -> IO ChainResult
+runChain options images closureRef lane runs = go 0 Nothing [] runs
   where
     go :: Int -> Maybe ChainRun -> [Value] -> [CycleRun] -> IO ChainResult
     go _ _ entries [] = pure (ChainResult (reverse entries) (all entryMatches (reverse entries)) Nothing)
@@ -727,11 +781,12 @@ runChain options images lane runs = go 0 Nothing [] runs
         runStep input = case findLoopStack input of
           Left problem -> pure (ChainResult (reverse entries) False (Just problem))
           Right sp -> do
-            let planInput = PlanInput input (0x3b4b, 47, wakePayload (cycleRunCycle run)) initialWindows5 initialWindows4 ("chain-" ++ laneName (laneSpec lane) ++ "-" ++ show index) (optionStubs options)
-            outcome <- runCycle options images planInput sp
+            current <- readIORef closureRef
+            let planInput = PlanInput input (0x3b4b, 47, wakePayload (cycleRunCycle run)) current ("chain-" ++ laneName (laneSpec lane) ++ "-" ++ show index) (optionStubs options)
+            outcome <- runCycle options images closureRef planInput sp
             case outcome of
               Left problem -> pure (ChainResult (reverse entries) False (Just problem))
-              Right (result, _, _, _) -> do
+              Right (result, _) -> do
                 let predicted = State (M.findWithDefault B.empty "ram-low" (runMemory result)) (M.findWithDefault B.empty "ram-high" (runMemory result))
                     observed = cycleRunObserved run
                     predictedLevel = stateWord predicted levelAddress
@@ -771,13 +826,15 @@ main = do
   options <- parseOptions =<< getArgs
   image5Bytes <- readRegular (16 * 1024 * 1024) (optionId5 options)
   image4Bytes <- readRegular (16 * 1024 * 1024) (optionId4 options)
+  loaderBytes <- readRegular (16 * 1024 * 1024) (optionLoader options)
   sitesBytes <- readRegular (4 * 1024 * 1024) (optionSites options)
   sites <- jsonRead sitesBytes
-  let images = Images image5Bytes image4Bytes
+  let images = Images image5Bytes image4Bytes loaderBytes
       spans = declaredSpans sites
   createDirectoryIfMissing True (optionWork options)
   lanes <- mapM loadLane (optionLanes options)
-  outputs <- forM lanes $ \lane -> runLane options images spans lane
+  closureRef <- newIORef initialClosure
+  outputs <- forM lanes $ \lane -> runLane options images spans closureRef lane
   let named name = case [output | output <- outputs, laneOutputName output == name] of
         output : _ -> Just output
         [] -> Nothing
@@ -790,7 +847,7 @@ main = do
         pure (lane, output)
   chained <- case chainOutput of
     Just (lane, output) -> do
-      result <- runChain options images lane (laneOutputRuns output)
+      result <- runChain options images closureRef lane (laneOutputRuns output)
       pure (obj
         [ ("lane", s (laneName (laneSpec lane)))
         , ("cycles", arr (chainEntries result))
@@ -827,6 +884,7 @@ main = do
         , ("stock_qualified", b stockQualified)
         , ("lanes", arr (map laneValue outputs))
         , ("chained", chained)
+        , ("discovery", b (optionDiscoverData options))
         , ("frame_identity_slip", arr slip)
         , ("exclusions", arr (map s
             [ "The record region 0x00500000 is the trampoline's harness scratch and is not retained state."
@@ -835,7 +893,8 @@ main = do
             ]))
         ]
   B.writeFile (optionOut options) (encodeCanonical overall)
-  unless (stockQualified && chainQualified) exitFailure
+  -- A discovery run reads zero-filled scratch where the capture has no bytes; it never qualifies.
+  unless (stockQualified && chainQualified && not (optionDiscoverData options)) exitFailure
   where
     laneValue output = obj
       [ ("lane", s (laneOutputName output))
