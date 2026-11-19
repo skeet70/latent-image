@@ -13,6 +13,7 @@ import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (nub)
+import Numeric (showHex)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -320,7 +321,32 @@ main = do
       ok "heap-composed J6 owned supplies retain their pinned demands"
         (all (\(entry, bytes) -> depthOf entry == Just bytes)
           [(0x69cbf0,8),(0x69d160,16),(0x7235d8,128),(0x7236b0,128),(0x725dd8,456),(0x726098,40)])
-      _ <- report "heap-composed task-entry walks" [0x6d7540,0x892110,0x1109130]
+      -- Published task stacks: replacement/task_constructors/src.rs and reports/replacement-inventory-baseline.md task33/72/73 rows.
+      let tasks :: [(Int, Word32, Integer)]
+          tasks = [ (1,0xc22f60,0xc00), (2,0xec2668,0x1000), (3,0xe00a80,0x1000), (4,0x1215480,0x1000), (7,0xecc058,0xc00)
+                  , (33,0x1109130,0x1000), (35,0xed2ce0,0xc00), (36,0xd81218,0xc00), (43,0xf01bc8,0x1000), (55,0x106ceec,0xc00)
+                  , (56,0x1071ca4,0x1400), (62,0x1064224,0x1000), (64,0x1054cf4,0xc00), (72,0x892110,0xc00), (73,0x6d7540,0x1000)
+                  , (80,0x69f0e0,0xc00) ]
+          heapEntries = map fst owned
+      walks <- maybe (H.failH "no task-entry depths") pure (depthsIn evidence supplied [entry | (_, entry, _) <- tasks])
+      let headroom = [ (task, entry, stack, either (Left . show) (\walked -> let SS.StackDepth bytes = SS.reportDepth walked
+                          in Right (any (`elem` heapEntries) (SS.reportSupplied walked), stack - toInteger bytes - 88)) result)
+                     | ((task, entry, stack), (_, result)) <- zip tasks walks ]
+      forM_ headroom $ \(task, entry, stack, result) -> putStrLn ("heap task headroom: task " ++ show task ++ " entry 0x" ++ showHex entry ""
+        ++ " stack " ++ show stack ++ ": " ++ either ("unestablished, walk refused: " ++) (\(reaches, bytes) ->
+          if reaches then "headroom " ++ show bytes ++ " bytes after its bounded heap-reaching demand and the 88-byte IRQ peak"
+          else "bounded closure reaches no heap entry, headroom " ++ show bytes) result)
+      ok "every bounded task closure leaves stack after its demand and the IRQ peak"
+        (and [bytes > 0 | (_, _, _, Right (_, bytes)) <- headroom])
+      let refusedAt result = case result of
+            Left (SS.Refusal site _) -> Just site
+            Left (SS.UnresolvedBranch site) -> Just site
+            _ -> Nothing
+          pinned :: Int -> Word32
+          pinned task = case task of { 1 -> 0x4360c; 33 -> 0x72b694; 36 -> 0xd80e68; 72 -> 0x892c38; _ -> 0x4a960 }
+      ok "no published heap-calling task has an established whole-task bound: the walks refuse at the pinned sites"
+        ([(task, refusedAt result) | ((task, _, _), (_, result)) <- zip tasks walks]
+          == [(task, Just (pinned task)) | (task, _, _) <- tasks])
       pure ()
   -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the
   -- J6 pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
@@ -330,8 +356,9 @@ main = do
     Nothing -> H.failH "no supplied depths or indirect targets for the stock heap walk"
     Just results -> do
       putStrLn ("stock heap depths: " ++ show [(entry, fmap (\report -> let SS.StackDepth bytes = SS.reportDepth report in bytes) result) | (entry, result) <- results])
-      ok "stock malloc, free, _malloc_r and _free_r have bounded depths on canonical code"
-        (length results == 4 && all (either (const False) (const True) . snd) results)
+      ok "stock malloc, free, _malloc_r and _free_r have their pinned bounded depths on canonical code"
+        ([(entry, either (const Nothing) (\report -> let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)) result) | (entry, result) <- results]
+          == [(0x89cda4, Just 504), (0x89cdc4, Just 464), (0x89cde4, Just 496), (0x89e560, Just 456)])
 
   -- Staging and the contract.
   (dat, observed) <- stageComposition tools scratch source j7

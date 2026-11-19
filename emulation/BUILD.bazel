@@ -21,7 +21,7 @@ exports_files(
 )
 
 exports_files(
-    ["fujimod-xm1/src/heap_state.rs", "fujimod-xm1/src/heap_replay_state.rs"],
+    ["fujimod-xm1/src/heap_state.rs", "fujimod-xm1/src/heap_replay_state.rs", "fujimod-xm1/src/heap_abi_scenario.rs"],
     visibility = ["//replacement/general_heap:__pkg__"],
 )
 

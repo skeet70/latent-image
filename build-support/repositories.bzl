@@ -113,6 +113,8 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/frame_capture.rs",
     "//emulation:fujimod-xm1/src/guest.rs",
     "//emulation:fujimod-xm1/src/handoff.rs",
+    "//emulation:fujimod-xm1/src/heap_abi.rs",
+    "//emulation:fujimod-xm1/src/heap_abi_scenario.rs",
     "//emulation:fujimod-xm1/src/heap_accesses.rs",
     "//emulation:fujimod-xm1/src/heap_cutover.rs",
     "//emulation:fujimod-xm1/src/heap_cutover_check.rs",
