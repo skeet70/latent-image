@@ -443,7 +443,8 @@
     "post": "0x72503c",
     "callers": [
       {"start":"0x00ef8ad0","end":"0x00f473a4"},
-      {"start":"0x00ab1a20","end":"0x00bf1a00"}
+      {"start":"0x00ab1a20","end":"0x00bf1a00"},
+      {"start":"0x00ed80a8","end":"0x00ed80e0"}
     ],
     "entries": [
       {"address":"0x00ee8ba0","kind":"service-request","arguments":[{"kind":"word"}]},
