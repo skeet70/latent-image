@@ -78,7 +78,7 @@
         "kind": "reference-only",
         "symbols": ["xm1_playback_jpeg_build_request", "xm1_playback_jpeg_complete_first", "xm1_playback_jpeg_complete_second", "xm1_playback_jpeg_initialize", "xm1_playback_jpeg_reset_state", "xm1_playback_jpeg_restart_request", "xm1_playback_jpeg_cancel_timer", "xm1_playback_jpeg_preserve_prefix", "xm1_playback_jpeg_finish_request", "xm1_playback_jpeg_cancel_request", "xm1_playback_jpeg_submit", "xm1_playback_jpeg_develop_job4", "xm1_playback_jpeg_record_notification", "xm1_playback_jpeg_clear_record_release"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "Exact whole lifecycle and develop job4/notification/clear-record bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction through job4 and PLAY handbacks remain separate epochs; constructor serialization and record-specific completion wait remain explicit obligations."
+        "requirement": "Exact whole lifecycle and develop job4/notification/clear-record bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction through job4 and PLAY handbacks remain separate epochs; job4 construction runs only on task0xb, and a record-specific completion wait remains an explicit obligation."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
