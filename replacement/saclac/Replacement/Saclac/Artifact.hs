@@ -59,6 +59,7 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import Numeric (readHex)
 import qualified Replacement.Record5Staging as Record5
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.FixedImage.Record as Fixed
 import qualified Replacement.Toolchain.Stack as Stack
@@ -410,12 +411,12 @@ compilerTrapWord :: Word32
 compilerTrapWord = 0xe7ffdefe
 
 
-
--- | Direct targets stay in owned code or enter a declared retained entry.
-checkControl :: Admitted -> S.Set Word32 -> S.Set Word32 -> Either PlacementError ()
-checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \address -> do
+-- | Direct targets stay in owned code or enter a declared retained or loader entry.
+checkControl :: S.Set Word32 -> Admitted -> S.Set Word32 -> S.Set Word32 -> Either PlacementError ()
+checkControl loaderEntries admitted instructions dataWords = forM_ (S.toList instructions) $ \address -> do
   let word = wordAt admitted address
       instruction = A.decode address word
+      external target = target `elem` externalAddresses || S.member target loaderEntries
   case instruction of
     A.Rejected A.UndefinedEncoding | word == compilerTrapWord -> Right ()
     A.Rejected forbidden -> case W.classify W.Strict address word of
@@ -423,17 +424,26 @@ checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \
       W.Stop -> Left (WalkRefused address (DecoderRejected forbidden))
       _ -> Right ()
     A.Branch _ _ target -> do
-      unless (insideExtents target || target `elem` externalAddresses) $
+      unless (insideExtents target || external target) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
       when (insideExtents target && S.member target dataWords) $
         Left (WalkRefused address BranchToDataWord)
-      unless (S.member target instructions || target `elem` externalAddresses) $
+      unless (S.member target instructions || external target) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
     _ -> Right ()
   when (word /= compilerTrapWord && mayFallThrough instruction && S.member (address + 4) dataWords) $
     Left (WalkRefused (address + 4) FallThroughIntoDataWord)
   when (word /= compilerTrapWord && mayFallThrough instruction && not (insideExtents (address + 4))) $
     Left (WalkRefused (address + 4) FallThroughOutsideOwned)
+
+-- | The stock entries of both loaders whose bodies stay in the loader carriers: the fixed-bank
+-- family bodies call their own domain's services there.
+loaderEntryAddresses :: Agg.CarrierUnion -> S.Set Word32
+loaderEntryAddresses union = S.fromList
+  [ Agg.carrierEntryAddress entry
+  | entry <- Agg.carrierEntriesA union ++ Agg.carrierEntriesB union
+  , Agg.carrierEntryBody entry == Agg.LoaderBody
+  ]
 
 data Admitted = Admitted
   { admittedElf :: B.ByteString
@@ -574,8 +584,8 @@ checkLoadingTask admitted instructions = do
     checkStackEntry budget (F.symbolAddress task) admitted instructions
 
 -- | Admit layout, direct control-flow targets and the owned stack budget.
-admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
-admit elfBytes bin symbolsBytes disasm sectionsBytes = do
+admit :: Agg.CarrierUnion -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
+admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
   symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
   sections <- parseSections sectionsBytes
   instructions <- instructionAddresses disasm
@@ -636,8 +646,8 @@ admit elfBytes bin symbolsBytes disasm sectionsBytes = do
   budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
   checkStack budget admitted instructions
   checkLoadingTask admitted instructions
-  checkReferences elfBytes admitted
-  checkControl admitted instructions dataWords
+  checkReferences (loaderEntryAddresses union) elfBytes admitted
+  checkControl (loaderEntryAddresses union) admitted instructions dataWords
   pure admitted
 
 checkTaskStackContract :: Admitted -> S.Set Word32 -> Either PlacementError ()
@@ -681,8 +691,8 @@ taskCreateBranch admitted = do
   require (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) TaskStackContractInvalid
   pure (0xeb000000 .|. (fromIntegral (delta `div` 4) .&. 0xffffff))
 
-checkReferences :: B.ByteString -> Admitted -> Either PlacementError ()
-checkReferences elfBytes admitted = do
+checkReferences :: S.Set Word32 -> B.ByteString -> Admitted -> Either PlacementError ()
+checkReferences loaderEntries elfBytes admitted = do
   elf <- first ElfRejected (ELF.parseElf elfBytes)
   references <- first ElfRejected (ELF.addressRelocations elf)
   boundary <- either (const (Left KernelBoundaryInvalid)) Right
@@ -694,7 +704,7 @@ checkReferences elfBytes admitted = do
   require (at 0 == 0x314e524b && windows <= 16 && entryCount <= 32
     && F.symbolSize boundary == 4 * (3 + 2 * windows + entryCount)) KernelBoundaryInvalid
   let ranges = [(at (3 + 2 * index), at (4 + 2 * index)) | index <- take (fromIntegral windows) [0 ..]]
-      retained address = address `elem` externalAddresses
+      retained address = address `elem` externalAddresses || S.member address loaderEntries
         || any (\(_, _, low, bytes) -> low <= address && toInteger address < toInteger low + toInteger bytes) stockArrays
         || any (\(low, high) -> low <= address && address < high) ranges
       metadataBoundary reference symbol = ELF.addressKind reference == ELF.DataReference
@@ -817,10 +827,10 @@ decoderPublications image4 admitted = do
 -- | Staging the canonical image reproduces the canonical DAT: the inverse check.
 stageSaclac
   :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString -> B.ByteString
-  -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+  -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Agg.CarrierUnion
   -> IO Staged
-stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sectionsBytes = do
-  admitted <- either (H.failH . show) pure (admit elf bin symbolsBytes disasm sectionsBytes)
+stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sectionsBytes union = do
+  admitted <- either (H.failH . show) pure (admit union elf bin symbolsBytes disasm sectionsBytes)
   installed <- either (H.failH . show) pure (installedImage image5 admitted)
   either (H.failH . show) pure (admitInstalled installed admitted)
   body <- either (H.failH . show) pure (fixedBody admitted)

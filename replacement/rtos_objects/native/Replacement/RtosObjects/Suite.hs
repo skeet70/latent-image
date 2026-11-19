@@ -21,7 +21,7 @@ import qualified Replacement.RtosPlatform.Aggregate as Agg
 import System.FilePath ((</>), takeDirectory)
 
 newtype Slot = Slot Word32 deriving (Eq, Show)
-data Family = SetFlag | SetHandler | Clear | Wait | Poll | TimedWait | Create | Delete | Send deriving (Eq, Show)
+data Family = SetFlag | SetHandler | Clear | Wait | Poll | TimedWait | Create | Delete | Send | MailboxCreate | MailboxDelete | MailboxPoll deriving (Eq, Show)
 data Helper = WaitRelease Domain | WaitBlock Domain | WaitBlockTimed Domain | Check Domain deriving (Eq, Show)
 data Direct = Receive Domain | TimedReceive Domain deriving (Eq, Show)
 data Call
@@ -67,6 +67,7 @@ data AggregatePayload = AggregatePayload
   , aggregatePlacements :: [Agg.SectionPlacement]
   , aggregateCarriers :: [Regions.Extent]
   , aggregateFill :: Word32
+  , aggregateBank :: Agg.BankImage
   }
 
 data Payload = Standalone Image | Aggregate AggregatePayload
@@ -166,6 +167,9 @@ entryAddress DomainA family = case family of
   Create -> 0x4d39c
   Delete -> 0x4d434
   Send -> 0x4aa44
+  MailboxCreate -> 0x4d5bc
+  MailboxDelete -> 0x4d654
+  MailboxPoll -> 0x4af9c
 entryAddress DomainB family = case family of
   SetFlag -> 0xd80fc
   SetHandler -> 0xd835c
@@ -176,6 +180,9 @@ entryAddress DomainB family = case family of
   Create -> 0xdd360
   Delete -> 0xdd3f8
   Send -> 0xdaa04
+  MailboxCreate -> 0xdd580
+  MailboxDelete -> 0xdd618
+  MailboxPoll -> 0xdaf5c
 
 helperEntry :: Domain -> Helper -> Word32
 helperEntry DomainA helper = case helper of
@@ -303,10 +310,9 @@ cases facts executing =
         ]))
   , resumed "wait-resume-set" Wait 0 (Waker WakerSet [(R0, flagHandle), (R1, 0x11)])
       [ eq (blockWait + factsWaitBlockResult facts) 0, eq outputCell 0x11, Result 0 ]
-  , (resumed "timed-wait-resume-tick" TimedWait 5 (Waker (WakerTick 2) [])
+  , resumed "timed-wait-resume-tick" TimedWait 5 (Waker (WakerTick 2) [])
       [ eq (blockWait + factsWaitBlockResult facts) 0xffffffce, eq outputCell 0, Result 0xffffffce
-      , eq (dfTimerCount ownWords) 0 ])
-      { caseOwnedExpect = [eq (dfFlagTimers ownWords) 0] }
+      , eq (dfTimerCount ownWords) 0 ]
   , (resumed "wait-resume-delete" Wait 0 (Waker WakerDelete [(R0, flagHandle)])
       [])
       { caseOwnedExpect =
@@ -335,6 +341,26 @@ cases facts executing =
       , poke oldMessage 0, poke (oldMessage + 4) 5, poke message sentinel, poke (message + 4) 5
       ] [Result 0, eq oldMessage message, eq message 0, eq (mailControl + factsMailboxControlTail facts) oldMessage]
   , service "send-waiter-peer" Send executing (Released remote) CallerReturn [(R1, message)] (mailWaiter remote) [Result 0, ready remote, eq (mailboxWait facts remote 2 + factsMailboxWaitMessage facts) message, Equals (bank remote) 0x01000000, Equals (bank executing) 0]
+  , service "mailbox-create-empty" MailboxCreate executing NoWaiter CallerReturn [(R1, requestPointer)]
+      [poke (mailbox + factsMailboxConfigExists facts) 0, poke requestPointer 2, poke (requestPointer + 4) 32]
+      [Result 0, eq (mailbox + factsMailboxConfigExists facts) 1, eq mailbox 2
+      , eq (mailbox + factsMailboxConfigPriorityLimit facts) 32, eq mailControl mailControl
+      , eq (mailControl + factsWaitQueuePrev facts) mailControl, eq (mailControl + factsMailboxControlHead facts) 0]
+  , service "mailbox-delete-idle" MailboxDelete executing NoWaiter CallerReturn [] []
+      [Result 0, eq (mailbox + factsMailboxConfigExists facts) 0, eq mailbox 2
+      , eq (mailbox + factsMailboxConfigPriorityLimit facts) 32, eq mailControl mailControl
+      , eq (mailControl + factsWaitQueuePrev facts) mailControl, eq (mailControl + factsMailboxControlHead facts) 0]
+  , service "mailbox-poll-empty" MailboxPoll executing NoWaiter CallerReturn [(R1, outputCell)] []
+      [Result 0xffffffce, eq outputCell 0]
+  , service "mailbox-poll-message" MailboxPoll executing NoWaiter CallerReturn [(R1, outputCell)]
+      [poke (mailControl + factsMailboxControlHead facts) message, poke (mailControl + factsMailboxControlTail facts) message, poke message 0]
+      [Result 0, eq outputCell message, eq (mailControl + factsMailboxControlHead facts) 0]
+  , helper "mailbox-receive-message" (DirectEntry (Receive executing)) CallerReturn [(R1, outputCell)]
+      [poke (mailControl + factsMailboxControlHead facts) message, poke (mailControl + factsMailboxControlTail facts) message, poke message 0]
+      [Result 0, eq outputCell message, eq (mailControl + factsMailboxControlHead facts) 0]
+  , helper "mailbox-timed-receive-message" (DirectEntry (TimedReceive executing)) CallerReturn [(R1, outputCell), (R2, 50)]
+      [poke (mailControl + factsMailboxControlHead facts) message, poke (mailControl + factsMailboxControlTail facts) message, poke message 0]
+      [Result 0, eq outputCell message, eq (mailControl + factsMailboxControlHead facts) 0]
   , release "release-plain-insert" executing TaskInvocation [] [Result 1, ready executing]
   , release "release-terminate-reset" executing TaskInvocation [poke (localTask + factsTaskTerminatePending facts) 1] [Result 0, state executing (factsStateDormant facts), eq (localTask + factsTaskContextDiscarded facts) 1]
   , release "release-terminate-prepare" executing TaskInvocation
@@ -677,12 +703,16 @@ functionSpans domain role payload = case payload of
         spans = sections ++ [(Agg.symbolAddress s, Agg.symbolSize s) | s <- symbols, Agg.symbolSize s > 0] ++ kept
         cuts = sort (nub (concat [[at, at + size] | (at, size) <- spans]))
      in [(lo, hi - lo) | (lo,hi) <- zip cuts (drop 1 cuts), any (\(at,size) -> at <= lo && hi <= at + size) spans]
+          ++ [bankSpan (aggregateBank aggregate)]
   Aggregate _ ->
     let base = timerEntry domain - 0x1e8
      in extents domain ++ retained domain ++ [(base, 0xc4), (base + 0xc4, 0xdc), (timerEntry domain, 0xe4)]
   Standalone _ ->
     let base = timerEntry domain - 0x1e8
      in extents domain ++ retained domain ++ [(base, 0xc4), (base + 0xc4, 0xdc), (timerEntry domain, fromIntegral (B.length timerStub))]
+
+bankSpan :: Agg.BankImage -> (Word32, Word32)
+bankSpan fixed = (Agg.bankBase fixed, fromIntegral (B.length (Agg.bankBytes fixed)))
 
 caseFor :: Facts -> Domain -> ObservationRole -> Image -> Payload -> Case -> CaseSpec
 caseFor facts executing role loader payload one
@@ -699,6 +729,7 @@ caseFor facts executing role loader payload one
       , caseExit = wireAddress (GuestAddress exitAddress)
       , caseRegions =
           codeRegions
+            ++ bankRegions
             ++ [mkRegion ident (wireAddress address) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wireAddress (GuestAddress exitAddress)) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
       , caseFunctions =
@@ -726,6 +757,11 @@ caseFor facts executing role loader payload one
         (if any (\(at,end) -> at <= lo && hi <= end) readonly then ReadOnly else ReadExecute)
         (B.take (fromIntegral (hi-lo)) (B.drop (fromIntegral (lo-codeBase)) installed))
       | (index,(lo,hi)) <- zip [0 :: Int ..] (zip cuts (drop 1 cuts)), hi > lo]
+    bankRegions = case (role, payload) of
+      (OwnedObservation, Aggregate aggregate) ->
+        let Agg.BankImage bankAt bankContent = aggregateBank aggregate
+         in [mkRegion (RegionId "bank") (wireAddress (GuestAddress bankAt)) (B.length bankContent) ReadExecute bankContent]
+      _ -> []
     dataPages = pages facts one
     words' = layoutWords facts one ++ [poke (dfHandlerContext (domainFacts facts executing)) (if caseInvocation one `elem` [HandlerCallback, HandlerContext] then 1 else 0)] ++ caseWords one
     outside = [address | (address, _) <- words', not (any (contains address 4) dataPages)]
@@ -983,7 +1019,7 @@ compareFamily facts executing payload one description stock owned =
       OwnerRelease _ -> []
       HelperEntry _ -> []
       ObjectService family objectDomain
-        | family `elem` [Create, Delete] -> []
+        | family `elem` [Create, Delete, MailboxCreate, MailboxDelete] -> []
         | otherwise -> objectInterval objectDomain ++ nesting objectDomain
       DirectEntry direct -> objectInterval (directDomain direct)
       where

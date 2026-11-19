@@ -361,7 +361,7 @@ data Case = Case
   , caseResume :: Bool
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement], imageCarriers :: [(Word32, Word32)], imageFill :: Word32}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement], imageCarriers :: [(Word32, Word32)], imageFill :: Word32, imageBank :: Maybe Agg.BankImage}
 
 data Run = Run
   { runDomain :: Domain
@@ -1250,9 +1250,10 @@ caseSpec facts executing role loader owned one
       , caseExit = wire exitAddress
       , caseRegions =
           codeRegions
+            ++ [mkRegion (RegionId "bank") (wire bankAt) (B.length bankContent) ReadExecute bankContent | role == OwnedRole, Just (Agg.BankImage bankAt bankContent) <- [imageBank owned]]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes executing)]
-      , caseFunctions = [(wire address, size) | (address, size) <- functionSpans ++ [(driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)]]
+      , caseFunctions = [(wire address, size) | (address, size) <- functionSpans ++ bankSpans ++ [(driverEntry, driverSize), (expiryEntry, expirySize), (deleteEntry, deleteSize)]]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if arrival then StopAddress else Returned
       , caseExpectedRegisters = if arrival
@@ -1279,6 +1280,7 @@ caseSpec facts executing role loader owned one
       let starts = sort (nub (address : address + size :
             [at | (at, _) <- symbolSpans owned, at > address, at < address + size]))
        in [(lo, hi - lo) | (lo, hi) <- zip starts (drop 1 starts)]
+    bankSpans = [(Agg.bankBase fixed, fromIntegral (B.length (Agg.bankBytes fixed))) | role == OwnedRole, Just fixed <- [imageBank owned]]
     (codeBase, codeTop) = codeBounds executing role owned
     readonly = [(Agg.placementAddress p, Agg.placementAddress p + Agg.placementBytes p)
       | role == OwnedRole, p <- imagePlacements owned, Agg.placementBytes p > 0

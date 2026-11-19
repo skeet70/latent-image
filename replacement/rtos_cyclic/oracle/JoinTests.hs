@@ -22,7 +22,7 @@ main = do
         , Aggregate.SectionPlacement 0x40010 4 ".text.body"
         ]
       domain = Union.DomainMap R.DomainA (R.GuestAddress 0x40000) 32
-        [Union.Entry Union.Cyclic "configure" (R.GuestAddress 0x40008) "entry" ".text.entry" "entry" False]
+        [Union.Entry Union.Cyclic "configure" (R.GuestAddress 0x40008) "entry" ".text.entry" "entry" False Aggregate.LoaderBody]
         [Union.Carrier Union.Cyclic (R.Extent (R.GuestAddress 0x40008) (R.GuestAddress 0x40018))]
         [] []
       union = Union.Union 0xe7f000f0 domain domain []

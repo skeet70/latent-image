@@ -5,6 +5,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import qualified Emulation.Image4Staging as Image4
 import qualified FujiAF.Host as H
+import Replacement.RtosPlatform.Aggregate (parseCarrierUnion)
 import Replacement.Saclac.Artifact
 import System.Directory (canonicalizePath)
 import System.Environment (getArgs)
@@ -13,7 +14,7 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [encoder, rebuild, decoder, datPath, image5Path, image4Path, elfPath, binPath, symbolsPath, disasmPath, sectionsPath, scratchPath, outputImage, outputDat, outputContract, outputFixedBody, outputPublications] -> do
+    [encoder, rebuild, decoder, datPath, image5Path, image4Path, elfPath, binPath, symbolsPath, disasmPath, sectionsPath, carriersPath, scratchPath, outputImage, outputDat, outputContract, outputFixedBody, outputPublications] -> do
       [encoder', rebuild', decoder'] <- mapM canonicalizePath [encoder, rebuild, decoder]
       dat <- H.readRegular (64 * 1024 * 1024) datPath
       image5 <- H.readRegular (16 * 1024 * 1024) image5Path
@@ -23,7 +24,8 @@ main = do
       symbols <- H.readRegular (4 * 1024 * 1024) symbolsPath
       disasm <- H.readRegular (64 * 1024 * 1024) disasmPath
       sections <- H.readRegular (1024 * 1024) sectionsPath
-      staged <- stageSaclac (Image4.Tools encoder' rebuild' decoder') scratchPath dat image5 image4 elf bin symbols disasm sections
+      carriers <- either H.failH pure . parseCarrierUnion =<< H.readRegular (1024 * 1024) carriersPath
+      staged <- stageSaclac (Image4.Tools encoder' rebuild' decoder') scratchPath dat image5 image4 elf bin symbols disasm sections carriers
       B.writeFile outputImage (stagedImage5 staged)
       B.writeFile outputDat (stagedDat staged)
       B.writeFile outputFixedBody (stagedFixedBody staged)
@@ -31,4 +33,4 @@ main = do
       image' <- canonicalizePath outputImage
       dat' <- canonicalizePath outputDat
       L.writeFile outputContract (J.encode (contractValue image' dat' staged))
-    _ -> H.failH "usage: stage-saclac ENCODER REBUILD DECODER SOURCE_DAT IMAGE5 IMAGE4 LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS SCRATCH_DIR OUT_IMAGE5 OUT_ENTRY_DAT OUT_CONTRACT OUT_FIXED_BODY OUT_PUBLICATIONS"
+    _ -> H.failH "usage: stage-saclac ENCODER REBUILD DECODER SOURCE_DAT IMAGE5 IMAGE4 LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS CARRIERS SCRATCH_DIR OUT_IMAGE5 OUT_ENTRY_DAT OUT_CONTRACT OUT_FIXED_BODY OUT_PUBLICATIONS"

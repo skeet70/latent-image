@@ -323,49 +323,6 @@ xm1_rust_rlib(
     ],
 )
 
-[
-    xm1_rust_rlib(
-        name = "objects-%s-rlib" % domain,
-        src = "//replacement/rtos_objects:stage/adapter.rs",
-        crate_name = "xm1_rtos_objects_family_adapter",
-        opt_level = "2",
-        data = [
-            "//replacement/rtos_objects:stage/abi.rs",
-            "//replacement/rtos_objects:stage/family.rs",
-            "//replacement/rtos_objects:src/admission.rs",
-            "//replacement/rtos_objects:src/block.rs",
-            "//replacement/rtos_objects:src/create.rs",
-            "//replacement/rtos_objects:src/id.rs",
-            "//replacement/rtos_objects:src/lib.rs",
-            "//replacement/rtos_objects:src/locked.rs",
-            "//replacement/rtos_objects:src/matching.rs",
-            "//replacement/rtos_objects:src/message.rs",
-            "//replacement/rtos_objects:src/order.rs",
-            "//replacement/rtos_objects:src/status.rs",
-            "//replacement/rtos_objects:src/teardown.rs",
-            "//replacement/rtos_objects:src/timeout.rs",
-            "//replacement/rtos_objects:src/wake.rs",
-            "//replacement/rtos_layout:src/lib.rs",
-            "//replacement/rtos_reservation:src/lib.rs",
-        ],
-        rustc_flags = _CARRIER_CODEGEN + [
-            "--cfg",
-            "'feature=\"domain-%s\"'" % domain,
-            "--cfg",
-            "'feature=\"stage\"'",
-            "--cfg",
-            "'feature=\"family\"'",
-            "--cfg",
-            "'feature=\"component\"'",
-            "-C",
-            "llvm-args=-enable-machine-outliner=always",
-            "-C",
-            "llvm-args=-machine-outliner-reruns=1",
-        ],
-    )
-    for domain in ["a", "b"]
-]
-
 _ARCHIVES = {
     "a": [
         ":platform-root",
@@ -381,7 +338,6 @@ _ARCHIVES = {
         ":global-lock-rlib",
         ":cyclic-a-rlib",
         ":timer-a-rlib",
-        ":objects-a-rlib",
     ],
     "b": [
         ":platform-root",
@@ -397,7 +353,6 @@ _ARCHIVES = {
         ":global-lock-rlib",
         ":cyclic-b-rlib",
         ":timer-b-rlib",
-        ":objects-b-rlib",
     ],
 }
 
@@ -416,7 +371,7 @@ tmp=$$(mktemp -d)
 trap 'rm -rf "$$tmp"' EXIT
 $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location veneer-%s.S) -o $$tmp/veneer.o
 $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location //replacement/rtos_fixed_pool:stage/entries.S) -o $$tmp/entries.o
-$(location @lab_jq//:bin/jq) -r '.domains.%s | (.entries[].symbol, .entries[].veneer)' $(location carriers.json) | sort -u > $$tmp/seeds
+$(location @lab_jq//:bin/jq) -r '.domains.%s | ((.entries[] | select(.body != "bank") | .symbol), .entries[].veneer)' $(location carriers.json) | sort -u > $$tmp/seeds
 $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections $$(awk '{printf " -u %%s", $$1}' $$tmp/seeds) --start-group %s --end-group $$tmp/veneer.o $$tmp/entries.o -o $(location :bodies-%s.o)
 $(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(location :sections-%s.txt)
 """ % (domain, domain, " ".join(["$(location %s)" % archive for archive in _ARCHIVES[domain]]), domain, domain, domain),
@@ -434,10 +389,10 @@ $(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(locatio
 [
     genrule(
         name = "platform-script-%s" % domain,
-        srcs = ["carriers.json", ":sections-%s.txt" % domain],
+        srcs = ["carriers.json", ":sections-%s.txt" % domain, "//replacement/saclac:saclac-image.symbols"],
         outs = ["platform-%s.gen.ld" % domain, "placement-%s.json" % domain],
         tools = [":place-platform"],
-        cmd = "$(location :place-platform) $(location carriers.json) %s $(location :sections-%s.txt) $(location :platform-%s.gen.ld) $(location :placement-%s.json)" % (domain, domain, domain, domain),
+        cmd = "$(location :place-platform) $(location carriers.json) %s $(location :sections-%s.txt) $(location //replacement/saclac:saclac-image.symbols) $(location :platform-%s.gen.ld) $(location :placement-%s.json)" % (domain, domain, domain, domain),
         visibility = ["//visibility:public"],
     )
     for domain in ["a", "b"]
@@ -475,6 +430,7 @@ haskell_library(
     name = "platform-artifact",
     srcs = [
         "stage/Replacement/RtosPlatform/Artifact.hs",
+        "stage/Replacement/RtosPlatform/Bank.hs",
         "stage/Replacement/RtosPlatform/Place.hs",
         "stage/Replacement/RtosPlatform/Union.hs",
     ],
@@ -490,6 +446,7 @@ haskell_library(
         "//host:first-stage",
         "//host:text",
         "//host:update-container",
+        "//replacement/fixed_image:contract",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
@@ -522,6 +479,7 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:first-stage",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )

@@ -1,5 +1,6 @@
 use super::*;
 use fujimod_emulator_cpu::{Hook, HookId};
+use fujimod_xm1::fixed_image_layout::{HEADER_BYTES, IMAGE_BASE, IMAGE_LIMIT};
 use std::{ffi::c_void, sync::atomic::{AtomicU64, Ordering}};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -92,8 +93,8 @@ fn retain(source:&Path,output:&Path,name:&str)->Result<FileBinding,String>{let b
 struct CarrierPreimage([u32;97]);
 fn bound_body(contract:&Contract,body:&[u8],symbols:&[u8],producer:&[u8],producer_symbols:&[u8],preimage:&CarrierPreimage,catalog:&mut Catalog)->Result<(),String>{
     require(contract.schema==1&&contract.firmware_sha256.as_str()==loader_orchestration_owned::SOURCE_UPDATE,"decoder canonical source contract differs")?;
-    require(contract.body_start==Guest(0xba0020)&&contract.body_bytes.0 as usize==body.len()&&Digest::of(body).as_str()==contract.body_sha256.as_str()&&Digest::of(symbols).as_str()==contract.symbols_sha256.as_str(),"decoder body identity differs")?;
-    require(contract.bss[0].0>=contract.body_start.0+contract.body_bytes.0&&contract.bss[1].0==contract.bss[0].0+52&&contract.bss[1].0<=0xbe0000,"decoder zero-once state bounds differ")?;
+    require(contract.body_start==Guest(IMAGE_BASE+HEADER_BYTES)&&contract.body_bytes.0 as usize==body.len()&&Digest::of(body).as_str()==contract.body_sha256.as_str()&&Digest::of(symbols).as_str()==contract.symbols_sha256.as_str(),"decoder body identity differs")?;
+    require(contract.bss[0].0>=contract.body_start.0+contract.body_bytes.0&&contract.bss[1].0==contract.bss[0].0+52&&contract.bss[1].0<=IMAGE_LIMIT,"decoder zero-once state bounds differ")?;
     require(Digest::of(producer).as_str()==contract.producer_sha256.as_str()&&contract.producer_sha256.as_str()=="c4002c01c67a18647ffe5e0b2bc561af3e212c59c5ebcec0dac77000c6ea7703"&&Digest::of(producer_symbols).as_str()==contract.producer_symbols_sha256.as_str()&&contract.producer_symbols_sha256.as_str()=="eebd59f77cf2a33eeb10e5b040e981df18c43099866e9626e21016a63d5952ce","decoder actual producer identity differs")?;
     let entries=[(Entry::Init,0x6ae360,"xm1_decoder_init"),(Entry::Feed,0x6ae500,"xm1_decoder_feed"),(Entry::Progress,0x6ae1dc,"xm1_decoder_progress"),(Entry::Complete,0x6ae310,"xm1_decoder_complete"),(Entry::Finish,0x6ae3f4,"xm1_decoder_finish")];
     require(contract.entries.len()==entries.len(),"decoder entry count differs")?;

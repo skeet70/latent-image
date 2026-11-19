@@ -98,6 +98,24 @@
    "entry": "0x000db0a4",
    "extent": 680,
    "stock": "image"
+  },
+  {
+   "case": "mailbox-create-empty",
+   "entry": "0x000dd580",
+   "extent": 152,
+   "stock": "image"
+  },
+  {
+   "case": "mailbox-delete-idle",
+   "entry": "0x000dd618",
+   "extent": 112,
+   "stock": "image"
+  },
+  {
+   "case": "mailbox-poll-message",
+   "entry": "0x000daf5c",
+   "extent": 328,
+   "stock": "image"
   }
  ]
 }

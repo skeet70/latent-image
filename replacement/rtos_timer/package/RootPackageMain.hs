@@ -23,7 +23,7 @@ main = do
   arguments <- getArgs
   case arguments of
     encoder : rebuild : decoder : rest -> case splitAt 24 rest of
-      (imagePaths, [carriersPath, binA, symbolsA, disasmA, placementsA, binB, symbolsB, disasmB, placementsB, canonicalPath, guardPath, scratchPath, output]) -> do
+      (imagePaths, [carriersPath, binA, symbolsA, disasmA, placementsA, binB, symbolsB, disasmB, placementsB, bankSymbols, canonicalPath, guardPath, scratchPath, output]) -> do
         paths <- mapM canonicalizePath imagePaths
         guardBytes <- input guardPath
         initialBytes <- either H.failH pure (j5Manifest guardBytes [] paths)
@@ -45,7 +45,7 @@ main = do
         aSpans <- placements placementsA
         bSpans <- placements placementsB
         linked <- Platform.Linked <$> input binA <*> input symbolsA <*> input disasmA <*> pure aSpans
-          <*> input binB <*> input symbolsB <*> input disasmB <*> pure bSpans
+          <*> input binB <*> input symbolsB <*> input disasmB <*> pure bSpans <*> input bankSymbols
         package <- either H.failH pure (joinRootPlatform source composition startupDat observed union linked)
         effective <- either H.failH pure (packageCarriers package)
         Startup.writeOutputs output (packageDat package) (packageTargets package) (packageContract startupContract startupDat package)

@@ -80,10 +80,10 @@ poke = foldl (\bytes (offset,value) -> B.take (fromIntegral offset) bytes <> val
 w :: Word32 -> B.ByteString
 w = word32le
 
-spec :: Bool -> Service -> Row -> String -> [(Word32, Word32)] -> [(Word32, Word32)] -> B.ByteString -> CaseSpec
-spec domainB service (Row handle context cpsr state flags exists discarded self dispatch) label codeSpans functionSpans code = CaseSpec
+spec :: Bool -> Service -> Row -> String -> [(Word32, Word32)] -> [(Word32, Word32)] -> Maybe Agg.BankImage -> B.ByteString -> CaseSpec
+spec domainB service (Row handle context cpsr state flags exists discarded self dispatch) label codeSpans functionSpans fixedBank code = CaseSpec
   { caseId=label, caseProvenance="X-M1 1.50 exact task_services.c 55436fc85c, S3b", caseExclusion="Stack scratch and live dispatcher frame excluded; retained helpers execute stock", caseEntry=ga (entry service + delta), caseExit=ga 0x958f00
-  , caseRegions=codeRegions ++ [mkRegion (RegionId "config") (ga 0x96c000) 0x1000 ReadWrite config, mkRegion (RegionId "stack") (ga 0x959700) 0x110 ReadWrite (B.replicate 0x110 0)] ++ concatMap ram [False,True] ++ [mkRegion (RegionId name) (ga at) 4 Device (w 0) | (name,at) <- [("bank0",0xfffb30cc),("bank1",0xfffb40cc)]]
+  , caseRegions=codeRegions ++ bankRegions ++ [mkRegion (RegionId "config") (ga 0x96c000) 0x1000 ReadWrite config, mkRegion (RegionId "stack") (ga 0x959700) 0x110 ReadWrite (B.replicate 0x110 0)] ++ concatMap ram [False,True] ++ [mkRegion (RegionId name) (ga at) 4 Device (w 0) | (name,at) <- [("bank0",0xfffb30cc),("bank1",0xfffb40cc)]]
       ++ [mkRegion (RegionId "code-exit") (ga 0x958f00) 4 ReadExecute (w 0xe7f000f0)]
   , caseFunctions=[(ga at,size) | (at,size) <- functionSpans]
   , caseInitial=[(r,if r==R0 then handle else 0xa5a50000 + fromIntegral (fromEnum r)) | r <- [R0 .. R12]] ++ [(Sp,0x959800),(Lr,0x958f00),(Cpsr,cpsr)]
@@ -95,6 +95,7 @@ spec domainB service (Row handle context cpsr state flags exists discarded self 
   delta = if domainB then 0x8ffc0 else 0
   base = if domainB then 0xd0000 else 0x40000
   codeRegions = [mkRegion (RegionId ("code-"++show at)) (ga at) (fromIntegral size) ReadExecute (B.take (fromIntegral size) (B.drop (fromIntegral (at-base)) code)) | (at,size) <- codeSpans]
+  bankRegions = [mkRegion (RegionId "bank") (ga bankAt) (B.length bankContent) ReadExecute bankContent | Just (Agg.BankImage bankAt bankContent) <- [fixedBank]]
   localRam = if domainB then 0x400e0000 else 0x40050000
   table = localRam + if domainB then 0x458c else 0x45cc
   own = if domainB then 2 else 1
@@ -193,7 +194,7 @@ runCases runner reuseDirectory directory cases = do
     fresh <- if null freshSpecs then pure [] else loadObservedBatch runner =<< writeBatch currentDirectory freshSpecs
     let observed = reused ++ fresh
     unless (length observed == length labelled) (fail (path ++ ": observation count differs"))
-    pure ([(label, observation {nativeMemory = [(ident, B.copy bytes) | (ident, bytes) <- nativeMemory observation, not ("code-" `isPrefixOf` regionName ident)]}) | (CaseId label, observation) <- observed], length reused)
+    pure ([(label, observation {nativeMemory = [(ident, B.copy bytes) | (ident, bytes) <- nativeMemory observation, not ("code-" `isPrefixOf` regionName ident), regionName ident /= "bank"]}) | (CaseId label, observation) <- observed], length reused)
   pure (M.fromList (concatMap fst results), sum (map snd results))
  where
   chunks [] = []
@@ -213,6 +214,10 @@ main = do
     [runner,loaderA,loaderB,binA,binB,work] -> do
       createDirectoryIfMissing True work
       executableDigest <- sha256Hex <$> (sha256File =<< getExecutablePath)
+      bank <- if isJust symbolsA || isJust symbolsB
+        then Just <$> readBank (flagValue "--bank-body" arguments) (flagValue "--bank-symbols" arguments)
+        else pure Nothing
+      bankDigests <- traverse (fmap sha256Hex . sha256File) (catMaybes [flagValue "--bank-body" arguments, flagValue "--bank-symbols" arguments])
       reports <- forM [(False,loaderA,binA,symbolsA,placementsA),(True,loaderB,binB,symbolsB,placementsB)] $ \(b,loaderPath,binPath,symbolsPath,placementsPath) -> do
         stock <- B.readFile loaderPath
         owned <- B.readFile binPath
@@ -229,7 +234,7 @@ main = do
         symbolDigest <- traverse (fmap sha256Hex . sha256File) symbolsPath
         placementDigest <- traverse (fmap sha256Hex . sha256File) placementsPath
         carrierDigest <- traverse (fmap sha256Hex . sha256File) carriersPath
-        let inputs = object ["domain_b".=b, "loader_sha256".=loaderDigest, "candidate_sha256".=candidateDigest, "runner_sha256".=runnerDigest, "symbols_sha256".=symbolDigest, "placements_sha256".=placementDigest, "carriers_sha256".=carrierDigest]
+        let inputs = object ["domain_b".=b, "loader_sha256".=loaderDigest, "candidate_sha256".=candidateDigest, "runner_sha256".=runnerDigest, "symbols_sha256".=symbolDigest, "placements_sha256".=placementDigest, "carriers_sha256".=carrierDigest, "bank_sha256".=(bankDigests <$ bank)]
         B.writeFile (work </> ("inputs-" ++ show b ++ ".json")) (encodeCanonical inputs)
         let delta=if b then 0x8ffc0 else 0; base=if b then 0xd0000 else 0x40000
             selected = fromMaybe [] symbols
@@ -256,14 +261,18 @@ main = do
             placementFunctions = maybe [] (map (\placement -> (Agg.placementAddress placement, Agg.placementBytes placement)) . filter (\placement -> ".text." `isPrefixOf` Agg.placementSection placement)) placements
             overlaps (left, size) (right, bytes) = left < right + bytes && right < left + size
             retainedHelpers = [extent' | extent' <- helperSpans, not (any (overlaps extent') (symbolSpans ++ placementSpans))]
+            ownedBank = case symbols of
+              Nothing -> Nothing
+              Just _ -> bank
+            bankSpans = [(Agg.bankBase fixed, fromIntegral (B.length (Agg.bankBytes fixed))) | Just fixed <- [ownedBank]]
             ownedFunctionSpans s = case symbols of
               Nothing -> stockFunctionSpans s
-              Just _ -> mergeSpans (symbolSpans ++ retainedHelpers ++ placementFunctions)
+              Just _ -> mergeSpans (symbolSpans ++ retainedHelpers ++ placementFunctions) ++ bankSpans
         forM [minBound..maxBound] $ \s -> do
           let cases=rows s
               scratchInputs specification = specification {caseInitial = [(register, if register `elem` [R1, R2, R3, R12] then value `xor` 0xffffffff else value) | (register, value) <- caseInitial specification]}
-              roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s,id),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s,id),("equivalent",candidate,ownedCodeSpans s,ownedFunctionSpans s,scratchInputs),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s,id)]
-              labelled=[(role++show i,alter (spec b s row (role++show i) codeSpans functionSpans bytes)) | (role,bytes,codeSpans,functionSpans,alter)<-roles,(i,row)<-zip [0::Int ..] cases]
+              roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s,Nothing,id),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s,ownedBank,id),("equivalent",candidate,ownedCodeSpans s,ownedFunctionSpans s,ownedBank,scratchInputs),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s,ownedBank,id)]
+              labelled=[(role++show i,alter (spec b s row (role++show i) codeSpans functionSpans roleBank bytes)) | (role,bytes,codeSpans,functionSpans,roleBank,alter)<-roles,(i,row)<-zip [0::Int ..] cases]
               dir=work </> (show b++show s)
           (observed, reused) <- runCases runner (fmap (</> (show b ++ show s)) reuseRoot) dir labelled
           evidence <- forM [0 .. length cases - 1] $ \i -> do
@@ -276,7 +285,7 @@ main = do
           let at role i=observed M.! (role++show i)
               evidenceMap = M.fromList evidence
               completed=and [nativeStatus (at "stock" i) == status && M.lookup R0 (nativeRegisters (at "stock" i)) == Just value | (i,row) <- zip [0 :: Int ..] cases, let (status,value)=expected b s row]
-              stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
+              stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) Nothing stock
               matches role=length [() | i<-[0..length cases-1],comparable (stockSpec i (cases!!i)) (at "stock" i) (at role i)]
               corruptByte name offset observation = observation { nativeMemory = [(ident, if regionName ident == name then B.take offset bytes <> B.singleton (B.index bytes offset + 1) <> B.drop (offset + 1) bytes else bytes) | (ident, bytes) <- nativeMemory observation] }
               controls = case cases of
@@ -319,7 +328,7 @@ main = do
           if holds then removeDirectoryRecursive dir else pure ()
           let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"case_rows".=caseRows,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"controls".=mutantRows,"observation_controls".=observationRows,"negative_controls".=[object ["control".=name,"holds".=held] | (name,held)<-controlRows],"stock_instructions".=stockInstructions,"passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
-          pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
+          failures `seq` pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
       let flat=concat reports
           passed=all srHolds flat
           families=[object ["domain_b".=srDomainB r,"family".=show (srService r),"cases".=srCaseCount r,"passed".=srHolds r] | r<-flat]
@@ -341,7 +350,7 @@ main = do
               ]
         B.writeFile (work </> ("judge-report-" ++ (if b then "b" else "a") ++ ".json")) (encodeCanonical judge)
       unless passed (fail "S3b oracle failed")
-    _ -> fail "runner loader-a loader-b owned-a owned-b work"
+    _ -> fail "usage: runner loader-a loader-b owned-a owned-b work [--symbols-a SYMBOLS_A --symbols-b SYMBOLS_B --placements-a PLACEMENTS_A --placements-b PLACEMENTS_B --carriers CARRIERS --bank-body BANK_BODY --bank-symbols BANK_SYMBOLS] [--reuse-root DIRECTORY]"
 
 helperFunctions :: Bool -> [(Word32, Word32)]
 helperFunctions domainB = if domainB then [(0xd3f2c,44),(0xd3c60,124),(0xd4528,204),(0xd3d8c,72),(0xd3fd4,48),(0xd33e4,96),(0xd398c,60),(0xd39c8,40)] else [(0x43f70,44),(0x43ca4,124),(0x44568,204),(0x43dd0,72),(0x44018,44),(0x433e4,96),(0x439d8,60),(0x43a14,40)]
@@ -365,6 +374,14 @@ readPlacements path = either fail pure . Agg.parsePlacements =<< B.readFile path
 readCarriers :: FilePath -> IO Agg.CarrierUnion
 readCarriers path = either fail pure . Agg.parseCarrierUnion =<< B.readFile path
 
+-- | The fixed bank that bank-bodied entry veneers branch into.
+readBank :: Maybe FilePath -> Maybe FilePath -> IO Agg.BankImage
+readBank (Just bodyPath) (Just symbolsPath) = do
+  body <- B.readFile bodyPath
+  bankSymbols <- B.readFile symbolsPath
+  either fail pure (Agg.parseBankImage bankSymbols body)
+readBank _ _ = fail "aggregate S3b qualification requires --bank-body and --bank-symbols"
+
 flagValue :: String -> [String] -> Maybe FilePath
 flagValue flag arguments = case dropWhile (/= flag) arguments of
   [] -> Nothing
@@ -372,6 +389,6 @@ flagValue flag arguments = case dropWhile (/= flag) arguments of
   _ : value : _ -> Just value
 
 stripSymbolFlags :: [String] -> [String]
-stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--carriers", "--reuse-root"] = stripSymbolFlags rest
+stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--carriers", "--bank-body", "--bank-symbols", "--reuse-root"] = stripSymbolFlags rest
 stripSymbolFlags (value : rest) = value : stripSymbolFlags rest
 stripSymbolFlags [] = []

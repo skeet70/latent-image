@@ -29,7 +29,9 @@ fn queue_order(queue: WaitQueue) -> QueueOrder {
 }
 
 /// `0x44800` / `0xd47c0`; the caller holds the object and scheduler locks.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_wait_block_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_wait_block_b")]
 #[inline(never)]
 #[link_section = ".text.helper_block"]
 pub extern "C" fn xm1_rtos_objects_wait_block(owner: u32, queue: u32, wait: u32) {
@@ -49,7 +51,9 @@ pub extern "C" fn xm1_rtos_objects_wait_block(owner: u32, queue: u32, wait: u32)
 }
 
 /// `0x448e4` / `0xd48a4`; the caller holds the object and scheduler locks.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_wait_block_timed_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_wait_block_timed_b")]
 #[inline(never)]
 #[link_section = ".text.helper_block_timed"]
 pub extern "C" fn xm1_rtos_objects_wait_block_timed(
@@ -78,7 +82,9 @@ pub extern "C" fn xm1_rtos_objects_wait_block_timed(
 }
 
 /// `0x44744` / `0xd4704`; the caller holds the object and scheduler locks.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_wait_release_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_wait_release_b")]
 #[inline(never)]
 #[link_section = ".text.helper_release"]
 pub extern "C" fn xm1_rtos_objects_wait_release(owner: KernelContext, task: Task) -> u32 {
@@ -89,7 +95,9 @@ pub extern "C" fn xm1_rtos_objects_wait_release(owner: KernelContext, task: Task
 }
 
 /// `0x480cc` / `0xd808c`; the caller holds the object lock.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_check_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_check_b")]
 #[inline(never)]
 #[link_section = ".text.helper_check"]
 pub extern "C" fn xm1_rtos_objects_check(control: u32, want: u32, mode: u32, out: u32) -> i32 {

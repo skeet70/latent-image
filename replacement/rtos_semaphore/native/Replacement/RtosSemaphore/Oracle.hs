@@ -358,7 +358,7 @@ data Case = Case
   , caseTimerIndex :: Maybe TimerIndexCell
   }
 
-data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement], imageCarriers :: [(Word32, Word32)], imageFill :: Word32}
+data Image = Image {imageBase :: Word32, imageBytes :: B.ByteString, imageSymbols :: [Agg.AggregateSymbol], imagePlacements :: [Agg.SectionPlacement], imageCarriers :: [(Word32, Word32)], imageFill :: Word32, imageBank :: Maybe Agg.BankImage}
 
 newtype TimerIndexCell = TimerIndexCell GuestAddress
 
@@ -1035,6 +1035,10 @@ ownedSpans domain role owned
   | role == OwnedRole, aggregate owned = symbolSpans owned
   | otherwise = extents domain
 
+-- | The fixed bank an owned aggregate maps beside its loader code.
+bankSpans :: Role -> Image -> [(Word32, Word32)]
+bankSpans role owned = [(Agg.bankBase fixed, fromIntegral (B.length (Agg.bankBytes fixed))) | role == OwnedRole, Just fixed <- [imageBank owned]]
+
 codeBounds :: Domain -> Role -> Image -> [(Word32, Word32)] -> (Word32, Word32)
 codeBounds domain role owned extra =
   let placementSpans = [(Agg.placementAddress placement, Agg.placementBytes placement) | placement <- imagePlacements owned]
@@ -1196,10 +1200,11 @@ caseSpec contract facts executing role loader owned one
       , caseExit = wire exitAddress
       , caseRegions =
           [mkRegion (RegionId "code") (wire codeBase) (fromIntegral (codeTop - codeBase)) ReadExecute (codeBytes contract executing role loader owned extra)]
+            ++ [mkRegion (RegionId "bank") (wire bankAt) (B.length bankContent) ReadExecute bankContent | role == OwnedRole, Just (Agg.BankImage bankAt bankContent) <- [imageBank owned]]
             ++ [mkRegion ident (wire (guestWord address)) size permission (overlay address background words') | Page ident address size permission background <- dataPages]
             ++ [mkRegion (RegionId "continuations") (wire exitAddress) (fromIntegral (stopAddress - exitAddress + 4)) ReadExecute (continuationBytes facts executing one)]
       , caseFunctions =
-          [(wire address, size) | (address, size) <- mergeSpans functionSpans]
+          [(wire address, size) | (address, size) <- mergeSpans functionSpans ++ bankSpans role owned]
             ++ [(wire wakerStubBase, 0x80) | isJust (caseWaker one)]
       , caseInitial = initialRegisters executing one
       , caseExpectedStatus = if isJust budget then InstructionBudget else if arrival then StopAddress else Returned

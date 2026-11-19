@@ -71,6 +71,9 @@ main = do
   forM_ [symbolsA, symbolsB] $ \selected ->
     when (maybe False (const True) selected && maybe True (const False) carriers)
       (failH "--carriers is required with --symbols-a or --symbols-b")
+  bank <- if any isJust [symbolsAPath, symbolsBPath, wrongSymbolsAPath, wrongSymbolsBPath]
+    then Just <$> readBank
+    else pure Nothing
   executableDigest <- sha256Hex <$> (sha256File =<< getExecutablePath)
   runnerDigest <- sha256Hex <$> sha256File runner
   loaderDigestA <- sha256Hex <$> sha256File loaderA
@@ -86,15 +89,15 @@ main = do
   wrongDigestB <- traverse (fmap sha256Hex . sha256File) wrongBPath
   checkStorageBudget (takeDirectory resultsPath)
   createDirectoryIfMissing True cacheRoot
-  let stockA = Image 0x40000 loaderABytes [] [] [] 0
-      stockB = Image 0xd0000 loaderBBytes [] [] [] 0
-      ownedAImage = ownedImage DomainA ownedABytes symbolsA placementsA carriers
-      ownedBImage = ownedImage DomainB ownedBBytes symbolsB placementsB carriers
+  let stockA = Image 0x40000 loaderABytes [] [] [] 0 Nothing
+      stockB = Image 0xd0000 loaderBBytes [] [] [] 0 Nothing
+      ownedAImage = ownedImage DomainA ownedABytes symbolsA placementsA carriers bank
+      ownedBImage = ownedImage DomainB ownedBBytes symbolsB placementsB carriers bank
       wrongAImage = case (wrongABytes, wrongSymbolsA, wrongPlacementsA) of
-        (Just bytes, Just symbols, Just placements) -> Just (ownedImage DomainA bytes (Just symbols) (Just placements) carriers)
+        (Just bytes, Just symbols, Just placements) -> Just (ownedImage DomainA bytes (Just symbols) (Just placements) carriers bank)
         _ -> Nothing
       wrongBImage = case (wrongBBytes, wrongSymbolsB, wrongPlacementsB) of
-        (Just bytes, Just symbols, Just placements) -> Just (ownedImage DomainB bytes (Just symbols) (Just placements) carriers)
+        (Just bytes, Just symbols, Just placements) -> Just (ownedImage DomainB bytes (Just symbols) (Just placements) carriers bank)
         _ -> Nothing
   runA <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA ownedAImage
   runB <- runFamily runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB ownedBImage
@@ -217,16 +220,24 @@ unique (first : rest) = first : unique (filter (/= first) rest)
 familyOf :: String -> String
 familyOf = takeWhile (/= '-')
 
-ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> Maybe Agg.CarrierUnion -> Image
-ownedImage domain bytes Nothing _ _ = Image (minimum (map fst (extents domain))) bytes [] [] [] 0
-ownedImage domain bytes (Just symbols) placements carriers =
+ownedImage :: Domain -> B.ByteString -> Maybe [Agg.AggregateSymbol] -> Maybe [Agg.SectionPlacement] -> Maybe Agg.CarrierUnion -> Maybe Agg.BankImage -> Image
+ownedImage domain bytes Nothing _ _ _ = Image (minimum (map fst (extents domain))) bytes [] [] [] 0 Nothing
+ownedImage domain bytes (Just symbols) placements carriers bank =
   let image = either error id (Agg.aggregateImage symbols bytes)
       union = maybe (error ("carrier extents are missing for " ++ show domain)) id carriers
+      fixed = maybe (error ("the fixed bank is missing for " ++ show domain)) id bank
       extents' = case domain of
         DomainA -> Agg.carrierExtentsA union
         DomainB -> Agg.carrierExtentsB union
       selected = [(lo, hi - lo) | (lo, hi) <- extents']
-   in Image (Agg.imageBase image) (Agg.imageBytes image) symbols (maybe [] id placements) selected (Agg.carrierFill union)
+   in Image (Agg.imageBase image) (Agg.imageBytes image) symbols (maybe [] id placements) selected (Agg.carrierFill union) (Just fixed)
+
+-- | The fixed bank that bank-bodied entry veneers branch into.
+readBank :: IO Agg.BankImage
+readBank = do
+  body <- B.readFile =<< required "--bank-body"
+  symbols <- B.readFile =<< required "--bank-symbols"
+  either failH pure (Agg.parseBankImage symbols body)
 
 readSymbols :: FilePath -> IO [Agg.AggregateSymbol]
 readSymbols path = either fail pure . Agg.parseAggregateSymbols =<< B.readFile path

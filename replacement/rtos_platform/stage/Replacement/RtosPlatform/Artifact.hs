@@ -8,6 +8,7 @@ module Replacement.RtosPlatform.Artifact
   , Admitted (..)
   , DomainAdmitted (..)
   , Staged (..)
+  , BankEntryRow (..)
   , StageError (..)
   , canonicalSource
   , requirePinned
@@ -17,6 +18,7 @@ module Replacement.RtosPlatform.Artifact
   , installCarrier
   , confineChanges
   , stagedLoader
+  , containedLoader
   , contractValue
   ) where
 
@@ -36,6 +38,8 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Frame (Frame, FrameError, framesWith, OwnedCode (..))
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), domains, domainLabel, domainLoaderBase, domainLoaderId, domainLoaderSize, extentBytes, extentContains, hexText)
+import qualified Replacement.RtosPlatform.Aggregate as A
+import Replacement.RtosPlatform.Bank
 import Replacement.RtosPlatform.Union
 
 data CanonicalSource = CanonicalSource
@@ -53,6 +57,7 @@ data Linked = Linked
   , linkedSymbolsB :: B.ByteString
   , linkedDisasmB :: B.ByteString
   , linkedPlacementsB :: [(Word32, Int)]
+  , linkedBankSymbols :: B.ByteString
   }
 
 data DomainAdmitted = DomainAdmitted
@@ -67,12 +72,23 @@ data Admitted = Admitted
   , admittedSource :: CanonicalSource
   , admittedLinked :: Linked
   , admittedDomains :: M.Map Domain DomainAdmitted
+  , admittedBankVeneers :: [AdmittedVeneer]
   }
+
+-- | A bank-entry word the platform stage leaves at its source value; the fixed-image stager
+-- publishes it with the bank body.
+data BankEntryRow = BankEntryRow
+  { bankRowAddress :: GuestAddress
+  , bankRowOld :: Word32
+  , bankRowNew :: Word32
+  }
+  deriving (Eq, Show)
 
 data Staged = Staged
   { stagedAdmitted :: Admitted
   , stagedDat :: B.ByteString
   , stagedLoaders :: M.Map Domain B.ByteString
+  , stagedBankEntries :: [BankEntryRow]
   }
 
 data StageError
@@ -97,6 +113,7 @@ data StageError
   | PatchRejected String
   | RestoreMismatch
   | ScratchExternal Domain External
+  | BankRejected BankError
   deriving (Eq, Show)
 
 require :: Bool -> StageError -> Either StageError ()
@@ -213,6 +230,14 @@ admit union source linked = do
         ScratchEntry -> Left (ScratchExternal domain external)
         _ -> pure ()
   forM_ domains $ \domain -> either (Left . FitRejected) Right (fit (domainMap union domain))
+  bank <- either (Left . BankRejected) Right (parseBank (linkedBankSymbols linked))
+  let linkedVeneer domain entry =
+        let GuestAddress at = entryAddress entry
+            GuestAddress base = minimum (map (extentStart . carrierExtent) (mapCarriers (domainMap union domain)))
+            bin = if domain == DomainA then linkedBinA linked else linkedBinB linked
+         in Veneer domain (entryAddress entry) (U.word32At bin (fromIntegral (at - base)))
+  bankVeneers <- either (Left . BankRejected) Right
+    (admitVeneers union bank [linkedVeneer domain entry | domain <- domains, entry <- bankEntries union domain])
   admitted <- forM domains $ \domain -> do
     let dm = domainMap union domain
         linkedBin = if domain == DomainA then linkedBinA linked else linkedBinB linked
@@ -238,13 +263,15 @@ admit union source linked = do
       let extent = carrierExtent c
       bytes <- installCarrier domain (unionFill union) symbols placements (slice binBase extent bin) extent
       pure (extent, bytes)
+    let bankTargets = [admittedTarget v | v <- bankVeneers, veneerDomain (admittedVeneer v) == domain]
     forM_ (branchTargets linkedDisasm) $ \target ->
       let inUnion = any (\c -> extentContains (carrierExtent c) (GuestAddress target)) (mapCarriers dm)
           declared = [e | e <- mapExternals dm, externalAddress e == GuestAddress target]
-      in unless (inUnion || not (null declared)) (Left (ExternalCall domain (GuestAddress target)))
+      in unless (inUnion || not (null declared) || target `elem` bankTargets) (Left (ExternalCall domain (GuestAddress target)))
     let bodyEntries =
           [ F.symbolAddress s
           | e <- mapEntries dm
+          , entryBody e == A.LoaderBody
           , s <- symbols
           , F.symbolName s == entrySymbol e
           ]
@@ -254,7 +281,7 @@ admit union source linked = do
       Left err -> pure (M.empty, [show err])
       Right (walkedFrames, externalEdges) -> pure (walkedFrames, map show externalEdges)
     pure (domain, DomainAdmitted symbols installed walked premises)
-  pure (Admitted union source linked (M.fromList admitted))
+  pure (Admitted union source linked (M.fromList admitted) bankVeneers)
 
 stage :: Admitted -> Either StageError Staged
 stage admitted = do
@@ -266,8 +293,21 @@ stage admitted = do
         stock = sourceLoaders source M.! domain
         installed = domainInstalled (admittedDomains admitted M.! domain)
         loader = foldl (\bytes (extent, ownedBytes) -> put base extent ownedBytes bytes) stock installed
-    pure (domain, loader)
+        GuestAddress loaderBase = base
+        sourceWord (GuestAddress at) = B.take 4 (B.drop (fromIntegral (at - loaderBase)) stock)
+        held = foldl (\bytes v -> let at = veneerAddress (admittedVeneer v) in put base (Extent at (offsetBy 4 at)) (sourceWord at) bytes)
+          loader [v | v <- admittedBankVeneers admitted, veneerDomain (admittedVeneer v) == domain]
+    pure (domain, held)
   let loaders = M.fromList owned
+      bankRows =
+        [ BankEntryRow at (U.word32At stock offset) (veneerWord (admittedVeneer v))
+        | v <- admittedBankVeneers admitted
+        , let domain = veneerDomain (admittedVeneer v)
+              at@(GuestAddress address) = veneerAddress (admittedVeneer v)
+              GuestAddress loaderBase = mapBase (domainMap union domain)
+              stock = sourceLoaders source M.! domain
+              offset = fromIntegral (address - loaderBase)
+        ]
   patches <- fmap concat $ forM domains $ \domain -> do
     let dm = domainMap union domain
         current = sourceLoaders source M.! domain
@@ -290,7 +330,9 @@ stage admitted = do
     require (loader == loaders M.! domain) (StagedLoaderMismatch domain)
   restored <- restore admitted dat
   require (restored == sourceDat source) RestoreMismatch
-  pure (Staged admitted dat loaders)
+  pure (Staged admitted dat loaders bankRows)
+  where
+    offsetBy n (GuestAddress value) = GuestAddress (value + n)
 
 rebuild :: U.Parsed -> [F.LoaderWordPatch] -> Either StageError B.ByteString
 rebuild parsed patches = do
@@ -353,6 +395,16 @@ contractValue staged = object
           , "carriers" .= [object ["group" .= groupLabel (carrierGroup c), "start" .= addressText (extentStart (carrierExtent c)), "end" .= addressText (extentEnd (carrierExtent c))] | c <- mapCarriers (domainMap union domain)]
           ]
       | domain <- domains
+      ]
+  , "bank_entries" .=
+      [ object
+          [ "domain" .= domainLabel (veneerDomain (admittedVeneer v))
+          , "name" .= entryName (admittedEntry v)
+          , "address" .= addressText (veneerAddress (admittedVeneer v))
+          , "symbol" .= entrySymbol (admittedEntry v)
+          , "target" .= addressText (GuestAddress (admittedTarget v))
+          ]
+      | v <- admittedBankVeneers admitted
       ]
   , "entries" .=
       [ object

@@ -278,11 +278,12 @@ aggregateInputsWith prefix arguments
   | not (any (`elem` arguments) flags') = pure Nothing
   | otherwise = do
       paths <- mapM required flags'
+      bank <- bankInput
       case paths of
         [aBin,aSymbols,aPlacements,bBin,bSymbols,bPlacements,carriersPath] -> do
           union <- either (fail . show) pure . Union.parseUnion =<< B.readFile carriersPath
-          a <- load DomainA union aBin aSymbols aPlacements
-          b <- load DomainB union bBin bSymbols bPlacements
+          a <- load DomainA union bank aBin aSymbols aPlacements
+          b <- load DomainB union bank bBin bSymbols bPlacements
           pure (Just (a,b))
         _ -> fail "aggregate input arity differs"
   where
@@ -291,7 +292,7 @@ aggregateInputsWith prefix arguments
       [ "--" ++ name ++ "-a-bin", "--" ++ name ++ "-a-symbols", "--" ++ name ++ "-a-placements"
       , "--" ++ name ++ "-b-bin", "--" ++ name ++ "-b-symbols", "--" ++ name ++ "-b-placements"
       ]
-    load domain union bin symbolsPath placementsPath = do
+    load domain union bank bin symbolsPath placementsPath = do
       symbols <- either fail pure . Agg.parseAggregateSymbols =<< B.readFile symbolsPath
       placements <- either fail pure . Agg.parsePlacements =<< B.readFile placementsPath
       image <- either fail pure . Agg.aggregateImage symbols =<< B.readFile bin
@@ -313,4 +314,17 @@ aggregateInputsWith prefix arguments
         let GuestAddress address = Union.entryAddress entry
         unless (within address 4 && any (\s -> Agg.symbolAddress s == address && Agg.symbolSize s > 0) symbols)
           (fail ("aggregate entry missing live veneer: " ++ Union.entryName entry))
-      pure (Aggregate (AggregatePayload image symbols placements carriers (Union.unionFill union)))
+      let bankStart = Agg.bankBase bank
+          inBank target = bankStart <= target && toInteger target < toInteger bankStart + toInteger (B.length (Agg.bankBytes bank))
+      forM_ [entry | entry <- Union.mapEntries domainMap, Union.entryBody entry == Agg.BankBody] $ \entry ->
+        case Union.resolveEntryTarget image symbols placements entry of
+          Right (Union.BankTarget (GuestAddress target)) | inBank target -> pure ()
+          _ -> fail ("aggregate entry veneer does not branch into the bank: " ++ Union.entryName entry)
+      pure (Aggregate (AggregatePayload image symbols placements carriers (Union.unionFill union) bank))
+
+-- | The fixed bank that bank-bodied entry veneers branch into.
+bankInput :: IO Agg.BankImage
+bankInput = do
+  body <- B.readFile =<< required "--bank-body"
+  symbols <- B.readFile =<< required "--bank-symbols"
+  either fail pure (Agg.parseBankImage symbols body)

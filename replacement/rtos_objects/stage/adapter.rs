@@ -51,19 +51,49 @@ enum Notified {
     Local = 1,
 }
 
+// In the fixed bank each import is the stock entry of its own domain's loader, named
+// `<entry symbol>_<domain>`.
 extern "C" {
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_acquire_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_acquire_b")]
     fn xm1_rtos_scheduler_acquire(lock: LockRecord) -> Acquired;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_release_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_release_b")]
     fn xm1_rtos_scheduler_release(lock: LockRecord) -> LockRecord;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_insert_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_insert_b")]
     fn xm1_rtos_scheduler_insert(record: KernelContext, task: Task) -> Reschedule;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_reset_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_reset_b")]
     fn xm1_rtos_scheduler_reset(task: Task) -> Task;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_prepare_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_prepare_b")]
     fn xm1_rtos_scheduler_prepare(record: KernelContext, task: Task) -> Reschedule;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_notify_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_notify_b")]
     fn xm1_rtos_scheduler_notify(id: RecordId) -> Notified;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_save_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_save_b")]
     fn xm1_rtos_scheduler_save(code: i32);
     /// Provided by the link script at the stock `kernel_remove_timer` entry.
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_timer_remove_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_timer_remove_b")]
     fn xm1_rtos_objects_stock_remove_timer(record: KernelContext, entry: GuestAddress);
 }
 
 struct Cpu;
+
+/// Sets CPSR I and F to their bits in `saved`; mode, A and T are not written.
+#[cfg(feature = "bank")]
+#[inline(always)]
+fn restore_if(saved: u32) {
+    match saved & 0xc0 {
+        0 => unsafe { asm!("cpsie if", options(nostack)) },
+        0x40 => unsafe { asm!("cpsid f", "cpsie i", options(nostack)) },
+        0x80 => unsafe { asm!("cpsid i", "cpsie f", options(nostack)) },
+        _ => unsafe { asm!("cpsid if", options(nostack)) },
+    }
+}
 
 #[inline(always)]
 fn load(address: GuestAddress) -> u32 {
@@ -98,6 +128,9 @@ impl Machine for Cpu {
     }
 
     fn restore_interrupts(&self, saved: SavedInterrupts) {
+        #[cfg(feature = "bank")]
+        restore_if(saved.0);
+        #[cfg(not(feature = "bank"))]
         unsafe { asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
     }
 
@@ -206,7 +239,9 @@ unsafe fn cpsr_masked() -> bool {
 }
 
 /// The wait release at its stock entry, A `0x44568` / B `0xd4528`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_release_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_release_b")]
 #[inline(never)]
 #[link_section = ".text.f2_release"]
 pub extern "C" fn xm1_rtos_objects_release(owner: KernelContext, task: Task) -> u32 {

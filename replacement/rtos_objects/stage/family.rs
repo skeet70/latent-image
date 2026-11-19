@@ -32,7 +32,7 @@ pub(super) enum KernelFault {
 }
 
 #[inline(always)]
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
 pub(super) fn xm1_rtos_objects_fault(fault: KernelFault) -> ! {
     unsafe {
         core::arch::asm!("2: b 2b", in("r0") fault as u32, options(noreturn, nostack));
@@ -40,8 +40,14 @@ pub(super) fn xm1_rtos_objects_fault(fault: KernelFault) -> ! {
 }
 
 extern "C" {
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_remove_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_remove_b")]
     fn xm1_rtos_scheduler_remove(record: objects::layout::KernelContext, task: Task) -> Reschedule;
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_timer_insert_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_timer_insert_b")]
     fn xm1_rtos_objects_stock_insert_timer(record: objects::layout::KernelContext, entry: GuestAddress, expiry: u32);
+    #[cfg_attr(all(feature = "bank", feature = "domain-a"), link_name = "xm1_rtos_scheduler_timeout_a")]
+    #[cfg_attr(all(feature = "bank", feature = "domain-b"), link_name = "xm1_rtos_scheduler_timeout_b")]
     static xm1_rtos_objects_stock_timeout: u32;
 }
 
@@ -53,6 +59,9 @@ impl IrqScope for Cpu {
     }
 
     fn restore_i(&self, saved: SavedMask) {
+        #[cfg(feature = "bank")]
+        super::restore_if(saved.0);
+        #[cfg(not(feature = "bank"))]
         unsafe { core::arch::asm!("msr cpsr_fc, {saved}", saved = in(reg) saved.0, options(nostack)) };
     }
 }
@@ -111,20 +120,25 @@ fn mask_lifecycle() -> LifecycleMask {
 
 #[inline(never)]
 fn restore_lifecycle(saved: LifecycleMask) {
-    let current: u32;
-    let restored: u32;
-    unsafe {
-        core::arch::asm!(
-            "mrs {current}, cpsr",
-            "bic {restored}, {current}, #0xc0",
-            "orr {restored}, {restored}, {saved}",
-            "msr cpsr_c, {restored}",
-            current = out(reg) current,
-            restored = out(reg) restored,
-            saved = in(reg) saved.0,
-            options(nostack),
-        )
-    };
+    #[cfg(feature = "bank")]
+    super::restore_if(saved.0);
+    #[cfg(not(feature = "bank"))]
+    {
+        let current: u32;
+        let restored: u32;
+        unsafe {
+            core::arch::asm!(
+                "mrs {current}, cpsr",
+                "bic {restored}, {current}, #0xc0",
+                "orr {restored}, {restored}, {saved}",
+                "msr cpsr_c, {restored}",
+                current = out(reg) current,
+                restored = out(reg) restored,
+                saved = in(reg) saved.0,
+                options(nostack),
+            )
+        };
+    }
 }
 
 /// Stock retry addresses `0x488e8` / `0x4892c`.
@@ -230,6 +244,7 @@ fn delete_flag_entry(id: i32) -> (i32, DispatchDecision) {
 }
 
 #[inline(never)]
+#[cfg_attr(feature = "component", link_section = ".text.objects_create_mailbox")]
 fn create_mailbox_entry(id: i32, request_pointer: u32) -> i32 {
     let words = entry_words();
     let slot = match own_mailbox_slot(EncodedId(id), load(words.context(ENTRY).mailbox_count())) {
@@ -485,7 +500,9 @@ fn dispatch_teardown(saved: LifecycleMask) {
 }
 
 /// Slot `+0x80`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_create_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_create_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_create"]
 pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: u32) -> i32 {
@@ -496,7 +513,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_create(id: i32, request_pointer: 
 }
 
 /// Slot `+0x84`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_delete_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_delete_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_delete"]
 pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
@@ -510,7 +529,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_delete(id: i32) -> i32 {
 }
 
 /// Slot `+0x88`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_set_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_set_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_set"]
 pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
@@ -518,7 +539,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set(id: i32, bits: u32) -> i32 {
 }
 
 /// Slot `+0x8c`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_set_handler_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_set_handler_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_set_handler"]
 pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -> i32 {
@@ -526,7 +549,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_set_handler(id: i32, bits: u32) -
 }
 
 /// Slot `+0x90`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_clear_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_clear_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_clear"]
 pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 {
@@ -534,7 +559,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_clear(id: i32, keep: u32) -> i32 
 }
 
 /// Slot `+0x94`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_wait_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_wait_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_wait"]
 pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
@@ -542,7 +569,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_wait(id: i32, pattern: u32, mode:
 }
 
 /// Slot `+0x9c`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_timed_wait_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_timed_wait_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_timed_wait"]
 pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32, mode: u32, result: u32, timeout: i32) -> i32 {
@@ -550,7 +579,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_timed_wait(id: i32, pattern: u32,
 }
 
 /// Slot `+0x98`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_flag_poll_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_flag_poll_b")]
 #[inline(never)]
 #[link_section = ".text.family_flag_poll"]
 pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode: u32, result: u32) -> i32 {
@@ -558,7 +589,9 @@ pub extern "C" fn xm1_rtos_objects_family_flag_poll(id: i32, pattern: u32, mode:
 }
 
 /// Slot `+0xcc`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_mailbox_create_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_mailbox_create_b")]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_create"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointer: u32) -> i32 {
@@ -569,7 +602,9 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_create(id: i32, request_pointe
 }
 
 /// Slot `+0xd0`; the raw ABI discards the drained pointers as stock does.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_mailbox_delete_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_mailbox_delete_b")]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_delete"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
@@ -583,7 +618,9 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_delete(id: i32) -> i32 {
 }
 
 /// Slot `+0xd4`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_mailbox_send_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_mailbox_send_b")]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_send"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) -> i32 {
@@ -591,7 +628,9 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_send(id: i32, message: u32) ->
 }
 
 /// Slot `+0xd8`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_mailbox_receive_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_mailbox_receive_b")]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_receive"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: u32) -> i32 {
@@ -599,7 +638,9 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_receive(id: i32, message_out: 
 }
 
 /// Slot `+0xe0`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_mailbox_timed_receive_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_mailbox_timed_receive_b")]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_timed_receive"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message_out: u32, timeout: i32) -> i32 {
@@ -607,7 +648,9 @@ pub extern "C" fn xm1_rtos_objects_family_mailbox_timed_receive(id: i32, message
 }
 
 /// Slot `+0xdc`.
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_objects_family_mailbox_poll_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_objects_family_mailbox_poll_b")]
 #[inline(never)]
 #[link_section = ".text.family_mailbox_poll"]
 pub extern "C" fn xm1_rtos_objects_family_mailbox_poll(id: i32, message_out: u32) -> i32 {

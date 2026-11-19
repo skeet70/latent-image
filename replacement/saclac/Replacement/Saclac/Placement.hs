@@ -18,6 +18,7 @@ import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub)
 import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import Numeric (showHex)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import Replacement.Saclac.Artifact (Admitted (..), Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, loadingEntries, retainedData, retainedExternals, wordAt)
 import qualified Replacement.FixedImage.Layout as Fixed
 
@@ -36,8 +37,10 @@ sectionOf 0 = "dispatch"
 sectionOf 1 = "router"
 sectionOf _ = "driver"
 
-renderLinkerScript :: String
-renderLinkerScript = case (entries, extents) of
+-- | The Root script. The carrier union names the fixed-bank family bodies the link keeps and
+-- the loader entries they call, as @<entry symbol>_<domain>@ at the stock entry address.
+renderLinkerScript :: Agg.CarrierUnion -> String
+renderLinkerScript union = case (entries, extents) of
   (firstEntry : _, _ : _) -> unlines $
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
@@ -49,6 +52,12 @@ renderLinkerScript = case (entries, extents) of
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
            any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_", "xm1_loading_", "xm1_lower_read_"]
+         ]
+      ++ [ "EXTERN(" ++ Agg.carrierEntrySymbol entry ++ ")"
+         | (_, domainEntries) <- domainUnion, entry <- domainEntries, Agg.carrierEntryBody entry == Agg.BankBody
+         ]
+      ++ [ "PROVIDE(" ++ Agg.carrierEntrySymbol entry ++ "_" ++ label ++ " = " ++ hexAddress (Agg.carrierEntryAddress entry) ++ ");"
+         | (label, domainEntries) <- domainUnion, entry <- domainEntries, Agg.carrierEntryBody entry == Agg.LoaderBody
          ]
       ++ [ "MEMORY {"
     ]
@@ -100,6 +109,8 @@ renderLinkerScript = case (entries, extents) of
          , ""
          ]
   _ -> ""
+  where
+    domainUnion = [("a", Agg.carrierEntriesA union), ("b", Agg.carrierEntriesB union)]
 
 -- | The census watch ranges: the same extents, in the shape the census tool
 -- reads. The label is the entry's name without its prefix and suffix.
