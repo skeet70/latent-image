@@ -113,8 +113,7 @@ reexecInSlot policy arguments = do
   unless (requestedSlots >= 1 && requestedSlots <= classConcurrency resource
       && memoryMaxBytes (memoryMax policy) > 0
       && memoryMaxBytes (memoryMax policy) <= 32 * 1024 ^ (3 :: Int)
-      && memorySwapMaxBytes (memorySwapMax policy) <= 32 * 1024 ^ (3 :: Int)
-      && memoryMaxBytes (memoryMax policy) + memorySwapMaxBytes (memorySwapMax policy) <= 64 * 1024 ^ (3 :: Int)) $
+      && memorySwapMaxBytes (memorySwapMax policy) <= 32 * 1024 ^ (3 :: Int)) $
     ioError (userError "invalid verification class policy")
   storage <- lookupEnv "XM1_STORAGE_PATH" >>= maybe defaultStoragePath pure
   checkStorageBudget storage
@@ -143,13 +142,13 @@ reexecInSlot policy arguments = do
           scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
           (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
             acquired <- acquire directory (executionClass policy) (slotCount policy) (Just scope)
-            _ <- reserveMemory (memoryMax policy) (memorySwapMax policy) scope
+            _ <- reserveMemory (memoryMax policy) scope
             pinned <- pinExecutable directory executable running
             pure (acquired, pinned)
           hPutStrLn stderr ("verification admission: class=" ++ show (executionClass policy)
             ++ " memory_max_bytes=" ++ show (memoryMaxBytes (memoryMax policy))
             ++ " memory_swap_max_bytes=" ++ show (memorySwapMaxBytes (memorySwapMax policy))
-            ++ " reserved_memory_bytes=" ++ show (memoryMaxBytes (memoryMax policy) + memorySwapMaxBytes (memorySwapMax policy)))
+            ++ " reserved_memory_bytes=" ++ show (memoryMaxBytes (memoryMax policy)))
           hFlush stderr
           checkStorageBudget storage
           unsetEnv "XM1_ADMISSION_SCOPE"

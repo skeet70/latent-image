@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | Behavioral admission tests against the host user manager, without large allocations.
+-- | Behavioral admission tests against the host user manager, without large
+-- allocations, under a 16 GiB RAM budget; the host needs at least 16 GiB RAM.
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
@@ -15,8 +16,9 @@ import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist,
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>), takeFileName)
-import System.IO (Handle, hClose, hGetLine)
+import System.IO (Handle, SeekMode (AbsoluteSeek), hClose, hGetLine)
 import System.Posix.Files (setFileMode)
+import System.Posix.IO (LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setLock)
 import System.Posix.Process (getProcessID)
 import System.Posix.Signals (nullSignal, sigKILL, signalProcess)
 import System.Posix.Types (ProcessID)
@@ -79,7 +81,8 @@ run source builder wrapper = do
     , "done"
     ])
   setFileMode (failedBin </> "systemctl") 0o700
-  let environment = change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited
+  let environment = change "XM1_HOST_MEMORY_BUDGET" "16G" (change "XM1_HOST_BUILD_MEMORY_MAX" "2G"
+        (change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited))
       native = change "XM1_PROBE_CLASS" "native" environment
       spawn env = start (proc source []) {env = Just env}
       build = start (proc builder ["build", "//fake:target"]) {env = Just environment}
@@ -104,7 +107,7 @@ run source builder wrapper = do
     (defaultFullSlot /= Nothing && "probe-memory-max 8589934592" `elem` defaultFullLines
       && "probe-memory-swap-max 8589934592" `elem` defaultFullLines && defaultFullCode == Just ExitSuccess)
   overrideCaps <- forM
-    [ (change "XM1_EMULATOR_SWAP_MAX" "4G" (change "XM1_EMULATOR_MEMORY_MAX" "24G" environment), "25769803776", "4294967296")
+    [ (change "XM1_EMULATOR_SWAP_MAX" "4G" (change "XM1_EMULATOR_MEMORY_MAX" "10G" environment), "10737418240", "4294967296")
     , (change "XM1_NATIVE_SWAP_MAX" "16G" (change "XM1_NATIVE_MEMORY_MAX" "6G" native), "6442450944", "17179869184")
     ] $ \(overrides, ramBytes, swapBytes) -> do
       job <- spawn overrides
@@ -133,42 +136,43 @@ run source builder wrapper = do
       expect (label ++ " requested slot count " ++ show limit ++ " bounds overlap and resumes after release")
         (all (admitted . snd) holders && blocked && admitted resumed
           && all (== Just ExitSuccess) completed)
+  let smallFull = change "XM1_EMULATOR_MEMORY_MAX" "2G" environment
   full <- forM [1 :: Int .. 4] $ \_ -> do
-    job <- spawn (change "XM1_EMULATOR_SWAP_MAX" "0" environment)
+    job <- spawn smallFull
     seen <- admission job
     pure (job, seen)
-  fullOk <- expect "four full-system scopes overlap under whole-tree 8 GiB RAM caps with explicit zero swap"
-    (all (\(_, Admission seen slot) -> slot /= Nothing && "probe-memory-max 8589934592" `elem` seen
-      && "probe-memory-swap-max 0" `elem` seen) full)
+  fullOk <- expect "four full-system scopes overlap within the 16 GiB RAM budget without reserving their 8 GiB swap caps"
+    (all (\(_, Admission seen slot) -> slot /= Nothing && "probe-memory-max 2147483648" `elem` seen
+      && "probe-memory-swap-max 8589934592" `elem` seen) full)
   copyFile source replacement
   setFileMode replacement 0o700
-  fifth <- start (proc replacement []) {env = Just (change "XM1_EMULATOR_SWAP_MAX" "0" environment)}
+  fifth <- start (proc replacement []) {env = Just smallFull}
   fifthWaiting <- waiting fifth
   removeFile replacement
   writeFile replacement "#!/bin/sh\necho replacement-ran\nexit 42\n"
   setFileMode replacement 0o700
-  largeNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "24G" native)
+  largeNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "8G" native)
   Admission largeNativeLines largeNativeSlot <- admission largeNative
-  largeNativeWaiter <- spawn native
+  largeNativeWaiter <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "1G" native))
   largeNativeBlocked <- waiting largeNativeWaiter
   release largeNative
   Admission nativeDefaultLines nativeDefaultSlot <- admission largeNativeWaiter
   release largeNativeWaiter
   largeNativeCode <- finish largeNative
   nativeDefaultCode <- finish largeNativeWaiter
-  largeNativeOk <- expect "explicit 24 GiB native RAM plus default 8 GiB swap consumes the remaining shared budget"
-    (largeNativeSlot /= Nothing && "probe-memory-max 25769803776" `elem` largeNativeLines
+  largeNativeOk <- expect "explicit 8 GiB native RAM consumes the remaining RAM budget and a 1 GiB scope waits for it"
+    (largeNativeSlot /= Nothing && "probe-memory-max 8589934592" `elem` largeNativeLines
       && "probe-memory-swap-max 8589934592" `elem` largeNativeLines && largeNativeBlocked
-      && nativeDefaultSlot /= Nothing && "probe-memory-max 12884901888" `elem` nativeDefaultLines
-      && "probe-memory-swap-max 8589934592" `elem` nativeDefaultLines
+      && nativeDefaultSlot /= Nothing && "probe-memory-max 1073741824" `elem` nativeDefaultLines
       && largeNativeCode == Just ExitSuccess && nativeDefaultCode == Just ExitSuccess)
-  firstNative <- spawn native
+  let fourNative = change "XM1_NATIVE_MEMORY_MAX" "4G" native
+  firstNative <- spawn fourNative
   firstSeen <- admission firstNative
-  secondNative <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "4G" native))
+  secondNative <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "2G" native))
   secondSeen <- admission secondNative
   overlap <- expect "two native suites overlap four full-system scopes while a full-system waiter waits"
     (admitted firstSeen && admitted secondSeen && fifthWaiting)
-  thirdNative <- spawn native
+  thirdNative <- spawn fourNative
   overBudget <- waiting thirdNative
   smallDuringWait <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "1G" native))
   smallDuringWaitSeen <- admission smallDuringWait
@@ -192,21 +196,49 @@ run source builder wrapper = do
   buildSeenB <- admission buildB
   fullWithBuild <- spawn environment
   buildFullSeen <- admission fullWithBuild
-  nativeWithBuild <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "4G" native))
+  let twoNative = change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "2G" native)
+  nativeWithBuild <- spawn twoNative
   buildNativeSeen <- admission nativeWithBuild
-  nativeWithBuild2 <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "4G" native))
+  nativeWithBuild2 <- spawn twoNative
   buildNativeSeen2 <- admission nativeWithBuild2
-  buildOverlap <- expect "two builds, a full-system scope and two explicit native scopes overlap at 64 GiB RAM plus swap"
+  buildOverlap <- expect "two builds, a full-system scope and two native scopes fill the 16 GiB RAM budget"
     (all admitted [buildSeenA, buildSeenB, buildFullSeen, buildNativeSeen, buildNativeSeen2])
-  buildWaiter <- spawn native
+  buildWaiter <- spawn twoNative
   blockedByBuild <- waiting buildWaiter
   release buildA
   resumedBuildWaiter <- admission buildWaiter
-  buildBudget <- expect "build memory participates in the same weighted budget"
+  buildBudget <- expect "build memory participates in the same RAM budget"
     (blockedByBuild && admitted resumedBuildWaiter)
   mapM_ release [buildB, fullWithBuild, nativeWithBuild, nativeWithBuild2, buildWaiter]
   buildCodes <- mapM finish [buildA, buildB, fullWithBuild, nativeWithBuild, nativeWithBuild2, buildWaiter]
   buildExit <- expect "admitted build and verification exits propagate" (all (== Just ExitSuccess) buildCodes)
+
+  let tenNative = change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "10G" native)
+  firstLarge <- spawn tenNative
+  firstLargeSeen <- admission firstLarge
+  secondLarge <- spawn tenNative
+  secondLargeBlocked <- waiting secondLarge
+  release firstLarge
+  secondLargeSeen <- admission secondLarge
+  release secondLarge
+  largeCodes <- mapM finish [firstLarge, secondLarge]
+  ramQueueOk <- expect "two scopes whose RAM caps together exceed the budget run one after the other"
+    (admitted firstLargeSeen && secondLargeBlocked && admitted secondLargeSeen && all (== Just ExitSuccess) largeCodes)
+  let memoryDirectory = home </> ".cache" </> "xm1-host-memory"
+  createDirectoryIfMissing True memoryDirectory
+  legacyHolder <- openFd (memoryDirectory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
+  setLock legacyHolder (WriteLock, AbsoluteSeek, 240, 16)
+  besideLegacy <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "12G" native))
+  besideLegacySeen <- admission besideLegacy
+  afterLegacyHolder <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "1G" native))
+  legacyHolderBlocks <- waiting afterLegacyHolder
+  closeFd legacyHolder
+  afterLegacyHolderSeen <- admission afterLegacyHolder
+  mapM_ release [besideLegacy, afterLegacyHolder]
+  legacyHolderCodes <- mapM finish [besideLegacy, afterLegacyHolder]
+  legacyRangeOk <- expect "4 GiB of tokens held at legacy offsets 240..255 count against the 16 GiB RAM budget"
+    (admitted besideLegacySeen && legacyHolderBlocks && admitted afterLegacyHolderSeen
+      && all (== Just ExitSuccess) legacyHolderCodes)
 
   small <- spawn (change "XM1_NATIVE_MEMORY_MAX" "256M" native)
   Admission smallLines smallSlot <- admission small
@@ -333,7 +365,7 @@ run source builder wrapper = do
   unrelatedOwner <- rawScope reusedUnit
   unrelatedSeen <- admission unrelatedOwner
   unrelatedInvocation <- invocationOf environment reusedUnit
-  nativeAfterReuse <- spawn native
+  nativeAfterReuse <- spawn (change "XM1_NATIVE_MEMORY_MAX" "4G" native)
   nativeAfterReuseSeen <- admission nativeAfterReuse
   fullAfterReuse <- spawn environment
   fullAfterReuseSeen <- admission fullAfterReuse
@@ -365,7 +397,7 @@ run source builder wrapper = do
   legacyBuildSeenA <- admission legacyBuildA
   legacyBuildB <- build
   legacyBuildSeenB <- admission legacyBuildB
-  legacyWaiter <- spawn (failedState legacyUnit (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "17G" native)))
+  legacyWaiter <- spawn (failedState legacyUnit (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "5G" native)))
   legacyBlocked <- waiting legacyWaiter
   legacyAlive <- case observedPid "probe-pid " legacySeen of
     Nothing -> pure False
@@ -421,6 +453,16 @@ run source builder wrapper = do
         (proc source []) {env = Just invalidEnvironment} ""
       pure (capCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` capOutput))
   capOk <- expect "invalid RAM and swap caps are refused before admission" (and invalidCaps)
+  budgetCases <- forM
+    [ change "XM1_HOST_MEMORY_BUDGET" "1024T" native
+    , change "XM1_HOST_MEMORY_BUDGET" "128M" native
+    , change "XM1_HOST_MEMORY_BUDGET" "4G" (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "5G" native))
+    ] $ \budgetEnvironment -> do
+      (budgetCode, budgetOutput, _) <- readCreateProcessWithExitCode
+        (proc source []) {env = Just budgetEnvironment} ""
+      pure (budgetCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` budgetOutput))
+  budgetOk <- expect "a budget above physical RAM or below one token, or smaller than one scope's RAM, is refused rather than waited for"
+    (and budgetCases)
   let missingRuntime = root </> "no-session"
       sessionless = change "XDG_RUNTIME_DIR" missingRuntime
         (change "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ missingRuntime ++ "/bus") environment)
@@ -500,7 +542,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and (concat requestedSlots) && and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and (concat requestedSlots) && and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
@@ -623,6 +665,6 @@ probeEnvironment home = do
   uid <- getEffectiveUserID
   let runtime = "/run/user/" ++ show uid
       keep key value environment = if any ((== key) . fst) environment then environment else (key, value) : environment
-      dropped = ["HOME", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_SLOTS", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_INHERIT", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_GRANT", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
+      dropped = ["HOME", "XM1_HOST_MEMORY_BUDGET", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_SLOTS", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_INHERIT", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_GRANT", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
   pure (("HOME", home) : ("XM1_STORAGE_MIN_FREE", "1") : filter ((`notElem` dropped) . fst)
     (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))
