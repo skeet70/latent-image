@@ -200,7 +200,7 @@ extern crate std;
 #[test]
 fn natural_placement_maps_asset_bounds_to_top_left_panel_coordinates() {
     let origin = super::super::PanelPoint::new(30, 40).unwrap();
-    let placement = NaturalPlacement::natural(origin, [Scalar(2.0), Scalar(8.0), Scalar(12.0), Scalar(-4.0)]);
+    let placement = ShapePlacement::natural(origin, [Scalar(2.0), Scalar(8.0), Scalar(12.0), Scalar(-4.0)]);
     assert_eq!(placement.map_x(2.0), 30.0);
     assert_eq!(placement.map_y(8.0), 40.0);
     assert_eq!(placement.map_x(12.0), 40.0);
@@ -213,11 +213,27 @@ fn natural_placement_maps_asset_bounds_to_top_left_panel_coordinates() {
 fn styled_placement_uses_constructor_height_without_tight_bounds_rebasing() {
     let origin = super::super::PanelPoint::new(30, 40).unwrap();
     let entry = BitmapEntry { image: ImageId::new(2).unwrap(), width: 80, height: 60, kind: BitmapKind::ShapeKindOne, data: DataAddress(0x2000) };
-    let placement = NaturalPlacement::styled(origin, entry);
+    let placement = ShapePlacement::styled(origin, entry);
     assert_eq!(placement.map_x(7.0), 37.0);
     assert_eq!(placement.map_y(9.0), 91.0);
     assert_eq!(placement.map_y(60.0), 40.0);
     assert_eq!(placement.unmap_y(91.0), 9.0);
+}
+
+#[test]
+fn scaled_placement_maps_bounds_rectangle_onto_destination_rectangle() {
+    let bounds = [Scalar(2.0), Scalar(8.0), Scalar(12.0), Scalar(-4.0)];
+    let dest = super::super::commands::SceneRect::new(-100, 50, 20, 6).unwrap();
+    let placement = ShapePlacement::scaled(dest, bounds).unwrap();
+    assert_eq!(placement.map_x(2.0), -100.0);
+    assert_eq!(placement.map_x(12.0), -80.0);
+    assert_eq!(placement.map_y(8.0), 50.0);
+    assert_eq!(placement.map_y(-4.0), 56.0);
+    assert_eq!(placement.unmap_x(-90.0), 7.0);
+    assert_eq!(placement.unmap_y(53.0), 2.0);
+    assert!(!placement.is_unit_scale());
+    assert_eq!(ShapePlacement::scaled(dest, [Scalar(2.0), Scalar(8.0), Scalar(2.0), Scalar(-4.0)]), None);
+    assert_eq!(ShapePlacement::scaled(dest, [Scalar(2.0), Scalar(8.0), Scalar(12.0), Scalar(8.0)]), None);
 }
 
 #[test]

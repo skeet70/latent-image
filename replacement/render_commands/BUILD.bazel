@@ -37,6 +37,26 @@ xm1_rust_rlib(
     visibility = ["//visibility:public"],
 )
 
+# Checks the renderer on original assets read from a RAM dump given at run time.
+genrule(
+    name = "guest-assets-check-build",
+    srcs = [":module", "tests/guest_assets_check.rs", ":libm-host"],
+    outs = ["guest-assets-check"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) --extern libm=$(location :libm-host) $(location tests/guest_assets_check.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+# Renders a RAM dump's VGLIB scene with the owned renderer and compares it with the dump's OSD front buffer.
+genrule(
+    name = "scene-check-build",
+    srcs = [":module", "tests/scene_check.rs", ":libm-host"],
+    outs = ["scene-check"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) --extern libm=$(location :libm-host) $(location tests/scene_check.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
 rust_source_boundary_test(
     name = "unsafe-boundary-check",
     declaration = "unsafe-boundary.json",

@@ -22,6 +22,9 @@ pub mod actor;
 pub mod actor_request;
 pub mod actor_sequence;
 pub use commands::{Alpha, CatalogTextId, Colour, CustomTextId, ImageId, StrokeWidth, TextRef, DrawCommand, DrawList, TextPenOp, TextX, TextY, TextAdvance, TextCoordinate, Rgba, ShapePaint, ShapePalette, ShapeSecondarySource};
+pub mod stock_objects;
+pub mod guest_assets;
+pub mod vglib_scene;
 pub use raster::{Surface, AssetPack, AssetProvenance, RasterError, RasterResources, FontBinding, FontRegistry, ShapeBinding, VectorWorkspace, PaintBlend, PaintCoverage};
 
 #[cfg(test)]

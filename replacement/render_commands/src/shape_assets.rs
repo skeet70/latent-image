@@ -1,5 +1,6 @@
 use super::resources::{BitmapEntry, BitmapKind, DataAddress, ResourceError, ResourceMemory};
 use super::PanelPoint;
+use super::commands::SceneRect;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShapeError {
@@ -39,7 +40,8 @@ impl Recolour {
             },
         ] }
     }
-    fn parse(bytes: &[u8]) -> Result<Self, ShapeError> {
+    /// Parses three (source RGBA, replacement RGBA) pairs of little-endian f32 words.
+    pub fn parse(bytes: &[u8]) -> Result<Self, ShapeError> {
         let mut cursor = Cursor::new(bytes);
         let mut mappings = [ColourMapping { source: [Scalar(0.0); 4], replacement: [Scalar(0.0); 4] }; 3];
         for mapping in &mut mappings {
@@ -90,28 +92,49 @@ impl<'a> ShapeAsset<'a> {
     }
 }
 
+/// Maps y-up path coordinates to y-down panel pixels: `X = x_offset + x_scale·x`, `Y = y_offset − y_scale·y`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NaturalPlacement { x_offset: f64, y_offset: f64 }
-impl NaturalPlacement {
+pub struct ShapePlacement { x_offset: f64, y_offset: f64, x_scale: f64, y_scale: f64 }
+impl ShapePlacement {
     pub fn natural(origin: PanelPoint, bounds: [Scalar; 4]) -> Self {
         Self {
             x_offset: f64::from(origin.x()) - f64::from(bounds[0].value()),
             y_offset: f64::from(origin.y()) + f64::from(bounds[1].value()),
+            x_scale: 1.0,
+            y_scale: 1.0,
         }
     }
     pub fn styled(origin: PanelPoint, entry: BitmapEntry) -> Self {
         Self {
             x_offset: f64::from(origin.x()),
             y_offset: f64::from(origin.y()) + f64::from(entry.height),
+            x_scale: 1.0,
+            y_scale: 1.0,
         }
     }
-    pub fn x_offset(self) -> f64 { self.x_offset }
-    pub fn y_offset(self) -> f64 { self.y_offset }
-    pub fn y_sign(self) -> f64 { -1.0 }
-    pub fn map_x(self, local: f64) -> f64 { self.x_offset + local }
-    pub fn map_y(self, local: f64) -> f64 { self.y_offset - local }
-    pub fn unmap_x(self, output: f64) -> f64 { output - self.x_offset }
-    pub fn unmap_y(self, output: f64) -> f64 { self.y_offset - output }
+    /// Maps the GVFF bounds onto `dest`: `bounds[0]` lands on the left edge and `bounds[3]` on the bottom edge, with
+    /// scales `width / |bounds[2] − bounds[0]|` and `height / |bounds[3] − bounds[1]|`. Stock stores those extents at
+    /// `I4:6da6d0-6da6fc`, translates by `−(scale_x·bounds[0], scale_y·bounds[3])` before scaling (`I4:6da0f0-6da0f4`,
+    /// `6da3b0-6da3d4`) under the identity matrix `0x774c58` on the y-up surface. `None` for a zero or non-finite extent.
+    pub fn scaled(dest: SceneRect, bounds: [Scalar; 4]) -> Option<Self> {
+        let width = (f64::from(bounds[2].value()) - f64::from(bounds[0].value())).abs();
+        let height = (f64::from(bounds[3].value()) - f64::from(bounds[1].value())).abs();
+        if !(width > 0.0 && width.is_finite() && height > 0.0 && height.is_finite()) { return None; }
+        let x_scale = f64::from(dest.width()) / width;
+        let y_scale = f64::from(dest.height()) / height;
+        Some(Self {
+            x_offset: f64::from(dest.x()) - x_scale * f64::from(bounds[0].value()),
+            y_offset: f64::from(dest.y()) + f64::from(dest.height()) + y_scale * f64::from(bounds[3].value()),
+            x_scale,
+            y_scale,
+        })
+    }
+    pub fn is_unit_scale(self) -> bool { self.x_scale == 1.0 && self.y_scale == 1.0 }
+    pub fn max_scale(self) -> f64 { self.x_scale.max(self.y_scale) }
+    pub fn map_x(self, local: f64) -> f64 { self.x_offset + self.x_scale * local }
+    pub fn map_y(self, local: f64) -> f64 { self.y_offset - self.y_scale * local }
+    pub fn unmap_x(self, output: f64) -> f64 { (output - self.x_offset) / self.x_scale }
+    pub fn unmap_y(self, output: f64) -> f64 { (self.y_offset - output) / self.y_scale }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -231,6 +254,10 @@ impl PaintIndex { pub fn value(self) -> u32 { self.0 } }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RampIndex(u32);
 impl RampIndex { pub fn value(self) -> u32 { self.0 } }
+/// Raw dash-record index of a GVFF item (`+0x14`); `0x29a` selects no dash.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DashIndex(u32);
+impl DashIndex { pub fn value(self) -> u32 { self.0 } }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Paint<'a> {
     Solid { rgba: FloatWords<'a> },
@@ -263,6 +290,7 @@ pub struct GradientItem<'a> {
     pub stroke: Option<PaintIndex>,
     pub fill: Option<PaintIndex>,
     pub dash: Option<StrokeDash<'a>>,
+    pub dash_index: DashIndex,
     pub path: Path<'a>,
 }
 
@@ -345,7 +373,7 @@ impl<'a> Gvff<'a> {
                 source_over: word(record, 8)? != 0,
                 stroke: if mode.stroke() { Some(PaintIndex(word(record, 12)?)) } else { None },
                 fill: if mode.fill() { Some(PaintIndex(word(record, 16)?)) } else { None },
-                dash, path: read_path(&mut cursor, record)?,
+                dash, dash_index: DashIndex(index), path: read_path(&mut cursor, record)?,
             })
         })
     }

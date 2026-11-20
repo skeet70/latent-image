@@ -16,6 +16,14 @@ pub enum SemanticPrerequisite {
     PaletteOptions,
     MenuData,
     Footer,
+    /// A matched or unchanged pool object keeps the clip and group position of its earlier creation, which the pool does not record.
+    ReusedObject(ResourceId),
+    /// Rasterized by the stock font engine at glyph size `+0x1c/+0x1e` and centred vertically in `+0x20` by font metrics.
+    ObjectText(ResourceId),
+    ObjectStyling(ResourceId),
+    ObjectTransform(ResourceId),
+    ObjectColour(ResourceId),
+    CompositeOrder,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

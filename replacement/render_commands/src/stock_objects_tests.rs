@@ -1,0 +1,415 @@
+extern crate std;
+use super::*;
+use super::super::resources::{DataRegion, ResourceMemory};
+use super::super::ImageId;
+use std::vec;
+use std::vec::Vec;
+
+// Synthetic objects follow the stock layout: next +0 (`1179738`), handle +4, identifier +8, content +0xc and
+// kind +0x14 (`117a4c0-117a4cc`), state +0x10, scale +0x18/+0x1a and clip +0x38..+0x3e (`117a4ec-117a530`),
+// extent +0x24..+0x2c (`117a5dc-117a614`), x/y +0x34/+0x36 (`117a4d4-117a4e8`), options +0x40..+0x59 and
+// +0x64 (`1179bb0-1179bfc`), bank byte +0x5a (`117a4d0`), components +0x5b..+0x62 (`1179c30-1179c6c`).
+#[derive(Clone, Copy)]
+struct Spec { id: u32, state: u32, kind: u32, x: i16, y: i16, size: [u16; 2], primary: [u8; 4], secondary: [u8; 4], style: u32 }
+
+fn spec(id: u32, kind: u32, x: i16, y: i16, size: [u16; 2]) -> Spec {
+    Spec { id, state: 0, kind, x, y, size, primary: [0; 4], secondary: [0; 4], style: 0 }
+}
+
+fn address(bank: u8, slot: u8) -> u32 { 0x015e_7538 + u32::from(bank) * 0x6a00 + u32::from(slot) * 0xd4 }
+
+struct Fixture { pool: Vec<u8>, lists: Vec<u8> }
+impl Fixture {
+    fn new() -> Self { Self { pool: vec![0; 19 * 0x6a00], lists: vec![0; 19 * 8] } }
+    fn object(&mut self, bank: u8, slot: u8) -> &mut [u8] {
+        let start = usize::from(bank) * 0x6a00 + usize::from(slot) * 0xd4;
+        &mut self.pool[start..start + 0xd4]
+    }
+    fn put(&mut self, bank: u8, slot: u8, spec: Spec) {
+        let object = self.object(bank, slot);
+        let mut put16 = |offset: usize, value: u16| object[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        put16(0x18, 100); put16(0x1a, 100);
+        put16(0x24, spec.size[0]); put16(0x26, spec.size[1]); put16(0x28, spec.size[0]);
+        put16(0x2a, spec.size[0]); put16(0x2c, spec.size[1]);
+        put16(0x34, spec.x as u16); put16(0x36, spec.y as u16);
+        put16(0x3c, 720); put16(0x3e, 480);
+        object[8..12].copy_from_slice(&spec.id.to_le_bytes());
+        object[0xc..0x10].copy_from_slice(&0x0030_0000u32.to_le_bytes());
+        object[0x10..0x14].copy_from_slice(&spec.state.to_le_bytes());
+        object[0x14..0x18].copy_from_slice(&spec.kind.to_le_bytes());
+        object[0x54..0x58].copy_from_slice(&1u32.to_le_bytes());
+        object[0x5a] = bank;
+        object[0x5b..0x5f].copy_from_slice(&spec.primary);
+        object[0x5f..0x63].copy_from_slice(&spec.secondary);
+        object[0x64..0x68].copy_from_slice(&spec.style.to_le_bytes());
+    }
+    fn link(&mut self, bank: u8, slots: &[u8]) {
+        for pair in slots.windows(2) {
+            let next = address(bank, pair[1]);
+            self.object(bank, pair[0])[0..4].copy_from_slice(&next.to_le_bytes());
+        }
+        if let Some(last) = slots.last() { self.object(bank, *last)[0..4].fill(0); }
+        let head = slots.first().map_or(0, |slot| address(bank, *slot));
+        let tail = slots.last().map_or(0, |slot| address(bank, *slot));
+        self.lists[usize::from(bank) * 8..usize::from(bank) * 8 + 4].copy_from_slice(&head.to_le_bytes());
+        self.lists[usize::from(bank) * 8 + 4..usize::from(bank) * 8 + 8].copy_from_slice(&tail.to_le_bytes());
+    }
+    fn parse(&self) -> Result<ObjectPool<'_>, PoolError> { ObjectPool::parse(&self.pool, &self.lists) }
+}
+
+fn bank(index: u8) -> Bank { Bank::new(index).unwrap() }
+fn slots(pool: &ObjectPool<'_>, index: u8) -> Vec<u8> { pool.listed(bank(index)).map(|object| object.slot.index()).collect() }
+
+// Descriptor table at 0x0022a8b4: width, height, kind word, data (`BitmapCatalog::entry`).
+fn descriptors(entries: &[(u32, u16, u16, u32)]) -> Vec<u8> {
+    let mut bytes = vec![0; 0x839 * 12];
+    for (payload, width, height, kind) in entries {
+        let start = *payload as usize * 12;
+        bytes[start..start + 2].copy_from_slice(&width.to_le_bytes());
+        bytes[start + 2..start + 4].copy_from_slice(&height.to_le_bytes());
+        bytes[start + 4..start + 8].copy_from_slice(&kind.to_le_bytes());
+        bytes[start + 8..start + 12].copy_from_slice(&0x0030_0000u32.to_le_bytes());
+    }
+    bytes
+}
+const BITMAPS: &[(u32, u16, u16, u32)] = &[(0x10, 8, 6, 0), (0x11, 4, 3, 1), (0x12, 5, 5, 2), (0x838, 1, 1, 1)];
+// Indices 2 and 5 share RGB (1,2,3).
+const COMPONENTS: [u8; 18] = [0, 0, 0, 255, 255, 255, 1, 2, 3, 9, 9, 9, 7, 7, 7, 1, 2, 3];
+
+fn lower_with(objects: &[StockObject], output: OutputSelector) -> Result<Vec<DrawCommand<'static>>, ProducerError> {
+    let table = descriptors(BITMAPS);
+    let regions = [DataRegion { base: DataAddress(0x0022a8b4), bytes: &table }];
+    let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
+    let context = LoweringContext { bitmaps: &bitmaps, components: ComponentTable::new(&COMPONENTS).unwrap(), output };
+    let mut storage: [DrawCommand<'static>; 32] = [DrawCommand::ResetClip; 32];
+    let mut out = CommandBuffer::new(&mut storage);
+    for object in objects { object.lower(&context, &mut out)?; }
+    let count = out.draw_list().commands().len();
+    Ok(storage[..count].to_vec())
+}
+
+fn single(spec: Spec) -> StockObject {
+    let mut fixture = Fixture::new();
+    fixture.put(2, 0, spec);
+    fixture.link(2, &[0]);
+    let pool = fixture.parse().unwrap();
+    let object = pool.listed(bank(2)).next().unwrap();
+    object
+}
+
+fn rect(x: u16, y: u16, width: u16, height: u16) -> PanelRect { PanelRect::new(PanelPoint::new(x, y).unwrap(), width, height).unwrap() }
+fn panel() -> PanelRect { rect(0, 0, 720, 480) }
+
+#[test]
+fn lists_follow_next_words_in_append_order() {
+    let mut fixture = Fixture::new();
+    for slot in [5, 2, 9] { fixture.put(3, slot, spec(0xff00_0010 + u32::from(slot), 2, 0, 0, [1, 1])); }
+    fixture.link(3, &[5, 2, 9]);
+    let pool = fixture.parse().unwrap();
+    assert_eq!(slots(&pool, 3), [5, 2, 9]);
+    let ids: Vec<u32> = pool.listed(bank(3)).map(|object| object.identifier.0).collect();
+    assert_eq!(ids, [0xff00_0015, 0xff00_0012, 0xff00_0019]);
+    for index in (0..19).filter(|index| *index != 3) { assert!(slots(&pool, index).is_empty()); }
+}
+
+#[test]
+fn reparse_replaces_members_and_empties_the_pool_on_error() {
+    let mut fixture = Fixture::new();
+    fixture.put(3, 5, spec(0xff00_0010, 2, 0, 0, [1, 1]));
+    fixture.link(3, &[5]);
+    let mut pool: ObjectPool<'_> = ObjectPool::empty();
+    assert!(slots(&pool, 3).is_empty());
+    pool.reparse(&fixture.pool, &fixture.lists).unwrap();
+    assert_eq!(slots(&pool, 3), [5]);
+    let mut broken = fixture.lists.clone();
+    broken[3 * 8..3 * 8 + 4].copy_from_slice(&(address(3, 5) + 1).to_le_bytes());
+    assert_eq!(pool.reparse(&fixture.pool, &broken), Err(PoolError::Pointer { bank: bank(3), address: DataAddress(address(3, 5) + 1) }));
+    assert!(slots(&pool, 3).is_empty());
+}
+
+#[test]
+fn a_full_bank_of_128_nodes_is_accepted() {
+    let mut fixture = Fixture::new();
+    let order: Vec<u8> = (0..128).rev().collect();
+    for slot in &order { fixture.put(7, *slot, spec(1, 1, 0, 0, [0, 0])); }
+    fixture.link(7, &order);
+    assert_eq!(slots(&fixture.parse().unwrap(), 7), order);
+}
+
+#[test]
+fn malformed_lists_are_refused() {
+    let mut cycle = Fixture::new();
+    for slot in [1, 2] { cycle.put(3, slot, spec(1, 1, 0, 0, [0, 0])); }
+    cycle.link(3, &[1, 2]);
+    cycle.object(3, 2)[0..4].copy_from_slice(&address(3, 1).to_le_bytes());
+    assert_eq!(cycle.parse().err(), Some(PoolError::Cycle { bank: bank(3) }));
+
+    let mut foreign = Fixture::new();
+    foreign.put(3, 1, spec(1, 1, 0, 0, [0, 0]));
+    foreign.link(3, &[1]);
+    foreign.object(3, 1)[0..4].copy_from_slice(&address(4, 0).to_le_bytes());
+    assert_eq!(foreign.parse().err(), Some(PoolError::Pointer { bank: bank(3), address: DataAddress(address(4, 0)) }));
+
+    let mut misaligned = Fixture::new();
+    misaligned.lists[3 * 8..3 * 8 + 4].copy_from_slice(&(address(3, 1) + 4).to_le_bytes());
+    assert_eq!(misaligned.parse().err(), Some(PoolError::Pointer { bank: bank(3), address: DataAddress(address(3, 1) + 4) }));
+
+    let mut past_end = Fixture::new();
+    past_end.lists[18 * 8..18 * 8 + 4].copy_from_slice(&address(18, 128).to_le_bytes());
+    assert_eq!(past_end.parse().err(), Some(PoolError::Pointer { bank: bank(18), address: DataAddress(address(18, 128)) }));
+
+    let mut tail = Fixture::new();
+    for slot in [1, 2] { tail.put(3, slot, spec(1, 1, 0, 0, [0, 0])); }
+    tail.link(3, &[1, 2]);
+    tail.lists[3 * 8 + 4..3 * 8 + 8].copy_from_slice(&address(3, 1).to_le_bytes());
+    assert_eq!(tail.parse().err(), Some(PoolError::Tail { bank: bank(3) }));
+
+    let mut short = Fixture::new();
+    short.pool.pop();
+    assert_eq!(short.parse().err(), Some(PoolError::PoolLength(19 * 0x6a00 - 1)));
+}
+
+#[test]
+fn unknown_states_and_kinds_are_refused() {
+    let mut state = Fixture::new();
+    state.put(5, 0, Spec { state: 7, ..spec(1, 1, 0, 0, [0, 0]) });
+    state.link(5, &[0]);
+    assert_eq!(state.parse().err(), Some(PoolError::State { bank: bank(5), slot: SlotIndex::new(0).unwrap(), raw: 7 }));
+
+    let mut kind = Fixture::new();
+    kind.put(5, 0, spec(1, 4, 0, 0, [0, 0]));
+    kind.link(5, &[0]);
+    assert_eq!(kind.parse().err(), Some(PoolError::Kind { bank: bank(5), slot: SlotIndex::new(0).unwrap(), raw: 4 }));
+}
+
+#[test]
+fn free_members_are_listed_but_not_live() {
+    let mut fixture = Fixture::new();
+    fixture.put(6, 0, spec(1, 1, 0, 0, [0, 0]));
+    fixture.put(6, 1, Spec { state: 2, ..spec(2, 1, 0, 0, [0, 0]) });
+    fixture.put(6, 2, Spec { state: 3, ..spec(3, 1, 0, 0, [0, 0]) });
+    fixture.link(6, &[0, 1, 2]);
+    let pool = fixture.parse().unwrap();
+    let states: Vec<AllocationState> = pool.listed(bank(6)).map(|object| object.state).collect();
+    assert_eq!(states, [AllocationState::Created, AllocationState::Free, AllocationState::Unchanged]);
+    let live: Vec<u32> = pool.live(bank(6)).map(|object| object.identifier.0).collect();
+    assert_eq!(live, [1, 3]);
+}
+
+#[test]
+fn solid_resource_lowers_to_a_fill_in_the_lowest_matching_palette_index() {
+    let object = single(Spec { primary: [255, 255, 255, 0], secondary: [1, 2, 3, 200], ..spec(0xff00_0838, 5, 10, 20, [30, 40]) });
+    assert_eq!(lower_with(&[object], OutputSelector::Identity).unwrap(), [
+        DrawCommand::Clip(panel()),
+        DrawCommand::Fill { rect: rect(10, 20, 30, 40), colour: Colour { palette: PaletteIndex(2), alpha: Alpha(200) } },
+        DrawCommand::ResetClip,
+    ]);
+}
+
+#[test]
+fn panel_output_scales_horizontal_geometry_by_nine_eighths() {
+    let fill = |x, width| single(Spec { secondary: [0, 0, 0, 255], ..spec(0xff00_0838, 5, x, 7, [width, 9]) });
+    let colour = Colour { palette: PaletteIndex(0), alpha: Alpha(255) };
+    // 640 * 1.125 = 720; the 720-wide clip becomes 810 and is cut at the panel edge.
+    assert_eq!(lower_with(&[fill(0, 640)], OutputSelector::Panel).unwrap()[..2], [
+        DrawCommand::Clip(panel()),
+        DrawCommand::Fill { rect: rect(0, 7, 720, 9), colour },
+    ]);
+    // 112.5 rounds away from zero to 113; 50.625 truncates to 50; round(164.25) - (113 + 50) = 1 adds nothing.
+    assert_eq!(lower_with(&[fill(100, 45)], OutputSelector::Panel).unwrap()[1], DrawCommand::Fill { rect: rect(113, 7, 50, 9), colour });
+    // round(3.375) = 3, trunc(3.375) = 3, round(7.875) - (3 + 3) = 2 widens the span by one.
+    assert_eq!(lower_with(&[fill(3, 3)], OutputSelector::Panel).unwrap()[1], DrawCommand::Fill { rect: rect(3, 7, 4, 9), colour });
+}
+
+#[test]
+fn bitmaps_lower_to_images_and_shapes_at_the_stored_position() {
+    let image = single(spec(0xff00_0010, 2, 50, 60, [8, 6]));
+    assert_eq!(lower_with(&[image], OutputSelector::Identity).unwrap()[1],
+        DrawCommand::Image { origin: PanelPoint::new(50, 60).unwrap(), image: ImageId::new(0x10).unwrap(), alpha: Alpha::OPAQUE });
+
+    let primary = [10, 20, 30, 40];
+    let secondary = [50, 60, 70, 80];
+    let recoloured = single(Spec { primary, secondary, style: 1, ..spec(0xff00_0011, 5, 1, 2, [4, 3]) });
+    assert_eq!(lower_with(&[recoloured], OutputSelector::Identity).unwrap()[1], DrawCommand::Shape {
+        origin: PanelPoint::new(1, 2).unwrap(), image: ImageId::new(0x11).unwrap(), alpha: Alpha::OPAQUE,
+        paint: ShapePaint::Recolour(ShapePalette {
+            primary: Rgba { red: 10, green: 20, blue: 30, alpha: 40 },
+            secondary: Rgba { red: 50, green: 60, blue: 70, alpha: 80 },
+            secondary_source: ShapeSecondarySource::Red,
+        }),
+    });
+    let white = single(Spec { primary, secondary, ..spec(0xff00_0011, 5, 1, 2, [4, 3]) });
+    assert!(matches!(lower_with(&[white], OutputSelector::Identity).unwrap()[1],
+        DrawCommand::Shape { paint: ShapePaint::Recolour(ShapePalette { secondary_source: ShapeSecondarySource::White, .. }), .. }));
+
+    let original = single(spec(0xff00_0012, 6, 3, 4, [5, 5]));
+    assert_eq!(lower_with(&[original], OutputSelector::Identity).unwrap()[1],
+        DrawCommand::Shape { origin: PanelPoint::new(3, 4).unwrap(), image: ImageId::new(0x12).unwrap(), alpha: Alpha::OPAQUE, paint: ShapePaint::Original });
+}
+
+#[test]
+fn objects_without_a_vglib_object_lower_to_nothing() {
+    let mut empty = Fixture::new();
+    empty.put(2, 0, spec(0xff00_0010, 2, 0, 0, [8, 6]));
+    empty.object(2, 0)[0xc..0x10].fill(0);
+    empty.link(2, &[0]);
+    let pool = empty.parse().unwrap();
+    assert!(lower_with(&pool.listed(bank(2)).collect::<Vec<_>>(), OutputSelector::Identity).unwrap().is_empty());
+    let free = single(Spec { state: 2, ..spec(0xff00_0010, 2, 0, 0, [8, 6]) });
+    assert!(lower_with(&[free], OutputSelector::Identity).unwrap().is_empty());
+}
+
+#[test]
+fn unestablished_objects_are_refused_by_name() {
+    let refusal = |spec: Spec, output| lower_with(&[single(spec)], output).unwrap_err();
+    let missing = ProducerError::MissingSemantic;
+    let id = |value| ResourceId(value);
+    use SemanticPrerequisite as P;
+    let image = spec(0xff00_0010, 2, 50, 60, [8, 6]);
+    assert_eq!(refusal(Spec { state: 1, ..image }, OutputSelector::Identity), missing(P::ReusedObject(id(0xff00_0010))));
+    assert_eq!(refusal(Spec { state: 3, ..image }, OutputSelector::Identity), missing(P::ReusedObject(id(0xff00_0010))));
+    assert_eq!(refusal(spec(0x27a, 1, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::ObjectText(id(0x27a))));
+    assert_eq!(refusal(spec(0xfe00_0000, 1, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::TextCache));
+    assert_eq!(refusal(spec(0xfc00_0000, 3, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::PlaneResource(id(0xfc00_0000))));
+    assert_eq!(refusal(spec(0xfd00_0001, 2, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::CustomResource(id(0xfd00_0001))));
+    assert_eq!(refusal(image, OutputSelector::Doubled), missing(P::ObjectTransform(id(0xff00_0010))));
+    assert_eq!(refusal(image, OutputSelector::Panel), missing(P::ObjectTransform(id(0xff00_0010))));
+    assert_eq!(refusal(spec(0xff00_0010, 2, 0, 0, [16, 6]), OutputSelector::Identity), missing(P::ObjectTransform(id(0xff00_0010))));
+    assert_eq!(refusal(spec(0xff00_0010, 5, 0, 0, [8, 6]), OutputSelector::Identity), missing(P::BitmapKind(id(0xff00_0010))));
+    assert_eq!(refusal(Spec { secondary: [4, 5, 6, 255], ..spec(0xff00_0838, 5, 0, 0, [1, 1]) }, OutputSelector::Identity), missing(P::ObjectColour(id(0xff00_0838))));
+    assert_eq!(refusal(Spec { primary: [0, 0, 0, 1], ..spec(0xff00_0838, 5, 0, 0, [1, 1]) }, OutputSelector::Identity), missing(P::ObjectStyling(id(0xff00_0838))));
+
+    let mut offset = Fixture::new();
+    offset.put(2, 0, image);
+    offset.object(2, 0)[0x48] = 1;
+    offset.link(2, &[0]);
+    let pool = offset.parse().unwrap();
+    assert_eq!(lower_with(&pool.listed(bank(2)).collect::<Vec<_>>(), OutputSelector::Identity).unwrap_err(), missing(P::ObjectStyling(id(0xff00_0010))));
+
+    let mut option = Fixture::new();
+    option.put(2, 0, image);
+    option.object(2, 0)[0x59] = 1;
+    option.link(2, &[0]);
+    let pool = option.parse().unwrap();
+    assert_eq!(lower_with(&pool.listed(bank(2)).collect::<Vec<_>>(), OutputSelector::Panel).unwrap_err(), missing(P::ObjectTransform(id(0xff00_0010))));
+}
+
+fn frame(fixture: &Fixture) -> Result<Vec<DrawCommand<'static>>, ProducerError> {
+    let pool = fixture.parse().unwrap();
+    let table = descriptors(BITMAPS);
+    let regions = [DataRegion { base: DataAddress(0x0022a8b4), bytes: &table }];
+    let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
+    let context = LoweringContext { bitmaps: &bitmaps, components: ComponentTable::new(&COMPONENTS).unwrap(), output: OutputSelector::Identity };
+    let mut storage: [DrawCommand<'static>; 32] = [DrawCommand::ResetClip; 32];
+    let mut out = CommandBuffer::new(&mut storage);
+    frame_commands(&pool, &context, &mut out)?;
+    let count = out.draw_list().commands().len();
+    Ok(storage[..count].to_vec())
+}
+
+#[test]
+fn frames_composite_higher_banks_first_and_list_order_within_a_bank() {
+    let mut fixture = Fixture::new();
+    fixture.put(1, 0, spec(0xff00_0010, 2, 1, 1, [8, 6]));
+    fixture.put(18, 4, Spec { secondary: [9, 9, 9, 255], ..spec(0xff00_0838, 5, 0, 0, [720, 480]) });
+    fixture.put(9, 3, spec(0xff00_0012, 6, 30, 0, [5, 5]));
+    fixture.put(9, 1, spec(0xff00_0012, 6, 20, 0, [5, 5]));
+    fixture.put(9, 2, Spec { state: 2, ..spec(0xff00_0012, 6, 10, 0, [5, 5]) });
+    fixture.link(1, &[0]);
+    fixture.link(18, &[4]);
+    fixture.link(9, &[3, 2, 1]);
+    let drawn: Vec<DrawCommand<'static>> = frame(&fixture).unwrap().into_iter()
+        .filter(|command| !matches!(command, DrawCommand::Clip(_) | DrawCommand::ResetClip)).collect();
+    let shape = |x| DrawCommand::Shape { origin: PanelPoint::new(x, 0).unwrap(), image: ImageId::new(0x12).unwrap(), alpha: Alpha::OPAQUE, paint: ShapePaint::Original };
+    assert_eq!(drawn, [
+        DrawCommand::Fill { rect: panel(), colour: Colour { palette: PaletteIndex(3), alpha: Alpha(255) } },
+        shape(30), shape(20),
+        DrawCommand::Image { origin: PanelPoint::new(1, 1).unwrap(), image: ImageId::new(0x10).unwrap(), alpha: Alpha::OPAQUE },
+    ]);
+
+    fixture.put(0, 0, spec(0xff00_0010, 2, 1, 1, [8, 6]));
+    fixture.link(0, &[0]);
+    assert_eq!(frame(&fixture).unwrap_err(), ProducerError::MissingSemantic(SemanticPrerequisite::CompositeOrder));
+}
+
+// Captured pool: first `render-pane-return` hit (line 59) of
+// private-data/scratch/BasicKernelRequal/runs/20261114T130148Z-basic-render-current/work/pairs/runs/picker-15-owned/e2e-observation-3.trace-hits.jsonl
+// (phase owned-picker-keys, sha256 b845550c5ad828f71892b47ffece0dfa63c9ddcc88a97ee0b18293cc3cd0154e).
+// `memory[3]` is the 152 list bytes at 0x015e748c; `memory[6..]` the pool at 0x015e7538. Only list members are kept.
+const CAPTURED_LISTS: &str = "0000000000000000000000000000000000000000000000000000000000000000381d6001381d60010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b4ad6401ecbf6401e0166501e0166501387f6501387f650138e9650138e96501";
+const CAPTURED_OBJECTS: &[(u8, u8, &str)] = &[
+    (4, 0, "0000000000000000e80000ff443026000000000006000000640064000000000000000000a4019801a401a4019801000000000000dc00180000000000d002e001010000000000000000000000000000000000000001000000000004ffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 3, "04b16401000000005e0800ff0800190000000000050000006400640000000000000000002d0024002d002d00240000000000000064004e0000000000d002e00100000000000000000000000000000000000000000100000000000f5a5a5a4c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 7, "d8b164010000000032040000b4a63a000000000001000000640064001e0024003000000000000000000000000000780000000000a000480000000000d002e00100000000000000000000000000000000000000000100000000000f5a5a5a4c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 8, "acb26401000000005f0800ff74b0180000000000050000006400640000000000000000002d0024002d002d00240000000000000064007e0000000000d002e00100000000000000000000000000000000000000000100000000000f5a5a5eff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 9, "80b36401000000004904000000e33a000000000001000000640064001e0024003000000000000000000000000000780000000000a000780000000000d002e00100000000000000000000000000000000000000000100000000000f5a5a5eff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 10, "54b4640100000000910200ffc048260000000000050000006400640000000000000000002d0024002d002d0024000000000000006400ae0000000000d002e00100000000000000000000000000000000000000000100000000000f5a5a5eff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 11, "fcb564010000000031000000b0833a000000000001000000640064001e0024003000000000000000000000000000780000000000a000a80000000000d002e00100000000000000000000000000000000000000000100000000000f5a5a5eff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 13, "0cac6401000000003500000058aa3a000000000001000000640064001e00240030000000000000000000000000009001000000006400d80000000000d002e00100000000000000000000000000000000000000000100000000000f000000ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 1, "e0ac64017017a8007a02000058a33a000300000001000000640064001e0024003000000003013000030103013000680100000000a000000000000000d002e00100000000000000000000000000000000000000000100000000000fc6c6c6ff000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 2, "20ba64018818a800cb0000ff9c862f000300000006000000640064000000000000000000500030005000500030000000000000005000000000000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 18, "f4ba640100000000160200ff44901e000000000006000000640064000000000000000000640030006400640030000000000000000000300000000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 19, "c8bb640100000000170200ffdc941e000000000006000000640064000000000000000000640030006400640030000000000000000000600000000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 20, "9cbc640100000000180200ff2c9a1e000000000006000000640064000000000000000000640030006400640030000000000000000000900000000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 21, "70bd640100000000190200ff14a01e000000000006000000640064000000000000000000640030006400640030000000000000000000c00000000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 22, "44be6401000000003f0200ffb0a01b000000000006000000640064000000000000000000640030006400640030000000000000000000f00000000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 23, "18bf6401000000001b0200ff748230000000000006000000640064000000000000000000640030006400640030000000000000000000200100000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 24, "ecbf6401000000001c0200ffa0b723000000000006000000640064000000000000000000640030006400640030000000000000000000500100000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (15, 25, "00000000000000001d0200ff0cc923000000000006000000640064000000000000000000640030006400640030000000000000000000800100000000d002e00100000000000000000000000000000000000000000100000000000fffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (16, 2, "0000000000000000f30000ffdc7732000000000006000000640064000000000000000000300230003002300230000000000000005000d80000000000d002e001000000000000000000000000000000000000000001000000000010ffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (17, 0, "0000000000000000e70000ff6c6723000000000006000000640064000000000000000000440280014402440280010000000000003c00300000000000d002e001000000000000000000000000000000000000000001000000000011ffffffffcc0000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+    (18, 0, "00000000607fac00380800ff8c1b230003000000050000006400640000000000000000008002e00180028002e0010000000000000000000000000000d002e001000000000000000000000000000000000000000001000000000012ffffff00000000ff0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+];
+
+fn hex(text: &str) -> Vec<u8> {
+    text.as_bytes().chunks(2).map(|pair| u8::from_str_radix(core::str::from_utf8(pair).unwrap(), 16).unwrap()).collect()
+}
+
+fn captured() -> Fixture {
+    let mut fixture = Fixture::new();
+    fixture.lists = hex(CAPTURED_LISTS);
+    for (bank, slot, bytes) in CAPTURED_OBJECTS { fixture.object(*bank, *slot).copy_from_slice(&hex(bytes)); }
+    fixture
+}
+
+#[test]
+fn captured_picker_pane_pool_decodes_to_the_observed_objects() {
+    let fixture = captured();
+    let pool = fixture.parse().unwrap();
+    let summary = |index: u8| -> Vec<(u32, i16, i16, AllocationState)> {
+        pool.listed(bank(index)).map(|object| (object.identifier.0, object.position.x, object.position.y, object.state)).collect()
+    };
+    use AllocationState::{Created as C, Unchanged as U};
+    assert_eq!(summary(4), [(0xff00_00e8, 220, 24, C)]);
+    assert_eq!(summary(16), [(0xff00_00f3, 80, 216, C)]);
+    assert_eq!(summary(17), [(0xff00_00e7, 60, 48, C)]);
+    assert_eq!(summary(18), [(0xff00_0838, 0, 0, U)]);
+    assert_eq!(summary(15), [
+        (0xff00_085e, 100, 78, C), (0x432, 160, 72, C), (0xff00_085f, 100, 126, C), (0x449, 160, 120, C),
+        (0xff00_0291, 100, 174, C), (0x31, 160, 168, C), (0x35, 100, 216, C), (0x27a, 160, 0, U),
+        (0xff00_00cb, 80, 0, U), (0xff00_0216, 0, 48, C), (0xff00_0217, 0, 96, C), (0xff00_0218, 0, 144, C),
+        (0xff00_0219, 0, 192, C), (0xff00_023f, 0, 240, C), (0xff00_021b, 0, 288, C), (0xff00_021c, 0, 336, C),
+        (0xff00_021d, 0, 384, C),
+    ]);
+    assert_eq!(slots(&pool, 15), [3, 7, 8, 9, 10, 11, 13, 1, 2, 18, 19, 20, 21, 22, 23, 24, 25]);
+    for index in [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] { assert!(slots(&pool, index).is_empty()); }
+
+    let fill = pool.listed(bank(18)).next().unwrap();
+    assert_eq!(fill.kind, ObjectKind::ShapeKindOne);
+    assert_eq!(fill.handle, Some(VglibObject(DataAddress(0x00ac_7f60))));
+    assert_eq!((fill.extent.width, fill.extent.height), (640, 480));
+    assert_eq!(fill.clip, ObjectClip { x: 0, y: 0, width: 720, height: 480 });
+    assert_eq!(fill.components, [Rgba { red: 255, green: 255, blue: 255, alpha: 0 }, Rgba { red: 0, green: 0, blue: 0, alpha: 255 }]);
+    let icon = pool.listed(bank(4)).next().unwrap();
+    assert!(icon.options.enabled);
+    assert_eq!(icon.kind, ObjectKind::ShapeKindTwo);
+
+    let table = descriptors(&[]);
+    let regions = [DataRegion { base: DataAddress(0x0022a8b4), bytes: &table }];
+    let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
+    let context = LoweringContext { bitmaps: &bitmaps, components: ComponentTable::new(&COMPONENTS).unwrap(), output: OutputSelector::Panel };
+    let mut storage = [DrawCommand::ResetClip; 8];
+    let mut out = CommandBuffer::new(&mut storage);
+    assert_eq!(frame_commands(&pool, &context, &mut out),
+        Err(ProducerError::MissingSemantic(SemanticPrerequisite::ReusedObject(ResourceId(0xff00_0838)))));
+}

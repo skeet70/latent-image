@@ -1,9 +1,9 @@
 use super::{FontId, PaletteIndex, PanelPoint, PanelRect, SurfaceId};
-use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, Rgba, ShapePaint, TextPenOp, TextRef};
+use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, PixelSource, Rgba, SceneRect, ShapePaint, TextPenOp, TextRef};
 use super::font_core::{ByteStride, CoverageEncoding, FontAsset, FontConfig, FontEngine, FontError, FontWorkspace, GlyphId, GlyphMask, GlyphMetrics, PixelExtent, PixelOffset};
 use super::font_core::shaping::{detect_mode, detect_script_run, shape_text, CharacterCode, CharacterIndex, DirectionHint, LayoutExtent16, LayoutOffset, ScriptTables, ShapingMetrics, TextDirection, ThaiMetrics, MAX_TEXT_UNITS};
 const SCRIPT_TABLES: ScriptTables<'static> = ScriptTables::firmware();
-use super::shape_assets::{Gvff, NaturalPlacement, Paint, PaintIndex, PaintMode, Ramp, RampStop, Recolour, ShapeAsset, ShapeContent, ShapeError};
+use super::shape_assets::{FillRule, GradientItem, Gvff, LineCap, LineJoin, Paint, PaintIndex, PaintMode, Ramp, RampStop, Recolour, Scalar, ShapeAsset, ShapeContent, ShapeError, ShapePlacement};
 use super::vector_raster::{self, ClipBounds, CurveAccuracy, DashBudget, SampleGrid, StrokeMetrics, StrokePrimitive, StrokeStyle, VectorError, Vertex};
 
 #[cfg(test)]
@@ -44,6 +44,10 @@ pub enum RasterError {
     UnsortedShapes,
     AmbiguousImageOwnership(ImageId),
     Shape(ShapeError),
+    /// A `ScaledShape` recolour block that is not three pairs of finite RGBA f32 words.
+    InvalidRecolour(ShapeError),
+    /// GVFF bounds with a zero or non-finite width or height cannot be mapped onto a `SceneRect`.
+    DegenerateShapeBounds,
     Vector(VectorError),
 }
 
@@ -306,13 +310,13 @@ impl<'a> Surface<'a> {
         match asset.content {
             ShapeContent::Gradient { file, recolour } => {
                 let recolour = match paint { ShapePaint::Original => recolour, ShapePaint::Recolour(palette) => Some(Recolour::from_palette(palette)) };
-                self.draw_gvff_clipped(origin, file, recolour, alpha, clip, workspace)
+                self.draw_gvff_clipped(ShapePlacement::natural(origin, file.bounds()), file, recolour, alpha, clip, workspace)
             }
             ShapeContent::Styled(paths) => {
                 if paint != ShapePaint::Original { return Err(RasterError::InvalidPaint); }
                 if clip.left >= clip.right || clip.top >= clip.bottom { return Ok(()); }
                 let clip = ClipBounds::new(clip.left as i32, clip.top as i32, clip.right as i32, clip.bottom as i32).unwrap();
-                let placement = NaturalPlacement::styled(origin, asset.entry);
+                let placement = ShapePlacement::styled(origin, asset.entry);
                 for item in paths.items() {
                     if item.mode == PaintMode::None { continue; }
                     let path = vector_raster::flatten_path_placed(item.path, workspace.vertices, workspace.accuracy, placement).map_err(RasterError::Vector)?;
@@ -337,29 +341,69 @@ impl<'a> Surface<'a> {
     }
     pub fn draw_gvff(&mut self, origin: PanelPoint, file: Gvff<'_>, recolour: Option<Recolour>, alpha: Alpha, workspace: &mut VectorWorkspace<'_>) -> Result<(), RasterError> {
         let clip = Bounds { left: 0, top: 0, right: self.width, bottom: self.height };
-        self.draw_gvff_clipped(origin, file, recolour, alpha, clip, workspace)
+        self.draw_gvff_clipped(ShapePlacement::natural(origin, file.bounds()), file, recolour, alpha, clip, workspace)
     }
-    fn draw_gvff_clipped(&mut self, origin: PanelPoint, file: Gvff<'_>, recolour: Option<Recolour>, alpha: Alpha, clip: Bounds, workspace: &mut VectorWorkspace<'_>) -> Result<(), RasterError> {
+    fn draw_gvff_clipped(&mut self, placement: ShapePlacement, file: Gvff<'_>, recolour: Option<Recolour>, alpha: Alpha, clip: Bounds, workspace: &mut VectorWorkspace<'_>) -> Result<(), RasterError> {
         if clip.left >= clip.right || clip.top >= clip.bottom { return Ok(()); }
         let clip = ClipBounds::new(clip.left as i32, clip.top as i32, clip.right as i32, clip.bottom as i32).unwrap();
-        let placement = NaturalPlacement::natural(origin, file.bounds());
+        let unit = placement.is_unit_scale();
+        let mut previous = None;
         for item in file.items() {
             let item = item.map_err(RasterError::Shape)?;
+            let state = GvffItemState::next(previous, item);
+            previous = Some((item, state));
             if item.mode == PaintMode::None { continue; }
-            let path = vector_raster::flatten_path_placed(item.path, workspace.vertices, workspace.accuracy, placement).map_err(RasterError::Vector)?;
             let blend = if item.source_over { PaintBlend::SourceOver } else { PaintBlend::Source };
-            if let Some(paint) = item.fill {
-                let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
-                vector_raster::fill(path, item.fill_rule, clip, workspace.samples, &mut sink);
+            if item.fill.is_some() || (item.stroke.is_some() && unit) {
+                let path = vector_raster::flatten_path_placed(item.path, workspace.vertices, workspace.accuracy, placement).map_err(RasterError::Vector)?;
+                if let Some(paint) = item.fill {
+                    let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
+                    vector_raster::fill(path, state.fill_rule, clip, workspace.samples, &mut sink);
+                }
+                if let (Some(paint), true) = (item.stroke, unit) {
+                    let style = state.stroke_style(item)?;
+                    let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
+                    vector_raster::stroke(path, style, workspace.strokes, workspace.dash_budget, clip, workspace.samples, &mut sink).map_err(RasterError::Vector)?;
+                }
             }
-            if let Some(paint) = item.stroke {
-                let metrics = StrokeMetrics::new(item.stroke_width.value(), item.miter_limit.value()).map_err(RasterError::Vector)?;
-                let style = StrokeStyle { metrics, cap: item.cap, join: item.join, dash: item.dash };
+            if let (Some(paint), false) = (item.stroke, unit) {
+                let style = state.stroke_style(item)?;
+                let path = vector_raster::flatten_path_local(item.path, workspace.vertices, workspace.accuracy, placement).map_err(RasterError::Vector)?;
                 let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
-                vector_raster::stroke(path, style, workspace.strokes, workspace.dash_budget, clip, workspace.samples, &mut sink).map_err(RasterError::Vector)?;
+                vector_raster::stroke_placed(path, style, workspace.strokes, workspace.dash_budget, placement, clip, workspace.samples, &mut sink).map_err(RasterError::Vector)?;
             }
         }
         Ok(())
+    }
+    /// Owned sampling rule for scaled images; stock leaves filtering to the vector engine at image quality 4
+    /// (`VG_IMAGE_QUALITY_BETTER`, `I4:6d8cb8`), which is unmeasured. Destination pixel `X` samples texel coordinate
+    /// `u = (X + 0.5 − dest.x)·Ws/Wt − 0.5`, clamped to `[0, Ws − 1]` (likewise `v`); the colour is the bilinear blend of
+    /// the surrounding texels in premultiplied space, returned to straight alpha and composited source-over. At
+    /// `Wt == Ws` every `u` is a texel index, so texels are copied unchanged.
+    fn scaled_image(&mut self, dest: SceneRect, source: PixelSource<'_>, clip: Bounds) {
+        let left = i64::from(dest.x()).max(clip.left as i64);
+        let top = i64::from(dest.y()).max(clip.top as i64);
+        let right = (i64::from(dest.x()) + i64::from(dest.width())).min(clip.right as i64);
+        let bottom = (i64::from(dest.y()) + i64::from(dest.height())).min(clip.bottom as i64);
+        for y in top..bottom {
+            let (row0, row1, v) = texel_axis(y - i64::from(dest.y()), dest.height(), source.height());
+            for x in left..right {
+                let (column0, column1, u) = texel_axis(x - i64::from(dest.x()), dest.width(), source.width());
+                let mut sum = [0.0f64; 4];
+                for (column, row, weight) in [(column0, row0, (1.0 - u) * (1.0 - v)), (column1, row0, u * (1.0 - v)), (column0, row1, (1.0 - u) * v), (column1, row1, u * v)] {
+                    let Some(texel) = source.rgba(column, row) else { continue };
+                    let alpha = f64::from(texel.alpha) * weight;
+                    sum[0] += f64::from(texel.red) * alpha;
+                    sum[1] += f64::from(texel.green) * alpha;
+                    sum[2] += f64::from(texel.blue) * alpha;
+                    sum[3] += alpha;
+                }
+                if sum[3] == 0.0 { continue; }
+                let straight = |value: f64| (value / sum[3] + 0.5).min(255.0) as u8;
+                let colour = Rgba { red: straight(sum[0]), green: straight(sum[1]), blue: straight(sum[2]), alpha: (sum[3] + 0.5).min(255.0) as u8 };
+                self.blend(x as usize, y as usize, colour);
+            }
+        }
     }
     /// Replaces the complete frame, clearing previous pixels to transparent first.
     pub fn render(&mut self, list: DrawList<'_>, resources: &mut RasterResources<'_, '_, '_>) -> Result<(), RasterError> {
@@ -397,6 +441,14 @@ impl<'a> Surface<'a> {
                     let asset = resources.shapes[index].asset;
                     let workspace = resources.vector.as_mut().ok_or(RasterError::MissingVectorWorkspace)?;
                     self.draw_shape_clipped(origin, asset, alpha, paint, clip, workspace)?;
+                }
+                DrawCommand::ScaledImage { dest, source } => self.scaled_image(dest, source, clip),
+                DrawCommand::ScaledShape { dest, gvff, recolour } => {
+                    let file = Gvff::parse(gvff).map_err(RasterError::Shape)?;
+                    let recolour = recolour.map(|block| Recolour::parse(&block.0)).transpose().map_err(RasterError::InvalidRecolour)?;
+                    let placement = ShapePlacement::scaled(dest, file.bounds()).ok_or(RasterError::DegenerateShapeBounds)?;
+                    let workspace = resources.vector.as_mut().ok_or(RasterError::MissingVectorWorkspace)?;
+                    self.draw_gvff_clipped(placement, file, recolour, Alpha::OPAQUE, clip, workspace)?;
                 }
                 DrawCommand::Glyph { origin, font, glyph, colour } => {
                     let colour = resources.pack.colour(colour)?;
@@ -652,12 +704,12 @@ impl<'a> PreparedPaint<'a> {
 pub struct PaintCoverage<'surface, 'pixels, 'asset> {
     surface: &'surface mut Surface<'pixels>,
     paint: PreparedPaint<'asset>,
-    placement: NaturalPlacement,
+    placement: ShapePlacement,
     opacity: Alpha,
     blend: PaintBlend,
 }
 impl<'surface, 'pixels, 'asset> PaintCoverage<'surface, 'pixels, 'asset> {
-    pub fn new(surface: &'surface mut Surface<'pixels>, file: Gvff<'asset>, paint: PaintIndex, recolour: Option<Recolour>, placement: NaturalPlacement, opacity: Alpha, blend: PaintBlend) -> Result<Self, RasterError> {
+    pub fn new(surface: &'surface mut Surface<'pixels>, file: Gvff<'asset>, paint: PaintIndex, recolour: Option<Recolour>, placement: ShapePlacement, opacity: Alpha, blend: PaintBlend) -> Result<Self, RasterError> {
         Ok(Self { surface, paint: PreparedPaint::new(file, paint, recolour)?, placement, opacity, blend })
     }
 }
@@ -674,6 +726,40 @@ impl super::vector_raster::CoverageSink for PaintCoverage<'_, '_, '_> {
             PaintBlend::Source => self.surface.source_coverage(x as usize, y as usize, colour, coverage),
         }
     }
+}
+
+/// Fill rule, cap, join and miter limit in force for a GVFF item. The draw loop sets the fill rule (`0x1101`) only for
+/// the first item or when the fill paint differs from the previous item's (`I4:6da4ec-6da510`), and cap, join and miter
+/// limit (`0x1111-0x1113`) only for the first item or when stroke paint, dash index or stroke width differ
+/// (`I4:6da520-6da56c`); the change flags compare each record with its predecessor (`I4:6dab90-6dac24`).
+#[derive(Clone, Copy)]
+struct GvffItemState { fill_rule: FillRule, cap: LineCap, join: LineJoin, miter_limit: Scalar }
+impl GvffItemState {
+    fn next(previous: Option<(GradientItem<'_>, Self)>, item: GradientItem<'_>) -> Self {
+        let Some((last, state)) = previous else {
+            return Self { fill_rule: item.fill_rule, cap: item.cap, join: item.join, miter_limit: item.miter_limit };
+        };
+        let fill_rule = if last.fill == item.fill { state.fill_rule } else { item.fill_rule };
+        let same_stroke = last.stroke == item.stroke && last.dash_index == item.dash_index && last.stroke_width == item.stroke_width;
+        if same_stroke {
+            Self { fill_rule, ..state }
+        } else {
+            Self { fill_rule, cap: item.cap, join: item.join, miter_limit: item.miter_limit }
+        }
+    }
+    fn stroke_style<'a>(self, item: GradientItem<'a>) -> Result<StrokeStyle<'a>, RasterError> {
+        let metrics = StrokeMetrics::new(item.stroke_width.value(), self.miter_limit.value()).map_err(RasterError::Vector)?;
+        Ok(StrokeStyle { metrics, cap: self.cap, join: self.join, dash: item.dash })
+    }
+}
+
+/// Texel indices and the second texel's weight along one axis under the rule on [`Surface::scaled_image`].
+fn texel_axis(offset: i64, target: u16, source: u16) -> (u16, u16, f64) {
+    let position = (2 * offset + 1) as f64 * f64::from(source) / (2.0 * f64::from(target)) - 0.5;
+    let position = position.clamp(0.0, f64::from(source - 1));
+    let first = libm::floor(position);
+    let index = first as u16;
+    (index, (index + 1).min(source - 1), position - first)
 }
 
 fn stop_premultiplied(stop: RampStop) -> [f64; 4] {
@@ -720,3 +806,6 @@ impl Bounds {
 #[cfg(test)]
 #[path = "raster_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "scaled_raster_tests.rs"]
+mod scaled_tests;

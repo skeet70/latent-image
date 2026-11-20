@@ -505,7 +505,7 @@ fn linear_ramp_interpolates_premultiplied_colours_and_pads() {
     ]);
     let file = Gvff::parse(&asset).unwrap();
     let paint = file.items().next().unwrap().unwrap().fill.unwrap();
-    let placement = NaturalPlacement::natural(point(0,0),file.bounds());
+    let placement = ShapePlacement::natural(point(0,0),file.bounds());
     let mut bytes = vec![0;BYTES];
     {
         let mut surface = Surface::new(SurfaceId::Osd,&mut bytes).unwrap();
@@ -530,7 +530,7 @@ fn radial_ramp_samples_local_coordinates_after_natural_placement() {
     ]);
     let file = Gvff::parse(&asset).unwrap();
     let paint = file.items().next().unwrap().unwrap().fill.unwrap();
-    let placement = NaturalPlacement::natural(point(2,3),file.bounds());
+    let placement = ShapePlacement::natural(point(2,3),file.bounds());
     let mut bytes = vec![0;BYTES];
     {
         let mut surface = Surface::new(SurfaceId::Osd,&mut bytes).unwrap();
@@ -551,7 +551,7 @@ fn source_and_source_over_apply_distinct_coverage_to_transparent_paint() {
     let asset = gvff_paint_fixture(0x1b00,&[1.0,0.0,0.0,0.0],&[]);
     let file = Gvff::parse(&asset).unwrap();
     let paint = file.items().next().unwrap().unwrap().fill.unwrap();
-    let placement = NaturalPlacement::natural(point(0,0),file.bounds());
+    let placement = ShapePlacement::natural(point(0,0),file.bounds());
     let mut bytes = vec![0;BYTES];
     bytes[..8].copy_from_slice(&[0,0,255,255,0,0,255,255]);
     {
@@ -571,7 +571,7 @@ fn invalid_ramp_order_is_an_error_without_substituting_a_paint() {
     ]);
     let file = Gvff::parse(&asset).unwrap();
     let paint = file.items().next().unwrap().unwrap().fill.unwrap();
-    let placement = NaturalPlacement::natural(point(0,0),file.bounds());
+    let placement = ShapePlacement::natural(point(0,0),file.bounds());
     let mut bytes = vec![0;BYTES];
     let mut surface = Surface::new(SurfaceId::Osd,&mut bytes).unwrap();
     assert!(matches!(PaintCoverage::new(&mut surface,file,paint,None,placement,Alpha::OPAQUE,PaintBlend::SourceOver), Err(RasterError::InvalidPaint)));

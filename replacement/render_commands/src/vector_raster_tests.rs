@@ -204,7 +204,7 @@ fn natural_placement_reflects_y_before_fractional_pixel_sampling() {
     let mut asset = dashed_asset(&[2.0], 0.0);
     asset[40..44].copy_from_slice(&1.0f32.to_le_bytes());
     let bounds = Gvff::parse(&asset).unwrap().bounds();
-    let placement = NaturalPlacement::natural(super::super::PanelPoint::new(2, 8).unwrap(), bounds);
+    let placement = ShapePlacement::natural(super::super::PanelPoint::new(2, 8).unwrap(), bounds);
     let mut vertices = [Vertex::EMPTY; 16];
     let path = flatten_path_placed(item.path, &mut vertices, accuracy(), placement).unwrap();
     let mut mask = Mask::new();

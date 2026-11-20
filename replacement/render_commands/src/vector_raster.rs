@@ -1,4 +1,4 @@
-use super::shape_assets::{CoordinateMode, FillRule, LineCap, LineJoin, NaturalPlacement, Path, SegmentKind, StrokeDash};
+use super::shape_assets::{CoordinateMode, FillRule, LineCap, LineJoin, Path, SegmentKind, ShapePlacement, StrokeDash};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VectorError { WorkspaceTooSmall, InvalidStroke, NonFiniteGeometry, SubdivisionLimit, DashBudgetExceeded }
@@ -9,6 +9,7 @@ impl CurveAccuracy {
     pub fn new(max_chord_error: f32) -> Option<Self> {
         if max_chord_error.is_finite() && max_chord_error > 0.0 { Some(Self(max_chord_error as f64)) } else { None }
     }
+    fn in_path_units(self, placement: ShapePlacement) -> Self { Self(self.0 / placement.max_scale()) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,11 +145,17 @@ pub fn flatten_path<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: C
     flatten(path, workspace, accuracy, None)
 }
 
-pub fn flatten_path_placed<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: CurveAccuracy, placement: NaturalPlacement) -> Result<FlattenedPath<'a>, VectorError> {
-    flatten(path, workspace, accuracy, Some(placement))
+/// The error bound is in panel pixels.
+pub fn flatten_path_placed<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: CurveAccuracy, placement: ShapePlacement) -> Result<FlattenedPath<'a>, VectorError> {
+    flatten(path, workspace, accuracy.in_path_units(placement), Some(placement))
 }
 
-fn flatten<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: CurveAccuracy, placement: Option<NaturalPlacement>) -> Result<FlattenedPath<'a>, VectorError> {
+/// Leaves vertices in path coordinates for [`stroke_placed`]; the error bound is in panel pixels under `placement`.
+pub fn flatten_path_local<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: CurveAccuracy, placement: ShapePlacement) -> Result<FlattenedPath<'a>, VectorError> {
+    flatten(path, workspace, accuracy.in_path_units(placement), None)
+}
+
+fn flatten<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: CurveAccuracy, placement: Option<ShapePlacement>) -> Result<FlattenedPath<'a>, VectorError> {
     let mut output = Vertices { storage: workspace, used: 0 };
     let mut current = Point::ZERO;
     let mut start = Point::ZERO;
@@ -526,9 +533,33 @@ fn closing_direction(vertices: &[Vertex]) -> Option<Point> {
     if closed { last } else { None }
 }
 
-pub fn stroke(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], mut budget: DashBudget, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+pub fn stroke(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+    let used = stroke_primitives(path, style, workspace, budget)?;
+    if used == 0 { return Ok(()); }
+    let primitives = &workspace[..used];
+    let clip = bounded_clip(clip, primitives.iter().flat_map(|primitive| primitive.0.extent()));
+    sample(clip, grid, sink, |point| primitives.iter().any(|primitive| primitive.0.contains(point)));
+    Ok(())
+}
+
+/// Strokes a path flattened by [`flatten_path_local`] in path coordinates, so width, caps, joins and dashes follow
+/// `placement` including unequal axis scales; each sample point is mapped back into path coordinates.
+pub fn stroke_placed(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, placement: ShapePlacement, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+    let used = stroke_primitives(path, style, workspace, budget)?;
+    if used == 0 { return Ok(()); }
+    let primitives = &workspace[..used];
+    let extents = primitives.iter().flat_map(|primitive| primitive.0.extent()).map(|point| Point { x: placement.map_x(point.x), y: placement.map_y(point.y) });
+    let clip = bounded_clip(clip, extents);
+    sample(clip, grid, sink, |point| {
+        let local = Point { x: placement.unmap_x(point.x), y: placement.unmap_y(point.y) };
+        primitives.iter().any(|primitive| primitive.0.contains(local))
+    });
+    Ok(())
+}
+
+fn stroke_primitives(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], mut budget: DashBudget) -> Result<usize, VectorError> {
     let mut dash = DashPattern::new(style.dash)?;
-    if style.metrics.radius == 0.0 || (dash.invisible && style.cap == LineCap::Butt) { return Ok(()); }
+    if style.metrics.radius == 0.0 || (dash.invisible && style.cap == LineCap::Butt) { return Ok(0); }
     let mut builder = StrokeBuilder {
         output: Primitives { storage: workspace, used: 0 }, first: None, previous: None, degenerate: None,
         first_dash_boundary: false, last_dash_boundary: false, style, radius: style.metrics.radius,
@@ -560,10 +591,7 @@ pub fn stroke(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [
         dash.terminal_zeros(at, tangent, if closed { first_direction.unwrap_or(tangent) } else { tangent }, &mut builder, &mut budget)?;
     }
     builder.finish(closed)?;
-    let primitives = &builder.output.storage[..builder.output.used];
-    let clip = bounded_clip(clip, primitives.iter().flat_map(|primitive| primitive.0.extent()));
-    sample(clip, grid, sink, |point| primitives.iter().any(|primitive| primitive.0.contains(point)));
-    Ok(())
+    Ok(builder.output.used)
 }
 
 #[cfg(test)]

@@ -78,6 +78,56 @@ pub struct ShapePalette {
 pub enum ShapePaint { Original, Recolour(ShapePalette) }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextRef<'a> { Catalog(CatalogTextId), Custom(CustomTextId), Inline(&'a str) }
+/// Destination of a scaled draw in panel pixels, top-left origin; may extend past the surface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SceneRect { x: i32, y: i32, width: u16, height: u16 }
+impl SceneRect {
+    pub const fn new(x: i32, y: i32, width: u16, height: u16) -> Option<Self> {
+        if width == 0 || height == 0 { None } else { Some(Self { x, y, width, height }) }
+    }
+    pub const fn x(self) -> i32 { self.x }
+    pub const fn y(self) -> i32 { self.y }
+    pub const fn width(self) -> u16 { self.width }
+    pub const fn height(self) -> u16 { self.height }
+}
+/// Byte order of one 32-bit pixel in memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PixelOrder {
+    Rgba,
+    /// OpenVG `VG_sRGBA_8888` words (R in bits 31:24) stored little-endian.
+    Abgr,
+}
+/// Straight-alpha 8-bit-per-channel pixels; rows top-down, `stride` bytes apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PixelSource<'a> { width: u16, height: u16, stride: usize, order: PixelOrder, bytes: &'a [u8] }
+impl<'a> PixelSource<'a> {
+    pub fn new(width: u16, height: u16, stride: usize, order: PixelOrder, bytes: &'a [u8]) -> Option<Self> {
+        let row = usize::from(width) * 4;
+        if width == 0 || height == 0 || stride < row { return None; }
+        let needed = stride.checked_mul(usize::from(height) - 1)?.checked_add(row)?;
+        if bytes.len() < needed { return None; }
+        Some(Self { width, height, stride, order, bytes })
+    }
+    pub const fn width(self) -> u16 { self.width }
+    pub const fn height(self) -> u16 { self.height }
+    pub const fn stride(self) -> usize { self.stride }
+    pub const fn order(self) -> PixelOrder { self.order }
+    pub const fn bytes(self) -> &'a [u8] { self.bytes }
+    /// The pixel at `(x, y)` as straight RGBA.
+    pub fn rgba(self, x: u16, y: u16) -> Option<Rgba> {
+        if x >= self.width || y >= self.height { return None; }
+        let start = usize::from(y) * self.stride + usize::from(x) * 4;
+        let [a, b, c, d]: [u8; 4] = self.bytes[start..start + 4].try_into().ok()?;
+        Some(match self.order {
+            PixelOrder::Rgba => Rgba { red: a, green: b, blue: c, alpha: d },
+            PixelOrder::Abgr => Rgba { red: d, green: c, blue: b, alpha: a },
+        })
+    }
+}
+/// The 96-byte colour block of a recoloured GVFF draw: three (source RGBA, replacement RGBA) pairs of
+/// little-endian f32 words, as the shape object stores it at `+0xec` (`I4:6da6a0-6da6ac`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecolourBlock(pub [u8; 96]);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrawCommand<'a> {
     Fill { rect: PanelRect, colour: Colour },
@@ -90,6 +140,10 @@ pub enum DrawCommand<'a> {
     Glyph { origin: PanelPoint, font: FontId, glyph: char, colour: Colour },
     Image { origin: PanelPoint, image: ImageId, alpha: Alpha },
     Shape { origin: PanelPoint, image: ImageId, alpha: Alpha, paint: ShapePaint },
+    /// Draws `source` stretched onto `dest`, blended source-over within the current clip.
+    ScaledImage { dest: SceneRect, source: PixelSource<'a> },
+    /// Draws a GVFF block with its bounds mapped onto `dest`, recoloured when a block is given.
+    ScaledShape { dest: SceneRect, gvff: &'a [u8], recolour: Option<RecolourBlock> },
     Clip(PanelRect),
     ResetClip,
 }
