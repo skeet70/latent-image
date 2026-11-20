@@ -5540,9 +5540,9 @@
   },
   {
     "id": "E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150",
-    "claim": "The public property stager admits retirement of the stock getter and setter bodies without --unadmitted-retirement (retirement.admitted {{admitted}}, {{obligations}} unresolved references, {{dependencies}} named MMIO-sink dependencies whose coinciding retired words stay stock). On the staged DAT {{candidate_dat}}, the natural pair over {{routes}} routes qualifies both roles (retained {{retained_verdict}}, owned {{owned_verdict}}) and compares equal; the refusal controls refuse {{refusal_retained}}/10 for the retained role and {{refusal_owned}}/10 for the owned role, and the setter-entry guest control ends {{control_verdict}}.",
-    "scope": "Emulated X-M1 1.50 DAT {{firmware_sha256}}, full-system natural pair on the IMAGE SIZE-excluded route file (109 routes), one observation per role. Retirement admission is the static reference frontier over image4, image5, plain, both loaders, image2 and image3; computed addresses are outside it. Not the camera, not a native cohort on the kept-word image, not the lifecycle matrix.",
-    "notes": "Kept words are 0x620004, 0x620060, 0x620154, 0x6207c8, 0x630060, 0x630064 and 0x630168: values that reach only MMIO registers 0xfff45250, 0xfff45a4c, 0xfff45a50, 0xfff14020 (device-read table) and 0xfff14068, whose device interpretation is unproved. The pair run lost its retained refusal-controls check to a host OOM kill; the recheck over the same observation passed it and lost the owned refusal-controls check to its 18 GiB scope, which the pair run had passed.",
+    "claim": "The public property stager admits retirement of the stock getter and setter bodies without --unadmitted-retirement (retirement.admitted {{admitted}}, {{obligations}} unresolved references, {{dependencies}} named MMIO-sink dependencies whose coinciding retired words stay stock). On the staged DAT {{candidate_dat}}, the natural pair over {{routes}} routes qualifies both roles (retained {{retained_verdict}}, owned {{owned_verdict}}) and compares equal; one checker run refuses {{refusal_retained}}/10 refusal controls for the retained role and {{refusal_owned}}/10 for the owned role (peak RSS {{refusal_retained_kib}} and {{refusal_owned_kib}} KiB), and the setter-entry guest control ends {{control_verdict}}. On the settings/record-store image composed over the admitted property image (DAT {{lifecycle_dat}}), the {{lifecycle_steps}}-step lifecycle matrix qualifies both roles (retained {{lifecycle_retained_verdict}}, owned {{lifecycle_owned_verdict}}) and compares equal over {{lifecycle_routes}} routes; the owned observation guards {{lifecycle_guard_sites}} retired-body words and records {{lifecycle_guard_hits}} guard hits (retained {{lifecycle_retained_guard_hits}}), and {{lifecycle_kept_unguarded}} of the {{lifecycle_kept}} kept words are unguarded.",
+    "scope": "Emulated X-M1 1.50 DAT {{firmware_sha256}}, full-system natural pair on the IMAGE SIZE-excluded route file (109 routes) and the settings-storage lifecycle matrix, one observation per role each. Retirement admission is the static reference frontier over image4, image5, plain, both loaders, image2 and image3; computed addresses are outside it. Not the camera, not a native cohort on the kept-word image.",
+    "notes": "Kept words are 0x620004, 0x620060, 0x620154, 0x6207c8, 0x630060, 0x630064 and 0x630168: values that reach only MMIO registers 0xfff45250, 0xfff45a4c, 0xfff45a50, 0xfff14020 (device-read table) and 0xfff14068, whose device interpretation is unproved. The refusal-controls run rechecks the pair run's observation; its retained and owned outputs equal, as JSON, those of 20261120T162016Z-pair-check-admitted and 20261120T160658Z-pair-admitted.",
     "artifacts": [
       "private-data/scratch/PropertyRetirement/runs/20261120T160535Z-stage-admitted/result/property-contract.json",
       "private-data/scratch/PropertyRetirement/runs/20261120T160535Z-stage-admitted/result/programs.sha256",
@@ -5554,10 +5554,21 @@
       "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/qualify-retained.json",
       "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/qualify-owned.json",
       "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/compare.log",
-      "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/refusal-owned.log",
       "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/control-check.json",
-      "private-data/scratch/PropertyRetirement/runs/20261120T162016Z-pair-check-admitted/result/inputs.sha256",
-      "private-data/scratch/PropertyRetirement/runs/20261120T162016Z-pair-check-admitted/result/refusal-retained.log"
+      "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/inputs.sha256",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-retained.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-owned.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-retained.log",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-owned.log",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/inputs.sha256",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/matrix.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/receipt-retained.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/receipt-owned.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/qualify-retained.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/qualify-owned.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/compare.log",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-retained.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-owned.json"
     ],
     "facts": [
       {
@@ -5606,22 +5617,89 @@
       },
       {
         "name": "refusal_retained",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T162016Z-pair-check-admitted/result/refusal-retained.log",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-retained.log",
         "operation": "decimal-between",
         "prefix": "check: ",
         "suffix": "/10"
       },
       {
         "name": "refusal_owned",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/refusal-owned.log",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-owned.log",
         "operation": "decimal-between",
         "prefix": "check: ",
         "suffix": "/10"
       },
       {
+        "name": "refusal_retained_kib",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-retained.log",
+        "operation": "decimal-between",
+        "prefix": "Maximum resident set size (kbytes): ",
+        "suffix": "\n"
+      },
+      {
+        "name": "refusal_owned_kib",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163551Z-pair-refusal-admitted/result/refusal-owned.log",
+        "operation": "decimal-between",
+        "prefix": "Maximum resident set size (kbytes): ",
+        "suffix": "\n"
+      },
+      {
         "name": "control_verdict",
         "path": "private-data/scratch/PropertyRetirement/runs/20261120T160658Z-pair-admitted/result/control-check.json",
         "pointer": ["verdict"]
+      },
+      {
+        "name": "lifecycle_dat",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/receipt-owned.json",
+        "pointer": ["inputs", "dat", "sha256"]
+      },
+      {
+        "name": "lifecycle_steps",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/matrix.json",
+        "pointer": ["steps"],
+        "operation": "length"
+      },
+      {
+        "name": "lifecycle_retained_verdict",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/qualify-retained.json",
+        "pointer": ["verdict"]
+      },
+      {
+        "name": "lifecycle_owned_verdict",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/qualify-owned.json",
+        "pointer": ["verdict"]
+      },
+      {
+        "name": "lifecycle_routes",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/compare.log",
+        "operation": "decimal-between",
+        "prefix": "equal over ",
+        "suffix": " routes"
+      },
+      {
+        "name": "lifecycle_guard_sites",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-owned.json",
+        "pointer": ["guard_sites"]
+      },
+      {
+        "name": "lifecycle_guard_hits",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-owned.json",
+        "pointer": ["guard_hit_count"]
+      },
+      {
+        "name": "lifecycle_retained_guard_hits",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-retained.json",
+        "pointer": ["guard_hit_count"]
+      },
+      {
+        "name": "lifecycle_kept_unguarded",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-owned.json",
+        "pointer": ["kept_words_unguarded"]
+      },
+      {
+        "name": "lifecycle_kept",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T163940Z-lifecycle-admitted/result/retired-owned.json",
+        "pointer": ["kept_word_count"]
       }
     ]
   }
