@@ -45,7 +45,7 @@ use core::ptr;
 use xm1_focus_measurement_round::acquisition::qualification::StageView;
 use xm1_focus_measurement_round::jobs::qualification::JobView;
 use xm1_focus_measurement_round::lanes::{Lane, Lanes};
-use xm1_focus_measurement_round::round::qualification::{FanView, PhaseView, PlannerModeView, PlannerPhaseView, PlannerView};
+use xm1_focus_measurement_round::round::qualification::{FanView, PhaseView, PlannerModeView, PlannerPhaseView};
 use xm1_saclac_controllers::live::qualification::StateView as LiveView;
 use xm1_saclac_controllers::live_view::qualification::StateView as LiveViewControllerView;
 use xm1_saclac_controllers::root::qualification::ModeView;
@@ -1230,11 +1230,12 @@ mod tests {
             assert_eq!(code, 2, "cursor {cursor} phase {phase}");
             assert_eq!(gap, Some(gap_word(FIELD_ADJUSTMENT_00, 2)), "cursor {cursor} phase {phase}");
             // Every non-gap field round-trips to itself.
-            for (field, (address, length)) in QUALIFICATION_FIELDS.iter().enumerate() {
+            for (field, entry) in QUALIFICATION_FIELDS.iter().enumerate() {
                 if matches!(field, FIELD_ADJUSTMENT_00 | FIELD_CLASSIFICATION | FIELD_ADJUSTMENT_48 | FIELD_ADJUSTMENT_58) { continue; }
+                let (address, length) = (entry[0], entry[1]);
                 let _ = address;
                 let at = overlay_offset(field);
-                let range = at..at + *length as usize;
+                let range = at..at + length as usize;
                 assert_eq!(out[range.clone()], overlay[range], "field {field}");
             }
         }
