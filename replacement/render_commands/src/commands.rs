@@ -78,17 +78,21 @@ pub struct ShapePalette {
 pub enum ShapePaint { Original, Recolour(ShapePalette) }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextRef<'a> { Catalog(CatalogTextId), Custom(CustomTextId), Inline(&'a str) }
-/// Destination of a scaled draw in panel pixels, top-left origin; may extend past the surface.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SceneRect { x: i32, y: i32, width: u16, height: u16 }
+/// Destination of a scaled draw in panel pixels, top-left origin; may extend past the surface. Edges may be fractional.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneRect { x: f32, y: f32, width: f32, height: f32 }
+/// Every field is finite.
+impl Eq for SceneRect {}
 impl SceneRect {
-    pub const fn new(x: i32, y: i32, width: u16, height: u16) -> Option<Self> {
-        if width == 0 || height == 0 { None } else { Some(Self { x, y, width, height }) }
+    /// `None` unless every value is finite and the width and height are positive.
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
+        if !(x.is_finite() && y.is_finite() && width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) { return None; }
+        Some(Self { x, y, width, height })
     }
-    pub const fn x(self) -> i32 { self.x }
-    pub const fn y(self) -> i32 { self.y }
-    pub const fn width(self) -> u16 { self.width }
-    pub const fn height(self) -> u16 { self.height }
+    pub const fn x(self) -> f32 { self.x }
+    pub const fn y(self) -> f32 { self.y }
+    pub const fn width(self) -> f32 { self.width }
+    pub const fn height(self) -> f32 { self.height }
 }
 /// Byte order of one 32-bit pixel in memory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

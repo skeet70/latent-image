@@ -28,7 +28,7 @@ const ALIAS_BASE: u32 = 0x4000_0000;
 const PHYSICAL_MASK: u32 = 0x3fff_ffff;
 const COMMAND_CAPACITY: usize = 96;
 const VERTEX_CAPACITY: usize = 512;
-const STROKE_CAPACITY: usize = 128;
+const STROKE_CAPACITY: usize = 256;
 /// Stage-0 image objects `O(0,0)` and `O(0,1)`; each holds its buffer address at `+0x1c`.
 const IMAGE_OBJECTS: [u32; 2] = [0x008e_2158, 0x008e_215c];
 const IMAGE_ADDRESS: u32 = 0x1c;
@@ -482,7 +482,7 @@ mod tests {
     /// The owned guest's published buffer: the unclipped image draw rendered as the frame step renders it.
     fn publish(guest: &mut Guest) {
         let source = PixelSource::new(2, 2, 8, PixelOrder::Abgr, &IMAGE).unwrap();
-        let commands = [DrawCommand::ResetClip, DrawCommand::ScaledImage { dest: SceneRect::new(IMAGE_X as i32, IMAGE_Y as i32, 2, 2).unwrap(), source }];
+        let commands = [DrawCommand::ResetClip, DrawCommand::ScaledImage { dest: SceneRect::new(IMAGE_X as f32, IMAGE_Y as f32, 2.0, 2.0).unwrap(), source }];
         let mut pixels = vec![0; PANEL_BYTES];
         render_osd(&commands, &mut pixels, &mut [Vertex::EMPTY; VERTEX_CAPACITY], &mut [StrokePrimitive::EMPTY; STROKE_CAPACITY]).unwrap();
         guest.put(BUFFER, &pixels);

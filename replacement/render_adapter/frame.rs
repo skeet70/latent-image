@@ -58,7 +58,8 @@ const RAM_ALIAS: (u32, usize) = (0x4000_0000, 0x0400_0000);
 
 const COMMAND_CAPACITY: usize = 96;
 const VERTEX_CAPACITY: usize = 512;
-const STROKE_CAPACITY: usize = 128;
+/// The Run-3 shooting screen's largest shape item needs 212 stroke primitives.
+const STROKE_CAPACITY: usize = 256;
 /// Bytes of the frame statics in the bank engine region, excluding code.
 const FRAME_STATIC_BYTES: usize = COMMAND_CAPACITY * core::mem::size_of::<DrawCommand<'static>>()
     + VERTEX_CAPACITY * core::mem::size_of::<Vertex>()

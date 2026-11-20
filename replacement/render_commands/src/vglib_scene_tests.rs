@@ -189,7 +189,7 @@ fn render(ram: &Ram) -> Result<(SceneReport, Vec<Out>), SceneError> {
 
 fn refusal(ram: &Ram) -> SceneError { render(ram).unwrap_err() }
 fn object_refusal(object: u32, refusal: ObjectRefusal) -> SceneError { SceneError::Object { object: VglibObject(DataAddress(object)), refusal } }
-fn rect(x: i32, y: i32, width: u16, height: u16) -> SceneRect { SceneRect::new(x, y, width, height).unwrap() }
+fn rect(x: i32, y: i32, width: u16, height: u16) -> SceneRect { SceneRect::new(x as f32, y as f32, f32::from(width), f32::from(height)).unwrap() }
 fn panel(x: u16, y: u16, width: u16, height: u16) -> PanelRect { PanelRect::new(PanelPoint::new(x, y).unwrap(), width, height).unwrap() }
 fn group(index: u8) -> GroupIndex { GroupIndex::new(index).unwrap() }
 const FIRST: Rgba = Rgba { red: 0x10, green: 0x20, blue: 0x30, alpha: 0x80 };
@@ -414,12 +414,18 @@ fn image_storage_and_geometry_refusals() {
     ram.put16(object + 0x200 + 0x3c, 9);
     ram.put16(object + 0x200 + 0x4c, 36);
     assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageSize));
-    // 8 x 1.1 = 8.8 pixels.
-    let (ram, object) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale: (1.1, 1.0) });
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NonIntegralGeometry));
-    // A position 1/2048 off an integer.
-    let (ram, object) = single_image(place(3.0 + 1.0 / 2048.0, 0.0, (8, 4)));
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NonIntegralGeometry));
+    for scale in [(0.0, 1.0), (1.0, -1.0)] {
+        let (ram, object) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale });
+        assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::DegenerateGeometry));
+    }
+}
+
+#[test]
+fn fractional_geometry_lowers_to_the_f32_products() {
+    let (ram, _) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale: (1.1, 1.0) });
+    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image_at(SceneRect::new(0.0, 0.0, 8.0f32 * 1.1f32, 4.0).unwrap(), (8, 4))]);
+    let (ram, _) = single_image(place(3.0 + 1.0 / 2048.0, 0.0, (8, 4)));
+    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image_at(SceneRect::new(3.0 + 1.0 / 2048.0, 0.0, 8.0, 4.0).unwrap(), (8, 4))]);
 }
 
 #[test]

@@ -54,16 +54,20 @@ fn front_pixel(front: &[u8], order: FrontOrder, x: usize, y: usize) -> [u8; 4] {
     match order { FrontOrder::Rgba => [a, b, c, d], FrontOrder::Abgr => [d, c, b, a] }
 }
 
+/// Panel pixels `[left, top, right, bottom)` that `rect` touches.
+fn span(rect: SceneRect) -> (usize, usize, usize, usize) {
+    let edge = |value: f64, limit: usize| value.clamp(0.0, limit as f64) as usize;
+    let (x, y) = (f64::from(rect.x()), f64::from(rect.y()));
+    (
+        edge(x.floor(), WIDTH),
+        edge(y.floor(), HEIGHT),
+        edge((x + f64::from(rect.width())).ceil(), WIDTH),
+        edge((y + f64::from(rect.height())).ceil(), HEIGHT),
+    )
+}
+
 fn compare(owned: &[u8], front: &[u8], order: FrontOrder, rect: Option<SceneRect>) -> Difference {
-    let (left, top, right, bottom) = match rect {
-        None => (0, 0, WIDTH, HEIGHT),
-        Some(rect) => (
-            rect.x().clamp(0, WIDTH as i32) as usize,
-            rect.y().clamp(0, HEIGHT as i32) as usize,
-            (rect.x() + i32::from(rect.width())).clamp(0, WIDTH as i32) as usize,
-            (rect.y() + i32::from(rect.height())).clamp(0, HEIGHT as i32) as usize,
-        ),
-    };
+    let (left, top, right, bottom) = rect.map_or((0, 0, WIDTH, HEIGHT), span);
     let mut difference = Difference::default();
     for y in top..bottom {
         for x in left..right {
@@ -76,10 +80,7 @@ fn compare(owned: &[u8], front: &[u8], order: FrontOrder, rect: Option<SceneRect
 
 /// Pixels with nonzero alpha inside `rect` and their bounding box `[left, top, right, bottom)`, as JSON.
 fn coverage(pixel: impl Fn(usize, usize) -> [u8; 4], rect: SceneRect) -> String {
-    let left = rect.x().clamp(0, WIDTH as i32) as usize;
-    let top = rect.y().clamp(0, HEIGHT as i32) as usize;
-    let right = (rect.x() + i32::from(rect.width())).clamp(0, WIDTH as i32) as usize;
-    let bottom = (rect.y() + i32::from(rect.height())).clamp(0, HEIGHT as i32) as usize;
+    let (left, top, right, bottom) = span(rect);
     let mut count = 0usize;
     let mut bounds: Option<[usize; 4]> = None;
     for y in top..bottom {
@@ -120,7 +121,7 @@ fn main() {
     let list = buffer.draw_list();
 
     let mut vertices = vec![Vertex::EMPTY; 512];
-    let mut strokes = vec![StrokePrimitive::EMPTY; 128];
+    let mut strokes = vec![StrokePrimitive::EMPTY; 256];
     let mut owned = vec![0u8; SurfaceId::Osd.byte_len()];
     render_osd(list.commands(), &mut owned, &mut vertices, &mut strokes)
         .unwrap_or_else(|error| { eprintln!("FAIL render: {error:?}"); std::process::exit(1) });

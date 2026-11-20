@@ -223,7 +223,7 @@ fn styled_placement_uses_constructor_height_without_tight_bounds_rebasing() {
 #[test]
 fn scaled_placement_maps_bounds_rectangle_onto_destination_rectangle() {
     let bounds = [Scalar(2.0), Scalar(8.0), Scalar(12.0), Scalar(-4.0)];
-    let dest = super::super::commands::SceneRect::new(-100, 50, 20, 6).unwrap();
+    let dest = super::super::commands::SceneRect::new(-100.0, 50.0, 20.0, 6.0).unwrap();
     let placement = ShapePlacement::scaled(dest, bounds).unwrap();
     assert_eq!(placement.map_x(2.0), -100.0);
     assert_eq!(placement.map_x(12.0), -80.0);

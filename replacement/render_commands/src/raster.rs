@@ -381,16 +381,16 @@ impl<'a> Surface<'a> {
     /// (`VG_IMAGE_QUALITY_BETTER`, `I4:6d8cb8`), which is unmeasured. Destination pixel `X` samples texel coordinate
     /// `u = (X + 0.5 − dest.x)·Ws/Wt − 0.5`, clamped to `[0, Ws − 1]` (likewise `v`); the colour is the bilinear blend of
     /// the surrounding texels in premultiplied space, returned to straight alpha and composited source-over. At
-    /// `Wt == Ws` every `u` is a texel index, so texels are copied unchanged.
+    /// `Wt == Ws` on integral edges every `u` is a texel index, so texels are copied unchanged. A pixel the destination
+    /// covers only partly has its alpha multiplied by the covered area.
     fn scaled_image(&mut self, dest: SceneRect, source: PixelSource<'_>, clip: Bounds) {
-        let left = i64::from(dest.x()).max(clip.left as i64);
-        let top = i64::from(dest.y()).max(clip.top as i64);
-        let right = (i64::from(dest.x()) + i64::from(dest.width())).min(clip.right as i64);
-        let bottom = (i64::from(dest.y()) + i64::from(dest.height())).min(clip.bottom as i64);
-        for y in top..bottom {
-            let (row0, row1, v) = texel_axis(y - i64::from(dest.y()), dest.height(), source.height());
-            for x in left..right {
-                let (column0, column1, u) = texel_axis(x - i64::from(dest.x()), dest.width(), source.width());
+        let columns = ImageAxis::new(dest.x(), dest.width(), source.width(), clip.left, clip.right);
+        let rows = ImageAxis::new(dest.y(), dest.height(), source.height(), clip.top, clip.bottom);
+        for y in rows.first..rows.end {
+            let (row0, row1, v) = rows.texels(y);
+            let row_cover = rows.cover(y);
+            for x in columns.first..columns.end {
+                let (column0, column1, u) = columns.texels(x);
                 let mut sum = [0.0f64; 4];
                 for (column, row, weight) in [(column0, row0, (1.0 - u) * (1.0 - v)), (column1, row0, u * (1.0 - v)), (column0, row1, (1.0 - u) * v), (column1, row1, u * v)] {
                     let Some(texel) = source.rgba(column, row) else { continue };
@@ -402,8 +402,10 @@ impl<'a> Surface<'a> {
                 }
                 if sum[3] == 0.0 { continue; }
                 let straight = |value: f64| (value / sum[3] + 0.5).min(255.0) as u8;
-                let colour = Rgba { red: straight(sum[0]), green: straight(sum[1]), blue: straight(sum[2]), alpha: (sum[3] + 0.5).min(255.0) as u8 };
-                self.blend(x as usize, y as usize, colour);
+                let alpha = (sum[3] + 0.5).min(255.0) as u8;
+                let coverage = (columns.cover(x) * row_cover * 255.0 + 0.5) as u8;
+                let alpha = if coverage == 255 { alpha } else { multiply(alpha, coverage) };
+                self.blend(x as usize, y as usize, Rgba { red: straight(sum[0]), green: straight(sum[1]), blue: straight(sum[2]), alpha });
             }
         }
     }
@@ -776,13 +778,37 @@ impl GvffItemState {
     }
 }
 
-/// Texel indices and the second texel's weight along one axis under the rule on [`Surface::scaled_image`].
-fn texel_axis(offset: i64, target: u16, source: u16) -> (u16, u16, f64) {
-    let position = (2 * offset + 1) as f64 * f64::from(source) / (2.0 * f64::from(target)) - 0.5;
-    let position = position.clamp(0.0, f64::from(source - 1));
-    let first = libm::floor(position);
-    let index = first as u16;
-    (index, (index + 1).min(source - 1), position - first)
+/// One axis of a [`Surface::scaled_image`] destination: the clipped pixel range it touches, its texel rule and the
+/// share of each pixel it covers.
+struct ImageAxis { start: f64, end_edge: f64, target: f64, source: u16, first: i64, end: i64 }
+impl ImageAxis {
+    fn new(start: f32, extent: f32, source: u16, clip_start: usize, clip_end: usize) -> Self {
+        let start = f64::from(start);
+        let target = f64::from(extent);
+        let end_edge = start + target;
+        Self {
+            start,
+            end_edge,
+            target,
+            source,
+            first: (libm::floor(start) as i64).max(clip_start as i64),
+            end: (libm::ceil(end_edge) as i64).min(clip_end as i64),
+        }
+    }
+    /// Texel indices and the second texel's weight for pixel `pixel`.
+    fn texels(&self, pixel: i64) -> (u16, u16, f64) {
+        let position = (pixel as f64 - self.start + 0.5) * f64::from(self.source) / self.target - 0.5;
+        let position = position.clamp(0.0, f64::from(self.source - 1));
+        let first = libm::floor(position);
+        let index = first as u16;
+        (index, (index + 1).min(self.source - 1), position - first)
+    }
+    /// Length of `[pixel, pixel + 1)` inside the destination.
+    fn cover(&self, pixel: i64) -> f64 {
+        let low = (pixel as f64).max(self.start);
+        let high = (pixel as f64 + 1.0).min(self.end_edge);
+        (high - low).max(0.0)
+    }
 }
 
 fn stop_premultiplied(stop: RampStop) -> [f64; 4] {

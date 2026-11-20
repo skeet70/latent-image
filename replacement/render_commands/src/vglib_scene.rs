@@ -110,7 +110,8 @@ pub enum ObjectRefusal {
     ColourTransform,
     /// Surface size or factors from `0x6dd884`/`0x6dda20` other than 720 x 480 at 1.0.
     SurfaceScale { display_mode: u32, output_mode: u8 },
-    NonIntegralGeometry,
+    /// A scaled position or size that is not finite, or a scaled width or height that is not positive.
+    DegenerateGeometry,
     /// Created size words `+8`/`+0xc` differ from the VGImage extent.
     ImageSize,
     /// The image handle does not resolve to a live image (`0x82b428`).
@@ -586,12 +587,6 @@ fn node_slot(address: u32) -> Option<usize> {
     Some(offset / NODE_BYTES)
 }
 
-fn integral(value: f32) -> Option<i32> {
-    let nearest = libm::roundf(value);
-    if value != nearest || !(-2_147_483_648.0..2_147_483_648.0).contains(&nearest) { return None; }
-    Some(nearest as i32)
-}
-
 /// Renders lowered stage-0 commands into a VGLIB format-1 OSD buffer (`VG_sRGBA_8888`, A,B,G,R bytes, the model's
 /// `mode1-abgr8888-straight` layer profile). The owned frame step and the host reference both render through here.
 pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], vertices: &mut [Vertex], strokes: &mut [StrokePrimitive]) -> Result<(), RasterError> {
@@ -615,14 +610,12 @@ pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], vertices: &mu
 /// (`img6:117d648-117d664`), and the image matrix ends in `diag(1, -1, 1)` (`0x774bac`), whose placement relative to
 /// the translation is an engine law of `vgDrawImage`.
 fn destination(base: BaseFields, surface: SurfaceScale) -> Result<SceneRect, ObjectRefusal> {
-    let x = integral(base.position.x * surface.x);
-    let y = integral(base.position.y * surface.y);
-    let width = integral(base.size.width * base.scale.x * surface.x).and_then(|value| u16::try_from(value).ok());
-    let height = integral(base.size.height * base.scale.y * surface.y).and_then(|value| u16::try_from(value).ok());
-    match (x, y, width, height) {
-        (Some(x), Some(y), Some(width), Some(height)) => SceneRect::new(x, y, width, height).ok_or(ObjectRefusal::NonIntegralGeometry),
-        _ => Err(ObjectRefusal::NonIntegralGeometry),
-    }
+    SceneRect::new(
+        base.position.x * surface.x,
+        base.position.y * surface.y,
+        base.size.width * base.scale.x * surface.x,
+        base.size.height * base.scale.y * surface.y,
+    ).ok_or(ObjectRefusal::DegenerateGeometry)
 }
 
 /// The scissor rectangle each draw sets (`6d8c2c-6d8cb4`, `6da414-6da49c`), returned in top-left panel space and

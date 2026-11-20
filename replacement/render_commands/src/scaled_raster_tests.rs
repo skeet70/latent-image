@@ -15,7 +15,8 @@ const SQUARE: u32 = 0x1702;
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 fn pixel(bytes: &[u8], x: usize, y: usize) -> [u8; 4] { bytes[(y * 720 + x) * 4..(y * 720 + x) * 4 + 4].try_into().unwrap() }
-fn scene(x: i32, y: i32, width: u16, height: u16) -> SceneRect { SceneRect::new(x, y, width, height).unwrap() }
+fn scene(x: i32, y: i32, width: u16, height: u16) -> SceneRect { SceneRect::new(x as f32, y as f32, f32::from(width), f32::from(height)).unwrap() }
+fn fractional(x: f32, y: f32, width: f32, height: f32) -> SceneRect { SceneRect::new(x, y, width, height).unwrap() }
 fn panel_rect(x: u16, y: u16, width: u16, height: u16) -> PanelRect { PanelRect::new(PanelPoint::new(x, y).unwrap(), width, height).unwrap() }
 fn rgba_source(width: u16, height: u16, stride: usize, bytes: &[u8]) -> PixelSource<'_> {
     PixelSource::new(width, height, stride, PixelOrder::Rgba, bytes).unwrap()
@@ -316,4 +317,49 @@ fn scene_render_matches_full_render_for_clips_and_scaled_draws() {
 fn scene_render_refuses_commands_that_need_assets() {
     let fill = DrawCommand::Fill { rect: panel_rect(0, 0, 2, 2), colour: Colour { palette: PaletteIndex(1), alpha: Alpha::OPAQUE } };
     assert_eq!(render_scene(&[DrawCommand::ResetClip, fill]), Err(RasterError::UnsupportedSceneCommand));
+}
+
+#[test]
+fn fractional_image_edges_scale_alpha_by_covered_area() {
+    let red = [200, 0, 0, 255];
+    let bytes = render_images(&[
+        DrawCommand::ScaledImage { dest: fractional(0.0, 0.0, 2.5, 1.0), source: rgba_source(1, 1, 4, &red) },
+        DrawCommand::ScaledImage { dest: fractional(10.25, 10.0, 1.5, 0.5), source: rgba_source(1, 1, 4, &red) },
+    ]);
+    assert_eq!(pixel(&bytes, 1, 0), [200, 0, 0, 255]);
+    assert_eq!(pixel(&bytes, 2, 0), [200, 0, 0, 128]);
+    assert_eq!(pixel(&bytes, 3, 0), [0, 0, 0, 0]);
+    // Covered areas 0.75 x 0.5 at both columns.
+    assert_eq!(pixel(&bytes, 10, 10), [200, 0, 0, 96]);
+    assert_eq!(pixel(&bytes, 11, 10), [200, 0, 0, 96]);
+    assert_eq!(pixel(&bytes, 12, 10), [0, 0, 0, 0]);
+    assert_eq!(pixel(&bytes, 10, 11), [0, 0, 0, 0]);
+}
+
+#[test]
+fn edges_within_half_a_coverage_step_of_a_pixel_boundary_render_as_that_boundary() {
+    let texels = [30, 60, 90, 255];
+    let square = [0.0, 0.0, 414.0, 0.0, 414.0, -2.0, 0.0, -2.0];
+    let shape = gvff([0.0, 0.0, 414.0, -2.0], &[RED], &[Item::fill(0, NON_ZERO, SQUARE_SEGMENTS, &square)]);
+    let exact_image = render_images(&[DrawCommand::ScaledImage { dest: scene(3, 4, 22, 2), source: rgba_source(1, 1, 4, &texels) }]);
+    let exact_shape = render_scene(&[DrawCommand::ScaledShape { dest: scene(3, 4, 22, 2), gvff: &shape, recolour: None }]).unwrap();
+    // One f32 step either side of 22; the Run-3 shooting screen lowers a 414-unit shape to 22.000002.
+    for width in [f32::from_bits(22.0f32.to_bits() - 1), f32::from_bits(22.0f32.to_bits() + 1)] {
+        let image = render_images(&[DrawCommand::ScaledImage { dest: fractional(3.0, 4.0, width, 2.0), source: rgba_source(1, 1, 4, &texels) }]);
+        assert_eq!(image, exact_image, "image width {width}");
+        let shape = render_scene(&[DrawCommand::ScaledShape { dest: fractional(3.0, 4.0, width, 2.0), gvff: &shape, recolour: None }]).unwrap();
+        assert_eq!(shape, exact_shape, "shape width {width}");
+    }
+}
+
+#[test]
+fn fractional_shape_edges_cover_the_samples_inside_them() {
+    let square = [0.0, 0.0, 2.0, 0.0, 2.0, -2.0, 0.0, -2.0];
+    let shape = gvff([0.0, 0.0, 2.0, -2.0], &[RED], &[Item::fill(0, NON_ZERO, SQUARE_SEGMENTS, &square)]);
+    // Sample centres at x + 0.5: the edge at 2.6 contains column 2's, the edge at 2.4 does not.
+    let wide = render_scene(&[DrawCommand::ScaledShape { dest: fractional(0.0, 0.0, 2.6, 2.0), gvff: &shape, recolour: None }]).unwrap();
+    let narrow = render_scene(&[DrawCommand::ScaledShape { dest: fractional(0.0, 0.0, 2.4, 2.0), gvff: &shape, recolour: None }]).unwrap();
+    assert_eq!(pixel(&wide, 2, 1), [255, 0, 0, 255]);
+    assert_eq!(pixel(&narrow, 2, 1), [0, 0, 0, 0]);
+    assert_eq!(pixel(&narrow, 1, 1), [255, 0, 0, 255]);
 }
