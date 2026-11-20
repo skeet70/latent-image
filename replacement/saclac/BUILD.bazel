@@ -516,7 +516,7 @@ haskell_binary(
     data = ["//emulation:native-runner"],
     # The runner is fed and drained by threads while the process is awaited; without the
     # threaded RTS the blocking wait stalls the feeder and the case never ends.
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded", "-rtsopts"],
     deps = [
         ":cycle-step",
         ":payload-projection",
@@ -526,6 +526,7 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:deepseq",
         "//host:containers",
         "//host:directory",
         "//host:filepath",

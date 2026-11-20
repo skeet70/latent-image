@@ -276,7 +276,7 @@ decadeAddress = 0x00919760
 groupBase :: Integer
 groupBase = 0x0091904c
 
-data Segment = Segment {segmentBase :: Integer, segmentBytes :: B.ByteString} deriving (Eq, Show)
+data Segment = Segment {segmentBase :: !Integer, segmentBytes :: !B.ByteString} deriving (Eq, Show)
 
 newtype State = State {stateSegments :: [Segment]} deriving (Eq, Show)
 
@@ -334,8 +334,11 @@ overlayState state address bytes = case segmentOf state address (B.length bytes)
   Just (index, segment) ->
     let offset = fromIntegral (address - segmentBase segment)
         source = segmentBytes segment
-        replaced = segment {segmentBytes = B.take offset source <> bytes <> B.drop (offset + B.length bytes) source}
-     in Right (State [if position == index then replaced else other | (position, other) <- zip [0 ..] (stateSegments state)])
+        replaced = Segment (segmentBase segment) (B.take offset source <> bytes <> B.drop (offset + B.length bytes) source)
+        segments = [if position == index then replaced else other | (position, other) <- zip [0 ..] (stateSegments state)]
+     in -- Every segment is built now: a lazy overlay chain would keep each intermediate
+        -- copy of the segment alive until the state is next read.
+        foldr seq () segments `seq` Right (State segments)
 
 -- | Every segment of the second state written over the first.
 overlayStates :: State -> State -> Either String State

@@ -9,6 +9,7 @@
 -- the stock step applied to the owned sampled frames must reproduce the owned level.
 module Main (main) where
 
+import Control.DeepSeq (deepseq)
 import Control.Exception (IOException, try)
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (Value (..))
@@ -548,6 +549,10 @@ data Qualification = Qualification
   , qualFunctions :: [(Word32, Word32)]
   , qualSha :: String
   , qualSymbolsSha :: String
+  -- | `size_of::<Owner>()` and `size_of::<bool>()` in the qualification build; each lane's
+  -- OWNER and READY symbols must have these sizes.
+  , qualOwnerSize :: Word32
+  , qualReadySize :: Word32
   }
 
 -- | Harness scratch for one map call: the input overlay at +0, the output at +0x1000 and the
@@ -572,9 +577,17 @@ loadQualification (binPath, symbolsPath) = do
   roundtrip <- named "xm1_saclac_qualification_roundtrip"
   count <- named "XM1_SACLAC_QUALIFICATION_FIELD_COUNT"
   table <- named "XM1_SACLAC_QUALIFICATION_FIELDS"
+  ownerSizeAddress <- named "XM1_SACLAC_QUALIFICATION_OWNER_SIZE"
+  readySizeAddress <- named "XM1_SACLAC_QUALIFICATION_READY_SIZE"
+  let wordIn address
+        | address >= base && fromIntegral (address - base) + 4 <= B.length image = pure (wordAt image (fromIntegral (address - base)))
+        | otherwise = failH ("qualification word " ++ hexText (fromIntegral address) ++ " lies outside its image")
+  ownerSize <- wordIn ownerSizeAddress
+  readySize <- wordIn readySizeAddress
   ensure (base == 0x02000000 && base < textEnd && textEnd <= imageEnd && imageEnd <= end && end <= qualIoBase && textEnd .&. 0xfff == 0)
     "the qualification image leaves its declared window"
-  ensure (fromIntegral (B.length image) == imageEnd - base) "the qualification .bin does not span its image symbols"
+  -- The .bin ends with the last loadable byte; the windows past it are zero-filled.
+  ensure (fromIntegral (B.length image) <= imageEnd - base && imageEnd <= end) "the qualification .bin leaves its image symbols"
   fields <- either failH pure (parseFields base image count table)
   let starts = [symbolAddress symbol | symbol <- symbols, symbolType symbol `elem` ("tT" :: String), symbolAddress symbol >= base, symbolAddress symbol < textEnd]
       cuts = nub (sortOn id (base : starts))
@@ -591,6 +604,8 @@ loadQualification (binPath, symbolsPath) = do
     , qualFunctions = functions
     , qualSha = sha256Hex (sha256 image)
     , qualSymbolsSha = sha256Hex (sha256 symbolBytes)
+    , qualOwnerSize = ownerSize
+    , qualReadySize = readySize
     }
 
 -- | Encode reads Root's state at the `OWNER`/`READY` addresses of the lane's build;
@@ -636,13 +651,16 @@ runQualification options qual ident state call = go (0 :: Int) (mapMaybe (granul
     textSize = qualTextEnd qual - qualBase qual
     dataSize = qualEnd qual - qualTextEnd qual
     dataBytes = B.drop (fromIntegral textSize) (qualImage qual)
+    padded size bytes = bytes <> B.replicate (fromIntegral size - B.length bytes) 0
     go round' granules = case mapM granuleRegion (nub (sortOn id granules)) of
       Left problem -> pure (Left problem)
       Right stateRegions -> do
         let regions =
-              [ (RegionPlan "q-text" (qualBase qual) textSize "rx" Nothing, Just (B.take (fromIntegral textSize) (qualImage qual)))
-              , (RegionPlan "q-data" (qualTextEnd qual) dataSize "rw" Nothing, Just (dataBytes <> B.replicate (fromIntegral dataSize - B.length dataBytes) 0))
-              , (RegionPlan "q-io" qualIoBase qualIoSize "rw" Nothing, Just (input <> B.replicate (fromIntegral qualIoSize - B.length input) 0))
+              [ (RegionPlan "q-text" (qualBase qual) textSize "rx" Nothing, Just (padded textSize (B.take (fromIntegral textSize) (qualImage qual))))
+              ]
+                ++ [(RegionPlan "q-data" (qualTextEnd qual) dataSize "rw" Nothing, Just (padded dataSize dataBytes)) | dataSize > 0]
+                ++
+              [ (RegionPlan "q-io" qualIoBase qualIoSize "rw" Nothing, Just (input <> B.replicate (fromIntegral qualIoSize - B.length input) 0))
               , (RegionPlan "exit" exitAddress 4 "rx" Nothing, Nothing)
               , (RegionPlan "stack" stackBase (fromIntegral stackSize) "rw" Nothing, Nothing)
               ]
@@ -739,7 +757,10 @@ mapCycle options qualification shared lane index wake input completion = case qu
       (_, Left problem) -> pure (Left problem)
     ownedEncode qual symbols = case (,) <$> symbolPath symbols rootOwner <*> symbolPath symbols rootReady of
       Left problem -> pure (Left problem)
-      Right (owner, ready) -> do
+      Right (owner, ready)
+        | symbolSize owner /= Just (qualOwnerSize qual) || symbolSize ready /= Just (qualReadySize qual) ->
+            pure (Left ("refused: the lane's OWNER/READY sizes " ++ show (symbolSize owner, symbolSize ready) ++ " differ from the qualification build's " ++ show (qualOwnerSize qual, qualReadySize qual)))
+        | otherwise -> do
         let call = QualEncode (symbolAddress owner) (symbolAddress ready)
             rootData = rootDataSpan symbols
         wakeRun <- runQualification options qual (ident "wake") wake call
@@ -938,12 +959,18 @@ data CycleReport = CycleReport
   , reportMap :: Value
   }
 
-declaredSpans :: Value -> [Span]
-declaredSpans sites =
+-- | The retained interface memory both stock and Root keep in stock layout: the census
+-- `interface.shared` spans.
+censusShared :: Value -> [Span]
+censusShared sites =
   [ Span (addressOf (get row "start")) (addressOf (get row "end"))
   | row <- list (get (get sites "interface") "shared")
   ]
-    ++ [Span 0x0169d374 0x0169d4fe, Span groupBase 0x00919a20]
+
+-- | The compared spans: the census shared spans, the receive staging/state/row block and the
+-- group-27 block.
+declaredSpans :: Value -> [Span]
+declaredSpans sites = censusShared sites ++ [Span 0x0169d374 0x0169d4fe, Span groupBase 0x00919a20]
 
 -- | The step's outputs the recording trampolines kept in the record region, in call order: a
 -- post with its payload as copied at the post, or a recorded service call (queue -1, the entry
@@ -1052,8 +1079,8 @@ data LaneOutput = LaneOutput
   , laneOutputError :: Maybe String
   }
 
-runLane :: Options -> Images -> Maybe Qualification -> [Span] -> M.Map Integer Int -> Payload.Declaration -> ClosureStore -> Lane -> IO LaneOutput
-runLane options images qualification spans arity declaration store lane = case laneError lane of
+runLane :: Options -> Images -> Maybe Qualification -> [Span] -> [Span] -> M.Map Integer Int -> Payload.Declaration -> ClosureStore -> Lane -> IO LaneOutput
+runLane options images qualification shared spans arity declaration store lane = case laneError lane of
   Just problem -> pure (LaneOutput (laneName (laneSpec lane)) (laneSymbolsDigest lane) False [] [] [] (obj []) [] (Just problem))
   Nothing -> do
     let (cycles, refusals) = pairCycles (laneDumps lane) (laneEvents lane)
@@ -1091,7 +1118,7 @@ runLane options images qualification spans arity declaration store lane = case l
       wakeResult <- dumpState lane (cycleWake cycle)
       completionResult <- dumpState lane (cycleCompletion cycle)
       mapped <- case (loaded, wakeResult, completionResult) of
-        (Right input, Right wake, Right completion) -> mapCycle options qualification spans lane index wake input completion
+        (Right input, Right wake, Right completion) -> mapCycle options qualification shared lane index wake input completion
         (Left problem, _, _) -> pure (Left problem)
         (_, Left problem, _) -> pure (Left problem)
         (_, _, Left problem) -> pure (Left problem)
@@ -1113,17 +1140,34 @@ runLane options images qualification spans arity declaration store lane = case l
               Left problem -> pure (Left problem)
               Right (run, rounds) -> do
                 closure <- readIORef (storeRef store)
+                let predictedResult = predictedState planInput {planClosure = closure} run
+                -- An owned lane's next state is compared at the abstraction: the stock
+                -- prediction's fields go through decode and encode before they meet the
+                -- encoded owned completion.
+                mappedBack <- case (qualification, mappingAbstract mapping, predictedResult) of
+                  (Just qual, True, Right predicted') -> case extractOverlay (qualFields qual) predicted' of
+                    Left problem -> pure (Left problem)
+                    Right fieldsBytes' -> do
+                      back <- runQualification options qual ("map-" ++ laneName (laneSpec lane) ++ "-" ++ show index ++ "-predicted") predicted' (QualRoundtrip fieldsBytes')
+                      pure $ do
+                        backRun <- back
+                        if qualCode backRun /= 0
+                          then Left ("refused: the stock prediction has no owned representation: code " ++ show (qualCode backRun) ++ " field " ++ show (qualGap backRun `shiftR` 16) ++ " detail " ++ show (qualGap backRun .&. 0xffff))
+                          else applyOverlay (qualFields qual) (qualOut backRun) predicted'
+                  _ -> pure predictedResult
                 pure $ do
-                  predicted <- predictedState planInput {planClosure = closure} run
+                  predicted <- predictedResult
+                  predictedCompared <- mappedBack
                   if not (sameLayout predicted observed)
                     then Left "the completion dump's ranges differ from the wake dump's"
                     else do
                       let changed = netChanged input predicted
                           exposed = coverageExposed' (coverageAddresses isStateRegion run)
-                          unmapped = maybe [] (\qual -> unmappedExposed spans (qualFields qual) exposed) qualification
-                          compared = compareState spans changed predicted observed
+                          unmapped = maybe [] (\qual -> unmappedExposed shared (qualFields qual) exposed) qualification
+                          fieldAddresses = maybe [] (\qual -> concat [[fieldAddress field .. fieldAddress field + fromIntegral (fieldLength field) - 1] | field <- qualFields qual]) qualification
+                          compared = compareState spans (changed ++ fieldAddresses) predictedCompared observed
                           differences = case (qualification, mappingAbstract mapping) of
-                            (Just qual, True) -> filter (abstractDifference spans (qualFields qual) . differenceAddress) compared
+                            (Just qual, True) -> filter (abstractDifference shared (qualFields qual) . differenceAddress) compared
                             _ -> compared
                           posts = projectNative declaration (postRecords arity run)
                       if not (null unmapped)
@@ -1160,13 +1204,17 @@ runLane options images qualification spans arity declaration store lane = case l
                             , reportComparedBytes = length changed + sum [fromIntegral (spanBytes span') | span' <- spans]
                             , reportMap = mappingValue mapping
                             }
-                      Right CycleRun
+                      -- Rendering the report evaluates every field, so no cycle keeps its
+                      -- run's memory or its intermediate states alive.
+                      cycleValue report `deepseq` Right CycleRun
                         { cycleRunCycle = cycle
-                        , cycleRunInput = input
-                        , cycleRunPredicted = predicted
-                        , cycleRunObserved = observed
+                        , cycleRunInput = kept input
+                        , cycleRunPredicted = kept predicted
+                        , cycleRunObserved = kept observed
                         , cycleRunReport = report
                         }
+    -- Only the chained lane carries its states on to the chain.
+    kept state = if optionChain options == Just (laneName (laneSpec lane)) then state else State []
     messageOf cycle = case cycleWakeEvent cycle of
       TimedEvent _ (EventQueueIn operation sender payload) -> (operation, sender, payload)
       _ -> (0, 0, [])
@@ -1313,33 +1361,32 @@ differenceValue difference = obj
 
 data ChainResult = ChainResult {chainEntries :: [Value], chainMatches :: Bool, chainError :: Maybe String}
 
-data ChainRun = ChainRun {chainInput :: State, chainPredicted :: State, chainObserved :: State}
+-- | What the chain carries from one cycle to the next: the last prediction and every
+-- retained address the chained stock step has written so far.
+data ChainRun = ChainRun {chainPredicted :: State, chainWrites :: M.Map Integer ()}
 
 -- | Applies the stock step to the owned lane's sampled frames. The first cycle starts from
--- the owned wake state with its frame overlaid; each later cycle starts from the previous
--- prediction with the owned lane's observed changes since its completion applied outside
--- the step's own write set.
-runChain :: Options -> Images -> [Span] -> ClosureStore -> Lane -> [CycleRun] -> IO ChainResult
-runChain options images spans store lane runs = go 0 Nothing [] runs
+-- the owned (mapped) wake state with its frame overlaid. Each later cycle starts from the
+-- owned lane's own mapped wake state with every retained byte the chained step has written
+-- taken from the chain, then the cycle's frame overlaid: the step's loop-carried retained
+-- state comes from the stock step; the owned lane supplies frames, the other tasks' memory
+-- and, through the map, the machine state its other events move.
+runChain :: Options -> Images -> [Span] -> ClosureStore -> (Integer -> Bool) -> Lane -> [CycleRun] -> IO ChainResult
+runChain options images spans store keep lane runs = go 0 Nothing [] runs
   where
     go :: Int -> Maybe ChainRun -> [Value] -> [CycleRun] -> IO ChainResult
     go _ _ entries [] = pure (ChainResult (reverse entries) (all entryMatches (reverse entries)) Nothing)
     go index carried entries (run : rest) = case carried of
-      Nothing -> runStep (cycleRunInput run)
-      Just previous -> do
-        nextWake <- dumpState lane (cycleWake (cycleRunCycle run))
-        case nextWake of
-          Left problem -> pure (ChainResult (reverse entries) False (Just problem))
-          Right next ->
-              let writeSet = netChanged (chainInput previous) (chainPredicted previous)
-                  state = applyDeltas (chainObserved previous) next writeSet (chainPredicted previous)
-              in do
-                overlaid <- overlayFrame state
-                case overlaid of
-                  Left problem -> pure (ChainResult (reverse entries) False (Just problem))
-                  Right input -> runStep input
+      Nothing -> runStep M.empty (cycleRunInput run)
+      Just previous ->
+        let state = carry (chainPredicted previous) (M.keys (chainWrites previous)) (cycleRunInput run)
+         in do
+              overlaid <- overlayFrame state
+              case overlaid of
+                Left problem -> pure (ChainResult (reverse entries) False (Just problem))
+                Right input -> runStep (chainWrites previous) input
       where
-        runStep input = let sp = harnessSp in do
+        runStep writes input = let sp = harnessSp in do
             let planInput = PlanInput input (seedsOf spans) (0x3b4b, 47, wakePayload (cycleRunCycle run)) initialClosure ("chain-" ++ laneName (laneSpec lane) ++ "-" ++ show index) (optionStubs options) (optionServices options) (optionCoverage options)
             outcome <- runCycle options images store planInput sp
             closure <- readIORef (storeRef store)
@@ -1358,7 +1405,8 @@ runChain options images spans store lane runs = go 0 Nothing [] runs
                       , ("match", b (predictedLevel == observedLevel))
                       , ("native_status", s (either (const "") (runStatus . fst) outcome))
                       ]
-                go (index + 1) (Just (ChainRun input predicted observed)) (entry : entries) rest
+                let writes' = foldl' (\acc address -> M.insert address () acc) writes [address | address <- netChanged input predicted, keep address]
+                go (index + 1) (Just (ChainRun predicted writes')) (entry : entries) rest
         overlayFrame state = do
           frame <- dumpState lane (cycleFrame (cycleRunCycle run))
           pure (frame >>= overlayStates state)
@@ -1367,14 +1415,22 @@ runChain options images spans store lane runs = go 0 Nothing [] runs
       TimedEvent _ (EventQueueIn _ _ payload) -> payload
       _ -> []
 
-applyDeltas :: State -> State -> [Integer] -> State -> State
-applyDeltas observed next writeSet predicted = foldl' apply predicted addresses
+-- | The target state with the source's bytes at the given addresses: each run of
+-- consecutive addresses is copied at once and every intermediate state is forced, so the
+-- chain holds one state per cycle, not one per byte.
+carry :: State -> [Integer] -> State -> State
+carry source addresses target = foldl' apply target (ranges addresses)
   where
-    writeMembers = M.fromList [(address, ()) | address <- writeSet]
-    addresses = [address | address <- netChanged observed next, not (M.member address writeMembers)]
-    apply state address = case stateSlice next address 1 of
-      Just byte -> either (const state) id (overlayState state address byte)
+    apply state (low, high) = case stateSlice source low (fromIntegral (high - low)) >>= either (const Nothing) Just . overlayState state low of
+      Just state' -> forceState state'
+      -- A run crossing a dumped-range boundary is copied byte by byte.
+      Nothing -> foldl' byte state [low .. high - 1]
+    byte state address = case stateSlice source address 1 of
+      Just value -> either (const state) forceState (overlayState state address value)
       Nothing -> state
+
+forceState :: State -> State
+forceState state = foldr (\segment rest -> segmentBytes segment `seq` rest) state (stateSegments state)
 
 -- ---------------------------------------------------------------------------
 -- The persisted closure
@@ -1450,7 +1506,7 @@ main = do
   declaration <- either failH pure . Payload.parseDeclaration =<< readRegular (4 * 1024 * 1024) (optionFields options)
   store <- closureStore options images
   qualification <- mapM loadQualification (optionQualification options)
-  outputs <- forM lanes $ \lane -> runLane options images qualification spans (serviceArity sites) declaration store lane
+  outputs <- forM lanes $ \lane -> runLane options images qualification (censusShared sites) spans (serviceArity sites) declaration store lane
   let named name = case [output | output <- outputs, laneOutputName output == name] of
         output : _ -> Just output
         [] -> Nothing
@@ -1463,7 +1519,12 @@ main = do
         pure (lane, output)
   chained <- case chainOutput of
     Just (lane, output) -> do
-      result <- runChain options images spans store lane (laneOutputRuns output)
+      -- With the map, stock-private bytes and mapped fields evolve only through the chained
+      -- stock step; the owned lane's own changes reach the chain through retained memory.
+      let keep = case qualification of
+            Nothing -> const True
+            Just qual -> \address -> not (fieldAt (qualFields qual) address) && abstractDifference (censusShared sites) [] address
+      result <- runChain options images spans store keep lane (laneOutputRuns output)
       pure (obj
         [ ("lane", s (laneName (laneSpec lane)))
         , ("cycles", arr (chainEntries result))
