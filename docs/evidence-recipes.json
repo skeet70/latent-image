@@ -2595,7 +2595,7 @@
     "private-data/scratch/HeapCoverage/runs/20261119T014256Z-abi-owned/result/abi-journal.json",
     "private-data/scratch/HeapCoverage/runs/20261119T014303Z-abi-mutant-owned/result/abi-journal.json",
     "private-data/scratch/HeapCoverage/runs/20261119T014309Z-abi-front-end/result/abi-journal.json",
-    "private-data/scratch/HeapStackHeadroom/runs/20261119T034345Z-stack-headroom-gate/result/startup-artifact-j7-heap-canonical-tests.log"
+    "private-data/scratch/HeapCallbackTargets/runs/20261120T212022Z-declared8/result/startup-artifact-j7-heap-canonical-tests.log"
   ],
   "facts": [
     {
@@ -2745,7 +2745,7 @@
     },
     {
       "name": "j7_checks",
-      "path": "private-data/scratch/HeapStackHeadroom/runs/20261119T034345Z-stack-headroom-gate/result/startup-artifact-j7-heap-canonical-tests.log",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261120T212022Z-declared8/result/startup-artifact-j7-heap-canonical-tests.log",
       "operation": "decimal-between",
       "prefix": "startup-artifact-j7-heap-canonical-tests: ",
       "suffix": " checks passed"

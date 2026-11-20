@@ -3,7 +3,8 @@ module Replacement.StartupArtifact.StackBounds
   ( Segment (..), segmentsOf, stockCodeOf, ownedRanges
   , rootTable, rootSlotTargets, indirectTargetsOf, switchModel
   , irqEntryFrame, irqPreemptionPeak, irqPreemptionBytes
-  , branchSites, addressFormations, storesReaching, fallsInto
+  , branchSites, addressFormations, storesReaching, fallsInto, segmentWordAt
+  , Watched (..), Tracing (..), writersOf, closedValues, callerArguments
   , DescriptorId (..), descriptorIds
   , wrapperEntry, storagePrelude, releaseEntry, cleanupEntry
   , errorCallbackWord, errorCallbackSetter, errorDispatchSite, errorCallbacks
@@ -15,10 +16,11 @@ module Replacement.StartupArtifact.StackBounds
 
 import qualified A32
 import Control.Monad (guard, unless)
-import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))
+import Data.Bits (complement, shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
 import Data.Int (Int32)
+import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -120,6 +122,7 @@ conditionsPhrase conditions = case map phrase conditions of
       LoadedWordsClosed -> "words loaded from constant addresses holding only their image values and their scanned stores' constants (S6)"
       ReporterHookClosed -> "the exception-reporter hook set (S7)"
       FatalReportExcluded -> "excluding the fatal report a nonzero SVC starts, after which the task does not resume (S8)"
+      DeclaredTargetsClosed -> "the declared register-branch target sets, whose words only their scanned direct stores write, image 5's BSS holding 0 before its first store (S9)"
 
 -- | The image5 producer's fill flag and the fill-done callback that sets it.
 fillFlag, fillDoneCallback :: Word32
@@ -132,13 +135,13 @@ storagePrelude = 0x725c6c
 releaseEntry = 0x726098
 cleanupEntry = 0x72612c
 
--- | `cleared` are the ranges zero before any task runs.
-indirectTargetsOf :: [Segment] -> [Span] -> [(Word32, Word32)] -> M.Map SlotOffset [Word32] -> Either String IndirectTargets
-indirectTargetsOf segments carriers cleared slots = do
+-- | `cleared` are the ranges zero before any task runs; `declared` are the checked declared sites.
+indirectTargetsOf :: [Segment] -> [Span] -> [(Word32, Word32)] -> M.Map SlotOffset [Word32] -> M.Map Word32 CallbackSite -> Either String IndirectTargets
+indirectTargetsOf segments carriers cleared slots declared = do
   let code = stockCodeOf segments carriers
   locks <- mapM (\(kernel, initializer) -> ContextLocks kernel <$> contextLockMethods code initializer) kernelInitializers
   supervisors <- mapM (supervisorEntryOf code . fst) kernelInitializers
-  pure (IndirectTargets rootTable slots callbacks locks (closedWords segments (ownedRanges carriers) cleared) supervisors False)
+  pure (IndirectTargets rootTable slots (M.union callbacks declared) locks (closedWords segments (ownedRanges carriers) cleared) supervisors False)
   where
     callbacks = M.fromList ((errorDispatchSite, CallbackSite errorCallbacks ErrorCallbackClosed)
       : [(traceDispatch kernel, CallbackSite traceCallbacks TraceCallbackClosed) | kernel <- traceCallbackKernels]
@@ -287,56 +290,100 @@ addressFormations segments owned selected = concatMap scan segments
 -- path sets it to a constant; one it does not is a computed pointer, outside the scan.
 storesReaching :: [Segment] -> [(Word32, Word32)] -> Word32 -> [Word32]
 storesReaching segments owned target =
-  S.toList (S.fromList (map fst (storesFrom segments owned target [formation | formation@(_, _, value) <- baseFormations segments owned, near target value])))
+  S.toList (S.fromList (map fst (storesFrom UnconditionalConstants segments owned (Watched target 4) (formationsNear segments owned (physical target)))))
+
+-- | A word or halfword a scan watches: its address and size in bytes.
+data Watched = Watched {watchedAddress :: Word32, watchedBytes :: Word32} deriving (Eq, Ord, Show)
+
+-- | Which register constants a scan follows: those of unconditional @mov@/@movw/movt@ (S6), or also
+-- conditional constant moves, each outcome a path of its own, and pc-relative literal loads of a
+-- call's argument (S9).
+data Tracing = UnconditionalConstants | AnyConstants deriving (Eq, Show)
+
+-- | `storesReaching` for a watched word or halfword, following `AnyConstants`.
+writersOf :: [Segment] -> [(Word32, Word32)] -> Watched -> [Word32]
+writersOf segments owned = \watched -> S.toList (S.fromList (map fst (storesFrom AnyConstants segments owned watched (nearby (physical (watchedAddress watched))))))
+  where nearby = formationsNear segments owned
+
+-- | The base formations whose value lies within 4095 bytes of an address.
+formationsNear :: [Segment] -> [(Word32, Word32)] -> Word32 -> [(Word32, A32.Reg, Word32)]
+formationsNear segments owned = \target -> concat (M.elems (M.takeWhileAntitone (<= target + 4095)
+  (M.dropWhileAntitone (\value -> value + 4095 < target) index)))
+  where index = M.fromListWith (++) [(physical value, [formation]) | formation@(_, _, value) <- baseFormations segments owned]
 
 -- | The values a word can hold when every store `storesReaching` finds writes the whole word with a
 -- constant, or with an argument register of a setter whose every caller, in stock or owned code, passes
 -- a constant: its image value (0 inside a range cleared before any task runs) and those constants. A
 -- word outside the segments and the cleared ranges, or one a store writes otherwise, is open.
 closedWords :: [Segment] -> [(Word32, Word32)] -> [(Word32, Word32)] -> Word32 -> Maybe [Word32]
-closedWords segments owned cleared = \word -> do
-  let target = physical word
-  initial <- case segmentWordAt segments target of
-    Just value -> Just value
+closedWords segments owned cleared = \word -> closed (Watched word 4)
+  where closed = closedValues UnconditionalConstants segments owned cleared
+
+-- | `closedWords` for a watched word or halfword: a halfword store of the same address writes its low half.
+closedValues :: Tracing -> [Segment] -> [(Word32, Word32)] -> [(Word32, Word32)] -> Watched -> Maybe [Word32]
+closedValues tracing segments owned cleared = \(Watched address bytes) -> do
+  let target = physical address
+      mask = if bytes == 4 then 0xffffffff else 0xffff
+  initial <- case segmentWordAt segments (target .&. complement 3) of
+    Just value -> Just ((value `shiftR` (8 * fromIntegral (target .&. 3))) .&. mask)
     Nothing | any (\(low, high) -> low <= target && target < high) cleared -> Just 0
             | otherwise -> Nothing
-  stored <- concat <$> mapM storedValues (storesFrom segments owned target (nearby target))
-  pure (S.toList (S.fromList (initial : stored)))
+  stored <- concat <$> mapM storedValues (storesFrom tracing segments owned (Watched target bytes) (nearby target))
+  pure (S.toList (S.fromList (initial : map (.&. mask) stored)))
   where
-    index = M.fromListWith (++) [(physical value, [formation]) | formation@(_, _, value) <- baseFormations segments owned]
-    nearby target = concat (M.elems (M.takeWhileAntitone (<= target + 4095)
-      (M.dropWhileAntitone (\value -> value + 4095 < target) index)))
-    entered = S.fromList (map snd (branchSites segments [] (const True)))
-    instructionAt site = (\word -> (word, A32.decode site word)) <$> segmentWordAt segments site
+    nearby = formationsNear segments owned
+    arguments = callerArguments tracing segments owned
+    entered = enteredAddresses segments
     storedValues (site, stored) = case stored of
       StoredConstant value -> Just [value]
       StoredRegister register -> setterArguments site register
       StoredUnknown -> Nothing
-    -- The store is reached only on the straight line from a function entry that no code falls into,
-    -- whose address no code forms and that leaves the register as its callers set it. Owned code
-    -- before the entry does not fall into it: each owned piece's admission ends its paths inside its carrier.
+    -- The store is reached only on the straight line from a function entry that leaves the register
+    -- as its callers set it.
     setterArguments site register = do
       guard (register `elem` [A32.Reg n | n <- [0 .. 3]] && not (S.member site entered))
       entry <- entryBefore register (site - 4) (16 :: Int)
-      let callers = map fst (branchSites segments [] (== entry))
-          fallsFrom = not (inOwned owned (entry - 4)) && fallsInto segments entry
-      guard (not (null callers) && not fallsFrom && null (addressFormations segments [] (== entry)))
-      mapM (\caller -> argumentAt register (caller - 4) (16 :: Int)) callers
+      arguments entry register
     entryBefore register at budget = do
       guard (budget > 0)
-      (word, instruction) <- instructionAt at
+      (word, instruction) <- instructionIn segments at
       guard (register `notElem` writes at word && not (transfersAway instruction) && not (isBranchInstruction instruction))
       if S.member at entered then Just at else entryBefore register (at - 4) (budget - 1)
-    -- The constant the nearest earlier unconditional write gives the register, with no branch target
-    -- between that write and the call.
+
+-- | Every address a @b@ or @bl@ in the segments targets.
+enteredAddresses :: [Segment] -> S.Set Word32
+enteredAddresses segments = S.fromList (map snd (branchSites segments [] (const True)))
+
+instructionIn :: [Segment] -> Word32 -> Maybe (Word32, A32.Instruction)
+instructionIn segments site = (\word -> (word, A32.decode site word)) <$> segmentWordAt segments site
+
+-- | The values every @b@/@bl@ to the entry, in stock or owned code, leaves in the register, when the
+-- entry is entered only that way: no code falls into it or forms its address. Owned code before the
+-- entry does not fall into it: each owned piece's admission ends its paths inside its carrier.
+callerArguments :: Tracing -> [Segment] -> [(Word32, Word32)] -> Word32 -> A32.Reg -> Maybe [Word32]
+callerArguments tracing segments owned = \entry register -> do
+  let callers = M.findWithDefault [] entry calls
+      fallsFrom = not (inOwned owned (entry - 4)) && fallsInto segments entry
+  guard (not (null callers) && not fallsFrom && not (IS.member (fromIntegral (physical entry)) formed))
+  concat <$> mapM (\caller -> argumentAt register (caller - 4) (16 :: Int)) callers
+  where
+    calls = M.fromListWith (++) [(target, [site]) | (site, target) <- branchSites segments [] (const True)]
+    entered = M.keysSet calls
+    formed = IS.fromList [fromIntegral (physical value) | (_, value) <- addressFormations segments [] (const True)]
+    -- The constants the nearest earlier writes give the register, with no branch target between them
+    -- and the call: a conditional constant move adds its value to those of the writes before it.
     argumentAt register at budget = do
       guard (budget > 0 && not (S.member (at + 4) entered))
-      (word, instruction) <- instructionAt at
+      (word, instruction) <- instructionIn segments at
       guard (not (transfersAway instruction) && not (isBranchInstruction instruction))
       case instruction of
-        A32.MoveWide (A32.Cond 14) rd value | rd == register -> Just value
-        A32.DataProcessing (A32.Cond 14) A32.MOV _ rd _ (A32.Immediate value) | rd == register -> Just value
-        A32.MoveTop (A32.Cond 14) rd high | rd == register -> (\low -> (high `shiftL` 16) .|. (low .&. 0xffff)) <$> argumentAt register (at - 4) (budget - 1)
+        A32.MoveWide (A32.Cond 14) rd value | rd == register -> Just [value]
+        A32.DataProcessing (A32.Cond 14) A32.MOV _ rd _ (A32.Immediate value) | rd == register -> Just [value]
+        A32.Load (A32.Cond 14) A32.Word False rd rn (A32.OffsetImmediate offset) A32.OffsetOnly
+          | rd == register && rn == A32.pc && tracing == AnyConstants -> pure <$> segmentWordAt segments (fromIntegral (toInteger at + 8 + toInteger offset))
+        A32.MoveTop (A32.Cond 14) rd high | rd == register -> map (\low -> (high `shiftL` 16) .|. (low .&. 0xffff)) <$> argumentAt register (at - 4) (budget - 1)
+        A32.MoveWide _ rd value | rd == register && tracing == AnyConstants -> (value :) <$> argumentAt register (at - 4) (budget - 1)
+        A32.DataProcessing _ A32.MOV False rd _ (A32.Immediate value) | rd == register && tracing == AnyConstants -> (value :) <$> argumentAt register (at - 4) (budget - 1)
         _ | register `elem` writes at word -> Nothing
           | otherwise -> argumentAt register (at - 4) (budget - 1)
 
@@ -348,9 +395,6 @@ isBranchInstruction instruction = case instruction of
 
 -- | What a store found by `storesFrom` writes to the whole target word.
 data Stored = StoredConstant Word32 | StoredRegister A32.Reg | StoredUnknown deriving (Eq, Show)
-
-near :: Word32 -> Word32 -> Bool
-near target value = physical value <= physical target + 4095 && physical value + 4095 >= physical target
 
 -- | Each @movt@ completing a @movw/movt@ pair and each pc-relative literal load outside owned code:
 -- (site, register, value).
@@ -368,10 +412,10 @@ baseFormations segments owned =
     movwBefore rd site = [ low | back <- [1 .. 16 :: Word32], Just w <- [wordAt (site - 4 * back)]
                          , A32.MoveWide _ rd' low <- [A32.decode (site - 4 * back) w], rd' == rd ]
 
--- | The stores that may write any byte of the target word on a path from one of the formations, each
+-- | The stores that may write any byte of the watched word on a path from one of the formations, each
 -- with what it writes to the whole word.
-storesFrom :: [Segment] -> [(Word32, Word32)] -> Word32 -> [(Word32, A32.Reg, Word32)] -> [(Word32, Stored)]
-storesFrom segments owned target formations = concat [forward rd value (site + 4) | (site, rd, value) <- formations]
+storesFrom :: Tracing -> [Segment] -> [(Word32, Word32)] -> Watched -> [(Word32, A32.Reg, Word32)] -> [(Word32, Stored)]
+storesFrom tracing segments owned (Watched target targetBytes) formations = concat [forward rd value (site + 4) | (site, rd, value) <- formations]
   where
     wordAt = segmentWordAt segments
     forward rd value start = go S.empty [(start, value, M.empty, 40 :: Int)]
@@ -386,16 +430,19 @@ storesFrom segments owned target formations = concat [forward rd value (site + 4
                     unconditional = word `shiftR` 28 == 14
                     base' = rebased rd base instruction
                     overwritten = unconditional && rd `elem` writes site word && base' == Just base
-                    known' = constantsAfter known site word unconditional instruction
-                    successors = [(next, b, known', budget - 1) | not overwritten, Just b <- [base'], next <- following site unconditional instruction]
+                    successors = [(next, b, known', budget - 1) | not overwritten, Just b <- [base'], next <- following site unconditional instruction
+                                 , known' <- constantsAfter known site word unconditional instruction]
                  in [(site, stored) | Just stored <- [storesThrough rd base known word instruction]] ++ go visited' (successors ++ rest)
           where visited' = S.insert (site, base, known) visited
-    -- Registers the path set to constants.
+    -- Registers the path set to constants, on each outcome of a conditional constant move.
     constantsAfter known site word unconditional instruction = case instruction of
-      A32.MoveWide _ rd low | unconditional -> M.insert rd low cleared
-      A32.MoveTop _ rd high | unconditional, Just low <- M.lookup rd known -> M.insert rd ((high `shiftL` 16) .|. (low .&. 0xffff)) cleared
-      A32.DataProcessing (A32.Cond 14) A32.MOV _ rd _ (A32.Immediate constant) -> M.insert rd constant cleared
-      _ -> cleared
+      A32.MoveWide _ rd low | unconditional -> [M.insert rd low cleared]
+                            | tracing == AnyConstants -> [M.insert rd low cleared, known]
+      A32.MoveTop _ rd high | unconditional, Just low <- M.lookup rd known -> [M.insert rd ((high `shiftL` 16) .|. (low .&. 0xffff)) cleared]
+      A32.DataProcessing (A32.Cond c) A32.MOV _ rd _ (A32.Immediate constant)
+        | c == 14 -> [M.insert rd constant cleared]
+        | c < 14 && tracing == AnyConstants -> [M.insert rd constant cleared, known]
+      _ -> [cleared]
       where cleared = foldr M.delete known (writes site word)
     -- Nothing when the instruction cannot write the word; otherwise what it stores to the whole word.
     storesThrough rd base known word instruction = case instruction of
@@ -419,13 +466,14 @@ storesFrom segments owned target formations = concat [forward rd value (site + 4
       where
         storedAt address width rt
           | not (overlaps address (widthBytes width)) = Nothing
-          | width == A32.Word && physical address == physical target =
+          | widthBytes width == toInteger targetBytes && physical address == physical target =
               Just (if rt == rd then StoredConstant base else maybe (StoredRegister rt) StoredConstant (M.lookup rt known))
           | otherwise = Just StoredUnknown
     unknownIf hit = if hit then Just StoredUnknown else Nothing
     overlaps address size =
-      let start = toInteger (physical address); word = toInteger (physical target)
-       in start < word + 4 && word < start + size
+      let start = toInteger (physical address); low = toInteger (physical target)
+       in start < low + toInteger targetBytes && low < start + size
+    widthBytes :: A32.Width -> Integer
     widthBytes width = case width of
       A32.Byte -> 1
       A32.Half -> 2

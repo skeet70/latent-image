@@ -67,26 +67,23 @@ The walker now follows the constructs the earlier task walks stopped at. `0x4a96
 
 No published heap-calling task has an established whole-task bound. Under S1-S7, tasks 1, 2, 3, 4, 7, 35, 43, 55, 56, 62, 64, 73 and 80 (stacks 0xc00-0x1400) reach the kernel abort `0x4d978`, whose fatal report recurses: SVC `0x43604`, reporter `0x40cac`, diagnostic callback `0x69cc6c`, hook `0xed4a8c`, `0xed468c`, `0x6ab794`, `0x6fb7c8` and `0x4d978` again; a report nested in a report has no static bound. Task 33 (0x1000) stops at `0x7250cc`, a call through the message-trace word `0x4089ea94` that a setter fills from its argument. Task 36 (0xc00) stops at `0xd80e68`, a USB state-table record field indexed by RAM state. Task 72 (0xc00) stops at `0x892c00`, a callback array in an object. Root and plain producer targets that reached the abort refuse at the same recursion. The only bounded task demands remain root 104 (856 of 1024 bytes) and the task-60 producers (672/520 of 3040), under S1-S5.
 
-S8 takes the fatal report as terminal: a nonzero SVC starts a report after which the task does not resume normal operation, so a bound under S8 covers the paths before the report. Under S1-S8 every task walk passes the abort and stops at a register branch. The constructs below are read from the instruction words before each branch.
+S8 takes the fatal report as terminal: a nonzero SVC starts a report after which the task does not resume normal operation, so a bound under S8 covers the paths before the report. S9 adds declared register-branch target sets (`Replacement/StartupArtifact/CallbackTargets.hs`, data in `CallbackDeclarations.hs`, checked by `callback-targets-tests`): each declaration names its images by SHA-256 and the code allowed to write the words it reads, and a site closes only when every scanned store lies there with a known value and no table word it reads is written. On both the stock (J6) and owned (J7) compositions the check closes the message-trace site `0x7250cc` ({`0x723330`, `0x726478`}), task 55's `0x106cfcc` and task 62's `0x106444c`/`0x1064464`. It leaves task 35's `0xed1494` and the seven state-chart dispatchers open, on a store of unknown value into an index or state word or a dispatcher caller passing a non-constant machine.
 
-| Task | Entry | Stack | Refused at (S1-S8) |
-| --- | --- | --- | --- |
-| 1 | `0xc22f60` | 0xc00 | `0x6f16e0`, the argument callback under storage read `0x6a8f1c` |
-| 2 | `0xec2668` | 0x1000 | `0xec09b4`, a callback table indexed by a sign-extended byte id |
-| 3 | `0xe00a80` | 0x1000 | `0xdf7594`, the same callback-table construct |
-| 4 | `0x1215480` | 0x1000 | `0x11e8ca0`, a register call in the plain image |
-| 7 | `0xecc058` | 0xc00 | `0xec9bf8`, the same callback-table construct |
-| 33 | `0x1109130` | 0x1000 | `0x7250cc`, the message-trace word, as under S1-S7 |
-| 35 | `0xed2ce0` | 0xc00 | `0x7250cc`, the message-trace word |
-| 36 | `0xd81218` | 0xc00 | `0xd80e68`, the USB state table, as under S1-S7 |
-| 43 | `0xf01bc8` | 0x1000 | `0xefcb58`, a table indexed by a register value |
-| 55 | `0x106ceec` | 0xc00 | `0x106d000`, a callback loaded from an object's first word |
-| 56 | `0x1071ca4` | 0x1400 | `0x10724b8`, a callback at object offset `0x2698` |
-| 62 | `0x1064224` | 0x1000 | `0x106444c`, an object callback |
-| 64 | `0x1054cf4` | 0xc00 | `0x10548ec`, a table indexed by a register value |
-| 72 | `0x892110` | 0xc00 | `0x892c00`, the object callback array, as under S1-S7 |
-| 73 | `0x6d7540` | 0x1000 | `0x6d6fec`, a callback list walked from a constant address |
-| 80 | `0x69f0e0` | 0xc00 | `0x89bf08`, `bx lr` with lr reloaded from `[sp, #4]` |
+Per-task whole bounds are not the acceptance criterion: several stock tasks have none from bytes. Each walk's stop under S1-S9, with what lies behind it (byte research, including target sets the walker does not consume):
+
+| Task | Entry | Stack | Stop | Behind it |
+| --- | --- | --- | --- | --- |
+| 1 | `0xc22f60` | 0xc00 | `0x6f16e0`, argument 6 of `0x6f1440` | {`0x6ae500`, `0x73b924`} through two struct-field hops; then recursion `0x6334dc`↔`0x633594`, bounded only by consecutive failures of `[0x829a0c]` |
+| 2, 3, 4, 7, 43, 64 | `0xec2668`, `0xe00a80`, `0x1215480`, `0xecc058`, `0xf01bc8`, `0x1054cf4` | 0x1000, 0x1000, 0x1000, 0xc00, 0x1000, 0xc00 | state-chart dispatchers `0xec09b4`, `0xdf7594`, `0x11e8ca0`, `0xec9bf8`, `0xefcb58`, `0x10548ec` | 129, 1564, 1414, 73, 787 and 25 actions; actions that post events re-enter the dispatcher, a recursion with no static bound (2, 3, 4, 64) |
+| 33 | `0x1109130` | 0x1000 | `0x89becc`, a divmod wrapper's `push {sp, lr}` | then a computed `ldr pc` at `0x118d0b8` |
+| 35 | `0xed2ce0` | 0xc00 | `0xed1494` | 18 handlers; then 16 completion callbacks passed as arguments (`0x70f744`-`0x71c448`) |
+| 36 | `0xd81218` | 0xc00 | `0xd80e68`, USB chart | 119 actions, then about 100 further open branches |
+| 55, 56, 73 | `0x106ceec`, `0x1071ca4`, `0x6d7540` | 0xc00, 0x1400, 0x1000 | `0x106d000`, `0x10724b8`, `0x6d6fec` | callbacks taken from message payloads; senders with computed channels are not excluded |
+| 62 | `0x1064224` | 0x1000 | `0x106444c`, closed by its declaration | the walker refuses there because the set holds the list terminator's 0 and a compare of the event after the zero test forgets it; no further open branch |
+| 72 | `0x892110` | 0xc00 | `0x892c00` | callback arrays in client-built graphics commands |
+| 80 | `0x69f0e0` | 0xc00 | `0x89bf08`, the divmod wrapper | `0x6a1c44` calls word `0x95b074`, 0 until a setter runs, without a zero test |
+
+The criterion is stock dominance: each owned allocator entry that replaces a stock entry has a worst-case depth, callees included, no greater than the stock entry's, so a stack-safe stock execution stays stack-safe. The owned entries currently exceed stock by 32 (malloc), 8 (free), 40 (`_malloc_r`) and 16 (`_free_r`) bytes.
 
 The one-level fatal path is unmeasured: with fatal reports excluded the abort `0x4d978` is bounded, but the reporter `0x40cac` stops at `0x6f16e0`.
 

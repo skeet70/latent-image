@@ -193,6 +193,24 @@ main = do
             depth [0xe3500001, 0xe2911001, 0x979ff100, branch always 3 6, at 6, at 6, bxLr] none noTargets noSwitches == Left (TableUnbounded (at 2)))
         , ("pop of r11 forgets the frame",
             depth [0xe92d4800, 0xe28db004, 0xe8bd0800, 0xe24bd004, bxLr] none noTargets noSwitches == Left (FrameUnknown (at 3)))
+        , ("a conditional pop of lr followed by the same conditional return is a conditional return",
+            -- push {r4, r5, lr}; cmp r0, #0; popge {r4, r5, lr}; bxge lr; pop {r4, r5, pc}
+            bytesOf (depth [0xe92d4030, cmp0, 0xa8bd4030, 0xa12fff1e, 0xe8bd8030] none noTargets noSwitches) == Just 12)
+        , ("a conditional pop not followed by the same conditional return refuses",
+            -- push {r4, r5, lr}; cmp r0, #0; popge {r4, r5, lr}; bx lr
+            depth [0xe92d4030, cmp0, 0xa8bd4030, bxLr] none noTargets noSwitches == Left (Refusal (at 2) W.UnaccountedSpWrite))
+        , ("mlas is stack-neutral", bytesOf (depth [pushR4Lr, 0xe0300392, popR4Pc] none noTargets noSwitches) == Just 8)
+        , ("mlas into SP refuses", depth [pushR4Lr, 0xe03d0392, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.UnadmittedEncoding))
+        , ("a jump table guarded by cmp against a movw constant takes that many slots",
+            -- movw r3, #2; cmp r0, r3; ldrls pc, [pc, r0, lsl #2]; b 7; 7; 7; 7; 7: bx lr
+            bytesOf (depth [0xe3003002, 0xe1500003, 0x979ff100, branch always 3 7, at 7, at 7, at 7, bxLr] none noTargets noSwitches) == Just 0)
+        , ("a jump table guarded by cmp against a register of unknown value refuses",
+            depth [0xe1a03001, 0xe1500003, 0x979ff100, branch always 3 7, at 7, at 7, at 7, bxLr] none noTargets noSwitches == Left (TableUnbounded (at 2)))
+        , ("a declared site holding zero resolves only where the register compared unequal to zero",
+            -- push {r4, lr}; ldr r3, [r0]; cmp r3, #0; beq 5; blx r3; pop {r4, pc}; target: push {r4-r7, lr}; pop {r4-r7, pc}
+            let site = noTargets {callbackSites = M.singleton (at 4) (CallbackSite [0, at 6] DeclaredTargetsClosed)}
+             in bytesOf (depth [pushR4Lr, 0xe5903000, 0xe3530000, branch eq 3 5, 0xe12fff33, popR4Pc, push47Lr, pop47Pc] none site noSwitches) == Just 28
+                  && depth [pushR4Lr, 0xe5903000, 0xe1a00000, 0xe1a00000, 0xe12fff33, popR4Pc, push47Lr, pop47Pc] none site noSwitches == Left (UnresolvedBranch (at 4)))
         ]
       -- push {r4, lr}; sub sp, #8; movw r3, #0xbd20; movt r3, #0x96; ldr r3, [r3]; ldr r3, [r3, #0x10];
       -- str r3, [sp, #4]; bl callee; ldr r3, [sp, #4]; blx r3; add sp, #8; pop {r4, pc}; callee; target

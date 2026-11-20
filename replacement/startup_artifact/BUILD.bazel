@@ -10,6 +10,8 @@ haskell_library(
         "Replacement/StartupArtifact/Adapters.hs",
         "Replacement/StartupArtifact/Application.hs",
         "Replacement/StartupArtifact/AttachState.hs",
+        "Replacement/StartupArtifact/CallbackDeclarations.hs",
+        "Replacement/StartupArtifact/CallbackTargets.hs",
         "Replacement/StartupArtifact/Compose.hs",
         "Replacement/StartupArtifact/Contract.hs",
         "Replacement/StartupArtifact/Footprint/ApplicationPump.hs",
@@ -115,6 +117,21 @@ _TEST_DEPS = [
     "//host:update-container",
     "//host:vector",
 ]
+
+haskell_test(
+    name = "callback-targets-tests",
+    size = "small",
+    srcs = ["CallbackTargetsTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":startup-artifact",
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:stock-stack",
+    ],
+)
 
 haskell_test(
     name = "timer-compose-tests",
