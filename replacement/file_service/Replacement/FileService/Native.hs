@@ -33,6 +33,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (nub)
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
@@ -223,15 +224,38 @@ fixedBody elf = case sections of
 ownedFixed :: Extent
 ownedFixed = Extent (Layout.imageBase + Layout.headerBytes) Layout.imageLimit
 
+-- | Stock functions, or the owned functions direct A32 branches reach from the retired extents' words.
 functionsOf :: Code -> Role -> [(Word32, Word32)]
 functionsOf code Stock = codeStockFunctions code
-functionsOf code (Owned _ elf) = nub
-  [ (E.symbolValue symbol, E.symbolSize symbol)
-  | symbol <- E.elfSymbols elf
-  , E.symbolKind symbol == E.FunctionSymbol
-  , E.symbolSize symbol > 0
-  , any (\extent -> extentContains extent (E.symbolValue symbol)) (ownedFixed : map snd (codeExtents code))
-  ]
+functionsOf code (Owned _ elf) = M.toList (reach M.empty seeds)
+  where
+    functions = M.fromList
+      [ (E.symbolValue symbol, E.symbolSize symbol)
+      | symbol <- E.elfSymbols elf
+      , E.symbolKind symbol == E.FunctionSymbol
+      , E.symbolSize symbol > 0
+      , any (\extent -> extentContains extent (E.symbolValue symbol)) (ownedFixed : map snd (codeExtents code))
+      ]
+    seeds = concat [branchTargets low (high - low) | (_, Extent low high) <- codeExtents code]
+    containing target = case M.lookupLE target functions of
+      Just (low, size) | target < low + size -> Just (low, size)
+      _ -> Nothing
+    reach found [] = found
+    reach found (target : rest) = case containing target of
+      Just (low, size) | not (M.member low found) -> reach (M.insert low size found) (branchTargets low size ++ rest)
+      _ -> reach found rest
+    branchTargets low size =
+      [ fromIntegral (toInteger address + 8 + 4 * signed)
+      | address <- [low, low + 4 .. low + size - 4]
+      , Just instruction <- [wordAt address]
+      , instruction `shiftR` 28 /= 0xf
+      , instruction .&. 0x0e000000 == 0x0a000000
+      , let offset = toInteger (instruction .&. 0xffffff)
+            signed = if offset >= 0x800000 then offset - 0x1000000 else offset
+      ]
+    wordAt address = do
+      bytes <- mapM (E.byteAt elf) [address .. address + 3]
+      pure (foldr (\byte value -> value `shiftL` 8 .|. fromIntegral byte) 0 bytes)
 
 rowValue :: MemoryRow -> Value
 rowValue row = case row of

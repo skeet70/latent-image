@@ -66,7 +66,11 @@ main = do
     (publicationsFor image4 (replacing "xm1_scanout_commit" [row 0x02000000 'T' "xm1_scanout_commit"])))
   check "a data symbol named as an export is refused" (refusal (MissingExport "xm1_scanout_isr_one")
     (publicationsFor image4 (replacing "xm1_scanout_isr_one" [row (origin + 0xe0) 'D' "xm1_scanout_isr_one"])))
-  check "a body that does not start at the fixed origin is refused" (refusal BodyBoundsRejected
-    (bodyBounds (C.pack (unlines [row (origin + 0x20) 'T' "__fixed_body_start", row bodyEnd 'T' "__fixed_body_end"]))))
+  check "the body spans the unit's exports" (bodyBounds (symbols []) == Right (origin + 0xe0, origin + 0xbf0))
+  check "the body extends to the unit's own code" (bodyBounds (symbols [row (origin + 0x2000) 't' "_RNvCs1_19xm1_display_scanout4tail"]) == Right (origin + 0xe0, origin + 0x2010))
+  check "a core instantiation inside the unit's code is admitted" (bodyBounds (symbols [row (origin + 0x1f0) 't' "_RNvNtCs2_4core3ops5index"]) == Right (origin + 0xe0, origin + 0xbf0))
+  check "another crate's code inside the unit's range is refused" (refusal BodyBoundsRejected
+    (bodyBounds (symbols [row (origin + 0x1f0) 'T' "_RNvCs3_10xm1_saclac4step"])))
+  check "a body without every export is refused" (refusal BodyBoundsRejected (bodyBounds (replacing "xm1_scanout_blank" [])))
   check "a non-canonical image 4 is refused" (refusal SourceMismatch (canonicalPublications image4 (symbols [])))
   check "a malformed symbol row is refused" (either (const True) (const False) (publicationsFor image4 (symbols ["garbage"])))

@@ -10,6 +10,7 @@ import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import Data.List (isInfixOf)
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import Numeric (readHex)
@@ -49,11 +50,11 @@ entries =
 canonicalImage4Sha256 :: String
 canonicalImage4Sha256 = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
 
-data Row = Row Word32 Char String
+data Row = Row Word32 Word32 Char String
 
 parseRows :: B.ByteString -> Either ArtifactError [Row]
 parseRows bytes = forM (filter (not . C.null) (C.lines bytes)) $ \line -> case C.words line of
-  [address, _size, kind, name] | Just (letter, rest) <- C.uncons kind, C.null rest -> Row <$> hex address <*> pure letter <*> pure (C.unpack name)
+  [address, size, kind, name] | Just (letter, rest) <- C.uncons kind, C.null rest -> Row <$> hex address <*> hex size <*> pure letter <*> pure (C.unpack name)
   _ -> Left (SymbolTableRejected (C.unpack line))
   where
     hex text = case readHex (C.unpack text) of
@@ -61,7 +62,7 @@ parseRows bytes = forM (filter (not . C.null) (C.lines bytes)) $ \line -> case C
       _ -> Left (SymbolTableRejected (C.unpack text))
 
 symbol :: [Row] -> String -> Maybe Word32
-symbol rows name = case [address | Row address _ name' <- rows, name' == name] of
+symbol rows name = case [address | Row address _ _ name' <- rows, name' == name] of
   [address] -> Just address
   _ -> Nothing
 
@@ -75,7 +76,7 @@ publicationsFor image4 symbolBytes = do
   rows <- parseRows symbolBytes
   forM entries $ \(Entry name address) -> do
     target <- maybe (Left (MissingExport name)) Right
-      (case [value | Row value kind name' <- rows, name' == name, kind `elem` ("Tt" :: String)] of [value] -> Just value; _ -> Nothing)
+      (case [value | Row value _ kind name' <- rows, name' == name, kind `elem` ("Tt" :: String)] of [value] -> Just value; _ -> Nothing)
     unless (imageBase + headerBytes <= target && target < imageLimit && target .&. 3 == 0) (Left (ExportOutsideFixed name))
     let delta = (toInteger target - toInteger address - 8) `div` 4
     unless (fromIntegral (B.length image4) >= address - image4Base + 4) (Left SourceMismatch)
@@ -86,12 +87,21 @@ canonicalPublications image4 symbolBytes = do
   unless (SHA.sha256Hex (SHA.sha256 image4) == canonicalImage4Sha256) (Left SourceMismatch)
   publicationsFor image4 symbolBytes
 
+-- | The scanout unit's code in the fixed range: from its first text symbol to the end of its last. Only `core` and
+-- `alloc` instantiations may lie between them; any other crate's code there is refused.
 bodyBounds :: B.ByteString -> Either ArtifactError (Word32, Word32)
 bodyBounds symbolBytes = do
   rows <- parseRows symbolBytes
-  case (symbol rows "__fixed_body_start", symbol rows "__fixed_body_end") of
-    (Just low, Just high) | imageBase + headerBytes == low && low < high && high <= imageLimit -> Right (low, high)
-    _ -> Left BodyBoundsRejected
+  let text = [row | row@(Row address _ kind _) <- rows, kind `elem` ("Tt" :: String), imageBase + headerBytes <= address, address < imageLimit]
+      named fragments (Row _ _ _ name) = any (`isInfixOf` name) fragments
+      unit row@(Row _ _ _ name) = named ["_19xm1_display_scanout"] row || any (\(Entry export _) -> export == name) entries
+      own = filter unit text
+  unless (all (\(Entry export _) -> any (\(Row _ _ _ name) -> name == export) own) entries) (Left BodyBoundsRejected)
+  let low = minimum [address | Row address _ _ _ <- own]
+      high = maximum [address + size | Row address size _ _ <- own]
+      between = [row | row@(Row address _ _ _) <- text, low <= address, address < high]
+  unless (high <= imageLimit && all (\row -> unit row || named ["_4core", "_5alloc"] row) between) (Left BodyBoundsRejected)
+  Right (low, high)
 
 -- | The `stage-fixed-image` publication manifest.
 publicationsValue :: [Publication] -> Value
