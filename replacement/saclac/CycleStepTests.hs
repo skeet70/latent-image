@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import Data.List (isInfixOf)
 import Data.Word (Word8)
 import Replacement.Saclac.CycleStep
+import Replacement.Saclac.StateMap
 import System.Exit (exitFailure)
 
 check :: String -> Bool -> IO Bool
@@ -93,5 +94,25 @@ main = do
         _ <- check "a step-changed byte outside the spans differs" (any (\difference -> differenceAddress difference == 0x00920000 && not (differenceDeclared difference)) differences)
         _ <- check "equal compared bytes are not differences" (null (compareState spans (netChanged initial predicted) predicted predicted))
         check "a foreign byte outside the spans and the step's writes is not a difference" (not (any (\difference -> differenceAddress difference == 0x00920000) (compareState spans [] initial outside)))
+    , do
+        -- A field table at 0x02000100: two fields, then an overlapping and an out-of-image table.
+        let image = B.replicate 0x100 0 <> words' [2, 0x0169d4b4, 2, 0x016c0710, 4] <> words' [2, 0x0169d4b4, 4, 0x0169d4b6, 2]
+            words' = B.concat . map (\value -> B.pack [fromIntegral (value `div` (256 ^ k)) | k <- [0 .. 3 :: Int]]) :: [Integer] -> B.ByteString
+            fields = parseFields 0x02000000 image 0x02000100 0x02000104
+        _ <- check "a field table parses in order" (fields == Right [Field 0x0169d4b4 2, Field 0x016c0710 4])
+        _ <- check "overlapping fields are refused" (either ("overlap" `isInfixOf`) (const False) (parseFields 0x02000000 image 0x02000114 0x02000118))
+        check "a table outside the image is refused" (either ("outside" `isInfixOf`) (const False) (parseFields 0x02000000 image 0x02000114 0x02000200))
+    , do
+        let shared = [Span 0x0169cf24 0x0169d370]
+            fields = [Field 0x0169d4b4 2]
+        _ <- check "an exposed stock-private byte no field maps is unmapped" (unmappedExposed shared fields [0x0169d4b6, 0x0169d4b4] == [0x0169d4b6])
+        _ <- check "shared spans and retained memory are not unmapped" (null (unmappedExposed shared fields [0x0169cf30, 0x00919758]))
+        _ <- check "stock-private scratch outside the fields leaves the abstract comparison" (not (abstractDifference shared fields 0x0169d468))
+        check "fields, shared spans and retained memory stay compared" (all (abstractDifference shared fields) [0x0169d4b4, 0x0169cf30, 0x00919758])
+    , do
+        let rows = "00bd72d8 00009f34 b _RNvNtNtCsdKWFKxhINoS_15xm1_saclac_root5stock11composition5OWNER\n00be120d 00000001 b _RNvNtNtCsdKWFKxhINoS_15xm1_saclac_root5stock11composition5READY\n02000000 A __xm1_qualification_start\n"
+        _ <- check "a v0 item resolves by its path" (fmap symbolAddress (parseSymbols rows >>= (`symbolPath` ["xm1_saclac_root", "stock", "composition", "OWNER"])) == Right 0x00bd72d8)
+        _ <- check "an unsized absolute symbol parses" (fmap symbolAddress (parseSymbols rows >>= (`symbolNamed` "__xm1_qualification_start")) == Right 0x02000000)
+        check "a path naming no item is refused" (either ("no item" `isInfixOf`) (const False) (parseSymbols rows >>= (`symbolPath` ["xm1_saclac_root", "stock", "composition", "RECOGNITION"])))
     ]
   unless (and results) exitFailure

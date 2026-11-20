@@ -13,11 +13,12 @@ import Control.Exception (IOException, try)
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (Value (..))
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Word (Word32, Word8)
 import Emulation.NativeCase (loadCase, runCase)
 import Emulation.NativeObservation (Coverage (..), InstructionCount (..), NativeObservation (..), RegionId (..), Register (..), lookupRegister, nativeInstructions, nativeMemory, nativeStatus, observeNative, renderObservationError, reportRunnerExit, runnerStatusLabel)
@@ -28,6 +29,7 @@ import Numeric (showHex)
 import Prelude hiding (cycle)
 import Replacement.Saclac.CycleStep
 import qualified Replacement.Saclac.PayloadProjection as Payload
+import Replacement.Saclac.StateMap
 import qualified Data.Text as T
 import qualified FujiAF.FirstStage as F
 import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory, removeFile, renameFile)
@@ -59,15 +61,16 @@ data Options = Options
   , optionServices :: [Word32]
   , optionCoverage :: Bool
   , optionFields :: FilePath
+  , optionQualification :: Maybe (FilePath, FilePath)
   }
 
 usage :: String
-usage = "usage: saclac-cycle-step --runner RUNNER --id5 IMAGE5 --id4 IMAGE4 --loader LOADER_A --sites SITES --fields PAYLOAD_FIELDS --work DIR --out JSON --lane NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR[:SYMBOLS] [--lane ...] [--chain NAME] [--stub ADDRESS=VALUE]... [--rounds N] [--discover-data] [--closure FILE]"
+usage = "usage: saclac-cycle-step --runner RUNNER --id5 IMAGE5 --id4 IMAGE4 --loader LOADER_A --sites SITES --fields PAYLOAD_FIELDS --work DIR --out JSON --lane NAME:RESULT_JSON:CENSUS_JSON:INPUTS_DIR[:SYMBOLS] [--lane ...] [--chain NAME] [--stub ADDRESS=VALUE]... [--record-service ADDRESS]... [--coverage] [--qualification BIN:SYMBOLS] [--rounds N] [--discover-data] [--closure FILE]"
 
 parseOptions :: [String] -> IO Options
 parseOptions arguments = go empty arguments
   where
-    empty = Options "" "" "" "" "" "" "" [] Nothing [] 6 False Nothing [] False ""
+    empty = Options "" "" "" "" "" "" "" [] Nothing [] 6 False Nothing [] False "" Nothing
     go options ("--runner" : value : rest) = go options {optionRunner = value} rest
     go options ("--id5" : value : rest) = go options {optionId5 = value} rest
     go options ("--id4" : value : rest) = go options {optionId4 = value} rest
@@ -81,6 +84,9 @@ parseOptions arguments = go empty arguments
     go options ("--closure" : value : rest) = go options {optionClosure = Just value} rest
     go options ("--record-service" : value : rest) = go options {optionServices = optionServices options ++ [fromIntegral (readAddress value)]} rest
     go options ("--coverage" : rest) = go options {optionCoverage = True} rest
+    go options ("--qualification" : value : rest) = case splitOn ':' value of
+      [bin, symbols] -> go options {optionQualification = Just (bin, symbols)} rest
+      _ -> failH "--qualification takes BIN:SYMBOLS"
     go options ("--discover-data" : rest) = go options {optionDiscoverData = True} rest
     go options ("--stub" : value : rest) = case break (== '=') value of
       (address, '=' : number) -> go options {optionStubs = optionStubs options ++ [(fromIntegral (readAddress address), fromIntegral (readAddress number))]} rest
@@ -210,16 +216,18 @@ data Lane = Lane
   , laneError :: Maybe String
   , laneRole :: Payload.Role
   , laneSymbolsDigest :: Maybe String
+  , laneOwnedSymbols :: Maybe [Symbol]
   }
 
 loadLane :: LaneSpec -> IO Lane
 loadLane spec = do
-  (role, digest) <- case laneSymbols spec of
-    Nothing -> pure (Payload.StockRole, Nothing)
+  (role, digest, owned) <- case laneSymbols spec of
+    Nothing -> pure (Payload.StockRole, Nothing, Nothing)
     Just path -> do
       bytes <- readRegular (16 * 1024 * 1024) path
       symbols <- either failH pure (F.parseSymbols bytes)
-      pure (Payload.OwnedRole (\name -> F.symbolAddress <$> F.lookupSymbol symbols (T.unpack name)), Just (sha256Hex (sha256 bytes)))
+      rows <- either failH pure (parseSymbols (BC.unpack bytes))
+      pure (Payload.OwnedRole (\name -> F.symbolAddress <$> F.lookupSymbol symbols (T.unpack name)), Just (sha256Hex (sha256 bytes)), Just rows)
   resultBytes <- readRegular (64 * 1024 * 1024) (laneResult spec)
   result <- jsonRead resultBytes
   censusBytes <- readRegular (64 * 1024 * 1024) (laneCensus spec)
@@ -237,6 +245,7 @@ loadLane spec = do
     , laneError = failure
     , laneRole = role
     , laneSymbolsDigest = digest
+    , laneOwnedSymbols = owned
     }
 
 dumpBytes :: Lane -> Dump -> IO (Either String B.ByteString)
@@ -470,6 +479,7 @@ data RunResult = RunResult
   , runCoverage :: M.Map String (B.ByteString, B.ByteString, B.ByteString)
   , runRegionBases :: M.Map String Word32
   , runPc :: Word32
+  , runR0 :: Word32
   , runAccesses :: [Value]
   , runExecuted :: [Value]
   , runCaseSha :: String
@@ -510,6 +520,7 @@ runPlanned options plan = do
               , runCoverage = M.fromList [(regionName ident, (coverageRead c, coverageWritten c, coverageExposed c)) | (ident, c) <- fromMaybe [] (nativeCoverage observation)]
               , runRegionBases = M.fromList [(regionId region, regionBase region) | region <- casePlanRegions plan]
               , runPc = fromMaybe 0 (lookupRegister Pc observation)
+              , runR0 = fromMaybe 0 (lookupRegister R0 observation)
               , runAccesses = list (get runner "accesses")
               , runExecuted = list (get runner "executed")
               , runCaseSha = digest
@@ -518,6 +529,269 @@ runPlanned options plan = do
               , runProvenanceTotal = intOf (get runner "memory_provenance_total")
               , runTrace = list (get runner "trace")
               })
+
+-- ---------------------------------------------------------------------------
+-- The abstraction map
+
+-- | The qualification ELF: Root's declared stock encoding, built beside Root's types with
+-- `--cfg saclac_qualification` and never linked into a production image. It reads an owned
+-- lane's Root state with the layouts of the exact qualified build (the DWARF layout check
+-- binds them) and writes the stock-layout overlay its field table declares.
+data Qualification = Qualification
+  { qualImage :: B.ByteString
+  , qualBase :: Word32
+  , qualTextEnd :: Word32
+  , qualEnd :: Word32
+  , qualEncode :: Word32
+  , qualRoundtrip :: Word32
+  , qualFields :: [Field]
+  , qualFunctions :: [(Word32, Word32)]
+  , qualSha :: String
+  , qualSymbolsSha :: String
+  }
+
+-- | Harness scratch for one map call: the input overlay at +0, the output at +0x1000 and the
+-- refusal detail word at +0x1ff0.
+qualIoBase :: Word32
+qualIoBase = 0x02100000
+
+qualIoSize :: Word32
+qualIoSize = 0x2000
+
+loadQualification :: (FilePath, FilePath) -> IO Qualification
+loadQualification (binPath, symbolsPath) = do
+  image <- readRegular (1024 * 1024) binPath
+  symbolBytes <- readRegular (16 * 1024 * 1024) symbolsPath
+  symbols <- either failH pure (parseSymbols (BC.unpack symbolBytes))
+  let named name = either failH (pure . symbolAddress) (symbolNamed symbols name)
+  base <- named "__xm1_qualification_start"
+  textEnd <- named "__xm1_qualification_text_end"
+  imageEnd <- named "__xm1_qualification_image_end"
+  end <- named "__xm1_qualification_end"
+  encode <- named "xm1_saclac_qualification_encode"
+  roundtrip <- named "xm1_saclac_qualification_roundtrip"
+  count <- named "XM1_SACLAC_QUALIFICATION_FIELD_COUNT"
+  table <- named "XM1_SACLAC_QUALIFICATION_FIELDS"
+  ensure (base == 0x02000000 && base < textEnd && textEnd <= imageEnd && imageEnd <= end && end <= qualIoBase && textEnd .&. 0xfff == 0)
+    "the qualification image leaves its declared window"
+  ensure (fromIntegral (B.length image) == imageEnd - base) "the qualification .bin does not span its image symbols"
+  fields <- either failH pure (parseFields base image count table)
+  let starts = [symbolAddress symbol | symbol <- symbols, symbolType symbol `elem` ("tT" :: String), symbolAddress symbol >= base, symbolAddress symbol < textEnd]
+      cuts = nub (sortOn id (base : starts))
+      functions = zip cuts (zipWith (-) (drop 1 cuts ++ [textEnd]) cuts)
+  ensure (encode `elem` cuts && roundtrip `elem` cuts) "the qualification entries are not function starts"
+  pure Qualification
+    { qualImage = image
+    , qualBase = base
+    , qualTextEnd = textEnd
+    , qualEnd = end
+    , qualEncode = encode
+    , qualRoundtrip = roundtrip
+    , qualFields = fields
+    , qualFunctions = functions
+    , qualSha = sha256Hex (sha256 image)
+    , qualSymbolsSha = sha256Hex (sha256 symbolBytes)
+    }
+
+-- | Encode reads Root's state at the `OWNER`/`READY` addresses of the lane's build;
+-- round trip decodes a stock overlay into Root's typed state and encodes it back.
+data QualCall = QualEncode Word32 Word32 | QualRoundtrip B.ByteString
+
+data QualRun = QualRun
+  { qualCode :: Word32
+  , qualGap :: Word32
+  , qualOut :: B.ByteString
+  , qualReads :: [Integer]
+  , qualInstructions :: Integer
+  , qualCaseSha :: String
+  }
+
+-- | The 64 KiB granule of captured state around an address, clipped to its dumped range.
+granuleAround :: State -> Integer -> Maybe (Word32, Word32)
+granuleAround state address = case [segment | segment <- stateSegments state, stateHolds (State [segment]) address] of
+  segment : _ ->
+    let granule = fromIntegral (granuleOf address) :: Integer
+        low = max granule (segmentBase segment)
+        high = min (granule + fromIntegral granuleBytes) (segmentBase segment + fromIntegral (B.length (segmentBytes segment)))
+     in Just (fromIntegral low, fromIntegral (high - low))
+  [] -> Nothing
+
+-- | One map call in its own native case. Captured state is mapped by granule on demand, as
+-- the step's is; the run's complete coverage gives the state it read.
+runQualification :: Options -> Qualification -> String -> State -> QualCall -> IO (Either String QualRun)
+runQualification options qual ident state call = go (0 :: Int) (mapMaybe (granuleAround state) seeds)
+  where
+    seeds = case call of
+      QualEncode owner ready -> [fromIntegral owner, fromIntegral ready]
+      QualRoundtrip _ -> []
+    input = case call of
+      QualRoundtrip bytes -> bytes
+      QualEncode _ _ -> B.empty
+    entry = case call of
+      QualEncode _ _ -> qualEncode qual
+      QualRoundtrip _ -> qualRoundtrip qual
+    arguments = case call of
+      QualEncode owner ready -> [owner, ready, qualIoBase + 0x1000, qualIoBase + 0x1ff0]
+      QualRoundtrip _ -> [qualIoBase, qualIoBase + 0x1000, qualIoBase + 0x1ff0, 0]
+    textSize = qualTextEnd qual - qualBase qual
+    dataSize = qualEnd qual - qualTextEnd qual
+    dataBytes = B.drop (fromIntegral textSize) (qualImage qual)
+    go round' granules = case mapM granuleRegion (nub (sortOn id granules)) of
+      Left problem -> pure (Left problem)
+      Right stateRegions -> do
+        let regions =
+              [ (RegionPlan "q-text" (qualBase qual) textSize "rx" Nothing, Just (B.take (fromIntegral textSize) (qualImage qual)))
+              , (RegionPlan "q-data" (qualTextEnd qual) dataSize "rw" Nothing, Just (dataBytes <> B.replicate (fromIntegral dataSize - B.length dataBytes) 0))
+              , (RegionPlan "q-io" qualIoBase qualIoSize "rw" Nothing, Just (input <> B.replicate (fromIntegral qualIoSize - B.length input) 0))
+              , (RegionPlan "exit" exitAddress 4 "rx" Nothing, Nothing)
+              , (RegionPlan "stack" stackBase (fromIntegral stackSize) "rw" Nothing, Nothing)
+              ]
+                ++ stateRegions
+            (placed, artifacts) = packArtifacts regions
+            plan = CasePlan
+              { casePlanId = ident
+              , casePlanProvenance = "Root's declared stock encoding (qualification ELF " ++ qualSha qual ++ ", never linked into a production image) run on a lane's captured state."
+              , casePlanExclusions = ["The qualification code is not firmware; it reads the captured state read-only and writes only its own data and the harness scratch at 0x02100000."]
+              , casePlanEntry = entry
+              , casePlanExit = exitAddress
+              , casePlanRegisters =
+                  zip ["r0", "r1", "r2", "r3"] arguments
+                    ++ [(register, 0) | register <- ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"]]
+                    ++ [("sp", harnessSp), ("lr", exitAddress), ("cpsr", 0x10)]
+              , casePlanRegions = placed
+              , casePlanFunctions = qualFunctions qual
+              , casePlanStubs = []
+              , casePlanArtifacts = artifacts
+              , casePlanBudget = 4000000
+              , casePlanCoverage = True
+              }
+        result <- runPlanned options plan
+        case result of
+          Left problem -> pure (Left problem)
+          Right run -> case runStatus run of
+            "returned" -> pure $ case M.lookup "q-io" (runMemory run) of
+              Just io | B.length io == fromIntegral qualIoSize -> Right QualRun
+                { qualCode = runR0 run
+                , qualGap = wordAt io 0x1ff0
+                , qualOut = B.take (fieldsBytes (qualFields qual)) (B.drop 0x1000 io)
+                , qualReads = coverageRead' (coverageAddresses isStateRegion run)
+                , qualInstructions = runInstructions run
+                , qualCaseSha = runCaseSha run
+                }
+              _ -> Left "the runner did not report the map's scratch region"
+            "memory_guard" -> case reverse (runAccesses run) of
+              row : _ ->
+                let address = (addressOf (get row "address")) .&. complement 0x40000000
+                 in case granuleAround state address of
+                      Just granule
+                        | granule `notElem` granules && round' < 64 -> go (round' + 1) (granule : granules)
+                      _ -> pure (Left ("the map refused an access at " ++ hexText address ++ " outside the captured state"))
+              [] -> pure (Left "the map hit memory_guard without a recorded access")
+            other -> pure (Left ("the map ended " ++ other ++ " at " ++ hexText (fromIntegral (runPc run)) ++ ": " ++ runDetail run))
+    granuleRegion (base, size) = case stateSlice state (fromIntegral base) (fromIntegral size) of
+      Just bytes -> Right (RegionPlan (dataRegionId base) base size "rw" Nothing, Just bytes)
+      Nothing -> Left ("state granule " ++ hexText (fromIntegral base) ++ " is not captured")
+
+-- | What one cycle compares after the map: the step's input, the completion state it is held
+-- against, and whether stock-private scratch outside the fields leaves the comparison.
+data Mapping = Mapping {mappingInput :: State, mappingObserved :: State, mappingAbstract :: Bool, mappingValue :: Value}
+
+-- | The map for one cycle. Without `--qualification` the lane's states are compared as
+-- captured. The stock lane is the map's validation: its wake and completion fields go
+-- through decode and encode, and the step runs from the round-tripped wake state. An owned
+-- lane's wake and completion Root state are encoded into the stock fields.
+mapCycle :: Options -> Maybe Qualification -> [Span] -> Lane -> Int -> State -> State -> State -> IO (Either String Mapping)
+mapCycle options qualification shared lane index wake input completion = case qualification of
+  Nothing -> pure (Right (Mapping input completion False Null))
+  Just qual -> case laneOwnedSymbols lane of
+    Nothing -> stockRoundtrip qual
+    Just symbols -> ownedEncode qual symbols
+  where
+    ident suffix = "map-" ++ laneName (laneSpec lane) ++ "-" ++ show index ++ "-" ++ suffix
+    refused label run
+      | qualCode run == 0 = Right ()
+      | otherwise = Left ("refused: the map's " ++ label ++ " call returned " ++ show (qualCode run) ++ " for field " ++ show (qualGap run `shiftR` 16) ++ " detail " ++ show (qualGap run .&. 0xffff))
+    stockRoundtrip qual = case (extractOverlay (qualFields qual) input, extractOverlay (qualFields qual) completion) of
+      (Right before, Right after) -> do
+        wakeRun <- runQualification options qual (ident "wake") input (QualRoundtrip before)
+        completionRun <- runQualification options qual (ident "completion") completion (QualRoundtrip after)
+        pure $ do
+          wakeMap <- wakeRun
+          completionMap <- completionRun
+          refused "wake round trip" wakeMap
+          refused "completion round trip" completionMap
+          input' <- applyOverlay (qualFields qual) (qualOut wakeMap) input
+          pure Mapping
+            { mappingInput = input'
+            , mappingObserved = completion
+            , mappingAbstract = False
+            , mappingValue = obj
+                [ ("mode", s "stock-round-trip")
+                , ("wake_identical", b (qualOut wakeMap == before))
+                , ("completion_identical", b (qualOut completionMap == after))
+                , ("wake_changed", rangesValue (overlayChanges qual before (qualOut wakeMap)))
+                , ("completion_changed", rangesValue (overlayChanges qual after (qualOut completionMap)))
+                , ("instructions", arr [n (qualInstructions wakeMap), n (qualInstructions completionMap)])
+                , ("case_sha256", arr [s (qualCaseSha wakeMap), s (qualCaseSha completionMap)])
+                ]
+            }
+      (Left problem, _) -> pure (Left problem)
+      (_, Left problem) -> pure (Left problem)
+    ownedEncode qual symbols = case (,) <$> symbolPath symbols rootOwner <*> symbolPath symbols rootReady of
+      Left problem -> pure (Left problem)
+      Right (owner, ready) -> do
+        let call = QualEncode (symbolAddress owner) (symbolAddress ready)
+            rootData = rootDataSpan symbols
+        wakeRun <- runQualification options qual (ident "wake") wake call
+        completionRun <- runQualification options qual (ident "completion") completion call
+        pure $ do
+          wakeMap <- wakeRun
+          completionMap <- completionRun
+          refused "wake encode" wakeMap
+          refused "completion encode" completionMap
+          let outside = [address | address <- qualReads wakeMap ++ qualReads completionMap, not (any (`spanAt` address) (rootData : shared))]
+          if null outside
+            then Right ()
+            else Left ("refused: the map read outside Root's data and the shared spans: " ++ unwords [hexText low ++ ".." ++ hexText high | (low, high) <- take 16 (ranges (nub (sortOn id outside)))])
+          input' <- applyOverlay (qualFields qual) (qualOut wakeMap) input
+          observed' <- applyOverlay (qualFields qual) (qualOut completionMap) completion
+          pure Mapping
+            { mappingInput = input'
+            , mappingObserved = observed'
+            , mappingAbstract = True
+            , mappingValue = obj
+                [ ("mode", s "owned-encode")
+                , ("owner", s (hexText (fromIntegral (symbolAddress owner))))
+                , ("root_data", arr [s (hexText (spanLow rootData)), s (hexText (spanHigh rootData))])
+                , ("wake_overlay_sha256", s (sha256Hex (sha256 (qualOut wakeMap))))
+                , ("completion_overlay_sha256", s (sha256Hex (sha256 (qualOut completionMap))))
+                , ("wake_machine_states", machineStates input')
+                , ("completion_machine_states", machineStates observed')
+                , ("map_read", rangesValue (nub (sortOn id (qualReads wakeMap ++ qualReads completionMap))))
+                , ("instructions", arr [n (qualInstructions wakeMap), n (qualInstructions completionMap)])
+                , ("case_sha256", arr [s (qualCaseSha wakeMap), s (qualCaseSha completionMap)])
+                ]
+            }
+    machineStates state = obj [(show machine, maybe Null (n . fromIntegral) (halfword state (0x0169d4b4 + 2 * machine))) | machine <- [0, 1, 8, 11, 12, 13, 24, 29 :: Integer]]
+    halfword state address = (\bytes -> fromIntegral (B.index bytes 0) + 256 * fromIntegral (B.index bytes 1) :: Integer) <$> stateSlice state address 2
+
+rootOwner, rootReady :: [String]
+rootOwner = ["xm1_saclac_root", "stock", "composition", "OWNER"]
+rootReady = ["xm1_saclac_root", "stock", "composition", "READY"]
+
+-- | Root's data: every data and bss symbol of the lane's own image.
+rootDataSpan :: [Symbol] -> Span
+rootDataSpan symbols = Span (minimum (0xffffffff : map fst rows)) (maximum (0 : map snd rows))
+  where
+    rows = [(fromIntegral (symbolAddress symbol), fromIntegral (symbolAddress symbol) + fromIntegral size) | symbol <- symbols, symbolType symbol `elem` ("bBdD" :: String), Just size <- [symbolSize symbol]]
+
+-- | The stock addresses whose overlay byte the round trip changed.
+overlayChanges :: Qualification -> B.ByteString -> B.ByteString -> [Integer]
+overlayChanges qual before after =
+  [ address
+  | (address, old, new) <- zip3 (concat [[fieldAddress field .. fieldAddress field + fromIntegral (fieldLength field) - 1] | field <- qualFields qual]) (B.unpack before) (B.unpack after)
+  , old /= new
+  ]
 
 -- | The shared closure and how a growth is kept: in memory, and in `--closure FILE` when given.
 data ClosureStore = ClosureStore {storeRef :: IORef Closure, storeSave :: Closure -> IO ()}
@@ -661,6 +935,7 @@ data CycleReport = CycleReport
   , reportCaseSha :: String
   , reportRounds :: Int
   , reportComparedBytes :: Int
+  , reportMap :: Value
   }
 
 declaredSpans :: Value -> [Span]
@@ -777,8 +1052,8 @@ data LaneOutput = LaneOutput
   , laneOutputError :: Maybe String
   }
 
-runLane :: Options -> Images -> [Span] -> M.Map Integer Int -> Payload.Declaration -> ClosureStore -> Lane -> IO LaneOutput
-runLane options images spans arity declaration store lane = case laneError lane of
+runLane :: Options -> Images -> Maybe Qualification -> [Span] -> M.Map Integer Int -> Payload.Declaration -> ClosureStore -> Lane -> IO LaneOutput
+runLane options images qualification spans arity declaration store lane = case laneError lane of
   Just problem -> pure (LaneOutput (laneName (laneSpec lane)) (laneSymbolsDigest lane) False [] [] [] (obj []) [] (Just problem))
   Nothing -> do
     let (cycles, refusals) = pairCycles (laneDumps lane) (laneEvents lane)
@@ -813,34 +1088,47 @@ runLane options images spans arity declaration store lane = case laneError lane 
   where
     runCycleOf index cycle = do
       loaded <- cycleInput lane cycle
-      case loaded of
+      wakeResult <- dumpState lane (cycleWake cycle)
+      completionResult <- dumpState lane (cycleCompletion cycle)
+      mapped <- case (loaded, wakeResult, completionResult) of
+        (Right input, Right wake, Right completion) -> mapCycle options qualification spans lane index wake input completion
+        (Left problem, _, _) -> pure (Left problem)
+        (_, Left problem, _) -> pure (Left problem)
+        (_, _, Left problem) -> pure (Left problem)
+      case mapped of
         Left problem -> pure (Left problem)
-        Right input -> let sp = harnessSp in do
+        Right mapping -> let sp = harnessSp; input = mappingInput mapping; observed = mappingObserved mapping in do
             let planInput = PlanInput
                   { planState = input
-                  , planSeeds = seedsOf spans
+                  , planSeeds = seedsOf spans ++ maybe [] (map fieldAddress . qualFields) qualification
                   , planMessage = messageOf cycle
                   , planClosure = initialClosure
                   , planId = "cycle-" ++ laneName (laneSpec lane) ++ "-" ++ show index
                   , planExtraStubs = optionStubs options
                   , planServices = optionServices options
-                  , planCoverage = optionCoverage options
+                  , planCoverage = optionCoverage options || isJust qualification
                   }
             outcome <- runCycle options images store planInput sp
             case outcome of
               Left problem -> pure (Left problem)
               Right (run, rounds) -> do
                 closure <- readIORef (storeRef store)
-                observedResult <- dumpState lane (cycleCompletion cycle)
                 pure $ do
-                  observed <- observedResult
                   predicted <- predictedState planInput {planClosure = closure} run
                   if not (sameLayout predicted observed)
                     then Left "the completion dump's ranges differ from the wake dump's"
                     else do
                       let changed = netChanged input predicted
-                          differences = compareState spans changed predicted observed
+                          exposed = coverageExposed' (coverageAddresses isStateRegion run)
+                          unmapped = maybe [] (\qual -> unmappedExposed spans (qualFields qual) exposed) qualification
+                          compared = compareState spans changed predicted observed
+                          differences = case (qualification, mappingAbstract mapping) of
+                            (Just qual, True) -> filter (abstractDifference spans (qualFields qual) . differenceAddress) compared
+                            _ -> compared
                           posts = projectNative declaration (postRecords arity run)
+                      if not (null unmapped)
+                        then Left ("refused: the step read stock-private state no field maps: " ++ unwords [hexText low ++ ".." ++ hexText high | (low, high) <- take 16 (ranges unmapped)])
+                        else Right ()
                       observed' <- projectObserved (laneRole lane) declaration (observedPosts (optionServices options) cycle)
                       let report = CycleReport
                             { reportIndex = index
@@ -862,7 +1150,7 @@ runLane options images spans arity declaration store lane = case laneError lane 
                             , reportStateRead = coverageRead' (coverageAddresses isStateRegion run)
                             , reportStateWritten = coverageWritten' (coverageAddresses isStateRegion run)
                             , reportImageRead = coverageRead' (coverageAddresses isImageRegion run)
-                            , reportStateExposed = coverageExposed' (coverageAddresses isStateRegion run)
+                            , reportStateExposed = exposed
                             , reportNativeInstructions = runInstructions run
                             , reportExecuted = executedBytes (runExecuted run)
                             , reportLevelPredicted = stateWord predicted levelAddress
@@ -870,6 +1158,7 @@ runLane options images spans arity declaration store lane = case laneError lane 
                             , reportCaseSha = runCaseSha run
                             , reportRounds = rounds
                             , reportComparedBytes = length changed + sum [fromIntegral (spanBytes span') | span' <- spans]
+                            , reportMap = mappingValue mapping
                             }
                       Right CycleRun
                         { cycleRunCycle = cycle
@@ -969,6 +1258,7 @@ cycleValue report = obj
   , ("level_observed", maybe Null (s . hexText . fromIntegral) (reportLevelObserved report))
   , ("case_sha256", s (reportCaseSha report))
   , ("closure_rounds", n (fromIntegral (reportRounds report)))
+  , ("map", reportMap report)
   ]
 
 coverageRead', coverageWritten', coverageExposed' :: ([Integer], [Integer], [Integer]) -> [Integer]
@@ -1159,7 +1449,8 @@ main = do
   lanes <- mapM loadLane (optionLanes options)
   declaration <- either failH pure . Payload.parseDeclaration =<< readRegular (4 * 1024 * 1024) (optionFields options)
   store <- closureStore options images
-  outputs <- forM lanes $ \lane -> runLane options images spans (serviceArity sites) declaration store lane
+  qualification <- mapM loadQualification (optionQualification options)
+  outputs <- forM lanes $ \lane -> runLane options images qualification spans (serviceArity sites) declaration store lane
   let named name = case [output | output <- outputs, laneOutputName output == name] of
         output : _ -> Just output
         [] -> Nothing
@@ -1210,6 +1501,15 @@ main = do
         , ("lanes", arr (map laneValue outputs))
         , ("chained", chained)
         , ("discovery", b (optionDiscoverData options))
+        , ("qualification", case qualification of
+            Nothing -> Null
+            Just qual -> obj
+              [ ("image_sha256", s (qualSha qual))
+              , ("symbols_sha256", s (qualSymbolsSha qual))
+              , ("fields", arr [arr [s (hexText (fieldAddress field)), n (fromIntegral (fieldLength field))] | field <- qualFields qual])
+              , ("overlay_bytes", n (fromIntegral (fieldsBytes (qualFields qual))))
+              , ("stock_private", arr [arr [s (hexText (spanLow span')), s (hexText (spanHigh span'))] | span' <- stockPrivate])
+              ])
         , ("frame_identity_slip", arr slip)
         , ("exclusions", arr (map s
             [ "The record region 0x00500000 and the stack 0x00580000 are harness regions, not retained state: the stock loop at 0xf01be4 never reads its frame, so the step runs on a fresh stack."
