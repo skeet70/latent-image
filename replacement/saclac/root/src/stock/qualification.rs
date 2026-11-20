@@ -35,11 +35,13 @@
 //!
 //! `QUALIFICATION_FIELDS` lists the exposed `saclac_private` ranges
 //! (`inputs/stock-step-exposed.json`, 1269 bytes) and the fields the step's other writes
-//! reach (the shared profile state, the statistics descriptor and entries, and the
-//! adjustment sequence) in overlay order, 4185 bytes. The eight machine-state halfwords are
-//! fields of their own. The grid is two ranges because bytes 0..8 and 0x458 are written by
-//! the step before it reads them. The area-statistics entries are a field even though the
-//! measured step does not read them, because the map compares the next state through it.
+//! reach (the shared profile state, the statistics descriptor and the adjustment sequence) in
+//! overlay order, 1437 bytes. The eight machine-state halfwords are fields of their own. The
+//! grid is two ranges because bytes 0..8 and 0x458 are written by the step before it reads
+//! them. The 2760-byte area-statistics entries at `0x1ffee718` are not a field: the step
+//! writes them before reading them in every captured cycle (0 exposed bytes), only stock
+//! saclac consumes the copy, and Root retains no counterpart; as stock-private scratch
+//! outside the fields they leave the abstract comparison.
 
 use core::ptr;
 use xm1_focus_measurement_round::acquisition::qualification::StageView;
@@ -51,8 +53,6 @@ use xm1_saclac_controllers::live_view::qualification::StateView as LiveViewContr
 use xm1_saclac_controllers::root::qualification::ModeView;
 use xm1_saclac_interface::stock::peers;
 use xm1_saclac_lens_drive::live::qualification::StateView as LensView;
-use xm1_shot_sequence::stock::{area_statistics, AREA_ENTRY_BYTES};
-use xm1_shot_sequence::summary::{AreaEntry, ENTRIES};
 use crate::runtime::qualification::View as RuntimeView;
 
 // ---------------------------------------------------------------------------
@@ -82,27 +82,39 @@ pub const FIELD_LAYOUT: usize = 24;
 pub const FIELD_ENTRIES_POINTER: usize = 25;
 /// The descriptor's word 3 at `0x009190fc`; no reader uses it and stock leaves it zero.
 pub const FIELD_DESCRIPTOR_WORD3: usize = 26;
-/// The five 552-byte area-statistics entries at `0x1ffee718`
-/// (`shot_sequence/src/stock.rs::area_statistics` parses them into `AreaStatistics`).
-pub const FIELD_AREA_ENTRIES: usize = 27;
-/// The adjustment block's word at `0x016d8708` (`blk_016d8708` offset 0): no Root read found.
-pub const FIELD_ADJUSTMENT_00: usize = 28;
-/// The classification word at `0x016d8748` (block offset 0x40): no Root read found.
-pub const FIELD_CLASSIFICATION: usize = 29;
-/// The adjustment block's word at `0x016d8750` (block offset 0x48): no Root read found.
-pub const FIELD_ADJUSTMENT_48: usize = 30;
-/// The adjustment block's word at `0x016d8760` (block offset 0x58): no Root read found.
-pub const FIELD_ADJUSTMENT_58: usize = 31;
+/// The adjustment block's word at `0x016d8708` (`blk_016d8708` offset 0). The block's getter
+/// `0xfa7f00` reads it and compares it with 1 (`id5.dis:965365-965368`); no writer of this
+/// word exists in the image, and all 57 dumps hold 0. Root keeps no counterpart.
+pub const FIELD_ADJUSTMENT_00: usize = 27;
+/// The policy word at `0x016d8748` (block offset 0x40). `s54y_select_policy` (`0xfa992c`,
+/// the planner's policy selection) reads it through `0xfa7eac` and converts it with
+/// `FUN_00fa95a8` to the frame-rate band (`id5.dis:967091-967094`; `tu_00fa9588.c:441-448`).
+/// `s54_initialize_fixed/auxiliary/continuous_exposure_info` (`0xf33a18`/`0xf33ef4`/
+/// `0xf34710`) and `FUN_00f35d14` write it from the exposure-info struct's `+0x14`
+/// (`id5.dis:846983,847458,847873,849398`), so it is configuration, not per-round state; all
+/// 57 dumps hold 12. Root's same decision is `planned_mode` (`live.rs:206-212`) from
+/// `effects.frame_interval(...)` and `frame_rate_threshold()`; Root does not retain this
+/// cached word.
+pub const FIELD_CLASSIFICATION: usize = 28;
+/// The adjustment block's word at `0x016d8750` (block offset 0x48). `FUN_00f308d4` sets it to
+/// 1 or 0 beside the profile-selection writes (`id5.dis:843828-843831`); `FUN_00f30f64`,
+/// `FUN_00f33094` (the measurement controller's row function) and others read it
+/// (`id5.dis:844141,846183,847211`). All 57 dumps hold 0. Root keeps no word for it.
+pub const FIELD_ADJUSTMENT_48: usize = 29;
+/// The adjustment block's word at `0x016d8760` (block offset 0x58). `FUN_00ef9930` sets it to
+/// 1 (`id5.dis:787434`) and `FUN_00f3a564` reads and clears it (`id5.dis:853713,853739`); all
+/// 57 pre-state dumps hold 0. Root keeps no word for it.
+pub const FIELD_ADJUSTMENT_58: usize = 30;
 /// `Planner.first_cursor` at `0x016d8778` (`tu_00fa9588.c:415,462-465,480`).
-pub const FIELD_FIRST_CURSOR: usize = 32;
+pub const FIELD_FIRST_CURSOR: usize = 31;
 /// `Planner.mode` at `0x016d877c` (`tu_00fa9588.c:418-451,459-473`; `round/stock.rs:61-79`).
-pub const FIELD_MODE: usize = 33;
+pub const FIELD_MODE: usize = 32;
 /// `Planner.phase` at `0x016d8ff0` (`tu_00fa9588.c:463,473,482-484`, `First..Fourth` = 0..3).
-pub const FIELD_PHASE: usize = 34;
+pub const FIELD_PHASE: usize = 33;
 /// `Planner.second_cursor` at `0x016d8ff1` (`tu_00fa9588.c:415,472-475,481`).
-pub const FIELD_SECOND_CURSOR: usize = 35;
+pub const FIELD_SECOND_CURSOR: usize = 34;
 /// The number of mapped fields.
-pub const FIELD_COUNT: usize = 36;
+pub const FIELD_COUNT: usize = 35;
 
 /// The eight machines the wake step reads, in the overlay's machine-field order.
 pub const MACHINES: [u32; 8] = [0, 1, 8, 11, 12, 13, 24, 29];
@@ -126,24 +138,19 @@ pub const OFF_PRESENT: usize = 1401;
 pub const OFF_LAYOUT: usize = 1405;
 pub const OFF_ENTRIES_POINTER: usize = 1406;
 pub const OFF_DESCRIPTOR_WORD3: usize = 1410;
-pub const OFF_AREA_ENTRIES: usize = 1414;
-pub const OFF_ADJUSTMENT_00: usize = 4174;
-pub const OFF_CLASSIFICATION: usize = 4178;
-pub const OFF_ADJUSTMENT_48: usize = 4182;
-pub const OFF_ADJUSTMENT_58: usize = 4186;
-pub const OFF_FIRST_CURSOR: usize = 4190;
-pub const OFF_MODE: usize = 4191;
-pub const OFF_PHASE: usize = 4195;
-pub const OFF_SECOND_CURSOR: usize = 4196;
+pub const OFF_ADJUSTMENT_00: usize = 1414;
+pub const OFF_CLASSIFICATION: usize = 1418;
+pub const OFF_ADJUSTMENT_48: usize = 1422;
+pub const OFF_ADJUSTMENT_58: usize = 1426;
+pub const OFF_FIRST_CURSOR: usize = 1430;
+pub const OFF_MODE: usize = 1431;
+pub const OFF_PHASE: usize = 1435;
+pub const OFF_SECOND_CURSOR: usize = 1436;
 /// The overlay's byte length.
-pub const OVERLAY_BYTES: usize = 4197;
+pub const OVERLAY_BYTES: usize = 1437;
 
 /// The stock's uncached alias of the area-statistics entries buffer.
 pub const AREA_ENTRIES_POINTER: u32 = 0x5ffee7_18;
-/// The cached address the descriptor's pointer names.
-pub const AREA_ENTRIES_ADDRESS: u32 = 0x1ffee7_18;
-/// The five entries' stock width (`ENTRIES * AREA_ENTRY_BYTES`).
-pub const AREA_ENTRIES_BYTES: usize = ENTRIES * AREA_ENTRY_BYTES;
 
 /// `(stock address, byte length)` per mapped field, in overlay order.
 pub const QUALIFICATION_FIELDS: [[u32; 2]; FIELD_COUNT] = [
@@ -174,7 +181,6 @@ pub const QUALIFICATION_FIELDS: [[u32; 2]; FIELD_COUNT] = [
     [0x0091_90f4, 1],
     [0x0091_90f8, 4],
     [0x0091_90fc, 4],
-    [0x1ffe_e718, 2760],
     [0x016d_8708, 4],
     [0x016d_8748, 4],
     [0x016d_8750, 4],
@@ -436,47 +442,6 @@ pub const fn entries_pointer(present: u32) -> u32 {
 /// Checks a stock pointer word against the presence word.
 pub fn decode_entries_pointer(present: u32, pointer: u32) -> Result<(), u32> {
     if pointer == entries_pointer(present) { Ok(()) } else { Err(1) }
-}
-
-/// Parses the entries block with `shot_sequence/src/stock.rs::area_statistics` (the same
-/// parser Root's `Records::area_statistics` uses) and returns the typed entries.
-pub fn decode_area_entries(bytes: &[u8; AREA_ENTRIES_BYTES]) -> [AreaEntry; ENTRIES] {
-    area_statistics(&[0; 12], bytes).entries
-}
-
-/// Re-encodes the typed entries into the 552-byte stock layout
-/// (`shot_sequence/src/stock.rs:241-274`): id at +0, the 8x8 value grid at +4, the 8x8 weight
-/// grid at +0x104, then the eleven summary fields at `0x224` (word), `0x204`/`0x206` (halves),
-/// `0x208`/`0x20a` (signed halves, low 16 bits) and `0x210`, `0x20c`, `0x218`, `0x214`,
-/// `0x220`, `0x21c` (words), in `AREA_FIELDS` order.
-pub fn encode_area_entries(entries: &[AreaEntry; ENTRIES]) -> [u8; AREA_ENTRIES_BYTES] {
-    const FIELD_OFFSETS: [(usize, bool); 11] = [
-        (0x224, true), (0x204, false), (0x206, false), (0x208, false), (0x20a, false),
-        (0x210, true), (0x20c, true), (0x218, true), (0x214, true), (0x220, true), (0x21c, true),
-    ];
-    fn word(bytes: &mut [u8], at: usize, value: u32) {
-        bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
-    }
-    fn half(bytes: &mut [u8], at: usize, value: u32) {
-        bytes[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
-    }
-    let mut bytes = [0u8; AREA_ENTRIES_BYTES];
-    for (index, entry) in entries.iter().enumerate() {
-        let base = index * AREA_ENTRY_BYTES;
-        let at = |offset: usize| base + offset;
-        word(&mut bytes, at(0), entry.id);
-        for row in 0..8 {
-            for column in 0..8 {
-                let cell = row * 8 + column;
-                word(&mut bytes, at(4 + 4 * cell), entry.values[row][column]);
-                word(&mut bytes, at(0x104 + 4 * cell), entry.weights[row][column]);
-            }
-        }
-        for (field, (offset, is_word)) in entry.fields.iter().zip(FIELD_OFFSETS) {
-            if is_word { word(&mut bytes, at(offset), *field); } else { half(&mut bytes, at(offset), *field); }
-        }
-    }
-    bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -824,10 +789,8 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
         put_u32(out, OFF_ENTRIES_POINTER, entries_pointer(present));
         put_u32(out, OFF_DESCRIPTOR_WORD3, 0);
     }
-    // Root reads the entries transiently at the half-press (`shot_preparation_records.rs:50-59`)
-    // and does not retain the typed copy, so the encoder cannot supply them (gap G11). The
-    // adjustment block's untyped words have no Root read at all (gap G12).
-    refusal.note(FIELD_AREA_ENTRIES, 5);
+    // The adjustment block's words have no retained Root counterpart (gap G12): the stock
+    // entries buffer is not a field (the step writes it before reading it).
     refusal.note(FIELD_ADJUSTMENT_00, 5);
     refusal.note(FIELD_CLASSIFICATION, 5);
     refusal.note(FIELD_ADJUSTMENT_48, 5);
@@ -943,13 +906,6 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
     }
     let word3 = unsafe { get_u32(stock, OFF_DESCRIPTOR_WORD3) };
     if word3 != 0 { refusal.note(FIELD_DESCRIPTOR_WORD3, 2); code = 2; } else { unsafe { put_u32(out, OFF_DESCRIPTOR_WORD3, 0) } }
-    // The entries: parse them into the typed `AreaStatistics` and re-encode; the layout is a
-    // bijection, so the bytes must come back identical.
-    let mut entries = [0u8; AREA_ENTRIES_BYTES];
-    unsafe { ptr::copy_nonoverlapping(stock.add(OFF_AREA_ENTRIES), entries.as_mut_ptr(), AREA_ENTRIES_BYTES) };
-    let encoded_entries = encode_area_entries(&decode_area_entries(&entries));
-    unsafe { ptr::copy_nonoverlapping(encoded_entries.as_ptr(), out.add(OFF_AREA_ENTRIES), AREA_ENTRIES_BYTES) };
-    if encoded_entries != entries { refusal.note(FIELD_AREA_ENTRIES, 3); code = 3; }
     // The adjustment block's words have no Root read (gap G12).
     for field in [FIELD_ADJUSTMENT_00, FIELD_CLASSIFICATION, FIELD_ADJUSTMENT_48, FIELD_ADJUSTMENT_58] {
         refusal.note(field, 2);
@@ -1125,9 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn the_area_statistics_descriptor_and_entries_round_trip() {
-        // The measured wakes hold present 0 or 1, layout 0..4, the pointer 0 or 0x5ffee718
-        // and word 3 zero.
+    fn the_area_statistics_descriptor_round_trips_its_presence() {
         for present in [0u32, 1] {
             let pointer = entries_pointer(present);
             assert_eq!(pointer, if present == 0 { 0 } else { 0x5ffee7_18 });
@@ -1136,39 +1090,6 @@ mod tests {
         assert_eq!(entries_pointer(2), 0x5ffee7_18);
         assert_eq!(decode_entries_pointer(0, 0x5ffee7_18), Err(1));
         assert_eq!(decode_entries_pointer(1, 0), Err(1));
-        // The real entry of the captured wakes (`wake-0029`: all five entries identical): id
-        // 1, fields[3] = -352, fields[4] = 900, fields[5] = 23, fields[6] = 90,
-        // fields[7] = 23, fields[8] = 90, fields[9] = 1, fields[10] = 1.
-        let mut bytes = [0u8; AREA_ENTRIES_BYTES];
-        for entry in 0..ENTRIES {
-            let base = entry * AREA_ENTRY_BYTES;
-            bytes[base..base + 4].copy_from_slice(&1u32.to_le_bytes());
-            bytes[base + 0x208..base + 0x20a].copy_from_slice(&(-352i16).to_le_bytes());
-            bytes[base + 0x20a..base + 0x20c].copy_from_slice(&900i16.to_le_bytes());
-            bytes[base + 0x20c..base + 0x210].copy_from_slice(&90u32.to_le_bytes());
-            bytes[base + 0x210..base + 0x214].copy_from_slice(&23u32.to_le_bytes());
-            bytes[base + 0x214..base + 0x218].copy_from_slice(&90u32.to_le_bytes());
-            bytes[base + 0x218..base + 0x21c].copy_from_slice(&23u32.to_le_bytes());
-            bytes[base + 0x21c..base + 0x220].copy_from_slice(&1u32.to_le_bytes());
-            bytes[base + 0x220..base + 0x224].copy_from_slice(&1u32.to_le_bytes());
-        }
-        let typed = decode_area_entries(&bytes);
-        assert_eq!(typed[0].id, 1);
-        assert_eq!(typed[0].fields, [0, 0, 0, (-352i32) as u32, 900, 23, 90, 23, 90, 1, 1]);
-        assert_eq!(typed[4].id, 1);
-        assert_eq!(encode_area_entries(&typed), bytes);
-
-        // Full-scale words and both half domains round-trip.
-        let mut entry = AreaEntry::default();
-        entry.id = u32::MAX;
-        entry.values[0][0] = u32::MAX;
-        entry.values[7][7] = 0x8000_0000;
-        entry.weights[7][7] = u32::MAX;
-        entry.fields = [u32::MAX, 0xffff, 0xffff, (-1i32) as u32, (-1i32) as u32, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX];
-        let entries = [entry; ENTRIES];
-        let bytes = encode_area_entries(&entries);
-        assert_eq!(decode_area_entries(&bytes), entries);
-        assert_eq!(encode_area_entries(&decode_area_entries(&bytes)), bytes);
     }
 
     #[test]
@@ -1188,16 +1109,14 @@ mod tests {
         assert_eq!(QUALIFICATION_FIELDS[FIELD_LAYOUT], [0x0091_90f4, 1]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_ENTRIES_POINTER], [0x0091_90f8, 4]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_DESCRIPTOR_WORD3], [0x0091_90fc, 4]);
-        assert_eq!(QUALIFICATION_FIELDS[FIELD_AREA_ENTRIES], [0x1ffe_e718, 2760]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_CLASSIFICATION], [0x016d_8748, 4]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_FIRST_CURSOR], [0x016d_8778, 1]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_MODE], [0x016d_877c, 4]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_PHASE], [0x016d_8ff0, 1]);
         assert_eq!(QUALIFICATION_FIELDS[FIELD_SECOND_CURSOR], [0x016d_8ff1, 1]);
         assert_eq!(OFF_FOCUS_RESULT, 1269);
-        assert_eq!(OFF_AREA_ENTRIES, 1414);
-        assert_eq!(OFF_CLASSIFICATION, 4178);
-        assert_eq!(OFF_SECOND_CURSOR, 4196);
+        assert_eq!(OFF_CLASSIFICATION, 1418);
+        assert_eq!(OFF_SECOND_CURSOR, 1436);
         assert_eq!(record_hole_overlay_offset(0), 0);
         assert_eq!(record_hole_overlay_offset(5), 9);
     }
