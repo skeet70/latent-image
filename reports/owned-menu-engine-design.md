@@ -140,6 +140,8 @@ The engine owns kind 1 with seek id `0x17` (`0xbfa234` kind 1, all.c:331307-3313
 
 The 68-pair matrix qualifies at source `242b593f`: all 68 pairs pass the menu, render and settings comparisons, and all 136 roles complete with 102 executed and 34 reused. The reused roles come from an attempt at `ef0cfc3f` that stopped when the source tree became dirty; execution identity does not include the source commit. In the owned role, `oracle-open-seek` and `oracle-open-seek-moved` make no fallback-site entry; stock makes 13 and 17. picker-15 and picker-250 pass the engine criterion against archive `0eb8673c`: engine reads and `0x1d` posts are equal, and render and settings are equal. The guest control links the `SeekStepsFirst` archive `cfc72cbb` in the owned role and reuses the matrix's stock roles. `oracle-open-seek-moved` fails it on the last-move pair at both the oracle-key and close-menu phases; `oracle-open-seek` passes it, so the guest comparison on that route does not detect the defect. Evidence: E-MENU-ENGINE-CUTOVER-150.
 
+The time-services qualification over owned base `b0de4bc4` on the same pins qualifies at source `3eab5930`: 68 of 68 pairs pass and all 136 roles complete (E-MENU-ENGINE-CUTOVER-150).
+
 ### Moves left with stock
 
 Each move below still falls back to the stock kind switch. None is reached by a key route, so no oracle receipt exists for it; the reasons are byte readings of all.c and the crawl-5 graph (`private-data/scratch/ControllerStrategy/inc4/cells-all.json`, crawl-5 `crawl-graph.json`), detailed in [increment 4](owned-menu-engine-increment-4.md#key-reach-of-the-fallback-classes).
