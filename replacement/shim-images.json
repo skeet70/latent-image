@@ -660,7 +660,7 @@
         "scanout_leave_critical",
         "scanout_yield"
       ],
-      "expected_sha256": "ca2695a2b9542835c55702daf4aa65516d049529ee79f5384c6ebf9fddd44456"
+      "expected_sha256": "fbcf9d95892353cd639654f5a972e1fa07511c519514b3167d2de5380874d038"
     },
     {
       "id": "//replacement/display_scanout:display-scanout-panel",

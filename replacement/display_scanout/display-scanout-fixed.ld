@@ -13,7 +13,8 @@ MEMORY {
   INCLUDE fixed-memory.ld
 }
 SECTIONS {
-  .text : { __fixed_body_start = .; *(.text*) KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) } > OWNED_FIXED
+  .text : { __fixed_body_start = .; *(.text*) } > OWNED_FIXED
+  .rodata : { KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) } > OWNED_FIXED
   .data : { *(.data*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED
   .bss (NOLOAD) : { __fixed_bss_start = .; *(.bss*) *(COMMON) . = ALIGN(4); __fixed_bss_end = .; } > OWNED_FIXED
   /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.note*) *(.comment*) }

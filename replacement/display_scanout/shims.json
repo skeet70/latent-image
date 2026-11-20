@@ -341,6 +341,18 @@
           ],
           "contract": "replacement/display_scanout/Replacement/DisplayScanout/Artifact.hs",
           "requirement": "`artifact publish` writes one `b` per stock entry to these exports; the scanout pair admits fetches of the retired bodies only at those twelve words."
+        },
+        {
+          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "kind": "publication",
+          "symbols": [
+            "__fixed_body_end",
+            "__fixed_body_start",
+            "__fixed_bss_end",
+            "__fixed_bss_start"
+          ],
+          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "requirement": "The fixed-record stager and `check-fixed-image` read these layout labels from this link; BSS end equals body end."
         }
       ],
       "predicates": {
