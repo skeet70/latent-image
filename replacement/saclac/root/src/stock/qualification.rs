@@ -868,14 +868,13 @@ pub fn record_hole_overlay_offset(index: usize) -> usize {
 pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<u32>) {
     unsafe { ptr::copy_nonoverlapping(stock, out, OVERLAY_BYTES) };
     let mut refusal = Refusal::new();
-    let mut code = 0;
     // Machine states: decode then encode, and the result must be the same index.
     for (index, machine) in MACHINES.into_iter().enumerate() {
         let state = unsafe { get_u16(stock, OFF_MACHINE0 + 2 * index) };
         match reencode_machine(machine, state) {
             Ok(same) if same == state => unsafe { put_u16(out, OFF_MACHINE0 + 2 * index, same) },
-            Ok(_) => { refusal.note(FIELD_MACHINE0 + index, 3); code = 3; }
-            Err(detail) => { refusal.note(FIELD_MACHINE0 + index, detail); code = 2; }
+            Ok(_) => { refusal.note(FIELD_MACHINE0 + index, 3); }
+            Err(detail) => { refusal.note(FIELD_MACHINE0 + index, detail); }
         }
     }
     // The mask decodes to the selected lanes; bits above bit6 have no Root counterpart.
@@ -885,12 +884,11 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
             let encoded = encode_mask(lanes);
             if encoded != mask {
                 refusal.note(FIELD_MASK, 3);
-                code = 3;
             } else {
                 unsafe { ptr::write(out.add(OFF_MASK), encoded) };
             }
         }
-        Err(detail) => { refusal.note(FIELD_MASK, detail); code = 2; }
+        Err(detail) => { refusal.note(FIELD_MASK, detail); }
     }
     // The pair done bytes are a zero test in the wake step; a nonzero byte decodes to the
     // busy/done slot and re-encodes to the canonical nonzero value (non-identical by design).
@@ -905,17 +903,17 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
         let at = OFF_RECORD_HOLE0 + record_hole_overlay_offset(index);
         let mut byte = 0;
         while byte < length {
-            if unsafe { ptr::read(stock.add(at + byte)) } != 0 { refusal.note(FIELD_RECORD_HOLE0 + index, 2); code = 2; }
+            if unsafe { ptr::read(stock.add(at + byte)) } != 0 { refusal.note(FIELD_RECORD_HOLE0 + index, 2); }
             byte += 1;
         }
         unsafe { ptr::write_bytes(out.add(at), 0, length) };
     }
     // Latch: only 0 and 1 are typed.
     let latch = unsafe { get_u32(stock, OFF_LATCH) };
-    if latch > 1 { refusal.note(FIELD_LATCH, 2); code = 2; } else { unsafe { put_u32(out, OFF_LATCH, latch) } }
+    if latch > 1 { refusal.note(FIELD_LATCH, 2); } else { unsafe { put_u32(out, OFF_LATCH, latch) } }
     // Queue word: the calc route's id only.
     let queue = unsafe { get_u32(stock, OFF_QUEUE) };
-    if queue != u32::from(peers::CALC.queue.number()) { refusal.note(FIELD_QUEUE, 2); code = 2; } else { unsafe { put_u32(out, OFF_QUEUE, queue) } }
+    if queue != u32::from(peers::CALC.queue.number()) { refusal.note(FIELD_QUEUE, 2); } else { unsafe { put_u32(out, OFF_QUEUE, queue) } }
     // The shared profile state is a typed byte block (`FOCUS_RESULT`, 132 bytes); the copy
     // already carries it.
     // Descriptor: presence and layout are typed words; the pointer must name the entries
@@ -930,20 +928,20 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
     let pointer = unsafe { get_u32(stock, OFF_ENTRIES_POINTER) };
     match decode_entries_pointer(present, pointer) {
         Ok(()) => unsafe { put_u32(out, OFF_ENTRIES_POINTER, pointer) },
-        Err(detail) => { refusal.note(FIELD_ENTRIES_POINTER, detail); code = 2; }
+        Err(detail) => { refusal.note(FIELD_ENTRIES_POINTER, detail); }
     }
     let word3 = unsafe { get_u32(stock, OFF_DESCRIPTOR_WORD3) };
-    if word3 != 0 { refusal.note(FIELD_DESCRIPTOR_WORD3, 2); code = 2; } else { unsafe { put_u32(out, OFF_DESCRIPTOR_WORD3, 0) } }
+    if word3 != 0 { refusal.note(FIELD_DESCRIPTOR_WORD3, 2); } else { unsafe { put_u32(out, OFF_DESCRIPTOR_WORD3, 0) } }
     // The adjustment block: +0x00, +0x40 and +0x58 are constants (0, 12, 0); +0x48 has no
     // Root read (gap G12).
     let constant = unsafe { get_u32(stock, OFF_ADJUSTMENT_00) };
-    if constant != 0 { refusal.note(FIELD_ADJUSTMENT_00, 2); code = 2; } else { unsafe { put_u32(out, OFF_ADJUSTMENT_00, 0) } }
+    if constant != 0 { refusal.note(FIELD_ADJUSTMENT_00, 2); } else { unsafe { put_u32(out, OFF_ADJUSTMENT_00, 0) } }
     let selector = unsafe { get_u32(stock, OFF_CLASSIFICATION) };
-    if selector != FRAME_PERIOD_SELECTOR { refusal.note(FIELD_CLASSIFICATION, 2); code = 2; } else { unsafe { put_u32(out, OFF_CLASSIFICATION, FRAME_PERIOD_SELECTOR) } }
+    if selector != FRAME_PERIOD_SELECTOR { refusal.note(FIELD_CLASSIFICATION, 2); } else { unsafe { put_u32(out, OFF_CLASSIFICATION, FRAME_PERIOD_SELECTOR) } }
     let handoff = unsafe { get_u32(stock, OFF_ADJUSTMENT_58) };
-    if handoff != 0 { refusal.note(FIELD_ADJUSTMENT_58, 2); code = 2; } else { unsafe { put_u32(out, OFF_ADJUSTMENT_58, 0) } }
+    if handoff != 0 { refusal.note(FIELD_ADJUSTMENT_58, 2); } else { unsafe { put_u32(out, OFF_ADJUSTMENT_58, 0) } }
     refusal.note(FIELD_ADJUSTMENT_48, 2);
-    code = 2;
+
     // The planner's cursors are byte domains; the mode and phase have typed counterparts.
     let first = unsafe { ptr::read(stock.add(OFF_FIRST_CURSOR)) };
     unsafe { ptr::write(out.add(OFF_FIRST_CURSOR), first) };
@@ -952,13 +950,18 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
     let mode = unsafe { get_u32(stock, OFF_MODE) };
     match decode_mode(mode) {
         Ok(view) => unsafe { put_u32(out, OFF_MODE, encode_mode(view)) },
-        Err(detail) => { refusal.note(FIELD_MODE, detail); code = 2; }
+        Err(detail) => { refusal.note(FIELD_MODE, detail); }
     }
     let phase = unsafe { ptr::read(stock.add(OFF_PHASE)) };
     match decode_planner_phase(phase) {
         Ok(view) => unsafe { ptr::write(out.add(OFF_PHASE), encode_planner_phase(view)) },
-        Err(detail) => { refusal.note(FIELD_PHASE, detail); code = 2; }
+        Err(detail) => { refusal.note(FIELD_PHASE, detail); }
     }
+    let code = match refusal.first() {
+        None => 0,
+        Some((_, 3)) => 3,
+        Some(_) => 2,
+    };
     (code, refusal.first().map(|(field, detail)| gap_word(field, detail)))
 }
 
