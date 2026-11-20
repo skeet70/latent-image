@@ -17,12 +17,12 @@ import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (get, s, set, str)
 import FujiAF.StorageBudget (checkStorageBudget)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
-import System.Directory (createDirectoryIfMissing, doesFileExist, removeDirectoryRecursive)
+import Replacement.RtosScheduler.S3bService (Service (..), allServices, parseServiceSelection, selects)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs, getExecutablePath)
 import System.FilePath ((</>))
 import FujiAF.JSON (encodeCanonical)
 
-data Service = Activate | InterruptActivate | CancelActivation | Wake | InterruptWake | CancelWake deriving (Eq, Show, Enum, Bounded)
 data Row = Row Word32 Word32 Word32 Word8 Word8 Bool Bool Bool Word32 deriving Show
 
 data ServiceReport = ServiceReport
@@ -210,6 +210,7 @@ main = do
       placementsB = flagValue "--placements-b" arguments
       carriersPath = flagValue "--carriers" arguments
       reuseRoot = flagValue "--reuse-root" arguments
+  selection <- maybe (pure allServices) (either fail pure . parseServiceSelection) (flagValue "--services" arguments)
   case positional of
     [runner,loaderA,loaderB,binA,binB,work] -> do
       createDirectoryIfMissing True work
@@ -268,7 +269,7 @@ main = do
             ownedFunctionSpans s = case symbols of
               Nothing -> stockFunctionSpans s
               Just _ -> mergeSpans (symbolSpans ++ retainedHelpers ++ placementFunctions) ++ bankSpans
-        forM [minBound..maxBound] $ \s -> do
+        forM (filter (selects selection b) [minBound..maxBound]) $ \s -> do
           let cases=rows s
               scratchInputs specification = specification {caseInitial = [(register, if register `elem` [R1, R2, R3, R12] then value `xor` 0xffffffff else value) | (register, value) <- caseInitial specification]}
               roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s,Nothing,id),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s,ownedBank,id),("equivalent",candidate,ownedCodeSpans s,ownedFunctionSpans s,ownedBank,scratchInputs),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s,ownedBank,id)]
@@ -325,7 +326,6 @@ main = do
               observationRows = [object ["name".=name, "reported".=held] | (name,held)<-controlRows]
               holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases && negativeControl
           unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (stockSpec i (cases!!i)) (at "stock" i) (at "owned" i))]))
-          if holds then removeDirectoryRecursive dir else pure ()
           let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"case_rows".=caseRows,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"controls".=mutantRows,"observation_controls".=observationRows,"negative_controls".=[object ["control".=name,"holds".=held] | (name,held)<-controlRows],"stock_instructions".=stockInstructions,"passed".=holds]
           B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
           failures `seq` pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
@@ -335,7 +335,7 @@ main = do
           inputs=[srInputs r | r<-flat]
           summary=object ["verdict".=(if passed then "passed" else "failed" :: String),"families".=families,"inputs".=object ["suite_sha256".=executableDigest,"domains".=inputs],"entries".=[srReport r | r<-flat]]
       B.writeFile (work </> "summary.json") (encodeCanonical summary)
-      forM_ [False,True] $ \b -> do
+      forM_ [b | b <- [False,True], any ((== b) . srDomainB) flat] $ \b -> do
         let selected = [r | r <- flat, srDomainB r == b]
             loader = case selected of (r:_) -> srLoaderDigest r; [] -> ""
             candidate = case selected of (r:_) -> srCandidateDigest r; [] -> ""
@@ -350,7 +350,7 @@ main = do
               ]
         B.writeFile (work </> ("judge-report-" ++ (if b then "b" else "a") ++ ".json")) (encodeCanonical judge)
       unless passed (fail "S3b oracle failed")
-    _ -> fail "usage: runner loader-a loader-b owned-a owned-b work [--symbols-a SYMBOLS_A --symbols-b SYMBOLS_B --placements-a PLACEMENTS_A --placements-b PLACEMENTS_B --carriers CARRIERS --bank-body BANK_BODY --bank-symbols BANK_SYMBOLS] [--reuse-root DIRECTORY]"
+    _ -> fail "usage: runner loader-a loader-b owned-a owned-b work [--symbols-a SYMBOLS_A --symbols-b SYMBOLS_B --placements-a PLACEMENTS_A --placements-b PLACEMENTS_B --carriers CARRIERS --bank-body BANK_BODY --bank-symbols BANK_SYMBOLS] [--reuse-root DIRECTORY] [--services A:SERVICE,B:SERVICE,...]"
 
 helperFunctions :: Bool -> [(Word32, Word32)]
 helperFunctions domainB = if domainB then [(0xd3f2c,44),(0xd3c60,124),(0xd4528,204),(0xd3d8c,72),(0xd3fd4,48),(0xd33e4,96),(0xd398c,60),(0xd39c8,40)] else [(0x43f70,44),(0x43ca4,124),(0x44568,204),(0x43dd0,72),(0x44018,44),(0x433e4,96),(0x439d8,60),(0x43a14,40)]
@@ -389,6 +389,6 @@ flagValue flag arguments = case dropWhile (/= flag) arguments of
   _ : value : _ -> Just value
 
 stripSymbolFlags :: [String] -> [String]
-stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--carriers", "--bank-body", "--bank-symbols", "--reuse-root"] = stripSymbolFlags rest
+stripSymbolFlags (flag : _ : rest) | flag `elem` ["--symbols-a", "--symbols-b", "--placements-a", "--placements-b", "--carriers", "--bank-body", "--bank-symbols", "--reuse-root", "--services"] = stripSymbolFlags rest
 stripSymbolFlags (value : rest) = value : stripSymbolFlags rest
 stripSymbolFlags [] = []
