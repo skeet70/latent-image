@@ -640,7 +640,7 @@
         "scanout_leave_critical",
         "scanout_yield"
       ],
-      "expected_sha256": "5abfbddfb8a22a27294f5acb9970cdb3a7ddf692fe775878c00e8f7f1ffb78d9"
+      "expected_sha256": "dc1b5385f1b32e1efde85c276bc8253caee6fa62e76b10a6817676dacbd3b0a3"
     },
     {
       "id": "//replacement/display_scanout:display-scanout-panel",
@@ -664,39 +664,7 @@
         "xm1_power_restore_irq",
         "xm1_power_save_irq"
       ],
-      "expected_sha256": "fbdda5d596c775c09e86a3e284602790c4eae7d9c1708d44c4523875eaf2a207"
-    },
-    {
-      "id": "//replacement/file_service:file-service-image",
-      "elf": "replacement/file_service/file-service-image.elf",
-      "units": [
-        "file_service"
-      ],
-      "classification": "production",
-      "contracts": [
-        "replacement/file_service/file-service.ld",
-        "replacement/file_service/imports.ld"
-      ],
-      "required_exports": [],
-      "allowed_imports": [
-        "file_service_cache_claim",
-        "file_service_copy_bytes",
-        "file_service_copy_string",
-        "file_service_current_task",
-        "file_service_device_for_letter",
-        "file_service_local_open",
-        "file_service_local_position",
-        "file_service_local_record",
-        "file_service_media_report",
-        "file_service_receive_request",
-        "file_service_semaphore_signal",
-        "file_service_semaphore_wait",
-        "file_service_send",
-        "file_service_sleep",
-        "file_service_ticks",
-        "file_service_wake"
-      ],
-      "expected_sha256": "e0916f3631d2fafaf04fe59dbf24fcfea9decbb15f7ec7072aa5e116425e90b5"
+      "expected_sha256": "c1eb5279f4368705c7ece35fd28709ea6e292eacea3bcab55aec3ec99d35ea45"
     },
     {
       "id": "//replacement/first_stage:first-stage-fixed-image",
@@ -748,6 +716,45 @@
         "xm1_vector_table_start"
       ],
       "expected_sha256": "0f1ea73c310bbb8844f713eaa7e355b28efbd0310702b6a8014633e10594de83"
+    },
+    {
+      "id": "//replacement/fixed_image:fixed-bank-image",
+      "elf": "replacement/fixed_image/fixed-bank-image.elf",
+      "units": [
+        "display_scanout",
+        "file_service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/display_scanout/fixed-imports.ld",
+        "replacement/file_service/imports.ld",
+        "replacement/fixed_image/fixed-bank.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "file_service_cache_claim",
+        "file_service_copy_bytes",
+        "file_service_copy_string",
+        "file_service_current_task",
+        "file_service_device_for_letter",
+        "file_service_local_open",
+        "file_service_local_position",
+        "file_service_local_record",
+        "file_service_media_report",
+        "file_service_receive_request",
+        "file_service_semaphore_signal",
+        "file_service_semaphore_wait",
+        "file_service_send",
+        "file_service_sleep",
+        "file_service_ticks",
+        "file_service_wake",
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield"
+      ],
+      "expected_sha256": "aeaa476c7746d4b21c4999644caa092ed8ad5af170701c23af1245fd2809c795"
     },
     {
       "id": "//replacement/fixed_image:probe-image",

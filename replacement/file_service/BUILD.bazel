@@ -4,6 +4,8 @@ load(":controls.bzl", "FILE_SERVICE_CONTROLS", "file_service_suffixes")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["imports.ld"])
+
 _SOURCES = [
     "src/completion.rs",
     "src/handles.rs",
@@ -24,18 +26,6 @@ _SOURCES = [
     ("-control-" + control.replace("_", "-"), ["--cfg", "file_service_control_" + control])
     for control in FILE_SERVICE_CONTROLS
 ]]
-
-# One final link through the bank root: in-place tag code and entry veneers over the
-# retired extents, request bodies in OWNED_FIXED.
-[xm1_rust_elf(
-    name = "file-service-image" + suffix,
-    rust_staticlib = "//replacement/bank:bank-file-service" + suffix,
-    entry = "xm1_file_service_entry_route",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
-    link_includes = ["imports.ld", "//replacement/fixed_image:memory-region"],
-    link_script = "file-service.ld",
-    link_map = True,
-) for suffix in file_service_suffixes()]
 
 genrule(
     name = "host-tests",
@@ -125,7 +115,7 @@ filegroup(
         ":file-service-stage",
         ":file-service-suite",
         ":host-tests",
-    ] + [":file-service-image" + suffix for suffix in file_service_suffixes()],
+    ] + ["//replacement/fixed_image:fixed-bank-image" + suffix for suffix in file_service_suffixes()],
 )
 
 filegroup(

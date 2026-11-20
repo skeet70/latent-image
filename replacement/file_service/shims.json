@@ -13,7 +13,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/file_service:file-service-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "export",
           "symbols": [
             "xm1_file_service_entry_close",
@@ -46,7 +46,7 @@
             "xm1_file_service_entry_write_async",
             "xm1_file_service_entry_write_wait"
           ],
-          "contract": "replacement/file_service/file-service.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The linker places each four-byte A32 branch at its stock entry address and fills the rest of every retired extent with 0xe7f000f0.",
           "retained_targets": []
         }
@@ -67,7 +67,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/file_service:file-service-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "export",
           "symbols": [
             "xm1_file_service_close",
@@ -100,7 +100,7 @@
             "xm1_file_service_write_async",
             "xm1_file_service_write_wait"
           ],
-          "contract": "replacement/file_service/file-service.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The linker places every body in OWNED_FIXED with no writable statics.",
           "retained_targets": []
         }
@@ -121,7 +121,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/file_service:file-service-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "retained-import",
           "symbols": [
             "file_service_cache_claim",
@@ -162,7 +162,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/file_service:file-service-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "layout",
           "symbols": [
             "xm1_file_service_map_bind",
@@ -177,7 +177,7 @@
             "xm1_file_service_tag_allocate",
             "xm1_file_service_tag_release"
           ],
-          "contract": "replacement/file_service/file-service.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The bodies read and write the stock handle, tag, result-slot, media-context and mediamsg words in place."
         }
       ],
@@ -197,14 +197,14 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/file_service:file-service-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "retained-entry",
           "symbols": [
             "xm1_file_service_media_task",
             "xm1_file_service_open_intercept",
             "xm1_file_service_route"
           ],
-          "contract": "replacement/file_service/file-service.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The media task, mediamsg router and open interceptor call guest code words that are not definite linked references.",
           "retained_targets": []
         }
@@ -225,7 +225,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/file_service:file-service-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "publication",
           "symbols": [
             "__fixed_body_end",
@@ -233,7 +233,7 @@
             "__fixed_bss_end",
             "__fixed_bss_start"
           ],
-          "contract": "replacement/file_service/file-service.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
         }
       ],

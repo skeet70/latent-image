@@ -3250,3 +3250,7 @@ The diagnostic watch also retains both primary-group pools `[0x16fed28,0x16fee48
 
 Trace sites also retain the group-status consumer's caller, raw region-read entries/returns at `0x6aad94` and NAND read entries at `0x6fb904`. These observations distinguish backend request sequences from the record API's returned values and persistent effects.
 
+## Display scanout pair
+
+`//emulation:scanout-pair` (`emulation/fujimod-xm1/src/scanout_pair.rs`) observes the twelve published scanout entries of the fixed-bank image on the natural no-card route. `stock CONTRACT DAT ANALYSIS RUN ROM OUTPUT` and `owned CONTRACT DAT ANALYSIS RUN ROM STOCK_DIR OUTPUT` each run one role in an emulator slot; the owned role replays the stock receipt's route ticks. `check STOCK_DIR OWNED_DIR REPORT_JSON` compares the roles per execution context on read entry words, written words and route checkpoints, and checks each role's laws. `qualify STOCK_DIR OWNED_DIR REGISTER_ORDER_DIR SKIPPED_DRAIN_DIR REPORT_JSON` also requires both defect controls refused on their laws. The [scanout report](../reports/display-render-contracts/scanout.md#pair-method) defines the projection, rule and laws; `//emulation:fujimod-xm1-tests` covers them on synthetic calls.
+

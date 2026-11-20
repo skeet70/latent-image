@@ -133,7 +133,7 @@ impl CompletionSlot {
 }
 pub trait CompletionCallbacks {
     fn prepared(&mut self, _engine: Engine, _state: &EngineState) {}
-    fn call(&mut self, callback: CallbackId, slot: CompletionSlot, engine: Engine, state: &mut EngineState);
+    fn call(&mut self, callback: CallbackId, slot: CompletionSlot, engine: Engine, runtime: &mut RuntimeState);
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CaptureConfiguration {
@@ -201,7 +201,8 @@ fn float_equal(a: FloatBits, b: FloatBits) -> bool {
 pub fn collect_defaults(state: &EngineState, alternate_masks: bool, packet: &mut DefaultsCollection) -> i32 {
     let mask = if alternate_masks { state.input.rectangle_mask.0 } else { state.saved.rectangle_mask.0 };
     let (mut levels, mut colors, mut opacities) = (0, 0, 0);
-    for (records, shift) in [(&state.input.ten_records[..], 0), (&state.input.two_records[..], 16)] {
+    for list in 0..2 {
+        let (records, shift) = if list == 0 { (&state.input.ten_records[..], 0) } else { (&state.input.two_records[..], 16) };
         for (item, record) in records.iter().enumerate() {
             if mask & (1 << (shift + item)) == 0 { continue; }
             if !packet.levels[..levels].iter().any(|&value| float_equal(value, record.level)) {
@@ -260,18 +261,20 @@ pub fn pack_rectangle(state: &mut EngineState, group: RectangleGroup, item: usiz
 fn prepare(state: &mut EngineState, options: CommitOptions) {
     let mut defaults = DefaultsCollection::default();
     let _ = collect_defaults(state, options.alternate_masks, &mut defaults);
+    let unsigned = |value| RegisterWord(float_to_unsigned(value));
+    let [first, second, third, fourth] = defaults.levels;
     pack_defaults(state, &PackedDefaults {
-        levels: defaults.levels.map(|value| RegisterWord(float_to_unsigned(value))),
+        levels: [unsigned(first), unsigned(second), unsigned(third), unsigned(fourth)],
         colors: defaults.colors,
         opacities: defaults.opacities,
     });
     let scale = if state.runtime.mode == CaptureMode(2) && state.runtime.auxiliary != ConfigurationAuxiliary(0) { 1000 } else { 10 };
-    for group in [RectangleGroup::Ten, RectangleGroup::Two] {
-        let count = if group == RectangleGroup::Ten { 10 } else { 2 };
+    for list in 0..2 {
+        let (group, count) = if list == 0 { (RectangleGroup::Ten, 10) } else { (RectangleGroup::Two, 2) };
         for item in 0..count {
             let record = if group == RectangleGroup::Ten { state.input.ten_records[item] } else { state.input.two_records[item] };
             let packet = RectanglePacket {
-                coordinates: record.coordinates.map(|value| float_to_signed(value) as u16),
+                coordinates: { let [a, b, c, d] = record.coordinates; [float_to_signed(a) as u16, float_to_signed(b) as u16, float_to_signed(c) as u16, float_to_signed(d) as u16] },
                 extent: RectangleExtent {
                     width: ((record.extent.width as i32 * scale) / 10) as i16,
                     height: ((record.extent.height as i32 * scale) / 10) as i16,
@@ -286,10 +289,12 @@ fn prepare(state: &mut EngineState, options: CommitOptions) {
     }
     state.saved.geometry_control = state.input.geometry_control;
     let limit = (half(state.saved.extent, true) & 0xfff) + 1;
-    for (inputs, saved, reverses) in [
-        (&state.input.ten_rectangles[..], &mut state.saved.ten_rectangles[..], &state.input.ten_reverse[..]),
-        (&state.input.two_rectangles[..], &mut state.saved.two_rectangles[..], &state.input.two_reverse[..]),
-    ] {
+    for list in 0..2 {
+        let (inputs, saved, reverses) = if list == 0 {
+            (&state.input.ten_rectangles[..], &mut state.saved.ten_rectangles[..], &state.input.ten_reverse[..])
+        } else {
+            (&state.input.two_rectangles[..], &mut state.saved.two_rectangles[..], &state.input.two_reverse[..])
+        };
         for ((input, saved), &reverse) in inputs.iter().zip(saved).zip(reverses) {
             replace_half(&mut saved.horizontal, false, 0xfff, half(input.horizontal, false));
             replace_half(&mut saved.horizontal, true, 0xfff, half(input.horizontal, true));
@@ -312,10 +317,12 @@ fn prepare(state: &mut EngineState, options: CommitOptions) {
         let value = half(state.saved.origin, false).wrapping_add(state.input.horizontal_offset.0 as u16);
         replace_half(&mut state.saved.origin, false, 0x3fff, value);
     }
-    for (group, planes, origins) in [
-        (0, &mut state.saved.primary_planes, &state.input.primary_origins),
-        (1, &mut state.saved.secondary_planes, &state.input.secondary_origins),
-    ] {
+    for group in 0..2 {
+        let (planes, origins) = if group == 0 {
+            (&mut state.saved.primary_planes, &state.input.primary_origins)
+        } else {
+            (&mut state.saved.secondary_planes, &state.input.secondary_origins)
+        };
         let shift = if group == 0 { (state.saved.format.0 >> 4) & 3 } else { (state.saved.format.0 >> 8) & 3 };
         for (plane, &origin) in planes.iter_mut().zip(origins) {
             plane.origin = origin;
@@ -343,7 +350,8 @@ fn visit_registers(engine: Engine, capture: bool, saved: &mut SavedRegisters, mu
         auxiliary_step=>0xdc, output_control=>0x34, plane_control=>0x40, auxiliary_control=>0xe0,
         primary_control=>0x84, secondary_control=>0x90, overlay_control=>0xe4);
     for item in 0..4 {
-        for (plane, base) in [(&mut saved.primary_planes[item], 0x44), (&mut saved.secondary_planes[item], 0x94)] {
+        for list in 0..2 {
+            let (plane, base) = if list == 0 { (&mut saved.primary_planes[item], 0x44) } else { (&mut saved.secondary_planes[item], 0x94) };
             let offset = base + item as u16 * 4;
             visit(&mut plane.origin, offset);
             visit(&mut plane.layout, offset + 0x10);
@@ -371,18 +379,27 @@ fn visit_registers(engine: Engine, capture: bool, saved: &mut SavedRegisters, mu
         interrupt_control=>0x1bc, interrupt_start=>0x9d0, interrupt_end=>0x9d4);
 }
 pub fn commit(engine: Engine, state: &mut EngineState, options: CommitOptions, hardware: &mut impl Hardware, callbacks: &mut impl CompletionCallbacks) {
+    apply(engine, state, options, hardware, callbacks);
+    drain(engine, &mut state.runtime, callbacks);
+}
+/// The pending branch: prepare the saved image and write it under the register map.
+pub fn apply(engine: Engine, state: &mut EngineState, options: CommitOptions, hardware: &mut impl Hardware, callbacks: &mut impl CompletionCallbacks) {
     if state.runtime.pending == CommitPending(1) {
         state.runtime.pending = CommitPending(0);
         prepare(state, options);
         callbacks.prepared(engine, state);
         visit_registers(engine, false, &mut state.saved, |word, offset| hardware.write(register(engine, offset), word.0));
     }
-    for secondary in [false, true] {
+}
+/// Drains the first then the second completion list, clearing each set slot before its call.
+pub fn drain(engine: Engine, runtime: &mut RuntimeState, callbacks: &mut impl CompletionCallbacks) {
+    for list in 0..2 {
+        let secondary = list == 1;
         for item in 0..6 {
-            let slot = if secondary { &mut state.runtime.secondary_callbacks[item] } else { &mut state.runtime.completion_callbacks[item] };
+            let slot = if secondary { &mut runtime.secondary_callbacks[item] } else { &mut runtime.completion_callbacks[item] };
             if let Some(callback) = slot.take() {
                 let list = if secondary { CompletionList::Second } else { CompletionList::First };
-                callbacks.call(callback, CompletionSlot { list, index: item }, engine, state);
+                callbacks.call(callback, CompletionSlot { list, index: item }, engine, runtime);
             }
         }
     }
