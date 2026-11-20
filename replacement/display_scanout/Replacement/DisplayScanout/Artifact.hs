@@ -61,11 +61,6 @@ parseRows bytes = forM (filter (not . C.null) (C.lines bytes)) $ \line -> case C
       [(value, "")] | value <= (0xffffffff :: Integer) -> Right (fromIntegral value)
       _ -> Left (SymbolTableRejected (C.unpack text))
 
-symbol :: [Row] -> String -> Maybe Word32
-symbol rows name = case [address | Row address _ _ name' <- rows, name' == name] of
-  [address] -> Just address
-  _ -> Nothing
-
 word :: B.ByteString -> Word32 -> Word32
 word bytes address = let offset = fromIntegral (address - image4Base)
   in foldr (\index value -> value * 256 + fromIntegral (B.index bytes (offset + index))) 0 [0 .. 3]

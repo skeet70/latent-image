@@ -253,6 +253,7 @@ functionsOf code (Owned _ elf) = M.toList (reach M.empty seeds)
       , let offset = toInteger (instruction .&. 0xffffff)
             signed = if offset >= 0x800000 then offset - 0x1000000 else offset
       ]
+    wordAt :: Word32 -> Maybe Word32
     wordAt address = do
       bytes <- mapM (E.byteAt elf) [address .. address + 3]
       pure (foldr (\byte value -> value `shiftL` 8 .|. fromIntegral byte) 0 bytes)
