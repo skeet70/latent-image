@@ -2944,12 +2944,18 @@ newtype S1FrameBytes = S1FrameBytes B.ByteString deriving (Eq, Show)
 newtype S1QueueSlot = S1QueueSlot Word16 deriving (Eq, Show)
 newtype S1StackOffset = S1StackOffset Integer
 newtype S1ControllerState = S1ControllerState Word16 deriving (Eq, Show)
+-- | Frame bytes 0..12, built from the code and form that key-event poster `0x6a1b40` passes. Its
+-- 80-byte local message sets only words 0 and 1, so frame bytes 12..80 (message bytes 8..76) are
+-- its caller's stack residue.
+newtype S1PostedBytes = S1PostedBytes B.ByteString deriving (Eq, Show)
+
+s1Posted :: S1FrameBytes -> S1PostedBytes
+s1Posted (S1FrameBytes bytes) = S1PostedBytes (B.take 12 bytes)
 
 data S1Witness = S1Witness
   { s1ProducerIdentity :: (TraceCore,LogicalTaskId)
   , s1ConsumerIdentity :: (TraceCore,LogicalTaskId)
-  , s1ReplayedFrame :: S1FrameBytes
-  , s1ConsumedFrame :: S1FrameBytes
+  , s1PostedFrame :: S1PostedBytes
   , s1ControllerState :: S1ControllerState
   } deriving (Eq, Show)
 
@@ -3185,7 +3191,7 @@ s1Witnesses hits (from,to) = do
         consumerIdentity <- s1Actor (boundaryEntry call)
         pure [LocatedS1 (s1PointIndex (s1ProducerCopy producer))
           (max (s1PointIndex (s1ProducerCopied producer)) (s1PointIndex dispatched))
-          (S1Witness producerIdentity consumerIdentity (s1ProducerReplayed producer) frame state)
+          (S1Witness producerIdentity consumerIdentity (s1Posted frame) state)
           | S1Application dispatched state <- applications]
       _ -> Left (StorageShape "S1 consumed queue slot has ambiguous producer lineage")
 
@@ -3193,8 +3199,6 @@ s1WitnessValue :: S1Witness -> Value
 s1WitnessValue witness = object
   [ "producer" .= taskIdentityValue (s1ProducerIdentity witness)
   , "consumer" .= taskIdentityValue (s1ConsumerIdentity witness)
-  , "replayed_frame" .= frameValue (s1ReplayedFrame witness)
-  , "consumed_frame" .= frameValue (s1ConsumedFrame witness)
+  , "posted_frame" .= (case s1PostedFrame witness of S1PostedBytes bytes -> C.unpack (hexEncode bytes))
   , "m74_state" .= (case s1ControllerState witness of S1ControllerState state -> state)
   ]
- where frameValue (S1FrameBytes bytes) = C.unpack (hexEncode bytes)

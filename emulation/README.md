@@ -2329,7 +2329,7 @@ Qualification requires all eight original full-system behavioral criteria, not j
 - Custom recall exposes an earlier confirmed saved payload through both the active bank and backing view while the physical C selection and completed property access agree.
 - A physical C-to-live-to-C dial cycle occurs within one boot, with observed profile selection at each detent.
 - DISP/B cancellation restores the alternate bank after a prior capture and an intervening change, preserving the complete 450-byte images and body-copy relation.
-- S1 handback follows the declared half press through the actual 80-byte enqueue of the retained S1 press frame into its queue slot (`0xd34ed0` in enqueue `0xd34d68`, from whichever action calls it), the matching successful dequeue and an application-side machine-74 dispatch outside the editor. Enqueue alone is insufficient.
+- S1 handback follows the declared half press through the actual 80-byte enqueue of the retained S1 press frame into its queue slot (`0xd34ed0` in enqueue `0xd34d68`, from whichever action calls it), the matching successful dequeue and an application-side machine-74 dispatch outside the editor. Enqueue alone is insufficient. Within a role all 80 frame bytes must match; across roles only frame bytes 0..12 and the M74 state are compared, because key-event poster `0x6a1b40` sets only the first two words of its 80-byte local message and frame bytes 12..80 are its caller's stack residue.
 - A chosen setting has at least two completed set/readback round trips after attach. Film simulation can discharge this criterion; no EE occurrence is required.
 - A fresh committed-media child reloads an earlier confirmed saved 52-byte record and matching payload views through an observed record read.
 

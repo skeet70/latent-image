@@ -921,7 +921,9 @@ matrixConsumerCases =
          (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix)
      , comparisonCase "dequeue entries from a caller without a traced return are not paired" RolesAgree
          (matrixObservation RetainedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller))
-         (matrixObservation OwnedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller)) ]
+         (matrixObservation OwnedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller))
+     , comparisonCase "S1 frame residue outside the poster-defined bytes is not compared across roles" RolesAgree
+         retainedMatrix (matrixObservation OwnedRole (M.singleton HalfPressApplication s1ResidueMutation)) ]
   where
     rewritten = A.toJSON (wireBytes (littleWords [0x317,0,0x101,3,0x37243726,8,8]))
 

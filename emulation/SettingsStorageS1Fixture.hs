@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module SettingsStorageS1Fixture
-  ( s1ApplicationHits, s1ReplayFrame, s1Mutations, s1ComparisonMutations, s1UntracedDequeueCaller
+  ( s1ApplicationHits, s1ReplayFrame, s1Mutations, s1ComparisonMutations, s1ResidueMutation, s1UntracedDequeueCaller
   ) where
 
 import Data.Aeson (Value(..), toJSON)
@@ -98,12 +98,19 @@ s1Mutations =
 s1ComparisonMutations :: [(String,TraceMutation)]
 s1ComparisonMutations =
   [ ("s1-m74-state", memory S1ApplicationDispatch [s1ReplayFrame,B.pack [4,0],B.pack [0,0]])
-  , ("s1-replay-tail-cross-role",
-      memory S1FrameCopyCall [changedFrameByte 79,B.pack [1,0]]
-      . memory S1DequeueCopyReturn [changedFrameByte 79]
-      . memory S1ApplicationRouterCall [changedFrameByte 79,B.pack [3,0]]
-      . memory S1ApplicationDispatch [changedFrameByte 79,B.pack [3,0],B.pack [0,0]])
+  , ("s1-posted-word1-cross-role", everyFrameCopy 4)
   ]
+
+-- | One role's frame differing only at residue byte 0x20, in every copy.
+s1ResidueMutation :: TraceMutation
+s1ResidueMutation = everyFrameCopy 0x20
+
+everyFrameCopy :: Int -> TraceMutation
+everyFrameCopy index =
+  memory S1FrameCopyCall [changedFrameByte index,B.pack [1,0]]
+  . memory S1DequeueCopyReturn [changedFrameByte index]
+  . memory S1ApplicationRouterCall [changedFrameByte index,B.pack [3,0]]
+  . memory S1ApplicationDispatch [changedFrameByte index,B.pack [3,0],B.pack [0,0]]
 
 -- | Two dequeue entries from stock's second caller, whose return 0xd3ad78 is not a traced site.
 s1UntracedDequeueCaller :: TraceMutation
