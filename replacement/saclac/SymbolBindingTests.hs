@@ -9,24 +9,23 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [production, debug, wrongProduction, wrongDebug] -> do
-      check "production" production debug
-      check "wrong-driver-store" wrongProduction wrongDebug
-    _ -> H.failH "expected: PRODUCTION_SYMBOLS DEBUG_SYMBOLS WRONG_PRODUCTION_SYMBOLS WRONG_DEBUG_SYMBOLS"
+    [production, debug, bad] -> do
+      accepted <- checkFiles production debug
+      H.ensure (reportVerdict accepted == "match")
+        ("identical data symbols were refused: " ++ show (reportMismatches accepted))
+      H.ensure (reportUniformShift accepted == Just 8)
+        ("uniform shift was " ++ show (reportUniformShift accepted))
+      H.ensure (any (\(name, _, _) -> name == "func_a") (reportFunctionChanges accepted))
+        "function size change was not reported"
+      refused <- checkFiles production bad
+      H.ensure (reportVerdict refused == "mismatch")
+        "changed data size was accepted"
+      H.ensure (any ((== "data_a") . mismatchSymbol) (reportMismatches refused))
+        ("refusal did not name data_a: " ++ show (reportMismatches refused))
+    _ -> H.failH "expected: PRODUCTION_SYMBOLS DEBUG_SYMBOLS BAD_SYMBOLS"
 
-check :: String -> FilePath -> FilePath -> IO ()
-check label productionPath debugPath = do
+checkFiles :: FilePath -> FilePath -> IO SymbolReport
+checkFiles productionPath debugPath = do
   production <- parseSymbols <$> readFile productionPath
   debug <- parseSymbols <$> readFile debugPath
-  let report = checkSymbols production debug
-  H.ensure (reportVerdict report == "match")
-    (label ++ " data symbols differ: " ++ show (reportMismatches report))
-  H.ensure (reportDataSymbols report > 0) (label ++ " has no data symbols")
-  H.ensure (maybe False (const True) (reportUniformShift report))
-    (label ++ " data addresses do not move by one uniform shift")
-  putStrLn (label ++ " data symbols=" ++ show (reportDataSymbols report)
-    ++ " shift=" ++ show (reportUniformShift report)
-    ++ " function size changes=" ++ show (length (reportFunctionChanges report)))
-  mapM_ (\(name, productionSize, debugSize) ->
-           putStrLn ("  " ++ name ++ " " ++ show productionSize ++ " -> " ++ show debugSize))
-        (reportFunctionChanges report)
+  pure (checkSymbols production debug)
