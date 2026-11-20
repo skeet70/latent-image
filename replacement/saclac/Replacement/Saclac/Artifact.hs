@@ -13,6 +13,8 @@ module Replacement.Saclac.Artifact
   , Retained (..)
   , retainedExternals
   , retainedData
+  , unitImports
+  , retainedRegions
   , taskStackRuntime
   , taskStackBytes
   , taskCreateSite
@@ -59,6 +61,7 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import Numeric (readHex)
 import qualified Replacement.Record5Staging as Record5
+import qualified Replacement.DisplayScanout.Artifact as Scanout
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.FixedImage.Record as Fixed
@@ -180,8 +183,34 @@ loadingRetained =
   , Retained "xm1_lower_read_clock_restore" 0x42568
   ]
 
+-- | The retained services the file service and the display scanout call.
+unitImports :: [Retained]
+unitImports =
+  [ Retained "file_service_semaphore_wait" 0x724b68
+  , Retained "file_service_semaphore_signal" 0x724c00
+  , Retained "file_service_cache_claim" 0x71e960
+  , Retained "file_service_current_task" 0x723cb8
+  , Retained "file_service_local_record" 0x7111c4
+  , Retained "file_service_local_position" 0x7111e0
+  , Retained "file_service_local_open" 0x711200
+  , Retained "file_service_device_for_letter" 0x70ec84
+  , Retained "file_service_copy_string" 0x70e748
+  , Retained "file_service_copy_bytes" 0x722054
+  , Retained "file_service_media_report" 0x726c74
+  , Retained "file_service_send" 0x72503c
+  , Retained "file_service_receive_request" 0x71fe2c
+  , Retained "file_service_sleep" 0x7240c8
+  , Retained "file_service_wake" 0x724144
+  , Retained "file_service_ticks" 0x7257a8
+  , Retained "scanout_enter_critical" 0x7235d8
+  , Retained "scanout_leave_critical" 0x7236b0
+  , Retained "scanout_yield" 0x723ce8
+  , Retained "scanout_irq_configure" 0x64e918
+  , Retained "scanout_irq_release" 0x64eb20
+  ]
+
 externalAddresses :: [Word32]
-externalAddresses = map retainedAddress retainedExternals
+externalAddresses = map retainedAddress (retainedExternals ++ unitImports)
 
 -- | The stock tables and arrays the boundary module reads and writes.
 data StockArray
@@ -209,6 +238,11 @@ stockArrays =
 -- halfword arrays the boundary module supplies.
 retainedData :: [Retained]
 retainedData = [Retained name address | (_, name, address, _) <- stockArrays] ++ [taskStackRuntime]
+
+-- | The stock data the owned image reads and writes: name, address, bytes.
+retainedRegions :: [(String, Word32, Word32)]
+retainedRegions = [(name, address, bytes) | (_, name, address, bytes) <- stockArrays]
+  ++ [(retainedName taskStackRuntime, retainedAddress taskStackRuntime, 8)]
 
 taskStackRuntime :: Retained
 taskStackRuntime = Retained "__saclac_runtime_stack_words" 0x40a5b354
@@ -276,6 +310,7 @@ data PlacementError
   | KernelBoundaryInvalid
   | TaskStackContractInvalid
   | TaskCreatePreimage Word32
+  | PublishedWordInvalid Word32 Word32
   deriving (Eq, Show)
 
 require :: Bool -> PlacementError -> Either PlacementError ()
@@ -465,6 +500,18 @@ ownedSpans admitted =
 insideExtents :: Word32 -> Bool
 insideExtents address = any (`extentContains` address) (fixedExtent : extents)
 
+-- | Image 4's load range.
+image4Extent :: Extent
+image4Extent = Extent 0x61c400 (0x61c400 + 0x282800)
+
+-- | A read-only section inside image 4 publishes over retained stock code: a bank unit's entry
+-- branches into owned fixed code and trap fill elsewhere.
+publishedSection :: Section -> Bool
+publishedSection section = sectionAllocated section && sectionBytes section > 0
+  && not (sectionWritable section) && not (sectionNoBits section)
+  && extentContains image4Extent (sectionLow section)
+  && toInteger (sectionLow section) + toInteger (sectionBytes section) <= toInteger (extentHigh image4Extent)
+
 binBase :: Admitted -> Word32
 binBase admitted = minimum [sectionLow section | section <- admittedSections admitted, sectionAllocated section, sectionBytes section > 0]
 
@@ -547,10 +594,14 @@ checkStackEntry budget entry admitted instructions = do
   generic <- stackAdmitted admitted
   first stackFailure (Stack.checkEntry budget (Stack.Guest entry) (stackImage generic instructions))
 
+-- | The walked image starts at the fixed body, so retained stock addresses between published
+-- image-4 sections and the body stay outside it.
 stackImage :: Admitted -> S.Set Word32 -> Stack.Image
 stackImage admitted instructions =
-  Stack.Image (Stack.Guest (binBase admitted)) (admittedBin admitted)
-    (admittedSymbols admitted) (S.map Stack.Guest instructions)
+  Stack.Image (Stack.Guest low) (B.drop (fromIntegral (low - binBase admitted)) (admittedBin admitted))
+    (admittedSymbols admitted) (S.map Stack.Guest (S.filter (>= low) instructions))
+  where
+    low = max (binBase admitted) (extentLow fixedExtent)
 
 stackFailure :: Stack.Failure -> PlacementError
 stackFailure problem = case problem of
@@ -588,7 +639,7 @@ admit :: Agg.CarrierUnion -> B.ByteString -> B.ByteString -> B.ByteString -> B.B
 admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
   symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
   sections <- parseSections sectionsBytes
-  instructions <- instructionAddresses disasm
+  linkedInstructions <- instructionAddresses disasm
   ownedArrays <- forM
     [OwnedCellCounts, OwnedActionCounts, OwnedSecondCounts, OwnedRowCounts, OwnedRowMap]
     $ \array -> do
@@ -598,6 +649,10 @@ admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
         (F.lookupSymbol symbols (ownedArraySymbol array))
       pure (array, F.symbolAddress symbol, F.symbolSize symbol)
   let admitted = Admitted elfBytes bin symbolsBytes disasm sectionsBytes sections symbols ownedArrays
+      published = filter publishedSection sections
+      inPublished address = any (\section -> sectionLow section <= address
+        && toInteger address < toInteger (sectionLow section) + toInteger (sectionBytes section)) published
+      instructions = S.filter (not . inPublished) linkedInstructions
       ownedWords = S.fromList
         [ address
         | (low, high) <- ownedSpans admitted
@@ -607,16 +662,25 @@ admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
       dataKinds = ["d", "D", "b", "B"]
   forM_ (symbolKinds symbolsBytes) $ \(address, kind) ->
     when (kind `elem` dataKinds && not (extentContains fixedExtent address)) (Left (DataSymbol kind))
-  forM_ [section | section <- sections, sectionAllocated section, sectionBytes section > 0] $ \section -> do
+  forM_ [section | section <- sections, sectionAllocated section, sectionBytes section > 0, not (publishedSection section)] $ \section -> do
     let inFixed = extentContains fixedExtent (sectionLow section)
           && extentContains fixedExtent (sectionLow section + fromIntegral (sectionBytes section) - 1)
     require (not (sectionWritable section) || inFixed) (WritableSection (sectionName section))
     require (not (sectionNoBits section) || (inFixed && sectionName section == ".bss")) (WritableSection (sectionName section))
     unless (insideExtents (sectionLow section) && insideExtents (sectionLow section + fromIntegral (sectionBytes section) - 1)) $
       Left (SectionOutside (sectionName section) (sectionLow section) (sectionBytes section))
+  forM_ published $ \section -> do
+    let low = sectionLow section
+    require (low `mod` 4 == 0 && sectionBytes section `mod` 4 == 0) (SectionOutside (sectionName section) low (sectionBytes section))
+    forM_ [low, low + 4 .. low + fromIntegral (sectionBytes section) - 4] $ \address -> do
+      let word = wordAt admitted address
+      unless (word == trapWord) $ case A.decode address word of
+        A.Branch (A.Cond 14) False target | extentContains fixedExtent target && S.member target instructions -> pure ()
+        _ -> Left (PublishedWordInvalid address word)
   forM_ [symbol | symbol <- symbols, F.symbolSize symbol > 0] $ \symbol ->
-    unless (insideExtents (F.symbolAddress symbol)
-            && insideExtents (F.symbolAddress symbol + F.symbolSize symbol - 1)) $
+    unless ((insideExtents (F.symbolAddress symbol)
+             && insideExtents (F.symbolAddress symbol + F.symbolSize symbol - 1))
+            || (inPublished (F.symbolAddress symbol) && inPublished (F.symbolAddress symbol + F.symbolSize symbol - 1))) $
       Left (SymbolOutside (F.symbolName symbol) (F.symbolAddress symbol) (F.symbolSize symbol))
   forM_ entries $ \entry -> do
     veneer <- either (const (Left (EntryMissing (entryVeneer entry)))) Right (F.lookupSymbol symbols (entryVeneer entry))
@@ -824,6 +888,17 @@ decoderPublications image4 admitted = do
         new = 0xea000000 .|. (fromInteger (delta `div` 4) .&. 0xffffff)
     either H.failH pure (Fixed.publication address old new)
 
+-- | The display scanout's stock-entry branches, when the bank links the scanout; a partial
+-- scanout is refused.
+scanoutEntries :: B.ByteString -> Admitted -> IO [Fixed.Publication]
+scanoutEntries image4 admitted =
+  case [name | Scanout.Entry name _ <- Scanout.entries, Left _ <- [F.lookupSymbol (admittedSymbols admitted) name]] of
+    [] -> do
+      rows <- either (H.failH . show) pure (Scanout.canonicalPublications image4 (admittedSymbolsBytes admitted))
+      forM rows $ \(Scanout.Publication address old new) -> either H.failH pure (Fixed.publication address old new)
+    missing | length missing == length Scanout.entries -> pure []
+    missing -> H.failH ("partial display scanout: " ++ unwords missing)
+
 -- | Staging the canonical image reproduces the canonical DAT: the inverse check.
 stageSaclac
   :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString -> B.ByteString
@@ -842,7 +917,19 @@ stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sections
     if old == new then pure Nothing
       else Just <$> either H.failH pure (Fixed.publication address old new)
   image4Publications <- decoderPublications image4 admitted
-  let publications = image5Publications ++ image4Publications
+  unitPublications <- fmap catMaybes $ forM
+    [ address
+    | section <- admittedSections admitted, publishedSection section
+    , address <- [sectionLow section, sectionLow section + 4 .. sectionLow section + fromIntegral (sectionBytes section) - 4]
+    ] $ \address -> do
+      let old = U.word32At image4 (fromIntegral (address - extentLow image4Extent))
+          new = wordAt admitted address
+      if old == new then pure Nothing
+        else Just <$> either H.failH pure (Fixed.publication address old new)
+  scanoutPublications <- scanoutEntries image4 admitted
+  let publications = image5Publications ++ image4Publications ++ unitPublications ++ scanoutPublications
+      addresses = [address | Fixed.Publication _ address _ _ <- publications]
+  H.ensure (S.size (S.fromList addresses) == length addresses) "two publications name one word"
   scratchDirectory <- Tools.validateScratchDirectory scratch
   staged <- Record5.stageRecord5 tools scratchDirectory dat image5 installed
   inverse <- Record5.stageRecord5 tools scratchDirectory dat image5 image5

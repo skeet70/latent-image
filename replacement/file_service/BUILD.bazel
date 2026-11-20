@@ -4,7 +4,7 @@ load(":controls.bzl", "FILE_SERVICE_CONTROLS", "file_service_suffixes")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["imports.ld"])
+exports_files(["retired.ld", "retired-memory.ld"])
 
 _SOURCES = [
     "src/completion.rs",
@@ -115,7 +115,7 @@ filegroup(
         ":file-service-stage",
         ":file-service-suite",
         ":host-tests",
-    ] + ["//replacement/fixed_image:fixed-bank-image" + suffix for suffix in file_service_suffixes()],
+    ] + ["//replacement/saclac:saclac-image" + suffix for suffix in file_service_suffixes()],
 )
 
 filegroup(

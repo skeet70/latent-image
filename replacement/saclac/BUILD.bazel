@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_test", "xm1_rust_rlib", "xm1_rust_staticlib")
+load(":bank.bzl", "BANK_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -15,13 +16,15 @@ _ARM_DEPS = {
     "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
     "xm1_rtos_objects_bank_a": "//replacement/rtos_objects:objects-bank-a",
     "xm1_rtos_objects_bank_b": "//replacement/rtos_objects:objects-bank-b",
+    "xm1_file_service": "//replacement/file_service:arm",
+    "xm1_display_scanout": "//replacement/display_scanout:fixed-bank-owned",
 }
 
-# The wrong wake-publication control links the root rlib compiled with its cfg.
-_ARM_DEPS_WRONG_WAKE_PUBLICATION = dict(
-    _ARM_DEPS,
-    xm1_saclac_root = "//replacement/saclac/root:root-wrong-wake-publication",
-)
+# The scripts the generated bank script INCLUDEs: the file service's retired extents.
+_BANK_LINK_INCLUDES = [
+    "//replacement/file_service:retired.ld",
+    "//replacement/file_service:retired-memory.ld",
+]
 
 _ARM_SEARCH_DEPS = [
 
@@ -88,203 +91,66 @@ xm1_rust_rlib(
     dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
 )
 
-# The composed archive inherits record_store's one guest panic handler.
-xm1_rust_staticlib(
-    name = "saclac-rust",
-    src = "src/lib.rs",
-    crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no"],
-    data = _SOURCES,
-    rlib_deps = _ARM_DEPS,
-    rlib_search_deps = _ARM_SEARCH_DEPS,
-    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
-)
-
-xm1_rust_elf(
-    name = "saclac-image",
-    rust_staticlib = ":saclac-rust",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_dispatch_entry",
-    link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-)
-
-# The same bank with the task60 loading owner and one explicit qualification
-# policy. There is no production loading policy; these are emulator inputs.
+# The bank root archive inherits record_store's one guest panic handler.
 [
     xm1_rust_staticlib(
-        name = "saclac-rust-loading-" + policy,
+        name = "saclac-rust" + suffix,
         src = "src/lib.rs",
         crate_name = "xm1_saclac",
-        rustc_flags = ["-C", "jump-tables=no", "--cfg", "loading_owner"],
+        rustc_flags = ["-C", "jump-tables=no"] + [flag for cfg in variant.cfgs for flag in ["--cfg", cfg]],
         data = _SOURCES,
-        rlib_deps = dict(
-            _ARM_DEPS,
-            xm1_executable_loading = "//replacement/executable_loading:arm-root",
-            xm1_loading_policy = "//replacement/executable_loading:policy-%s-root" % policy,
-        ),
+        rlib_deps = dict(_ARM_DEPS.items() + variant.deps.items()),
         rlib_search_deps = _ARM_SEARCH_DEPS,
         dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
-        testonly = True,
+        testonly = variant.testonly,
     )
-    for policy in ["fujimod", "retention"]
+    for suffix, variant in BANK_VARIANTS.items()
 ]
 
 [
     xm1_rust_elf(
-        name = "saclac-image-loading-" + policy,
-        rust_staticlib = ":saclac-rust-loading-" + policy,
+        name = "saclac-image" + suffix,
+        rust_staticlib = ":saclac-rust" + suffix,
         asm_srcs = ["entry.S"],
-        entry = "xm1_saclac_dispatch_entry",
-        link_script = ":saclac.ld",
+        entry = variant.entry,
+        link_script = ":saclac.ld" if variant.units else ":saclac-root-family.ld",
+        link_includes = _BANK_LINK_INCLUDES if variant.units else [],
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-        link_map = True,
-        testonly = True,
+        link_map = variant.link_map,
+        testonly = variant.testonly,
     )
-    for policy in ["fujimod", "retention"]
+    for suffix, variant in BANK_VARIANTS.items()
 ]
 
 [
     genrule(
-        name = "saclac-image-loading-%s-sections" % policy,
-        srcs = [":saclac-image-loading-%s.elf" % policy],
-        outs = ["saclac-image-loading-%s.sections" % policy],
-        cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-loading-%s.elf) > $@" % policy,
+        name = "saclac-image%s-sections" % suffix,
+        srcs = [":saclac-image%s.elf" % suffix],
+        outs = ["saclac-image%s.sections" % suffix],
+        cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image%s.elf) > $@" % suffix,
         tools = ["@lab_llvm//:bin/llvm-readelf"],
-        testonly = True,
+        testonly = variant.testonly,
     )
-    for policy in ["fujimod", "retention"]
+    for suffix, variant in BANK_VARIANTS.items()
 ]
-
-# The comparison's deliberately wrong variant: the action entry sees the table base in r3.
-xm1_rust_staticlib(
-    name = "saclac-rust-wrong-r3",
-    src = "src/lib.rs",
-    crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_r3"],
-    data = _SOURCES,
-    rlib_deps = _ARM_DEPS,
-    rlib_search_deps = _ARM_SEARCH_DEPS,
-    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
-)
-
-xm1_rust_staticlib(
-    name = "saclac-rust-wrong-driver-store",
-    src = "src/lib.rs",
-    crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_driver_store"],
-    data = _SOURCES,
-    rlib_deps = _ARM_DEPS,
-    rlib_search_deps = _ARM_SEARCH_DEPS,
-    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
-)
-
-# The wrong wake-publication control: the defect is the cfg-compiled root rlib's
-# `publish_history` index advance, so this staticlib links that root variant.
-xm1_rust_staticlib(
-    name = "saclac-rust-wrong-wake-publication",
-    src = "src/lib.rs",
-    crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_wake_publication"],
-    data = _SOURCES,
-    rlib_deps = _ARM_DEPS_WRONG_WAKE_PUBLICATION,
-    rlib_search_deps = _ARM_SEARCH_DEPS,
-    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
-)
-
-xm1_rust_elf(
-    name = "saclac-image-wrong-driver-store",
-    rust_staticlib = ":saclac-rust-wrong-driver-store",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_driver_entry",
-    link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-)
-
-# The same driver entry as the wrong-driver-store control, so the per-cycle comparison can
-# capture the 0x3b4b wake step end and see the two-slot publication.
-xm1_rust_elf(
-    name = "saclac-image-wrong-wake-publication",
-    rust_staticlib = ":saclac-rust-wrong-wake-publication",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_driver_entry",
-    link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-)
 
 # The same production graph with a link script that keeps DWARF. Build it with
 # `--define=xm1_rust_debuginfo=2 --platform_suffix=xm1-debuginfo`; its .bin and
 # .symbols are the production bytes while its ELF carries the layout evidence.
-xm1_rust_elf(
-    name = "saclac-image-debug",
-    rust_staticlib = ":saclac-rust",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_dispatch_entry",
-    link_script = ":saclac-debug.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-    testonly = True,
-    tags = ["qualification"],
-)
-
-xm1_rust_elf(
-    name = "saclac-image-wrong-driver-store-debug",
-    rust_staticlib = ":saclac-rust-wrong-driver-store",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_driver_entry",
-    link_script = ":saclac-debug.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-    testonly = True,
-    tags = ["qualification"],
-)
-
-xm1_rust_elf(
-    name = "saclac-image-wrong-wake-publication-debug",
-    rust_staticlib = ":saclac-rust-wrong-wake-publication",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_driver_entry",
-    link_script = ":saclac-debug.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-    testonly = True,
-    tags = ["qualification"],
-)
-
-# The playback control: the cyclic wake 0x3b4b is not routed after 110 dispatches.
-xm1_rust_staticlib(
-    name = "saclac-rust-wrong-driver-playback",
-    src = "src/lib.rs",
-    crate_name = "xm1_saclac",
-    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_driver_playback"],
-    data = _SOURCES,
-    rlib_deps = _ARM_DEPS,
-    rlib_search_deps = _ARM_SEARCH_DEPS,
-    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
-)
-
-xm1_rust_elf(
-    name = "saclac-image-wrong-driver-playback",
-    rust_staticlib = ":saclac-rust-wrong-driver-playback",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_driver_entry",
-    link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
-)
-
-genrule(
-    name = "saclac-image-wrong-driver-playback-sections",
-    srcs = [":saclac-image-wrong-driver-playback.elf"],
-    outs = ["saclac-image-wrong-driver-playback.sections"],
-    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-playback.elf) > $@",
-    tools = ["@lab_llvm//:bin/llvm-readelf"],
-)
-
-xm1_rust_elf(
-    name = "saclac-image-wrong-r3",
-    rust_staticlib = ":saclac-rust-wrong-r3",
-    asm_srcs = ["entry.S"],
-    entry = "xm1_saclac_dispatch_entry",
-    link_script = ":saclac.ld",
-    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
-)
+[
+    xm1_rust_elf(
+        name = "saclac-image%s-debug" % suffix,
+        rust_staticlib = ":saclac-rust" + suffix,
+        asm_srcs = ["entry.S"],
+        entry = BANK_VARIANTS[suffix].entry,
+        link_script = ":saclac-debug.ld",
+        link_includes = _BANK_LINK_INCLUDES,
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+        testonly = True,
+        tags = ["qualification"],
+    )
+    for suffix in ["", "-wrong-driver-store", "-wrong-wake-publication"]
+]
 
 # The two extents are typed once, in Replacement.Saclac.Artifact; this emits the
 # linker script and the census sites file from them.
@@ -295,8 +161,10 @@ haskell_library(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/display_scanout:display-scanout-artifact",
         "//replacement/fixed_image:contract",
         "//replacement/rtos_platform:aggregate",
+        "//host:containers",
         "//host:aeson",
         "//host:base",
         "//host:first-stage",
@@ -333,6 +201,23 @@ genrule(
     srcs = ["//replacement/rtos_platform:carriers.json"],
     outs = ["saclac-debug.ld"],
     cmd = "$(location :saclac-extents) linker-script-debug $(location //replacement/rtos_platform:carriers.json) > $@",
+    tools = [":saclac-extents"],
+)
+
+genrule(
+    name = "saclac-linker-script-root-family",
+    srcs = ["//replacement/rtos_platform:carriers.json"],
+    outs = ["saclac-root-family.ld"],
+    cmd = "$(location :saclac-extents) linker-script-root-family $(location //replacement/rtos_platform:carriers.json) > $@",
+    tools = [":saclac-extents"],
+)
+
+# check-fixed-image's allowlist for the bank, from the joint admission's declarations.
+genrule(
+    name = "bank-allowlist",
+    srcs = ["//replacement/rtos_platform:carriers.json"],
+    outs = ["bank-allowlist.json"],
+    cmd = "$(location :saclac-extents) allowlist $(location //replacement/rtos_platform:carriers.json) $@",
     tools = [":saclac-extents"],
 )
 
@@ -384,30 +269,6 @@ haskell_binary(
     ],
 )
 
-genrule(
-    name = "saclac-image-sections",
-    srcs = [":saclac-image.elf"],
-    outs = ["saclac-image.sections"],
-    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image.elf) > $@",
-    tools = ["@lab_llvm//:bin/llvm-readelf"],
-)
-
-genrule(
-    name = "saclac-image-wrong-driver-store-sections",
-    srcs = [":saclac-image-wrong-driver-store.elf"],
-    outs = ["saclac-image-wrong-driver-store.sections"],
-    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-store.elf) > $@",
-    tools = ["@lab_llvm//:bin/llvm-readelf"],
-)
-
-genrule(
-    name = "saclac-image-wrong-wake-publication-sections",
-    srcs = [":saclac-image-wrong-wake-publication.elf"],
-    outs = ["saclac-image-wrong-wake-publication.sections"],
-    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-wake-publication.elf) > $@",
-    tools = ["@lab_llvm//:bin/llvm-readelf"],
-)
-
 haskell_library(
     name = "saclac-artifact",
     srcs = ["Replacement/Saclac/Artifact.hs"],
@@ -426,6 +287,7 @@ haskell_library(
         "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
+        "//replacement/display_scanout:display-scanout-artifact",
         "//replacement/fixed_image:contract",
         "//replacement/rtos_platform:aggregate",
         "//replacement/toolchain:stack-proof",

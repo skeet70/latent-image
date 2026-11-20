@@ -55,7 +55,8 @@ main = do
       sections <- canonicalizePath sectionsPath >>= H.readRegular (1024 * 1024)
       admitted <- either (H.failH . show) pure (admit bin symbols disasm sections)
       body <- either (H.failH . show) pure (fixedBody admitted)
-      let base = extentLow fixedExtent
+      parsedSections <- either (H.failH . show) pure (parseSections sections)
+      let base = minimum [sectionLow section | section <- parsedSections, sectionAllocated section, sectionBytes section > 0]
           imageBase = 0xbf1a00
           imageBytes = 0x4f1e60
           blank = patch imageBase (B.replicate imageBytes 0) taskCreateSite taskCreateWord
@@ -97,6 +98,11 @@ main = do
       dispatch <- F.symbolAddress <$> symbol symbols "xm1_saclac_dispatch"
       refused "veneer target mismatch" (EntryBranchMismatch "xm1_saclac_dispatch_entry" 0xefca6c dispatch)
         (admit (patch base bin 0xefca6c (branch 0xefca6c (dispatch + 4))) symbols disasm sections)
+      open <- F.symbolAddress <$> symbol symbols "xm1_file_service_entry_open"
+      refused "published word that is neither trap nor entry branch" (PublishedWordInvalid (open + 4) 0xe1a00000)
+        (admit (patch base bin (open + 4) 0xe1a00000) symbols disasm sections)
+      refused "published entry branch into retained stock" (PublishedWordInvalid open (branch open 0x724b68))
+        (admit (patch base bin open (branch open 0x724b68)) symbols disasm sections)
       counts <- F.symbolAddress <$> symbol symbols "SACLAC_CELL_COUNTS"
       refused "retained table extent mismatch" (TableLengthMismatch "SACLAC_CELL_COUNTS" 0 528 529)
         (admit (patch base bin counts 529) symbols disasm sections)
@@ -145,6 +151,7 @@ boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed 
       boundarySymbols = [(index, value) | (index, value) <- zip [0 :: Word32 ..] (ELF.elfSymbols parsed),
         ELF.symbolName value == "__power_cpu_end"]
       symbolTables = [section | section <- ELF.elfSections parsed, ELF.sectionType section == 2]
+      base = minimum [sectionLow section | section <- admittedSections admitted, sectionAllocated section, sectionBytes section > 0]
   case (bss, boundarySymbols, symbolTables, references) of
     ([section], [(identity, boundary)], [table], (reference, source) : _) -> do
       let site = ELF.addressSite reference
@@ -157,7 +164,7 @@ boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed 
                 .. ELF.sectionOffset relocation + ELF.sectionSize relocation - 8],
               U.word32At elf (fromIntegral offset) == site]
           run image target = Artifact.admit carriers (patch 0 image contentOffset target)
-            (patch (extentLow fixedExtent) bin site target) symbols disasm sections
+            (patch base bin site target) symbols disasm sections
           refusedEndpoint name result = case result of
             Left (ReferenceOutside _ target) -> check name (target == end)
             other -> H.failH (name ++ ": expected endpoint refusal, got " ++ show other)
@@ -179,12 +186,12 @@ boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed 
           refusedEndpoint "sized symbol is not endpoint metadata" (run sized end)
           refused "endpoint metadata is not a branch destination" (ReferenceOutside site end)
             (Artifact.admit carriers (patch 0 direct contentOffset (branch site end))
-              (patch (extentLow fixedExtent) bin site (branch site end)) symbols disasm sections)
+              (patch base bin site (branch site end)) symbols disasm sections)
           case run undefinedSymbol end of
             Left (ElfRejected _) -> pure ()
             other -> H.failH ("undefined boundary symbol admitted: " ++ show other)
           refused "raw ELF/bin reference disagreement" (ExtentImageMismatch site 4)
-            (Artifact.admit carriers (patch 0 metadata contentOffset end) (patch (extentLow fixedExtent) bin site (end + 4))
+            (Artifact.admit carriers (patch 0 metadata contentOffset end) (patch base bin site (end + 4))
               symbols disasm sections)
         _ -> H.failH "fixture requires one relocation at its data-reference site"
     _ -> H.failH "fixture requires allocated BSS, __power_cpu_end and a data relocation"

@@ -1,0 +1,1 @@
+RETIRED (rx) : ORIGIN = 0x71bc2c, LENGTH = 0x721834 - 0x71bc2c

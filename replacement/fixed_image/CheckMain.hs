@@ -35,7 +35,7 @@ main = do
 check :: FilePath -> FilePath -> FilePath -> EntryName -> OwnedStackBudget -> FilePath -> IO ()
 check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget budget) output = do
   allowlist <- H.readRegularWith (pure ()) False 0x100000 allowlistPath >>= either H.failH pure . A.parseAllowlist
-  elfBytes <- H.readRegularWith (pure ()) False 0x400000 elfPath
+  elfBytes <- H.readRegularWith (pure ()) False 0x2000000 elfPath
   elf <- either H.failH pure (E.parseElf elfBytes)
   body <- H.readRegularWith (pure ()) False (fromIntegral (imageLimit - imageBase - headerBytes)) bodyPath
   let symbol name = case [E.symbolValue value | value <- E.elfSymbols elf, E.symbolName value == name, E.symbolSection value /= E.Undefined] of
@@ -43,8 +43,8 @@ check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget bud
         _ -> H.failH ("missing or duplicate fixed symbol " ++ name)
       sections = sortOn E.sectionAddress (filter E.sectionAllocated (E.elfSections elf))
       end section = toInteger (E.sectionAddress section) + toInteger (E.sectionSize section)
-      -- Sections wholly below the fixed image are publications over stock code, not body.
-      (published, allocated) = partition (\section -> end section <= toInteger imageBase) sections
+      -- Sections wholly outside the fixed image are publications over stock code, not body.
+      (published, allocated) = partition (\section -> end section <= toInteger imageBase || E.sectionAddress section >= imageLimit) sections
       backed = filter ((== 1) . E.sectionType) allocated
       code = filter E.sectionExecutable allocated
       inside address = any (\section -> E.sectionAddress section <= address && toInteger address < end section) code

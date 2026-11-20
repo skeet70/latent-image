@@ -53,6 +53,7 @@ xm1_power_save_irq:
     msr cpsr_c,r2
     and r0,r1,#0x80
     bx lr
+.size xm1_power_save_irq,.-xm1_power_save_irq
 .global xm1_power_restore_irq
 .type xm1_power_restore_irq,%function
 xm1_power_restore_irq:
@@ -62,6 +63,7 @@ xm1_power_restore_irq:
     orr r1,r1,r2
     msr cpsr_c,r1
     bx lr
+.size xm1_power_restore_irq,.-xm1_power_restore_irq
 
 .global xm1_power_cache_disable
 .type xm1_power_cache_disable,%function
@@ -72,6 +74,7 @@ xm1_power_cache_disable:
     mcr p15,0,r1,c1,c0,0
     isb sy
     bx lr
+.size xm1_power_cache_disable,.-xm1_power_cache_disable
 .global xm1_power_cache_enable
 .type xm1_power_cache_enable,%function
 xm1_power_cache_enable:
@@ -86,18 +89,20 @@ xm1_power_cache_enable:
     mcr p15,0,r2,c1,c0,0
     isb sy
     bx lr
+.size xm1_power_cache_enable,.-xm1_power_cache_enable
 
 .global xm1_power_whole_cache
 .type xm1_power_whole_cache,%function
 xm1_power_whole_cache:
     mov r2,#1
-    b .Lwhole_cache_operation
+    b xm1_power_whole_cache_operation
 .size xm1_power_whole_cache,.-xm1_power_whole_cache
 .global xm1_power_dcache_clean_invalidate_all
 .type xm1_power_dcache_clean_invalidate_all,%function
 .set xm1_power_dcache_clean_invalidate_all,xm1_power_whole_cache
 
-.Lwhole_cache_operation:
+.type xm1_power_whole_cache_operation,%function
+xm1_power_whole_cache_operation:
     push {r4-r11,lr}
     mov r6,r2
     mrc p15,1,r0,c0,c0,1
@@ -140,6 +145,7 @@ xm1_power_whole_cache:
     bgt 3b
 6:
     pop {r4-r11,pc}
+.size xm1_power_whole_cache_operation,.-xm1_power_whole_cache_operation
 
 .global xm1_power_dcache_clean_range
 .type xm1_power_dcache_clean_range,%function
@@ -158,5 +164,5 @@ xm1_power_dcache_clean_range:
     bx lr
 .Lclean_all:
     mov r2,#2
-    b .Lwhole_cache_operation
+    b xm1_power_whole_cache_operation
 .size xm1_power_dcache_clean_range,.-xm1_power_dcache_clean_range

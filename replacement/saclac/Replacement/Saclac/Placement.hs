@@ -3,8 +3,10 @@
 -- | The linker script and the census watch ranges, from the one declared extent
 -- list in "Replacement.Saclac.Artifact".
 module Replacement.Saclac.Placement
-  ( renderLinkerScript
+  ( Units (..)
+  , renderLinkerScript
   , renderLinkerScriptDebug
+  , renderAllowlist
   , watchRanges
   , insertWatchRanges
   , bindOwnedPosts
@@ -23,7 +25,9 @@ import qualified FujiAF.FirstStage as F
 import Numeric (readHex, showHex)
 import qualified Data.Text as T
 import qualified Replacement.RtosPlatform.Aggregate as Agg
-import Replacement.Saclac.Artifact (Admitted (..), Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, loadingEntries, retainedData, retainedExternals, wordAt)
+import Replacement.Saclac.Artifact (Admitted (..), Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, loadingEntries, retainedData, retainedExternals, retainedRegions, unitImports, wordAt)
+import qualified Data.Map.Strict as M
+import qualified Replacement.DisplayScanout.Artifact as Scanout
 import qualified Replacement.FixedImage.Layout as Fixed
 
 hexAddress :: Word32 -> String
@@ -41,16 +45,21 @@ sectionOf 0 = "dispatch"
 sectionOf 1 = "router"
 sectionOf _ = "driver"
 
--- | The Root script. The carrier union names the fixed-bank family bodies the link keeps and
+-- | Whether the link carries the file service and the display scanout beside Root and the
+-- flag/mailbox family.
+data Units = BankUnits | RootFamilyOnly
+  deriving (Eq, Show)
+
+-- | The bank script. The carrier union names the fixed-bank family bodies the link keeps and
 -- the loader entries they call, as @<entry symbol>_<domain>@ at the stock entry address.
-renderLinkerScript :: Agg.CarrierUnion -> String
+renderLinkerScript :: Units -> Agg.CarrierUnion -> String
 renderLinkerScript = renderLinkerScriptFor False
 
-renderLinkerScriptDebug :: Agg.CarrierUnion -> String
+renderLinkerScriptDebug :: Units -> Agg.CarrierUnion -> String
 renderLinkerScriptDebug = renderLinkerScriptFor True
 
-renderLinkerScriptFor :: Bool -> Agg.CarrierUnion -> String
-renderLinkerScriptFor debug union = case (entries, extents) of
+renderLinkerScriptFor :: Bool -> Units -> Agg.CarrierUnion -> String
+renderLinkerScriptFor debug units union = case (entries, extents) of
   (firstEntry : _, _ : _) -> unlines $
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
@@ -59,6 +68,9 @@ renderLinkerScriptFor debug union = case (entries, extents) of
     , "/* Present only when the bank links the task60 loading owner. */"
     , "EXTERN(" ++ unwords (map snd loadingEntries) ++ ")"
     ]
+      ++ withUnits
+         ( ("EXTERN(" ++ unwords [name | Scanout.Entry name _ <- Scanout.entries] ++ ")")
+         : [retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";" | external <- unitImports] )
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
            any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_"]
@@ -75,7 +87,7 @@ renderLinkerScriptFor debug union = case (entries, extents) of
          ]
       ++ [ "MEMORY {"
     ]
-      ++ [ "  " ++ Fixed.linkerMemory ]
+      ++ [ "  " ++ Fixed.linkerMemory ] ++ withUnits [ "  INCLUDE retired-memory.ld" ]
       ++ [ "  " ++ regionName index ++ " (rx) : ORIGIN = " ++ hexAddress (extentLow extent)
              ++ ", LENGTH = " ++ hexAddress (fromIntegral (extentBytes extent))
          | (index, extent) <- zip [0 :: Int ..] extents
@@ -85,6 +97,7 @@ renderLinkerScriptFor debug union = case (entries, extents) of
          , "SECTIONS"
          , "{"
          ]
+      ++ withUnits [ "  INCLUDE retired.ld" ]
       ++ concat
         [ [ "  ." ++ sectionOf index ++ " : {"
           , "    KEEP(*(.text." ++ entryVeneer entry ++ "))"
@@ -125,6 +138,28 @@ renderLinkerScriptFor debug union = case (entries, extents) of
   _ -> ""
   where
     domainUnion = [("a", Agg.carrierEntriesA union), ("b", Agg.carrierEntriesB union)]
+    withUnits lines' = if units == BankUnits then lines' else []
+
+-- | The bank's check-fixed-image allowlist: every retained entry and data region its joint
+-- admission accepts, so both admissions judge one declared set.
+renderAllowlist :: Agg.CarrierUnion -> J.Value
+renderAllowlist union = J.object
+  [ "schema" J..= (2 :: Int)
+  , "stock_calls" J..=
+      [ J.object ["address" J..= hexAddress address, "name" J..= unwords (nub names), "source" J..= unwords (nub sources)]
+      | (address, (names, sources)) <- M.toAscList calls ]
+  , "stock_regions" J..=
+      [ J.object ["address" J..= hexAddress address, "bytes" J..= bytes, "name" J..= name, "source" J..= artifactSource "retainedRegions"]
+      | (name, address, bytes) <- retainedRegions ]
+  ]
+  where
+    artifactSource name = "replacement/saclac/Replacement/Saclac/Artifact.hs " ++ name :: String
+    calls = M.fromListWith (\(n1, s1) (n2, s2) -> (n2 ++ n1, s2 ++ s1)) $
+      [ (retainedAddress external, ([retainedName external], [artifactSource "retainedExternals"])) | external <- retainedExternals ]
+      ++ [ (retainedAddress external, ([retainedName external], [artifactSource "unitImports"])) | external <- unitImports ]
+      ++ [ (Agg.carrierEntryAddress entry, ([Agg.carrierEntrySymbol entry ++ "_" ++ label], ["replacement/rtos_platform/carriers.json"]))
+         | (label, domainEntries) <- [("a", Agg.carrierEntriesA union), ("b", Agg.carrierEntriesB union)]
+         , entry <- domainEntries, Agg.carrierEntryBody entry == Agg.LoaderBody ]
 
 -- | The census watch ranges: the same extents, in the shape the census tool
 -- reads. The label is the entry's name without its prefix and suffix.

@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("//replacement/saclac:bank.bzl", "BANK_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -389,10 +390,8 @@ $(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(locatio
 # The loader veneers branch to the fixed-bank family bodies at absolute addresses, so each linked
 # bank image has its own loader pair: suffix -> (bank symbols, testonly).
 _BANK_IMAGES = {
-    "": ("//replacement/saclac:saclac-image.symbols", False),
-    "-wrong-driver-store": ("//replacement/saclac:saclac-image-wrong-driver-store.symbols", False),
-    "-loading-fujimod": ("//replacement/saclac:saclac-image-loading-fujimod.symbols", True),
-    "-loading-retention": ("//replacement/saclac:saclac-image-loading-retention.symbols", True),
+    suffix: ("//replacement/saclac:saclac-image%s.symbols" % suffix, variant.testonly)
+    for suffix, variant in BANK_VARIANTS.items()
 }
 
 [
