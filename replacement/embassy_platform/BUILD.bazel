@@ -1,5 +1,7 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
 
+exports_files(["src/clock.rs"])
+
 NIX_INPUTS = [
     "Cargo.lock",
     "Cargo.toml",

@@ -29,6 +29,13 @@ main = do
   let outside = image { imageInstructions = S.insert (Guest (base + 28)) points }
   H.ensure (check fitting outside == Left (OutsideImage (Guest (base + 28)))) "missing instruction bytes were admitted"
   H.ensure (stackBytes (-1) == Nothing) "negative stack allowance was admitted"
+  restoreSymbols <- either H.failH pure (F.parseSymbols "00001000 00000020 T masked\n")
+  let restoreWords = [0xe92d4800, 0xe10fc000, 0xf10c0080, 0xe1a00000, 0xe1a00000, 0xe1a00000, 0xe129f00c, 0xe8bd8800]
+      restoreImage replaced = Image (Guest base) (B.concat (map U.putWord32 replaced)) restoreSymbols (S.fromList (map Guest [base, base + 4 .. base + 28]))
+  restoreBudget <- maybe (H.failH "invalid restore budget") pure (stackBytes 8)
+  either (H.failH . show) pure (check restoreBudget (restoreImage restoreWords))
+  H.ensure (check restoreBudget (restoreImage (take 4 restoreWords ++ [0xe3a0c013] ++ drop 5 restoreWords)) == Left (FrameNotDerivable (Guest base)))
+    "a CPSR write from a register overwritten after its MRS was admitted"
   zero <- maybe (H.failH "invalid zero budget") pure (stackBytes 0)
   haltSymbols <- either H.failH pure (F.parseSymbols "00001000 00000008 T halt\n")
   let halt = Image (Guest base) (B.concat (map U.putWord32 [0xe320f003, 0xeafffffd])) haltSymbols (S.fromList [Guest base, Guest (base + 4)])

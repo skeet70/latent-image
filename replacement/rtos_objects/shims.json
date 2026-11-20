@@ -5,7 +5,7 @@
   "rows": [
     {
       "id": "rtos_objects-01",
-      "shim": "`xm1_rtos_objects_*` exports placed by `family-a.ld`/`family-b.ld` at the stock entries",
+      "shim": "`xm1_rtos_objects_*_a`/`_b` family entries in the fixed bank, reached through the aggregate veneers at the stock entries",
       "kind": "stock-ABI export",
       "other_side": "stock flag/mailbox callers",
       "owned": "no",
@@ -33,23 +33,10 @@
             "xm1_platform_veneer_helper_block",
             "xm1_platform_veneer_helper_block_timed",
             "xm1_platform_veneer_helper_check",
-            "xm1_platform_veneer_helper_release",
-            "xm1_rtos_objects_check",
-            "xm1_rtos_objects_family_flag_clear",
-            "xm1_rtos_objects_family_flag_create",
-            "xm1_rtos_objects_family_flag_delete",
-            "xm1_rtos_objects_family_flag_poll",
-            "xm1_rtos_objects_family_flag_set",
-            "xm1_rtos_objects_family_flag_set_handler",
-            "xm1_rtos_objects_family_flag_timed_wait",
-            "xm1_rtos_objects_family_flag_wait",
-            "xm1_rtos_objects_release",
-            "xm1_rtos_objects_wait_block",
-            "xm1_rtos_objects_wait_block_timed",
-            "xm1_rtos_objects_wait_release"
+            "xm1_platform_veneer_helper_release"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "`xm1_rtos_objects_*` exports placed by `family-a.ld`/`family-b.ld` at the stock entries. stock flag/mailbox callers. every object caller is owned or migrated"
+          "requirement": "`xm1_rtos_objects_*_a`/`_b` family entries in the fixed bank, reached through the aggregate veneers at the stock entries. stock flag/mailbox callers. every object caller is owned or migrated"
         },
         {
           "image": "//replacement/rtos_platform:platform-b",
@@ -67,23 +54,56 @@
             "xm1_platform_veneer_helper_block",
             "xm1_platform_veneer_helper_block_timed",
             "xm1_platform_veneer_helper_check",
-            "xm1_platform_veneer_helper_release",
-            "xm1_rtos_objects_check",
-            "xm1_rtos_objects_family_flag_clear",
-            "xm1_rtos_objects_family_flag_create",
-            "xm1_rtos_objects_family_flag_delete",
-            "xm1_rtos_objects_family_flag_poll",
-            "xm1_rtos_objects_family_flag_set",
-            "xm1_rtos_objects_family_flag_set_handler",
-            "xm1_rtos_objects_family_flag_timed_wait",
-            "xm1_rtos_objects_family_flag_wait",
-            "xm1_rtos_objects_release",
-            "xm1_rtos_objects_wait_block",
-            "xm1_rtos_objects_wait_block_timed",
-            "xm1_rtos_objects_wait_release"
+            "xm1_platform_veneer_helper_release"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "`xm1_rtos_objects_*` exports placed by `family-a.ld`/`family-b.ld` at the stock entries. stock flag/mailbox callers. every object caller is owned or migrated"
+          "requirement": "`xm1_rtos_objects_*_a`/`_b` family entries in the fixed bank, reached through the aggregate veneers at the stock entries. stock flag/mailbox callers. every object caller is owned or migrated"
+        },
+        {
+          "image": "//replacement/saclac:saclac-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_rtos_objects_check_a",
+            "xm1_rtos_objects_check_b",
+            "xm1_rtos_objects_family_flag_clear_a",
+            "xm1_rtos_objects_family_flag_clear_b",
+            "xm1_rtos_objects_family_flag_create_a",
+            "xm1_rtos_objects_family_flag_create_b",
+            "xm1_rtos_objects_family_flag_delete_a",
+            "xm1_rtos_objects_family_flag_delete_b",
+            "xm1_rtos_objects_family_flag_poll_a",
+            "xm1_rtos_objects_family_flag_poll_b",
+            "xm1_rtos_objects_family_flag_set_a",
+            "xm1_rtos_objects_family_flag_set_b",
+            "xm1_rtos_objects_family_flag_set_handler_a",
+            "xm1_rtos_objects_family_flag_set_handler_b",
+            "xm1_rtos_objects_family_flag_timed_wait_a",
+            "xm1_rtos_objects_family_flag_timed_wait_b",
+            "xm1_rtos_objects_family_flag_wait_a",
+            "xm1_rtos_objects_family_flag_wait_b",
+            "xm1_rtos_objects_family_mailbox_create_a",
+            "xm1_rtos_objects_family_mailbox_create_b",
+            "xm1_rtos_objects_family_mailbox_delete_a",
+            "xm1_rtos_objects_family_mailbox_delete_b",
+            "xm1_rtos_objects_family_mailbox_poll_a",
+            "xm1_rtos_objects_family_mailbox_poll_b",
+            "xm1_rtos_objects_family_mailbox_receive_a",
+            "xm1_rtos_objects_family_mailbox_receive_b",
+            "xm1_rtos_objects_family_mailbox_send_a",
+            "xm1_rtos_objects_family_mailbox_send_b",
+            "xm1_rtos_objects_family_mailbox_timed_receive_a",
+            "xm1_rtos_objects_family_mailbox_timed_receive_b",
+            "xm1_rtos_objects_release_a",
+            "xm1_rtos_objects_release_b",
+            "xm1_rtos_objects_wait_block_a",
+            "xm1_rtos_objects_wait_block_b",
+            "xm1_rtos_objects_wait_block_timed_a",
+            "xm1_rtos_objects_wait_block_timed_b",
+            "xm1_rtos_objects_wait_release_a",
+            "xm1_rtos_objects_wait_release_b"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_objects_*_a`/`_b` family entries in the fixed bank, reached through the aggregate veneers at the stock entries. stock flag/mailbox callers. every object caller is owned or migrated"
         }
       ],
       "predicates": {
@@ -123,19 +143,19 @@
             "xm1_platform_veneer_helper_block_timed",
             "xm1_platform_veneer_helper_check",
             "xm1_platform_veneer_helper_release",
-            "xm1_rtos_objects_check",
-            "xm1_rtos_objects_family_flag_clear",
-            "xm1_rtos_objects_family_flag_create",
-            "xm1_rtos_objects_family_flag_delete",
-            "xm1_rtos_objects_family_flag_poll",
-            "xm1_rtos_objects_family_flag_set",
-            "xm1_rtos_objects_family_flag_set_handler",
-            "xm1_rtos_objects_family_flag_timed_wait",
-            "xm1_rtos_objects_family_flag_wait",
-            "xm1_rtos_objects_release",
-            "xm1_rtos_objects_wait_block",
-            "xm1_rtos_objects_wait_block_timed",
-            "xm1_rtos_objects_wait_release"
+            "xm1_rtos_objects_check_a",
+            "xm1_rtos_objects_family_flag_clear_a",
+            "xm1_rtos_objects_family_flag_create_a",
+            "xm1_rtos_objects_family_flag_delete_a",
+            "xm1_rtos_objects_family_flag_poll_a",
+            "xm1_rtos_objects_family_flag_set_a",
+            "xm1_rtos_objects_family_flag_set_handler_a",
+            "xm1_rtos_objects_family_flag_timed_wait_a",
+            "xm1_rtos_objects_family_flag_wait_a",
+            "xm1_rtos_objects_release_a",
+            "xm1_rtos_objects_wait_block_a",
+            "xm1_rtos_objects_wait_block_timed_a",
+            "xm1_rtos_objects_wait_release_a"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
           "requirement": "Thirteen event-flag carrier entries per domain in the aggregate `carriers.json` and `veneer-a.S`/`veneer-b.S`: eight flag services and the `family_release`, `helper_release` (`0x44744`/`0xd4704`), `helper_block`, `helper_block_timed` and `helper_check` bodies. stock flag callers, and retained stock mailbox send, receive and timed receive that branch into the helper extents. every flag caller is owned or migrated"
@@ -157,19 +177,19 @@
             "xm1_platform_veneer_helper_block_timed",
             "xm1_platform_veneer_helper_check",
             "xm1_platform_veneer_helper_release",
-            "xm1_rtos_objects_check",
-            "xm1_rtos_objects_family_flag_clear",
-            "xm1_rtos_objects_family_flag_create",
-            "xm1_rtos_objects_family_flag_delete",
-            "xm1_rtos_objects_family_flag_poll",
-            "xm1_rtos_objects_family_flag_set",
-            "xm1_rtos_objects_family_flag_set_handler",
-            "xm1_rtos_objects_family_flag_timed_wait",
-            "xm1_rtos_objects_family_flag_wait",
-            "xm1_rtos_objects_release",
-            "xm1_rtos_objects_wait_block",
-            "xm1_rtos_objects_wait_block_timed",
-            "xm1_rtos_objects_wait_release"
+            "xm1_rtos_objects_check_b",
+            "xm1_rtos_objects_family_flag_clear_b",
+            "xm1_rtos_objects_family_flag_create_b",
+            "xm1_rtos_objects_family_flag_delete_b",
+            "xm1_rtos_objects_family_flag_poll_b",
+            "xm1_rtos_objects_family_flag_set_b",
+            "xm1_rtos_objects_family_flag_set_handler_b",
+            "xm1_rtos_objects_family_flag_timed_wait_b",
+            "xm1_rtos_objects_family_flag_wait_b",
+            "xm1_rtos_objects_release_b",
+            "xm1_rtos_objects_wait_block_b",
+            "xm1_rtos_objects_wait_block_timed_b",
+            "xm1_rtos_objects_wait_release_b"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
           "requirement": "Thirteen event-flag carrier entries per domain in the aggregate `carriers.json` and `veneer-a.S`/`veneer-b.S`: eight flag services and the `family_release`, `helper_release` (`0x44744`/`0xd4704`), `helper_block`, `helper_block_timed` and `helper_check` bodies. stock flag callers, and retained stock mailbox send, receive and timed receive that branch into the helper extents. every flag caller is owned or migrated"
@@ -234,9 +254,6 @@
             "xm1_rtos_cyclic_timer_remove",
             "xm1_rtos_data_queue_stock_insert_timer",
             "xm1_rtos_data_queue_stock_remove_timer",
-            "xm1_rtos_objects_stock_insert_timer",
-            "xm1_rtos_objects_stock_remove_timer",
-            "xm1_rtos_objects_stock_timeout",
             "xm1_rtos_scheduler_s2_deliver_exception",
             "xm1_rtos_scheduler_s2_exit_task",
             "xm1_rtos_scheduler_s2_global_unlock",
@@ -291,9 +308,6 @@
             "xm1_rtos_cyclic_timer_remove",
             "xm1_rtos_data_queue_stock_insert_timer",
             "xm1_rtos_data_queue_stock_remove_timer",
-            "xm1_rtos_objects_stock_insert_timer",
-            "xm1_rtos_objects_stock_remove_timer",
-            "xm1_rtos_objects_stock_timeout",
             "xm1_rtos_scheduler_s2_deliver_exception",
             "xm1_rtos_scheduler_s2_exit_task",
             "xm1_rtos_scheduler_s2_global_unlock",
@@ -308,6 +322,30 @@
           ],
           "contract": "replacement/rtos_platform/carriers.json",
           "requirement": "`xm1_rtos_scheduler_*` externs (acquire, insert, notify, prepare, release, remove, reset, save). rtos_scheduler. the object crate links the scheduler crate directly and both sides compare with stock in one image"
+        },
+        {
+          "image": "//replacement/saclac:saclac-image",
+          "kind": "retained-import",
+          "symbols": [
+            "xm1_rtos_scheduler_acquire_a",
+            "xm1_rtos_scheduler_acquire_b",
+            "xm1_rtos_scheduler_insert_a",
+            "xm1_rtos_scheduler_insert_b",
+            "xm1_rtos_scheduler_notify_a",
+            "xm1_rtos_scheduler_notify_b",
+            "xm1_rtos_scheduler_prepare_a",
+            "xm1_rtos_scheduler_prepare_b",
+            "xm1_rtos_scheduler_release_a",
+            "xm1_rtos_scheduler_release_b",
+            "xm1_rtos_scheduler_remove_a",
+            "xm1_rtos_scheduler_remove_b",
+            "xm1_rtos_scheduler_reset_a",
+            "xm1_rtos_scheduler_reset_b",
+            "xm1_rtos_scheduler_save_a",
+            "xm1_rtos_scheduler_save_b"
+          ],
+          "contract": "replacement/rtos_platform/carriers.json",
+          "requirement": "`xm1_rtos_scheduler_*` externs (acquire, insert, notify, prepare, release, remove, reset, save). rtos_scheduler. the object crate links the scheduler crate directly and both sides compare with stock in one image. The bank family links them as the `_a`/`_b` loader entries"
         }
       ],
       "predicates": {
@@ -318,7 +356,7 @@
     },
     {
       "id": "rtos_objects-04",
-      "shim": "`xm1_rtos_objects_stock_insert_timer`/`_remove_timer` externs",
+      "shim": "`xm1_rtos_objects_stock_insert_timer`/`_remove_timer` externs, linked as the `xm1_rtos_timer_insert_a`/`_b` and `xm1_rtos_timer_remove_a`/`_b` loader entries",
       "kind": "C-ABI bridge between two owned units",
       "other_side": "rtos_timer",
       "owned": "yes",
@@ -331,22 +369,16 @@
           "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
         },
         {
-          "image": "//replacement/rtos_platform:platform-a",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "retained-import",
           "symbols": [
-            "xm1_rtos_objects_stock_insert_timer"
+            "xm1_rtos_timer_insert_a",
+            "xm1_rtos_timer_insert_b",
+            "xm1_rtos_timer_remove_a",
+            "xm1_rtos_timer_remove_b"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "`xm1_rtos_objects_stock_insert_timer`/`_remove_timer` externs. rtos_timer. the object crate links the timer crate directly and both sides compare with stock in one image"
-        },
-        {
-          "image": "//replacement/rtos_platform:platform-b",
-          "kind": "retained-import",
-          "symbols": [
-            "xm1_rtos_objects_stock_insert_timer"
-          ],
-          "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "`xm1_rtos_objects_stock_insert_timer`/`_remove_timer` externs. rtos_timer. the object crate links the timer crate directly and both sides compare with stock in one image"
+          "requirement": "`xm1_rtos_objects_stock_insert_timer`/`_remove_timer` externs, linked as the `xm1_rtos_timer_insert_a`/`_b` and `xm1_rtos_timer_remove_a`/`_b` loader entries. rtos_timer. the object crate links the timer crate directly and both sides compare with stock in one image"
         }
       ],
       "predicates": {
@@ -357,7 +389,7 @@
     },
     {
       "id": "rtos_objects-05",
-      "shim": "`xm1_rtos_objects_stock_timeout` (`0x44318`/`0xd42d8`)",
+      "shim": "`xm1_rtos_objects_stock_timeout`, linked as the `xm1_rtos_scheduler_timeout_a`/`_b` loader entries (`0x44318`/`0xd42d8`)",
       "kind": "C-ABI bridge between two owned units",
       "other_side": "the owned scheduler timeout body behind the aggregate veneer",
       "owned": "yes",
@@ -370,22 +402,14 @@
           "requirement": "Standalone family qualification images are frozen reference artifacts; the current linked boundary is the platform aggregate, not a rebuilt standalone family image."
         },
         {
-          "image": "//replacement/rtos_platform:platform-a",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "retained-import",
           "symbols": [
-            "xm1_rtos_objects_stock_timeout"
+            "xm1_rtos_scheduler_timeout_a",
+            "xm1_rtos_scheduler_timeout_b"
           ],
           "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "`xm1_rtos_objects_stock_timeout` (`0x44318`/`0xd42d8`). the owned scheduler timeout body behind the aggregate veneer. the object crate names the owned timeout callback directly"
-        },
-        {
-          "image": "//replacement/rtos_platform:platform-b",
-          "kind": "retained-import",
-          "symbols": [
-            "xm1_rtos_objects_stock_timeout"
-          ],
-          "contract": "replacement/rtos_platform/carriers.json",
-          "requirement": "`xm1_rtos_objects_stock_timeout` (`0x44318`/`0xd42d8`). the owned scheduler timeout body behind the aggregate veneer. the object crate names the owned timeout callback directly"
+          "requirement": "`xm1_rtos_objects_stock_timeout`, linked as the `xm1_rtos_scheduler_timeout_a`/`_b` loader entries (`0x44318`/`0xd42d8`). the owned scheduler timeout body behind the aggregate veneer. the object crate names the owned timeout callback directly"
         }
       ],
       "predicates": {

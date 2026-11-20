@@ -9,6 +9,7 @@ module Replacement.Saclac.Artifact
   , fixedExtent
   , Entry (..)
   , entries
+  , loadingEntries
   , Retained (..)
   , retainedExternals
   , retainedData
@@ -58,6 +59,7 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import Numeric (readHex)
 import qualified Replacement.Record5Staging as Record5
+import qualified Replacement.RtosPlatform.Aggregate as Agg
 import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.FixedImage.Record as Fixed
 import qualified Replacement.Toolchain.Stack as Stack
@@ -105,6 +107,20 @@ decoderEntries =
   , (0x6ae3f4, "xm1_decoder_finish")
   ]
 
+-- | The stock task60 constructor, request and cancel wrappers. They are
+-- published only when the linked bank carries the loading owner; a partial
+-- owner is refused.
+loadingEntries :: [(Word32, String)]
+loadingEntries =
+  [ (0x73ac74, "xm1_loading_startup")
+  , (0x73ac94, "xm1_loading_legacy_request")
+  , (0x73aca4, "xm1_loading_legacy_cancel")
+  ]
+
+-- | The receiver task's stock-created stack (`0x725dd8` descriptor word 3).
+loadingTaskStackBytes :: Int
+loadingTaskStackBytes = 0xc00
+
 -- | A stock word the owned image reaches outside its extents.
 data Retained = Retained
   { retainedName :: String
@@ -131,6 +147,37 @@ retainedExternals =
   , Retained "xm1_decoder_marker" 0x42188
   , Retained "xm1_decoder_progress_entry" 0x6ae1dc
   , Retained "xm1_decoder_complete_entry" 0x6ae310
+  ] ++ loadingRetained
+
+-- | Source-inspected X-M1 1.50 leaves the task60 owner and its NAND port call.
+loadingRetained :: [Retained]
+loadingRetained =
+  [ Retained "xm1_loading_create_channel" 0x724cdc
+  , Retained "xm1_loading_create_task" 0x725dd8
+  , Retained "xm1_loading_send_message" 0x72503c
+  , Retained "xm1_loading_receive_message" 0x725318
+  , Retained "xm1_loading_current_task" 0x723cb8
+  , Retained "xm1_loading_wait_reserved" 0x724b68
+  , Retained "xm1_loading_signal_reserved" 0x724c00
+  , Retained "xm1_loading_segment" 0x657114
+  , Retained "xm1_loading_extents" 0x6571a0
+  , Retained "xm1_loading_mode" 0x657184
+  , Retained "xm1_loading_plain_progress" 0x73b924
+  , Retained "xm1_loading_take" 0x724b68
+  , Retained "xm1_loading_give" 0x724c00
+  , Retained "xm1_loading_delay" 0x723ce8
+  , Retained "xm1_loading_cache" 0x42634
+  , Retained "xm1_loading_action1" 0x6aa5b4
+  , Retained "xm1_loading_action2" 0x6aa5e4
+  , Retained "xm1_loading_section3" 0x6aa6f8
+  , Retained "xm1_loading_selected" 0x6aa63c
+  , Retained "xm1_loading_region" 0x6aa750
+  , Retained "xm1_loading_initialize_storage" 0x69f920
+  , Retained "xm1_loading_register_completion" 0x6c1444
+  , Retained "xm1_loading_auxiliary" 0x6aa838
+  , Retained "xm1_lower_read_clean_invalidate" 0x42634
+  , Retained "xm1_lower_read_clock_mask" 0x42560
+  , Retained "xm1_lower_read_clock_restore" 0x42568
   ]
 
 externalAddresses :: [Word32]
@@ -364,12 +411,12 @@ compilerTrapWord :: Word32
 compilerTrapWord = 0xe7ffdefe
 
 
-
--- | Direct targets stay in owned code or enter a declared retained entry.
-checkControl :: Admitted -> S.Set Word32 -> S.Set Word32 -> Either PlacementError ()
-checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \address -> do
+-- | Direct targets stay in owned code or enter a declared retained or loader entry.
+checkControl :: S.Set Word32 -> Admitted -> S.Set Word32 -> S.Set Word32 -> Either PlacementError ()
+checkControl loaderEntries admitted instructions dataWords = forM_ (S.toList instructions) $ \address -> do
   let word = wordAt admitted address
       instruction = A.decode address word
+      external target = target `elem` externalAddresses || S.member target loaderEntries
   case instruction of
     A.Rejected A.UndefinedEncoding | word == compilerTrapWord -> Right ()
     A.Rejected forbidden -> case W.classify W.Strict address word of
@@ -377,17 +424,26 @@ checkControl admitted instructions dataWords = forM_ (S.toList instructions) $ \
       W.Stop -> Left (WalkRefused address (DecoderRejected forbidden))
       _ -> Right ()
     A.Branch _ _ target -> do
-      unless (insideExtents target || target `elem` externalAddresses) $
+      unless (insideExtents target || external target) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
       when (insideExtents target && S.member target dataWords) $
         Left (WalkRefused address BranchToDataWord)
-      unless (S.member target instructions || target `elem` externalAddresses) $
+      unless (S.member target instructions || external target) $
         Left (WalkRefused address (BranchTargetNotAllowed target))
     _ -> Right ()
   when (word /= compilerTrapWord && mayFallThrough instruction && S.member (address + 4) dataWords) $
     Left (WalkRefused (address + 4) FallThroughIntoDataWord)
   when (word /= compilerTrapWord && mayFallThrough instruction && not (insideExtents (address + 4))) $
     Left (WalkRefused (address + 4) FallThroughOutsideOwned)
+
+-- | The stock entries of both loaders whose bodies stay in the loader carriers: the fixed-bank
+-- family bodies call their own domain's services there.
+loaderEntryAddresses :: Agg.CarrierUnion -> S.Set Word32
+loaderEntryAddresses union = S.fromList
+  [ Agg.carrierEntryAddress entry
+  | entry <- Agg.carrierEntriesA union ++ Agg.carrierEntriesB union
+  , Agg.carrierEntryBody entry == Agg.LoaderBody
+  ]
 
 data Admitted = Admitted
   { admittedElf :: B.ByteString
@@ -503,9 +559,33 @@ stackFailure problem = case problem of
   Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
   Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
   Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
+-- | Whether the linked bank carries the task60 loading owner: all wrapper
+-- bodies or none.
+loadingOwner :: [F.Symbol] -> Either PlacementError Bool
+loadingOwner symbols = case [name | (_, name) <- loadingEntries, Left _ <- [F.lookupSymbol symbols name]] of
+  [] -> Right True
+  missing | length missing == length loadingEntries -> Right False
+  (name : _) -> Left (EntryMissing name)
+
+-- | The image-4 veneers the linked bank publishes.
+image4Entries :: Admitted -> Either PlacementError [(Word32, String)]
+image4Entries admitted = do
+  loading <- loadingOwner (admittedSymbols admitted)
+  pure (decoderEntries ++ if loading then loadingEntries else [])
+
+-- | The receiver task's owned demand fits its stock-created stack.
+checkLoadingTask :: Admitted -> S.Set Word32 -> Either PlacementError ()
+checkLoadingTask admitted instructions = do
+  loading <- loadingOwner (admittedSymbols admitted)
+  when loading $ do
+    task <- either (const (Left (EntryMissing "xm1_loading_task"))) Right
+      (F.lookupSymbol (admittedSymbols admitted) "xm1_loading_task")
+    budget <- maybe (Left SectionsRejected) Right (stackBudget loadingTaskStackBytes)
+    checkStackEntry budget (F.symbolAddress task) admitted instructions
+
 -- | Admit layout, direct control-flow targets and the owned stack budget.
-admit :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
-admit elfBytes bin symbolsBytes disasm sectionsBytes = do
+admit :: Agg.CarrierUnion -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
+admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
   symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
   sections <- parseSections sectionsBytes
   instructions <- instructionAddresses disasm
@@ -565,8 +645,9 @@ admit elfBytes bin symbolsBytes disasm sectionsBytes = do
   checkTaskStackContract admitted instructions
   budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
   checkStack budget admitted instructions
-  checkReferences elfBytes admitted
-  checkControl admitted instructions dataWords
+  checkLoadingTask admitted instructions
+  checkReferences (loaderEntryAddresses union) elfBytes admitted
+  checkControl (loaderEntryAddresses union) admitted instructions dataWords
   pure admitted
 
 checkTaskStackContract :: Admitted -> S.Set Word32 -> Either PlacementError ()
@@ -610,8 +691,8 @@ taskCreateBranch admitted = do
   require (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) TaskStackContractInvalid
   pure (0xeb000000 .|. (fromIntegral (delta `div` 4) .&. 0xffffff))
 
-checkReferences :: B.ByteString -> Admitted -> Either PlacementError ()
-checkReferences elfBytes admitted = do
+checkReferences :: S.Set Word32 -> B.ByteString -> Admitted -> Either PlacementError ()
+checkReferences loaderEntries elfBytes admitted = do
   elf <- first ElfRejected (ELF.parseElf elfBytes)
   references <- first ElfRejected (ELF.addressRelocations elf)
   boundary <- either (const (Left KernelBoundaryInvalid)) Right
@@ -623,7 +704,7 @@ checkReferences elfBytes admitted = do
   require (at 0 == 0x314e524b && windows <= 16 && entryCount <= 32
     && F.symbolSize boundary == 4 * (3 + 2 * windows + entryCount)) KernelBoundaryInvalid
   let ranges = [(at (3 + 2 * index), at (4 + 2 * index)) | index <- take (fromIntegral windows) [0 ..]]
-      retained address = address `elem` externalAddresses
+      retained address = address `elem` externalAddresses || S.member address loaderEntries
         || any (\(_, _, low, bytes) -> low <= address && toInteger address < toInteger low + toInteger bytes) stockArrays
         || any (\(low, high) -> low <= address && address < high) ranges
       metadataBoundary reference symbol = ELF.addressKind reference == ELF.DataReference
@@ -733,11 +814,12 @@ decoderPublications image4 admitted = do
   H.ensure (B.length image4 == 0x282800
     && digest image4 == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
     "canonical image4 differs"
-  forM decoderEntries $ \(address, name) -> do
+  published <- either (H.failH . show) pure (image4Entries admitted)
+  forM published $ \(address, name) -> do
     target <- either H.failH pure (F.symbolAddress <$> F.lookupSymbol (admittedSymbols admitted) name)
-    H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("decoder entry leaves fixed body: " ++ name)
+    H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("image4 entry leaves fixed body: " ++ name)
     let delta = toInteger target - toInteger address - 8
-    H.ensure (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) ("decoder entry leaves A32 branch range: " ++ name)
+    H.ensure (delta `mod` 4 == 0 && delta >= -0x2000000 && delta < 0x2000000) ("image4 entry leaves A32 branch range: " ++ name)
     let old = U.word32At image4 (fromIntegral (address - 0x61c400))
         new = 0xea000000 .|. (fromInteger (delta `div` 4) .&. 0xffffff)
     either H.failH pure (Fixed.publication address old new)
@@ -745,10 +827,10 @@ decoderPublications image4 admitted = do
 -- | Staging the canonical image reproduces the canonical DAT: the inverse check.
 stageSaclac
   :: Tools.Tools -> FilePath -> B.ByteString -> B.ByteString -> B.ByteString
-  -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+  -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Agg.CarrierUnion
   -> IO Staged
-stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sectionsBytes = do
-  admitted <- either (H.failH . show) pure (admit elf bin symbolsBytes disasm sectionsBytes)
+stageSaclac tools scratch dat image5 image4 elf bin symbolsBytes disasm sectionsBytes union = do
+  admitted <- either (H.failH . show) pure (admit union elf bin symbolsBytes disasm sectionsBytes)
   installed <- either (H.failH . show) pure (installedImage image5 admitted)
   either (H.failH . show) pure (admitInstalled installed admitted)
   body <- either (H.failH . show) pure (fixedBody admitted)
@@ -804,6 +886,7 @@ contractValue imagePath datPath staged = object
   , "trap_word" .= trapWord
   , "entries" .= [object ["address" .= entryAddress entry, "veneer" .= entryVeneer entry, "body" .= entryBody entry] | entry <- entries]
   , "decoder_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- decoderEntries]
+  , "loading_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- either (const []) (filter (`elem` loadingEntries)) (image4Entries admitted)]
   , "retained_externals" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedExternals]
   , "retained_data" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedData]
   , "owned_bytes" .= sum [sectionBytes section | section <- admittedSections admitted, sectionAllocated section]

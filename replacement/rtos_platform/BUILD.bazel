@@ -323,49 +323,6 @@ xm1_rust_rlib(
     ],
 )
 
-[
-    xm1_rust_rlib(
-        name = "objects-%s-rlib" % domain,
-        src = "//replacement/rtos_objects:stage/adapter.rs",
-        crate_name = "xm1_rtos_objects_family_adapter",
-        opt_level = "2",
-        data = [
-            "//replacement/rtos_objects:stage/abi.rs",
-            "//replacement/rtos_objects:stage/family.rs",
-            "//replacement/rtos_objects:src/admission.rs",
-            "//replacement/rtos_objects:src/block.rs",
-            "//replacement/rtos_objects:src/create.rs",
-            "//replacement/rtos_objects:src/id.rs",
-            "//replacement/rtos_objects:src/lib.rs",
-            "//replacement/rtos_objects:src/locked.rs",
-            "//replacement/rtos_objects:src/matching.rs",
-            "//replacement/rtos_objects:src/message.rs",
-            "//replacement/rtos_objects:src/order.rs",
-            "//replacement/rtos_objects:src/status.rs",
-            "//replacement/rtos_objects:src/teardown.rs",
-            "//replacement/rtos_objects:src/timeout.rs",
-            "//replacement/rtos_objects:src/wake.rs",
-            "//replacement/rtos_layout:src/lib.rs",
-            "//replacement/rtos_reservation:src/lib.rs",
-        ],
-        rustc_flags = _CARRIER_CODEGEN + [
-            "--cfg",
-            "'feature=\"domain-%s\"'" % domain,
-            "--cfg",
-            "'feature=\"stage\"'",
-            "--cfg",
-            "'feature=\"family\"'",
-            "--cfg",
-            "'feature=\"component\"'",
-            "-C",
-            "llvm-args=-enable-machine-outliner=always",
-            "-C",
-            "llvm-args=-machine-outliner-reruns=1",
-        ],
-    )
-    for domain in ["a", "b"]
-]
-
 _ARCHIVES = {
     "a": [
         ":platform-root",
@@ -381,7 +338,6 @@ _ARCHIVES = {
         ":global-lock-rlib",
         ":cyclic-a-rlib",
         ":timer-a-rlib",
-        ":objects-a-rlib",
     ],
     "b": [
         ":platform-root",
@@ -397,7 +353,6 @@ _ARCHIVES = {
         ":global-lock-rlib",
         ":cyclic-b-rlib",
         ":timer-b-rlib",
-        ":objects-b-rlib",
     ],
 }
 
@@ -416,7 +371,7 @@ tmp=$$(mktemp -d)
 trap 'rm -rf "$$tmp"' EXIT
 $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location veneer-%s.S) -o $$tmp/veneer.o
 $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location //replacement/rtos_fixed_pool:stage/entries.S) -o $$tmp/entries.o
-$(location @lab_jq//:bin/jq) -r '.domains.%s | (.entries[].symbol, .entries[].veneer)' $(location carriers.json) | sort -u > $$tmp/seeds
+$(location @lab_jq//:bin/jq) -r '.domains.%s | ((.entries[] | select(.body != "bank") | .symbol), .entries[].veneer)' $(location carriers.json) | sort -u > $$tmp/seeds
 $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections $$(awk '{printf " -u %%s", $$1}' $$tmp/seeds) --start-group %s --end-group $$tmp/veneer.o $$tmp/entries.o -o $(location :bodies-%s.o)
 $(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(location :sections-%s.txt)
 """ % (domain, domain, " ".join(["$(location %s)" % archive for archive in _ARCHIVES[domain]]), domain, domain, domain),
@@ -431,50 +386,64 @@ $(location @lab_llvm//:bin/llvm-readelf) -S $(location :bodies-%s.o) > $(locatio
     for domain in ["a", "b"]
 ]
 
+# The loader veneers branch to the fixed-bank family bodies at absolute addresses, so each linked
+# bank image has its own loader pair: suffix -> (bank symbols, testonly).
+_BANK_IMAGES = {
+    "": ("//replacement/saclac:saclac-image.symbols", False),
+    "-wrong-driver-store": ("//replacement/saclac:saclac-image-wrong-driver-store.symbols", False),
+    "-loading-fujimod": ("//replacement/saclac:saclac-image-loading-fujimod.symbols", True),
+    "-loading-retention": ("//replacement/saclac:saclac-image-loading-retention.symbols", True),
+}
+
 [
     genrule(
-        name = "platform-script-%s" % domain,
-        srcs = ["carriers.json", ":sections-%s.txt" % domain],
-        outs = ["platform-%s.gen.ld" % domain, "placement-%s.json" % domain],
+        name = "platform-script-%s%s" % (domain, suffix),
+        srcs = ["carriers.json", ":sections-%s.txt" % domain, bank],
+        outs = ["platform-%s%s.gen.ld" % (domain, suffix), "placement-%s%s.json" % (domain, suffix)],
         tools = [":place-platform"],
-        cmd = "$(location :place-platform) $(location carriers.json) %s $(location :sections-%s.txt) $(location :platform-%s.gen.ld) $(location :placement-%s.json)" % (domain, domain, domain, domain),
+        cmd = "$(location :place-platform) $(location carriers.json) %s $(location :sections-%s.txt) $(location %s) $(location :platform-%s%s.gen.ld) $(location :placement-%s%s.json)" % (domain, domain, bank, domain, suffix, domain, suffix),
+        testonly = testonly,
         visibility = ["//visibility:public"],
     )
     for domain in ["a", "b"]
+    for suffix, (bank, testonly) in _BANK_IMAGES.items()
 ]
 
 [
     genrule(
-        name = "platform-%s" % domain,
-        srcs = [":bodies-%s.o" % domain, ":platform-%s.gen.ld" % domain],
+        name = "platform-%s%s" % (domain, suffix),
+        srcs = [":bodies-%s.o" % domain, ":platform-%s%s.gen.ld" % (domain, suffix)],
         outs = [
-            "platform-%s.elf" % domain,
-            "platform-%s.bin" % domain,
-            "platform-%s.symbols" % domain,
-            "platform-%s.disasm" % domain,
+            "platform-%s%s.elf" % (domain, suffix),
+            "platform-%s%s.bin" % (domain, suffix),
+            "platform-%s%s.symbols" % (domain, suffix),
+            "platform-%s%s.disasm" % (domain, suffix),
         ],
         cmd = """
 set -e
-$(location @lab_lld//:bin/ld.lld) -m armelf -T $(location :platform-%s.gen.ld) $(location :bodies-%s.o) -o $(location :platform-%s.elf)
-$(location @lab_llvm//:bin/llvm-objcopy) -O binary $(location :platform-%s.elf) $(location :platform-%s.bin)
-$(location @lab_llvm//:bin/llvm-nm) -S --defined-only --numeric-sort $(location :platform-%s.elf) > $(location :platform-%s.symbols)
-$(location @lab_llvm//:bin/llvm-objdump) -d --no-show-raw-insn --triple=armv7r-none-eabi --mcpu=cortex-r4f $(location :platform-%s.elf) > $(location :platform-%s.disasm)
-""" % (domain, domain, domain, domain, domain, domain, domain, domain, domain),
+$(location @lab_lld//:bin/ld.lld) -m armelf -T $(location :platform-{name}.gen.ld) $(location :bodies-{domain}.o) -o $(location :platform-{name}.elf)
+$(location @lab_llvm//:bin/llvm-objcopy) -O binary $(location :platform-{name}.elf) $(location :platform-{name}.bin)
+$(location @lab_llvm//:bin/llvm-nm) -S --defined-only --numeric-sort $(location :platform-{name}.elf) > $(location :platform-{name}.symbols)
+$(location @lab_llvm//:bin/llvm-objdump) -d --no-show-raw-insn --triple=armv7r-none-eabi --mcpu=cortex-r4f $(location :platform-{name}.elf) > $(location :platform-{name}.disasm)
+""".format(name = domain + suffix, domain = domain),
         tools = [
             "@lab_lld//:bin/ld.lld",
             "@lab_llvm//:bin/llvm-objcopy",
             "@lab_llvm//:bin/llvm-nm",
             "@lab_llvm//:bin/llvm-objdump",
         ],
+        testonly = testonly,
         visibility = ["//visibility:public"],
     )
     for domain in ["a", "b"]
+    for suffix, (bank, testonly) in _BANK_IMAGES.items()
 ]
 
 haskell_library(
     name = "platform-artifact",
     srcs = [
         "stage/Replacement/RtosPlatform/Artifact.hs",
+        "stage/Replacement/RtosPlatform/Bank.hs",
         "stage/Replacement/RtosPlatform/Place.hs",
         "stage/Replacement/RtosPlatform/Union.hs",
     ],
@@ -490,6 +459,7 @@ haskell_library(
         "//host:first-stage",
         "//host:text",
         "//host:update-container",
+        "//replacement/fixed_image:contract",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
@@ -522,6 +492,7 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:first-stage",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )

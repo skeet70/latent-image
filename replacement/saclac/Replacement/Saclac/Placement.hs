@@ -22,7 +22,8 @@ import Data.Word (Word32)
 import qualified FujiAF.FirstStage as F
 import Numeric (readHex, showHex)
 import qualified Data.Text as T
-import Replacement.Saclac.Artifact (Admitted (..), Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, retainedData, retainedExternals, wordAt)
+import qualified Replacement.RtosPlatform.Aggregate as Agg
+import Replacement.Saclac.Artifact (Admitted (..), Entry (..), Extent (..), Retained (..), entries, extentBytes, extents, loadingEntries, retainedData, retainedExternals, wordAt)
 import qualified Replacement.FixedImage.Layout as Fixed
 
 hexAddress :: Word32 -> String
@@ -40,23 +41,37 @@ sectionOf 0 = "dispatch"
 sectionOf 1 = "router"
 sectionOf _ = "driver"
 
-renderLinkerScript :: String
+-- | The Root script. The carrier union names the fixed-bank family bodies the link keeps and
+-- the loader entries they call, as @<entry symbol>_<domain>@ at the stock entry address.
+renderLinkerScript :: Agg.CarrierUnion -> String
 renderLinkerScript = renderLinkerScriptFor False
 
-renderLinkerScriptDebug :: String
+renderLinkerScriptDebug :: Agg.CarrierUnion -> String
 renderLinkerScriptDebug = renderLinkerScriptFor True
 
-renderLinkerScriptFor :: Bool -> String
-renderLinkerScriptFor debug = case (entries, extents) of
+renderLinkerScriptFor :: Bool -> Agg.CarrierUnion -> String
+renderLinkerScriptFor debug union = case (entries, extents) of
   (firstEntry : _, _ : _) -> unlines $
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
     , "/* Generated from Replacement.Saclac.Artifact.extents. */"
     , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK XM1_SACLAC_CONSTRUCTOR_STACK xm1_saclac_create_task XM1_DECODER_STATE xm1_decoder_init xm1_decoder_feed xm1_decoder_progress xm1_decoder_complete xm1_decoder_finish)"
+    , "/* Present only when the bank links the task60 loading owner. */"
+    , "EXTERN(" ++ unwords (map snd loadingEntries) ++ ")"
     ]
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
            any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_"]
+         ]
+      ++ [ "PROVIDE(" ++ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ");"
+         | external <- retainedExternals ++ retainedData,
+           any (`isPrefixOf` retainedName external) ["xm1_loading_", "xm1_lower_read_"]
+         ]
+      ++ [ "EXTERN(" ++ Agg.carrierEntrySymbol entry ++ ")"
+         | (_, domainEntries) <- domainUnion, entry <- domainEntries, Agg.carrierEntryBody entry == Agg.BankBody
+         ]
+      ++ [ "PROVIDE(" ++ Agg.carrierEntrySymbol entry ++ "_" ++ label ++ " = " ++ hexAddress (Agg.carrierEntryAddress entry) ++ ");"
+         | (label, domainEntries) <- domainUnion, entry <- domainEntries, Agg.carrierEntryBody entry == Agg.LoaderBody
          ]
       ++ [ "MEMORY {"
     ]
@@ -108,6 +123,8 @@ renderLinkerScriptFor debug = case (entries, extents) of
          , ""
          ]
   _ -> ""
+  where
+    domainUnion = [("a", Agg.carrierEntriesA union), ("b", Agg.carrierEntriesB union)]
 
 -- | The census watch ranges: the same extents, in the shape the census tool
 -- reads. The label is the entry's name without its prefix and suffix.

@@ -73,6 +73,8 @@ xm1_rust_staticlib(
     rlib_deps = {
         "xm1_callback_core": "//replacement/callback_core:arm",
         "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_executable_loading": "//replacement/executable_loading:arm",
+        "xm1_application_nand": "//replacement/application_nand:arm",
     },
     strict_align = False,
     data = [

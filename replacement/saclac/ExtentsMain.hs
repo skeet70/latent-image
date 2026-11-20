@@ -14,6 +14,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.Word (Word32)
 import FujiAF.Host (failH)
+import Replacement.RtosPlatform.Aggregate (CarrierUnion, parseCarrierUnion)
 import Replacement.Saclac.Artifact (Admitted, admit)
 import Replacement.Saclac.Placement (bindOwnedEntries, bindOwnedPosts, insertWatchRanges, renderLinkerScript, renderLinkerScriptDebug)
 import System.Environment (getArgs)
@@ -22,15 +23,23 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    ["linker-script"] -> putStr renderLinkerScript
-    ["linker-script-debug"] -> putStr renderLinkerScriptDebug
-    "census-sites" : inputPath : fieldsPath : outputPath : images@(_ : _) | length images `mod` 5 == 0 -> do
+    ["linker-script", carriersPath] -> do
+      union <- readCarriers carriersPath
+      putStr (renderLinkerScript union)
+    ["linker-script-debug", carriersPath] -> do
+      union <- readCarriers carriersPath
+      putStr (renderLinkerScriptDebug union)
+    "census-sites" : inputPath : fieldsPath : outputPath : carriersPath : images@(_ : _) | length images `mod` 5 == 0 -> do
+      union <- readCarriers carriersPath
       value <- either failH pure . J.eitherDecode =<< L.readFile inputPath
       identities <- either failH pure . (J.parseEither declaredIdentities =<<) . J.eitherDecode =<< L.readFile fieldsPath
-      admitted <- mapM admitImage (groups images)
+      admitted <- mapM (admitImage union) (groups images)
       updated <- either failH pure (insertWatchRanges value >>= bindOwnedPosts admitted >>= bindOwnedEntries identities admitted)
       L.writeFile outputPath (J.encode updated)
-    _ -> failH "usage: saclac-extents linker-script | census-sites INPUT FIELDS OUTPUT (ELF BIN SYMBOLS DISASM SECTIONS)..."
+    _ -> failH "usage: saclac-extents linker-script CARRIERS | linker-script-debug CARRIERS | census-sites INPUT FIELDS OUTPUT CARRIERS (ELF BIN SYMBOLS DISASM SECTIONS)..."
+
+readCarriers :: FilePath -> IO CarrierUnion
+readCarriers path = either failH pure . parseCarrierUnion =<< B.readFile path
 
 -- | Every declared identity's stock value and replacement symbol.
 declaredIdentities :: J.Value -> J.Parser [(Word32, String)]
@@ -51,9 +60,9 @@ groups :: [a] -> [[a]]
 groups [] = []
 groups items = let (group, rest) = splitAt 5 items in group : groups rest
 
-admitImage :: [FilePath] -> IO Admitted
-admitImage paths = case paths of
+admitImage :: CarrierUnion -> [FilePath] -> IO Admitted
+admitImage union paths = case paths of
   [elf, bin, symbols, disasm, sections] ->
     either (failH . show) pure =<<
-      (admit <$> B.readFile elf <*> B.readFile bin <*> B.readFile symbols <*> B.readFile disasm <*> B.readFile sections)
+      (admit union <$> B.readFile elf <*> B.readFile bin <*> B.readFile symbols <*> B.readFile disasm <*> B.readFile sections)
   _ -> failH "an image is ELF BIN SYMBOLS DISASM SECTIONS"

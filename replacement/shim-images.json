@@ -578,6 +578,15 @@
         "xm1_kernel_console9",
         "xm1_kernel_critical_enter",
         "xm1_kernel_critical_exit",
+        "xm1_loading_create_channel",
+        "xm1_loading_create_task",
+        "xm1_loading_current_task",
+        "xm1_loading_receive_message",
+        "xm1_loading_send_message",
+        "xm1_loading_signal_reserved",
+        "xm1_loading_wait_reserved",
+        "xm1_lower_read_clock_mask",
+        "xm1_lower_read_clock_restore",
         "xm1_original_font_builtin_decode_bitmap",
         "xm1_original_font_builtin_destroy",
         "xm1_original_font_builtin_dimensions",
@@ -620,7 +629,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "76e5c71999f0dc417a48e8bb7853ffd71f052a276a6bca136d49e69239a9af39"
+      "expected_sha256": "708304a51c537f4a29c21cf1761a6d865cecf1539a96caa637a03e721e75f90b"
     },
     {
       "id": "//replacement/display_scanout:display-scanout",
@@ -1567,9 +1576,25 @@
         "xm1_rtos_cyclic_timer_remove",
         "xm1_rtos_data_queue_stock_insert_timer",
         "xm1_rtos_data_queue_stock_remove_timer",
-        "xm1_rtos_objects_stock_insert_timer",
-        "xm1_rtos_objects_stock_remove_timer",
-        "xm1_rtos_objects_stock_timeout",
+        "xm1_rtos_objects_check_a",
+        "xm1_rtos_objects_family_flag_clear_a",
+        "xm1_rtos_objects_family_flag_create_a",
+        "xm1_rtos_objects_family_flag_delete_a",
+        "xm1_rtos_objects_family_flag_poll_a",
+        "xm1_rtos_objects_family_flag_set_a",
+        "xm1_rtos_objects_family_flag_set_handler_a",
+        "xm1_rtos_objects_family_flag_timed_wait_a",
+        "xm1_rtos_objects_family_flag_wait_a",
+        "xm1_rtos_objects_family_mailbox_create_a",
+        "xm1_rtos_objects_family_mailbox_delete_a",
+        "xm1_rtos_objects_family_mailbox_poll_a",
+        "xm1_rtos_objects_family_mailbox_receive_a",
+        "xm1_rtos_objects_family_mailbox_send_a",
+        "xm1_rtos_objects_family_mailbox_timed_receive_a",
+        "xm1_rtos_objects_release_a",
+        "xm1_rtos_objects_wait_block_a",
+        "xm1_rtos_objects_wait_block_timed_a",
+        "xm1_rtos_objects_wait_release_a",
         "xm1_rtos_scheduler_s2_clear_irq",
         "xm1_rtos_scheduler_s2_deliver_exception",
         "xm1_rtos_scheduler_s2_exit_task",
@@ -1588,11 +1613,11 @@
         "xm1_task_mask_restore",
         "xm1_task_mask_save"
       ],
-      "expected_sha256": "482b9c803bad427f3bf6b1cb95df219824b592eba560940995bb0ada6a1c495c",
+      "expected_sha256": "a8f9761dd06aad27aa9ca07eeae0ebf83b45ac74899a1154a25b3c4bcd7b4613",
       "qualified_artifacts": [
         {
           "path": "replacement/rtos_platform/platform-a.bin",
-          "sha256": "f5f9c935707f18e75ba5c07242a02000fb8de80946ac907871da6d5fbc252106"
+          "sha256": "794469dd05ccc1f1a03d02dbca386a6af7be1580fdbc57bc39615182ec698d2b"
         }
       ]
     },
@@ -1659,9 +1684,25 @@
         "xm1_rtos_cyclic_timer_remove",
         "xm1_rtos_data_queue_stock_insert_timer",
         "xm1_rtos_data_queue_stock_remove_timer",
-        "xm1_rtos_objects_stock_insert_timer",
-        "xm1_rtos_objects_stock_remove_timer",
-        "xm1_rtos_objects_stock_timeout",
+        "xm1_rtos_objects_check_b",
+        "xm1_rtos_objects_family_flag_clear_b",
+        "xm1_rtos_objects_family_flag_create_b",
+        "xm1_rtos_objects_family_flag_delete_b",
+        "xm1_rtos_objects_family_flag_poll_b",
+        "xm1_rtos_objects_family_flag_set_b",
+        "xm1_rtos_objects_family_flag_set_handler_b",
+        "xm1_rtos_objects_family_flag_timed_wait_b",
+        "xm1_rtos_objects_family_flag_wait_b",
+        "xm1_rtos_objects_family_mailbox_create_b",
+        "xm1_rtos_objects_family_mailbox_delete_b",
+        "xm1_rtos_objects_family_mailbox_poll_b",
+        "xm1_rtos_objects_family_mailbox_receive_b",
+        "xm1_rtos_objects_family_mailbox_send_b",
+        "xm1_rtos_objects_family_mailbox_timed_receive_b",
+        "xm1_rtos_objects_release_b",
+        "xm1_rtos_objects_wait_block_b",
+        "xm1_rtos_objects_wait_block_timed_b",
+        "xm1_rtos_objects_wait_release_b",
         "xm1_rtos_scheduler_s2_clear_irq",
         "xm1_rtos_scheduler_s2_deliver_exception",
         "xm1_rtos_scheduler_s2_exit_task",
@@ -1680,11 +1721,11 @@
         "xm1_task_mask_restore",
         "xm1_task_mask_save"
       ],
-      "expected_sha256": "80fac07213e96a4a51e18643b743a4d5508ec5817c46736891fb28490f9cf0d7",
+      "expected_sha256": "f0ee66abe4473b6e5b9bb70f847b4fbfacc1477d72684b9b25c5621bd800bcb8",
       "qualified_artifacts": [
         {
           "path": "replacement/rtos_platform/platform-b.bin",
-          "sha256": "41adbaed3d18d88dc069435c5f8a9a2214f5a66470722a1b5beec10e609c43c8"
+          "sha256": "d5cda3314bbe2217c64e6f870e681a453d731a82fd543ad592ba9cd30c688f39"
         }
       ]
     },
@@ -1692,6 +1733,7 @@
       "id": "//replacement/saclac:saclac-image",
       "elf": "replacement/saclac/saclac-image.elf",
       "units": [
+        "rtos_objects",
         "saclac",
         "saclac_interface"
       ],
@@ -1718,9 +1760,34 @@
         "xm1_decoder_take",
         "xm1_kernel_console9",
         "xm1_kernel_critical_enter",
-        "xm1_kernel_critical_exit"
+        "xm1_kernel_critical_exit",
+        "xm1_lower_read_clean_invalidate",
+        "xm1_lower_read_clock_mask",
+        "xm1_lower_read_clock_restore",
+        "xm1_rtos_scheduler_acquire_a",
+        "xm1_rtos_scheduler_acquire_b",
+        "xm1_rtos_scheduler_insert_a",
+        "xm1_rtos_scheduler_insert_b",
+        "xm1_rtos_scheduler_notify_a",
+        "xm1_rtos_scheduler_notify_b",
+        "xm1_rtos_scheduler_prepare_a",
+        "xm1_rtos_scheduler_prepare_b",
+        "xm1_rtos_scheduler_release_a",
+        "xm1_rtos_scheduler_release_b",
+        "xm1_rtos_scheduler_remove_a",
+        "xm1_rtos_scheduler_remove_b",
+        "xm1_rtos_scheduler_reset_a",
+        "xm1_rtos_scheduler_reset_b",
+        "xm1_rtos_scheduler_save_a",
+        "xm1_rtos_scheduler_save_b",
+        "xm1_rtos_scheduler_timeout_a",
+        "xm1_rtos_scheduler_timeout_b",
+        "xm1_rtos_timer_insert_a",
+        "xm1_rtos_timer_insert_b",
+        "xm1_rtos_timer_remove_a",
+        "xm1_rtos_timer_remove_b"
       ],
-      "expected_sha256": "ee7e28d678a52f0bee46337c0491d866b0154945291da7f3c20fa49a0544e6d0"
+      "expected_sha256": "55bb03656124a5e4822f4647e6864f884433338ca612f88bc0cc155a33260e75"
     },
     {
       "id": "//replacement/save:save-owned",

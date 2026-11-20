@@ -9,7 +9,9 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L
 import Data.List (isPrefixOf, partition)
 import Data.Word (Word32)
+import qualified FujiAF.FirstStage as F
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), extentStart, hexText)
+import Replacement.RtosPlatform.Bank (Bank (..), bankEntries, parseBank)
 import Replacement.RtosPlatform.Place
 import Replacement.RtosPlatform.Union
 import System.Environment (getArgs)
@@ -19,9 +21,10 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [carriersPath, domainText, readelfPath, output, manifest] -> do
+    [carriersPath, domainText, readelfPath, bankSymbolsPath, output, manifest] -> do
       carriers <- B.readFile carriersPath
       union <- either (die . show) pure (parseUnion carriers)
+      bank <- either (die . show) pure . parseBank =<< B.readFile bankSymbolsPath
       domain <- case domainText of
         "a" -> pure DomainA
         "b" -> pure DomainB
@@ -59,6 +62,10 @@ main = do
           freePlacements <- either (die . show) pure (solveOpenSections 50000 runExtents openRuns free)
           let placements = reservedPlacements ++ freePlacements
           either (die . show) (const (pure ())) (admitPlacement runExtents sections placements)
+          bankLines <- forM (bankEntries union domain) $ \e ->
+            case [F.symbolAddress s | s <- bankSymbols bank, F.symbolName s == entrySymbol e, F.symbolSize s > 0] of
+              [address] -> pure (entrySymbol e ++ " = " ++ addressText (GuestAddress address) ++ ";")
+              _ -> die ("the bank link lacks exactly one body for " ++ entrySymbol e)
           let entryLines =
                 [ "  .veneer_" ++ slug (entryVeneer e) ++ " " ++ addressText (entryAddress e) ++ " : { KEEP(*(.veneer." ++ slug (entryVeneer e) ++ ")) }"
                 | e <- mapEntries dm
@@ -72,9 +79,10 @@ main = do
                   ++ entryLines
                   ++ drop 2 scriptLines
                   ++ externalLines
+                  ++ bankLines
           writeFile output body
           L.writeFile manifest (J.encode (placementValue runExtents placements) <> L.singleton 10)
-    _ -> die "usage: place-platform CARRIERS a|b READELF_TEXT OUT_LD OUT_MANIFEST"
+    _ -> die "usage: place-platform CARRIERS a|b READELF_TEXT BANK_SYMBOLS OUT_LD OUT_MANIFEST"
   where
     offsetBy :: Word32 -> GuestAddress -> GuestAddress
     offsetBy n (GuestAddress value) = GuestAddress (value + n)

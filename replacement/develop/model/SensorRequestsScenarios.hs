@@ -45,6 +45,24 @@ sensorRequestScenarios _ _=prepareCases++gainCases++alignmentCases++flagCases++o
   irqCases=[make (sensorOptionPublication 0x67486c "ack_irq") ("acknowledge-register-"++show status) [] [word 0xfff40084 status] [word 0xfff40084 status] (Just 0)|status<-[0,1,0xffffffff]]++
     [make (sensorOptionPublication 0x6756fc "reset_irq") "reset-interrupt-mask" [] [word 0xfff40084 0xa55af00f] [word 0xfff40084 0x703f000f] Nothing]
 
+sensorLoadingFailureScenarios :: [StageScenario]
+sensorLoadingFailureScenarios =
+ [StageScenario (StageCaseName "sensor-profile-unconfigured-loading-preserves-output")
+   (sensorOptionPublication 0xe575fc "profile_geometry") [0x1580000,0,0,0x9c4000]
+   [word (0x00944440+6*4) 1,Patch (Address 0x9c4000) (B.replicate 300 0xa5)]
+   [Patch (Address 0x9c4000) (B.replicate 300 0xa5)] (Just 0) [] []
+ ,StageScenario (StageCaseName "sensor-prepare-loading-failure-publishes-no-profile")
+   (sensorRequestPublication 0xe57758 "prepare_processing")
+   [0x1580000,0x9c0000,0x9c3000,0x9c1000,42,0,0,0,0x9c4000,0x9c3000]
+   (configurationInitial 0x3000000 [(0xc0,0),(0xb2,0)] ++
+    [word (0x9c0000+24) 0x9c2000,word (0x9c2000+4) 0x12345678
+    ,word 0x9c1000 0x20,word (0x00944440+6*4) 1
+    ,Patch (Address 0x9c4000) (B.replicate 40 0xa5)
+    ,Patch (Address 0x156ad6c) (B.replicate 300 0xa5)])
+   [word 0x9c1000 0x20,word (0x9c4000+12) 0
+   ,Patch (Address 0x156ad6c) (B.replicate 300 0xa5)]
+   (Just 0) [] []]
+
 noiseTableLaw :: B.ByteString -> Word32 -> Word32 -> Word32 -> ([Patch],[Patch],[Call])
 noiseTableLaw bundle stage descriptor output=noiseTableLawFromMemory bundle stage descriptor output []
 

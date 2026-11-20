@@ -13,6 +13,8 @@ _ARM_DEPS = {
     "xm1_rtos_global_lock_component": "//replacement/rtos_global_lock:global-lock-component",
     "xm1_fixed_image_layout": "//replacement/fixed_image:layout",
     "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
+    "xm1_rtos_objects_bank_a": "//replacement/rtos_objects:objects-bank-a",
+    "xm1_rtos_objects_bank_b": "//replacement/rtos_objects:objects-bank-b",
 }
 
 # The wrong wake-publication control links the root rlib compiled with its cfg.
@@ -106,6 +108,53 @@ xm1_rust_elf(
     link_script = ":saclac.ld",
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
 )
+
+# The same bank with the task60 loading owner and one explicit qualification
+# policy. There is no production loading policy; these are emulator inputs.
+[
+    xm1_rust_staticlib(
+        name = "saclac-rust-loading-" + policy,
+        src = "src/lib.rs",
+        crate_name = "xm1_saclac",
+        rustc_flags = ["-C", "jump-tables=no", "--cfg", "loading_owner"],
+        data = _SOURCES,
+        rlib_deps = dict(
+            _ARM_DEPS,
+            xm1_executable_loading = "//replacement/executable_loading:arm-root",
+            xm1_loading_policy = "//replacement/executable_loading:policy-%s-root" % policy,
+        ),
+        rlib_search_deps = _ARM_SEARCH_DEPS,
+        dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+        testonly = True,
+    )
+    for policy in ["fujimod", "retention"]
+]
+
+[
+    xm1_rust_elf(
+        name = "saclac-image-loading-" + policy,
+        rust_staticlib = ":saclac-rust-loading-" + policy,
+        asm_srcs = ["entry.S"],
+        entry = "xm1_saclac_dispatch_entry",
+        link_script = ":saclac.ld",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+        link_map = True,
+        testonly = True,
+    )
+    for policy in ["fujimod", "retention"]
+]
+
+[
+    genrule(
+        name = "saclac-image-loading-%s-sections" % policy,
+        srcs = [":saclac-image-loading-%s.elf" % policy],
+        outs = ["saclac-image-loading-%s.sections" % policy],
+        cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-loading-%s.elf) > $@" % policy,
+        tools = ["@lab_llvm//:bin/llvm-readelf"],
+        testonly = True,
+    )
+    for policy in ["fujimod", "retention"]
+]
 
 # The comparison's deliberately wrong variant: the action entry sees the table base in r3.
 xm1_rust_staticlib(
@@ -247,6 +296,7 @@ haskell_library(
     deps = [
         ":saclac-artifact",
         "//replacement/fixed_image:contract",
+        "//replacement/rtos_platform:aggregate",
         "//host:aeson",
         "//host:base",
         "//host:first-stage",
@@ -262,6 +312,7 @@ haskell_binary(
     deps = [
         ":saclac-artifact",
         ":saclac-placement",
+        "//replacement/rtos_platform:aggregate",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -271,15 +322,17 @@ haskell_binary(
 
 genrule(
     name = "saclac-linker-script",
+    srcs = ["//replacement/rtos_platform:carriers.json"],
     outs = ["saclac.ld"],
-    cmd = "$(location :saclac-extents) linker-script > $@",
+    cmd = "$(location :saclac-extents) linker-script $(location //replacement/rtos_platform:carriers.json) > $@",
     tools = [":saclac-extents"],
 )
 
 genrule(
     name = "saclac-linker-script-debug",
+    srcs = ["//replacement/rtos_platform:carriers.json"],
     outs = ["saclac-debug.ld"],
-    cmd = "$(location :saclac-extents) linker-script-debug > $@",
+    cmd = "$(location :saclac-extents) linker-script-debug $(location //replacement/rtos_platform:carriers.json) > $@",
     tools = [":saclac-extents"],
 )
 
@@ -296,9 +349,9 @@ _CENSUS_IMAGE_FILES = [
 
 genrule(
     name = "saclac-census-sites",
-    srcs = ["//emulation:saclac-census-sites", "payload-fields.json"] + _CENSUS_IMAGE_FILES,
+    srcs = ["//emulation:saclac-census-sites", "payload-fields.json", "//replacement/rtos_platform:carriers.json"] + _CENSUS_IMAGE_FILES,
     outs = ["saclac-census-sites.json"],
-    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $(location payload-fields.json) $@ " + " ".join(["$(location " + label + ")" for label in _CENSUS_IMAGE_FILES]),
+    cmd = "$(location :saclac-extents) census-sites $(location //emulation:saclac-census-sites) $(location payload-fields.json) $@ $(location //replacement/rtos_platform:carriers.json) " + " ".join(["$(location " + label + ")" for label in _CENSUS_IMAGE_FILES]),
     tools = [":saclac-extents"],
 )
 
@@ -374,6 +427,7 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//replacement/record5_staging:record5-staging",
         "//replacement/fixed_image:contract",
+        "//replacement/rtos_platform:aggregate",
         "//replacement/toolchain:stack-proof",
     ],
 )
@@ -395,6 +449,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/rtos_platform:aggregate",
         "//emulation:image4-staging-lib",
         "//host:aeson",
         "//host:base",
@@ -413,6 +468,7 @@ haskell_test(
         "$(rootpath :saclac-image.symbols)",
         "$(rootpath :saclac-image.disasm)",
         "$(rootpath :saclac-image-sections)",
+        "$(rootpath //replacement/rtos_platform:carriers.json)",
     ],
     data = [
         ":saclac-image.elf",
@@ -420,10 +476,12 @@ haskell_test(
         ":saclac-image.bin",
         ":saclac-image.disasm",
         ":saclac-image.symbols",
+        "//replacement/rtos_platform:carriers.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":saclac-artifact",
+        "//replacement/rtos_platform:aggregate",
         "//host:base",
         "//host:bytestring",
         "//host:directory",

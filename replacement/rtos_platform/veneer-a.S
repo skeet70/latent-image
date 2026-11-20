@@ -786,7 +786,7 @@ timer_veneer tick
 .global xm1_platform_veneer_family_flag_\name
 .type xm1_platform_veneer_family_flag_\name,%function
 xm1_platform_veneer_family_flag_\name:
-    b xm1_rtos_objects_family_flag_\name
+    b xm1_rtos_objects_family_flag_\name\()_a
 .size xm1_platform_veneer_family_flag_\name, .-xm1_platform_veneer_family_flag_\name
 .endm
 
@@ -799,6 +799,22 @@ flag_veneer wait
 flag_veneer poll
 flag_veneer timed_wait
 
+.macro mailbox_veneer name
+.section .veneer.family_mailbox_\name,"ax",%progbits
+.global xm1_platform_veneer_family_mailbox_\name
+.type xm1_platform_veneer_family_mailbox_\name,%function
+xm1_platform_veneer_family_mailbox_\name:
+    b xm1_rtos_objects_family_mailbox_\name\()_a
+.size xm1_platform_veneer_family_mailbox_\name, .-xm1_platform_veneer_family_mailbox_\name
+.endm
+
+mailbox_veneer create
+mailbox_veneer delete
+mailbox_veneer send
+mailbox_veneer receive
+mailbox_veneer poll
+mailbox_veneer timed_receive
+
 .macro helper_veneer name, target
 .section .veneer.\name,"ax",%progbits
 .global xm1_platform_veneer_\name
@@ -808,8 +824,8 @@ xm1_platform_veneer_\name:
 .size xm1_platform_veneer_\name, .-xm1_platform_veneer_\name
 .endm
 
-helper_veneer family_release, xm1_rtos_objects_release
-helper_veneer helper_release, xm1_rtos_objects_wait_release
-helper_veneer helper_block, xm1_rtos_objects_wait_block
-helper_veneer helper_block_timed, xm1_rtos_objects_wait_block_timed
-helper_veneer helper_check, xm1_rtos_objects_check
+helper_veneer family_release, xm1_rtos_objects_release_a
+helper_veneer helper_release, xm1_rtos_objects_wait_release_a
+helper_veneer helper_block, xm1_rtos_objects_wait_block_a
+helper_veneer helper_block_timed, xm1_rtos_objects_wait_block_timed_a
+helper_veneer helper_check, xm1_rtos_objects_check_a

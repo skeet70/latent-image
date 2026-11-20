@@ -131,7 +131,7 @@ admitFlagRoots union targets
       forM_ (flagRootBindings domain) $ \binding -> do
         let name = "family_flag_" ++ flagRootName binding
             expected = Union.Entry Union.EventFlag name (flagRootAddress binding)
-              ("xm1_rtos_objects_" ++ name) (".text." ++ name) ("xm1_platform_veneer_" ++ name) False
+              ("xm1_rtos_objects_" ++ name ++ "_" ++ R.domainLabel domain) (".text." ++ name) ("xm1_platform_veneer_" ++ name) False Aggregate.BankBody
         unless (filter ((== name) . Union.entryName) entries == [expected])
           (Left ("event flag root slot lacks its executing-domain family entry: " ++ show (domain, flagRootSlot binding)))
   where
@@ -150,7 +150,7 @@ flagRootContract union
           , "header_root" .= (if domain == R.DomainA then 0x4004dae0 else 0x400ddaa0 :: Word32)
           , "slot" .= flagRootSlot binding
           , "target" .= address
-          , "symbol" .= ("xm1_rtos_objects_family_flag_" ++ flagRootName binding)
+          , "symbol" .= ("xm1_rtos_objects_family_flag_" ++ flagRootName binding ++ "_" ++ R.domainLabel domain)
           , "binding" .= ("same-address-owned-veneer" :: String)
           , "publication_source" .= ("x70view 55436fc85c0560dd252b0410af6f2427fe198cd3 kernel{0,1}/src/core/kernel_publication.c; original movw/movt/str slot stores at loader+0x5c0..0x620" :: String)
           , "startup_publisher" .= (if domain == R.DomainA then "replacement/primary_initializer/src.rs SERVICES[32..39]" else "replacement/interface_initializer/src.rs SERVICES[32..39]" :: String)

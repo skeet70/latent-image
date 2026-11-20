@@ -1,0 +1,170 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_rlib", "xm1_rust_host_test", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_CORE = [
+    "src/client.rs",
+    "src/protocol.rs",
+    "src/receiver.rs",
+    "src/sender.rs",
+    "src/timeout.rs",
+    "//replacement/embassy_platform:src/clock.rs",
+]
+
+xm1_rust_host_rlib(
+    name = "host",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    data = _CORE,
+    rlib_deps = {"xm1_application_nand": "//replacement/application_nand:host"},
+)
+
+xm1_rust_host_test(
+    name = "host-tests",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    data = _CORE + ["src/tests.rs"],
+    rlib_deps = {"xm1_application_nand": "//replacement/application_nand:host"},
+)
+
+xm1_rust_rlib(
+    name = "arm",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    out = "arm/libxm1_executable_loading.rlib",
+    data = _CORE + ["src/native.rs", "src/producer.rs"],
+    rlib_deps = {"xm1_application_nand": "//replacement/application_nand:arm"},
+)
+
+_POWER_SERVICES_SEARCH = [
+    "//replacement/settings_storage:record-store-guest-rlib",
+    "//replacement/settings_storage:property-core",
+    "//replacement/display_scanout:libdisplay_scanout_panel",
+    "//replacement/calibration_liveview:libcalibration_liveview",
+    "//replacement/callback_core:arm",
+    "//replacement/kernel:arm",
+]
+
+# The Root bank already links application_nand inside power services; this
+# variant uses that single NAND owner instead of a second copy.
+xm1_rust_rlib(
+    name = "arm-root",
+    src = "src/lib.rs",
+    crate_name = "xm1_executable_loading",
+    out = "arm-root/libxm1_executable_loading.rlib",
+    data = _CORE + ["src/native.rs", "src/producer.rs"],
+    rustc_flags = ["--cfg", "loading_nand_in_power_services"],
+    rlib_deps = {"xm1_power_services": "//replacement/power_lifecycle:services-arm"},
+    rlib_search_deps = _POWER_SERVICES_SEARCH,
+)
+
+# Compositions link exactly one configuration. The stock-wrapper timeout is the
+# Root startup caller policy (`timeout::STARTUP_CLASS_HANG_BOUND`) except in the
+# retention controls, which link an explicit test timeout; drains are
+# qualification choices. The owner library has no timeout or drain default.
+_OWNERS = {
+    "native": (":arm", ["//replacement/application_nand:arm"]),
+    "root": (":arm-root", ["//replacement/power_lifecycle:services-arm"] + _POWER_SERVICES_SEARCH),
+}
+
+[
+    xm1_rust_rlib(
+        name = "policy-%s-%s" % (variant, composition),
+        src = "policy.rs",
+        crate_name = "xm1_loading_policy",
+        out = "policy-%s-%s/libxm1_loading_policy.rlib" % (variant, composition),
+        rlib_deps = {"xm1_executable_loading": _OWNERS[composition][0]},
+        rlib_search_deps = _OWNERS[composition][1],
+        rustc_flags = ["--cfg", "loading_qualification_" + variant],
+        env = {"XM1_LOADING_TEST_TIMEOUT_MS": test_timeout} if test_timeout else {},
+        testonly = True,
+    )
+    for variant, composition, test_timeout in [
+        ("fujimod", "root", None),
+        ("retention", "root", "22"),
+        ("external", "native", None),
+        ("retention", "native", "2"),
+    ]
+]
+
+# Native-qualification harness only; installed composition is the Root bank
+# (`//replacement/saclac:saclac-image-loading-*`).
+genrule(
+    name = "runtime-fixed-script",
+    srcs = ["runtime.ld"],
+    outs = ["runtime-fixed.ld"],
+    tools = ["//replacement/image5_load:image5-decoder-artifact"],
+    cmd = "$(location //replacement/image5_load:image5-decoder-artifact) script $(location runtime.ld) > $@",
+    testonly = True,
+)
+
+[
+    xm1_rust_staticlib(
+        name = "runtime-%s-rust" % variant,
+        src = "runtime.rs",
+        crate_name = "xm1_loading_runtime",
+        rlib_deps = {
+            "xm1_application_nand": "//replacement/application_nand:arm",
+            "xm1_executable_loading": ":arm",
+            "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
+            "xm1_loading_policy": ":policy-%s-native" % policy,
+        },
+        testonly = True,
+    )
+    for variant, policy in [("native", "external"), ("retention", "retention")]
+]
+
+[
+    xm1_rust_elf(
+        name = "runtime-" + variant,
+        rust_staticlib = ":runtime-%s-rust" % variant,
+        entry = "xm1_loading_startup",
+        link_script = ":runtime-fixed-script",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+        link_map = True,
+        testonly = True,
+    )
+    for variant in ["native", "retention"]
+]
+
+haskell_binary(
+    name = "runtime-artifact",
+    srcs = ["RuntimeArtifact.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:json",
+        "//host:update-container",
+        "//replacement/fixed_image:contract",
+    ],
+)
+
+haskell_binary(
+    name = "runtime-native-qualify",
+    srcs = ["RuntimeNative.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    deps = [
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:containers",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+    ],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "RuntimeArtifact.hs", "policy.rs", "runtime.rs"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

@@ -39,7 +39,7 @@ import System.FilePath ((</>), takeDirectory, takeFileName)
 
 data InputRole = Composer | Encoder | Rebuilder | Decoder | StartupManifest | PlatformUnion
   | PlatformA | PlatformASymbols | PlatformADisassembly | PlatformAPlacements
-  | PlatformB | PlatformBSymbols | PlatformBDisassembly | PlatformBPlacements
+  | PlatformB | PlatformBSymbols | PlatformBDisassembly | PlatformBPlacements | BankSymbols
   | PropertyImage | PropertySymbols | PropertyElf | RecordImage | RecordSymbols | PlainImage | Image2 | FunctionIndex
   deriving Show
 
@@ -61,7 +61,7 @@ main = do
   arguments <- getArgs
   case arguments of
     "bind-recipe-edit" : rest -> bindRecipeEdit rest
-    _ -> case drop 17 arguments of
+    _ -> case drop 18 arguments of
       "bind-recipe-edit" : rest -> bindRecipeEdit rest
       _ -> stageCandidate arguments
 
@@ -84,16 +84,16 @@ bindRecipeEdit arguments = case arguments of
 
 stageCandidate :: [String] -> IO ()
 stageCandidate arguments = do
-  let (candidateArguments, recipeArguments) = splitAt 24 arguments
+  let (candidateArguments, recipeArguments) = splitAt 25 arguments
   unless (null recipeArguments || length recipeArguments == 11)
     (H.failH "recipe publication requires PREPUBLICATION RECIPE_BIN RECIPE_SYMBOLS RECIPE_ELF EDIT_C EDIT_H STORAGE_C ARM_S FIELDS UI_H SDK_QUALIFICATION")
   case candidateArguments of
     [encoder, rebuild, decoder, carriersPath, binA, symbolsA, disasmA, placementsA,
-     binB, symbolsB, disasmB, placementsB, propertyBin, propertySymbols, propertyElf, recordBin, recordSymbols,
+     binB, symbolsB, disasmB, placementsB, bankSymbols, propertyBin, propertySymbols, propertyElf, recordBin, recordSymbols,
      canonicalPath, manifestPath, plainPath, image2Path, indexPath, scratchPath, output] -> do
       executable <- getExecutablePath
       snapshot <- forM ([executable, encoder, rebuild, decoder, carriersPath, binA, symbolsA, disasmA, placementsA,
-        binB, symbolsB, disasmB, placementsB, propertyBin, propertySymbols, propertyElf, recordBin, recordSymbols,
+        binB, symbolsB, disasmB, placementsB, bankSymbols, propertyBin, propertySymbols, propertyElf, recordBin, recordSymbols,
         manifestPath, plainPath, image2Path, indexPath] ++ take 10 recipeArguments) $ \path -> do
           resolved <- canonicalizePath path
           bytes <- H.readRegular (64 * 1024 * 1024) resolved
@@ -119,7 +119,7 @@ stageCandidate arguments = do
       aSpans <- placements =<< input placementsA
       bSpans <- placements =<< input placementsB
       linked <- Platform.Linked <$> input binA <*> input symbolsA <*> input disasmA <*> pure aSpans
-        <*> input binB <*> input symbolsB <*> input disasmB <*> pure bSpans
+        <*> input binB <*> input symbolsB <*> input disasmB <*> pure bSpans <*> input bankSymbols
       package <- shown (joinRootPlatform source composition startupDat observed union linked)
       let original = Compose.canonicalTargets source
           four = Targets.targetOf original S.Image4
@@ -220,7 +220,7 @@ stageCandidate arguments = do
         [ (Composer, executable), (Encoder, encoder), (Rebuilder, rebuild), (Decoder, decoder)
         , (StartupManifest, manifestPath), (PlatformUnion, carriersPath)
         , (PlatformA, binA), (PlatformASymbols, symbolsA), (PlatformADisassembly, disasmA), (PlatformAPlacements, placementsA)
-        , (PlatformB, binB), (PlatformBSymbols, symbolsB), (PlatformBDisassembly, disasmB), (PlatformBPlacements, placementsB)
+        , (PlatformB, binB), (PlatformBSymbols, symbolsB), (PlatformBDisassembly, disasmB), (PlatformBPlacements, placementsB), (BankSymbols, bankSymbols)
         , (PropertyImage, propertyBin), (PropertySymbols, propertySymbols), (PropertyElf, propertyElf), (RecordImage, recordBin), (RecordSymbols, recordSymbols)
         , (PlainImage, plainPath), (Image2, image2Path), (FunctionIndex, indexPath)
         ] $ \(role, path) -> do

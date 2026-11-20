@@ -7,6 +7,9 @@ use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 
 pub mod boot_skip;
 pub mod physical;
+pub mod dma_read;
+#[cfg(target_arch = "arm")]
+pub mod dma_native;
 pub mod memory;
 mod events;
 pub use events::{EventFailure, EventOperation};

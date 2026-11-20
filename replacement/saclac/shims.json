@@ -5,7 +5,7 @@
   "rows": [
     {
       "id": "saclac-01",
-      "shim": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00ba0020`; unused retired extent bytes carry trap word `0xe7f000f0`",
+      "shim": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00a9fa20`; unused retired extent bytes carry trap word `0xe7f000f0`",
       "kind": "veneer or carrier at a stock address",
       "other_side": "retained row-function callers, task constructor and nested stock action calls",
       "owned": "no",
@@ -21,7 +21,7 @@
             "xm1_saclac_driver_entry"
           ],
           "contract": "replacement/saclac/saclac.ld",
-          "requirement": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00ba0020`; unused retired extent bytes carry trap word `0xe7f000f0`. retained row-function callers, task constructor and nested stock action calls. every machine and retained entry caller is owned. Caller closure, direct owned API use and same-image comparison remain unestablished."
+          "requirement": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00a9fa20`; unused retired extent bytes carry trap word `0xe7f000f0`. retained row-function callers, task constructor and nested stock action calls. every machine and retained entry caller is owned. Caller closure, direct owned API use and same-image comparison remain unestablished."
         },
         {
           "image": "//replacement/saclac:saclac-image",
@@ -2255,7 +2255,7 @@
             7710412,
             7810856,
             9031076,
-            12462504,
+            12479184,
             14041436,
             14042148,
             14043136,
@@ -2313,7 +2313,10 @@
             "xm1_decoder_take",
             "xm1_kernel_console9",
             "xm1_kernel_critical_enter",
-            "xm1_kernel_critical_exit"
+            "xm1_kernel_critical_exit",
+            "xm1_lower_read_clean_invalidate",
+            "xm1_lower_read_clock_mask",
+            "xm1_lower_read_clock_restore"
           ],
           "retained_targets": [],
           "contract": "replacement/saclac/saclac.ld",
@@ -2445,7 +2448,6 @@
             "xm1_rtos_own_first_slot_1618_body",
             "xm1_rtos_own_first_slot_164",
             "xm1_rtos_own_first_slot_168",
-            "xm1_saclac_client_call",
             "xm1_saclac_create_task",
             "xm1_saclac_driver",
             "xm1_saclac_root_adjustment_synchronized",

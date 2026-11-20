@@ -10,6 +10,7 @@ import qualified Data.Set as Set
 import Fixtures (fixtureDat, fixtureImage4, fixtureImage5)
 import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.RtosOwnFirst.Regions as R
+import qualified Replacement.RtosPlatform.Aggregate as Aggregate
 import qualified Replacement.RtosPlatform.Artifact as Platform
 import qualified Replacement.RtosPlatform.Union as Union
 import Replacement.RtosTimer.RootPackage
@@ -25,7 +26,7 @@ main = do
   source <- either (die . show) pure (Startup.canonical fixtureDat fixtureImage4 fixtureImage5)
   let domain role base veneer body = Union.DomainMap role (R.GuestAddress base)
         (if role == R.DomainA then 0xdae0 else 0xdaa0)
-        [Union.Entry Union.Timer "test" (R.GuestAddress (base + 0x430)) body (".text." ++ body) veneer False]
+        [Union.Entry Union.Timer "test" (R.GuestAddress (base + 0x430)) body (".text." ++ body) veneer False Aggregate.LoaderBody]
         [Union.Carrier Union.Timer (R.Extent (R.GuestAddress (base + 0x430)) (R.GuestAddress (base + 0x530)))]
         [] [Union.Demand Union.Timer body 0x20]
       union = Union.Union 0xe7f000f0 (domain R.DomainA 0x40000 "veneer_a" "body_a") (domain R.DomainB 0xd0000 "veneer_b" "body_b") []
@@ -33,7 +34,8 @@ main = do
         <> B.concat (replicate 6 (U.putWord32 0xe1a00000)) <> B.replicate (0x100 - 0x30) 0
       symbolsA = "00040430 00000004 T veneer_a\n00040440 00000020 T body_a\n"
       symbolsB = "000d0430 00000004 T veneer_b\n000d0440 00000020 T body_b\n"
-      linked = Platform.Linked binary (C.pack symbolsA) "" [(0x40460,8)] binary (C.pack symbolsB) "" [(0xd0460,8)]
+      bankSymbols = "00a9fa20 00000000 T __fixed_body_start\n00a9fa40 00000000 T __fixed_body_end\n"
+      linked = Platform.Linked binary (C.pack symbolsA) "" [(0x40460,8)] binary (C.pack symbolsB) "" [(0xd0460,8)] (C.pack bankSymbols)
       piece kind = T.Piece kind Set.empty [] [] [] []
         (T.Catalog [] [] (T.EnumeratedWrites [] (T.Premised (T.Premise "synthetic fixture"))) []) T.NoFacts
       pieces = map piece [T.TaskStorage,T.RootTask,T.AppCallback]
@@ -82,18 +84,20 @@ main = do
   let flagNames = ["create", "delete", "set", "set_handler", "clear", "wait", "poll", "timed_wait"]
       flagAddresses = [0x4d39c, 0x4d434, 0x4813c, 0x4839c, 0x485c0, 0x486f8, 0x489ac, 0x48b30]
       peerAddresses = [0xdd360, 0xdd3f8, 0xd80fc, 0xd835c, 0xd8580, 0xd86b8, 0xd896c, 0xd8af0]
-      flagEntry name address = Union.Entry Union.EventFlag name (R.GuestAddress address) ("xm1_rtos_objects_" ++ name) (".text." ++ name) ("xm1_platform_veneer_" ++ name) False
+      flagEntry role name address = Union.Entry Union.EventFlag name (R.GuestAddress address) ("xm1_rtos_objects_" ++ name ++ "_" ++ R.domainLabel role) (".text." ++ name) ("xm1_platform_veneer_" ++ name) False Aggregate.BankBody
       flagDomain role base addresses = Union.DomainMap role (R.GuestAddress base)
         (if role == R.DomainA then 0xdae0 else 0xdaa0)
-        [flagEntry ("family_flag_" ++ name) address | (name, address) <- zip flagNames addresses]
+        [flagEntry role ("family_flag_" ++ name) address | (name, address) <- zip flagNames addresses]
         [] [] []
       flagUnion = Union.Union 0xe7f000f0 (flagDomain R.DomainA 0x40000 flagAddresses) (flagDomain R.DomainB 0xd0000 peerAddresses) []
       withLoaders a b = maybe (error "target map") id (Targets.targetBytes
         (M.fromList [(target, if target == T.LoaderA then a else if target == T.LoaderB then b else B.replicate 16 0) | target <- [minBound .. maxBound]]))
       flagLoaders = withLoaders (B.replicate 16 0 <> U.putWord32 0x4004dae0 <> B.replicate 0x40 0) (B.replicate 16 0 <> U.putWord32 0x400ddaa0 <> B.replicate 0x40 0)
       missingSlot = flagUnion { Union.unionA = (Union.unionA flagUnion) { Union.mapEntries = init (Union.mapEntries (Union.unionA flagUnion)) } }
+      loaderBodied = flagUnion { Union.unionB = (Union.unionB flagUnion) { Union.mapEntries = [entry { Union.entryBody = Aggregate.LoaderBody } | entry <- Union.mapEntries (Union.unionB flagUnion)] } }
   require "flag roots accepted on the correct publication words" (admitFlagRoots flagUnion flagLoaders == Right ())
   require "flag roots refuse a wrong publication word"
     (isLeft (admitFlagRoots flagUnion (withLoaders (B.replicate 16 0 <> U.putWord32 0x4004dae4 <> B.replicate 0x40 0) (B.replicate 16 0 <> U.putWord32 0x400ddaa0 <> B.replicate 0x40 0))))
   require "flag roots refuse a missing slot" (isLeft (admitFlagRoots missingSlot flagLoaders))
+  require "flag roots refuse a loader-bodied entry" (isLeft (admitFlagRoots loaderBodied flagLoaders))
   putStrLn "root-package-tests: passed"

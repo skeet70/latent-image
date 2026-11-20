@@ -1,0 +1,115 @@
+{
+  "unit": "executable_loading",
+  "summary": "The single typed task60 command, producer, completion and lower-read owner.",
+  "classification": "module",
+  "rows": [
+    {
+      "id": "executable-loading-callers",
+      "shim": "xm1_loading_configuration, xm1_loading_startup, xm1_loading_ready, xm1_loading_legacy_request, xm1_loading_legacy_cancel, xm1_loading_configure, xm1_loading_deadline_after_ms, xm1_loading_initialize, xm1_loading_request, xm1_loading_request_sync, xm1_loading_cancel, xm1_loading_wait_channel and xm1_loading_observe_completion",
+      "kind": "stock-ABI export",
+      "other_side": "startup construction, stock task60 wrapper callers and Develop loading callers",
+      "owned": "yes",
+      "removal": "all callers use the Rust API in one final composition",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "symbols": [
+            "xm1_loading_configuration",
+            "xm1_loading_startup",
+            "xm1_loading_ready",
+            "xm1_loading_legacy_request",
+            "xm1_loading_legacy_cancel",
+            "xm1_loading_configure",
+            "xm1_loading_deadline_after_ms",
+            "xm1_loading_initialize",
+            "xm1_loading_request",
+            "xm1_loading_request_sync",
+            "xm1_loading_cancel",
+            "xm1_loading_wait_channel",
+            "xm1_loading_observe_completion"
+          ],
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
+          "requirement": "Reference-only until the Root bank's loading variant is bound in replacement/shim-images.json. //replacement/saclac:saclac-image-loading-* export these bodies; stage-saclac publishes the 0x73ac74/0x73ac94/0x73aca4 veneers only when all three are linked. The composition supplies schema2 configuration whose stock-wrapper timeout is the Root startup caller policy in milliseconds; each posted request converts its caller's timeout once through the timer contract into one finite absolute deadline and carries it unchanged through read and cleanup. A published completion latch answers as stock flashloader_request/cancel do, without posting. No duration, default or cleanup budget is fitted by the library."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "executable-loading-kernel",
+      "shim": "task60 queue, task, wait, signal and current-task leaves",
+      "kind": "trampoline into retained stock",
+      "other_side": "retained RTOS message and semaphore services",
+      "owned": "partly",
+      "removal": "the kernel owns typed queue and wait APIs",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "symbols": [
+            "xm1_loading_create_channel",
+            "xm1_loading_create_task",
+            "xm1_loading_send_message",
+            "xm1_loading_receive_message",
+            "xm1_loading_current_task",
+            "xm1_loading_wait_reserved",
+            "xm1_loading_signal_reserved"
+          ],
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
+          "requirement": "Reference-only until the Root bank's loading variant is bound. Queue60 keeps the stock dispatch_create_channel geometry (0x30 messages of 16 bytes); each message carries (request id, kind) and the 24-byte envelope is the owned per-command record XM1_LOADING_ENVELOPES. Task startup preserves the nine reserved completion semaphores and task-id publication."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "executable-loading-storage",
+      "shim": "NAND, decoder, segment, extent, progress and delegated-command leaves",
+      "kind": "trampoline into retained stock",
+      "other_side": "retained X-M1 services; the owned image5 decoder and NAND owner are called directly in the same bank",
+      "owned": "partly",
+      "removal": "the corresponding device and delegated command units are owned",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "symbols": [
+            "xm1_loading_segment",
+            "xm1_loading_extents",
+            "xm1_loading_mode",
+            "xm1_loading_plain_progress",
+            "xm1_loading_take",
+            "xm1_loading_give",
+            "xm1_loading_delay",
+            "xm1_loading_cache",
+            "xm1_lower_read_clean_invalidate",
+            "xm1_lower_read_clock_mask",
+            "xm1_lower_read_clock_restore",
+            "xm1_loading_action1",
+            "xm1_loading_action2",
+            "xm1_loading_section3",
+            "xm1_loading_selected",
+            "xm1_loading_region",
+            "xm1_loading_initialize_storage",
+            "xm1_loading_register_completion",
+            "xm1_loading_auxiliary"
+          ],
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
+          "requirement": "Reference-only until the Root bank's loading variant is bound. The DMA unit is 0x20000 bytes; plain backing 0x360000 and image5 staging 0x2e0000 bytes; 0x100000 is a controller budget. Producers use stock segment ids 5 (image5) and 6 (plain); the plain progress reporter is the source-inspected void ABI at 0x73b924. NAND and decoder are owned and linked in the same bank."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 use core::mem::MaybeUninit;
 use super::shared::{Address32, ByteOffset};
 use super::sensor_requests::{byte, configuration_byte, half, store, store_byte, store_half, word, CaptureSelection, ConfigurationKey, ImagePlane, SensorStage};
-use super::sensor_configuration::{xm1_pipeline_sensor_select_conversion, xm1_pipeline_sensor_conversion_band, xm1_pipeline_sensor_profile_feature, xm1_pipeline_sensor_cancel_configuration, xm1_pipeline_sensor_configuration_word, ConfigurationChannel, ConversionInput, ProfileId};
+use super::sensor_configuration::{xm1_pipeline_sensor_select_conversion, xm1_pipeline_sensor_conversion_band, xm1_pipeline_sensor_profile_feature, xm1_pipeline_sensor_configuration_word, ConversionInput, ProfileId};
 use super::output_triplets::{CalibrationBankId, xm1_pipeline_image_calibration_data};
 use super::image_geometry::xm1_pipeline_image_geometry_delta;
 
@@ -157,14 +157,16 @@ impl ProfileGeometryFamily {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn xm1_pipeline_sensor_profile_geometry(stage: SensorStage, _source: ImagePlane, selection: CaptureSelection, output: Address32) {
+pub unsafe extern "C" fn xm1_pipeline_sensor_profile_geometry(stage: SensorStage, _source: ImagePlane, selection: CaptureSelection, output: Address32) -> u32 {
+    let kind = xm1_executable_loading::protocol::CommandKind::Initialize;
+    let Ok(deadline) = xm1_executable_loading::client::deadline_after(super::LOADING_INITIALIZE_TIMEOUT) else { return 0 };
+    if xm1_executable_loading::client::request_sync(kind, deadline).is_err() { return 0; }
     let feature = unsafe { xm1_pipeline_sensor_profile_feature(ProfileId(word(stage.0, 0x2260))) };
     unsafe { store(output, 0, if configuration_byte(ConfigurationKey(0xc9)) & 2 != 0 { 2 } else { 1 }); }
     let family = ProfileGeometryFamily::parse(feature);
     let index = selection.0.wrapping_add(family.index() * 2);
     let count_key = ConfigurationKey(unsafe { word(Address32(0xe585d8), index.wrapping_mul(4)) });
     let region = CalibrationBankId(unsafe { word(Address32(0xe5862c), index.wrapping_mul(4)) });
-    let _ = unsafe { xm1_pipeline_sensor_cancel_configuration(ConfigurationChannel(6)) };
     let count = unsafe { configuration_byte(count_key) };
     let mut source = unsafe { xm1_pipeline_image_calibration_data(region) };
     if selection.0 == 1 {
@@ -186,4 +188,5 @@ pub unsafe extern "C" fn xm1_pipeline_sensor_profile_geometry(stage: SensorStage
         let value = unsafe { xm1_pipeline_sensor_configuration_word(ConfigurationKey(0x2601 + index * 2)) };
         unsafe { store(output, 16 + index * 4, value); }
     }
+    1
 }
