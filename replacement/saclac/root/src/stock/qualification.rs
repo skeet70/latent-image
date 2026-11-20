@@ -1196,8 +1196,8 @@ mod tests {
         assert_eq!(QUALIFICATION_FIELDS[FIELD_SECOND_CURSOR], [0x016d_8ff1, 1]);
         assert_eq!(OFF_FOCUS_RESULT, 1269);
         assert_eq!(OFF_AREA_ENTRIES, 1414);
-        assert_eq!(OFF_CLASSIFICATION, 4174);
-        assert_eq!(OFF_SECOND_CURSOR, 4184);
+        assert_eq!(OFF_CLASSIFICATION, 4178);
+        assert_eq!(OFF_SECOND_CURSOR, 4196);
         assert_eq!(record_hole_overlay_offset(0), 0);
         assert_eq!(record_hole_overlay_offset(5), 9);
     }
