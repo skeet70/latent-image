@@ -3,19 +3,20 @@
 //! The measurement round's view of the shared measurement record and the profile records, and
 //! the shared layer's profile headers, over the owned profile-record view.
 
+use xm1_focus_measurement_round::history::HistoryEntry;
 use xm1_focus_measurement_round::lanes::Selection;
 use xm1_focus_measurement_round::profile::{
     FrameInterval, GridCell, IntervalHistory, IntervalTracking, Profile, ProfileGeometry, ProfileMode, ProfileRecords,
     ProfileSelection, PublishedResult, RetainedHalfword, RetainedWord, StatisticsInUse, WindowPosition, WindowRecord,
     WindowStatus,
 };
-use xm1_focus_measurement_round::stock::{availability, RecordSelection};
+use xm1_focus_measurement_round::stock::{availability, HISTORY_CLEARED_ENTRIES, HISTORY_ENTRY_BYTES, HISTORY_RING, RecordSelection};
 use xm1_saclac_interface::round::{GeometryPair, RetainedGeometryValue};
 use xm1_saclac_interface::stock::record_handle_from_a2;
 use xm1_saclac_interface::RecordHandle;
 use xm1_saclac_profile_records::field::{SharedField, SharedRead, SharedWrite, Value};
 use xm1_saclac_profile_records::stock::record::{group_00, group_04, group_13};
-use xm1_saclac_profile_records::stock::shared::{group_14, group_15, group_20, group_23, group_25, group_27};
+use xm1_saclac_profile_records::stock::shared::{group_14, group_15, group_16, group_20, group_23, group_25, group_27};
 use xm1_saclac_profile_records::{
     AccessGroup, ChangeSet, MeasurementSelection, Memory, SharedHeaderByte, StockEntries,
 };
@@ -114,6 +115,41 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileRecords for Servi
     }
 
     fn grants_measurement_history(&mut self, record: RecordHandle) -> bool { self.records.may_write(record, HISTORY_GROUP) }
+
+    /// 0xf32654: reads the 12-byte descriptor (0x7567ec), sets presence/index/pointer, zeroes
+    /// the started word of six entries when the descriptor was absent, writes one 552-byte
+    /// entry at the ring and writes the descriptor back (0x756814, grant 16).
+    fn publish_history(&mut self, record: RecordHandle, entry: &HistoryEntry) {
+        let mut descriptor = self.shared_bytes(NO_HANDLE, &group_16::AREA_STATISTICS);
+        let present = u32::from_le_bytes([descriptor[0], descriptor[1], descriptor[2], descriptor[3]]);
+        let index = if present == 0 {
+            // 0xf326d4..0xf326e4 clears the started word of six entries.
+            for slot in 0..HISTORY_CLEARED_ENTRIES as u32 {
+                self.machine.write_u32(HISTORY_RING.wrapping_add(slot.wrapping_mul(HISTORY_ENTRY_BYTES as u32)), 0);
+            }
+            descriptor[..4].copy_from_slice(&1u32.to_le_bytes());
+            descriptor[8..12].copy_from_slice(&HISTORY_RING.to_le_bytes());
+            0
+        } else {
+            // 0xf326ec..0xf32704: `uxtb(index + 1)`, and any value above four becomes zero.
+            let index = descriptor[4].wrapping_add(1);
+            if index > 4 { 0 } else { index }
+        };
+        descriptor[4] = index;
+        let bytes = xm1_focus_measurement_round::stock::history_entry_bytes(entry);
+        let base = HISTORY_RING.wrapping_add(u32::from(index).wrapping_mul(HISTORY_ENTRY_BYTES as u32));
+        for (chunk, word) in bytes.chunks_exact(4).enumerate() {
+            self.machine.write_u32(base.wrapping_add((chunk as u32).wrapping_mul(4)), u32::from_le_bytes([word[0], word[1], word[2], word[3]]));
+        }
+        let _refused = self.records.write_shared(record, &group_16::AREA_STATISTICS, descriptor);
+    }
+
+    /// 0xf32d9c: clears the descriptor's presence word, preserving the index and pointer.
+    fn clear_history(&mut self, record: RecordHandle) {
+        let mut descriptor = self.shared_bytes(NO_HANDLE, &group_16::AREA_STATISTICS);
+        descriptor[..4].fill(0);
+        let _refused = self.records.write_shared(record, &group_16::AREA_STATISTICS, descriptor);
+    }
 
     fn acquisition_level(&mut self) -> i16 { self.shared(NO_HANDLE, &group_27::AT_0250) }
 

@@ -1,4 +1,7 @@
+use xm1_focus_measurement_round::history::HistoryEntry;
 use xm1_focus_measurement_round::lanes::Selection;
+use xm1_focus_measurement_round::pipeline::{HistoryStatistics, PipelineSnapshot, PipelineWord};
+use xm1_focus_measurement_round::stock::{HISTORY_ENTRY_BYTES, HISTORY_RING};
 use xm1_focus_measurement_round::profile::{
     FrameInterval, GridCell, IntervalHistory, IntervalTracking, ProfileMode, ProfileRecords, ProfileSelection,
     PublishedResult, StatisticsInUse, WindowPosition, WindowStatus,
@@ -172,6 +175,101 @@ fn the_profile_comes_from_the_record_the_handle_selects_and_the_shared_header_en
     assert_eq!(geometry.resource, GeometryPair([1, 2]));
     assert_eq!(geometry.converted_profile, RetainedGeometryValue(0x77));
     assert_eq!((geometry.first_parameter, geometry.second_parameter), (RetainedGeometryValue(0x11), RetainedGeometryValue(0x22)));
+}
+
+/// The fake machine's halfword at `at`.
+fn half(fake: &crate::fake::Fake, at: u32) -> u16 { u16::from_le_bytes([fake.byte(at), fake.byte(at + 1)]) }
+
+#[test]
+fn the_first_history_publication_starts_the_descriptor_and_writes_the_entry() {
+    // 0xf32654: an absent descriptor (0x7567ec reads present 0) becomes present 1, index 0 and
+    // pointer 0x5ffee718, the started word of six entries is cleared (0xf326d4..0xf326e4), one
+    // 552-byte entry is written at the ring and the descriptor is written back (0x756814).
+    let mut bytes = Bytes::default();
+    let record = open(&mut bytes, &[16]);
+    let (fake, mut root) = root(bytes, Entries::default());
+    for slot in 0..6 { fake.set_word(HISTORY_RING + slot * HISTORY_ENTRY_BYTES as u32, 0xdead_beef); }
+    let statistics = HistoryStatistics {
+        banks: [std::array::from_fn(|index| 0x1000 + index as u32), std::array::from_fn(|index| 0x2000 + index as u32)],
+        word: PipelineWord(0x5555_4444),
+        cell_levels: [0x6666, 0x7777],
+    };
+    let snapshot = PipelineSnapshot {
+        levels: [0x1111, 0x2222],
+        retained: [0x31, 0x32, 0x33, 0x34, 0x35, 0x36].map(PipelineWord),
+        ..PipelineSnapshot::default()
+    };
+    let entry = HistoryEntry::new(&snapshot, statistics, -1234);
+    root.publish_history(record, &entry);
+
+    let shared = &root.records().memory().shared;
+    assert_eq!((word(shared, 0xa4), shared[0xa8], word(shared, 0xac)), (1, 0, HISTORY_RING));
+    assert_eq!(&shared[0xa9..0xac], &[0, 0, 0]);
+    // The entry: written word, both 64-word banks, the cell levels, the exposure difference,
+    // the second snapshot level, the six retained words and the statistics word.
+    assert_eq!(fake.word(HISTORY_RING), 1);
+    assert_eq!(fake.word(HISTORY_RING + 4), 0x2000);
+    assert_eq!(fake.word(HISTORY_RING + 0x104), 0x1000);
+    assert_eq!((half(&fake, HISTORY_RING + 0x204), half(&fake, HISTORY_RING + 0x206)), (0x6666, 0x7777));
+    assert_eq!(half(&fake, HISTORY_RING + 0x208), -1234i16 as u16);
+    assert_eq!(half(&fake, HISTORY_RING + 0x20a), 0x2222);
+    for index in 0..6 { assert_eq!(fake.word(HISTORY_RING + 0x20c + 4 * index as u32), 0x31 + index as u32); }
+    assert_eq!(fake.word(HISTORY_RING + 0x224), 0x5555_4444);
+    // The five other entries keep only their cleared started word.
+    for slot in 1..6 { assert_eq!(fake.word(HISTORY_RING + slot * HISTORY_ENTRY_BYTES as u32), 0, "slot {slot}"); }
+}
+
+#[test]
+fn the_history_descriptor_advances_one_slot_and_wraps_like_0xf326ec() {
+    // 0xf326ec..0xf32704: `uxtb(index + 1)`, and any value above four becomes zero.
+    for (index, next) in [(0u8, 1u8), (1, 2), (3, 4), (4, 0), (5, 0), (0xff, 0)] {
+        let mut bytes = Bytes::default();
+        let record = open(&mut bytes, &[16]);
+        put(&mut bytes.shared, 0xa4, 1);
+        bytes.shared[0xa8] = index;
+        bytes.shared[0xa9..0xac].fill(0x5a);
+        put(&mut bytes.shared, 0xac, HISTORY_RING);
+        let (fake, mut root) = root(bytes, Entries::default());
+        root.publish_history(record, &HistoryEntry::new(&PipelineSnapshot::default(), HistoryStatistics::default(), 0));
+        let shared = &root.records().memory().shared;
+        assert_eq!((word(shared, 0xa4), shared[0xa8], word(shared, 0xac)), (1, next, HISTORY_RING), "index {index}");
+        assert_eq!(&shared[0xa9..0xac], &[0x5a; 3], "index {index}");
+        assert_eq!(fake.word(HISTORY_RING + u32::from(next) * HISTORY_ENTRY_BYTES as u32), 1, "index {index}");
+        if index < 5 && index != next {
+            assert_eq!(fake.word(HISTORY_RING + u32::from(index) * HISTORY_ENTRY_BYTES as u32), 0, "index {index}");
+        }
+    }
+}
+
+#[test]
+fn clearing_the_history_descriptor_keeps_the_index_and_pointer() {
+    // 0xf32d9c: reads the descriptor with 0x7567ec, clears its presence word and writes it back
+    // with 0x756814; the index byte, the three reserved bytes and the ring pointer stay.
+    let mut bytes = Bytes::default();
+    let record = open(&mut bytes, &[16]);
+    put(&mut bytes.shared, 0xa4, 1);
+    bytes.shared[0xa8] = 3;
+    bytes.shared[0xa9..0xac].copy_from_slice(&[0xaa, 0xbb, 0xcc]);
+    put(&mut bytes.shared, 0xac, HISTORY_RING);
+    let (_, mut root) = root(bytes, Entries::default());
+    root.clear_history(record);
+    let shared = &root.records().memory().shared;
+    assert_eq!(word(shared, 0xa4), 0);
+    assert_eq!(shared[0xa8], 3);
+    assert_eq!(&shared[0xa9..0xac], &[0xaa, 0xbb, 0xcc]);
+    assert_eq!(word(shared, 0xac), HISTORY_RING);
+}
+
+#[test]
+fn a_history_publication_without_the_descriptor_grant_writes_only_the_ring() {
+    // 0x756814 refuses the descriptor write without group 16; the ring writes are direct.
+    let mut bytes = Bytes::default();
+    let record = open(&mut bytes, &[]);
+    bytes.shared[0xa4..0xb0].fill(0x5a);
+    let (fake, mut root) = root(bytes, Entries::default());
+    root.publish_history(record, &HistoryEntry::new(&PipelineSnapshot::default(), HistoryStatistics::default(), 0));
+    assert_eq!(root.records().memory().shared[0xa4..0xb0], [0x5a; 12]);
+    assert_eq!(fake.word(HISTORY_RING), 1);
 }
 
 #[test]

@@ -117,6 +117,8 @@ delegate!(with_services, ProfileRecords {
     fn invalidate(&mut self, record: RecordHandle, result: PublishedResult);
     fn invalidate_focus_result(&mut self);
     fn grants_measurement_history(&mut self, record: RecordHandle) -> bool;
+    fn publish_history(&mut self, record: RecordHandle, entry: &xm1_focus_measurement_round::history::HistoryEntry);
+    fn clear_history(&mut self, record: RecordHandle);
     fn acquisition_level(&mut self) -> i16;
     fn interval_history(&mut self) -> IntervalHistory;
     fn set_interval_history(&mut self, record: RecordHandle, history: IntervalHistory);

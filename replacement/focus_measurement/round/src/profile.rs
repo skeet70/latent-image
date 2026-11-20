@@ -170,6 +170,11 @@ pub trait ProfileRecords {
     fn invalidate_focus_result(&mut self);
     /// Whether `record`'s grant covers the measurement history's position.
     fn grants_measurement_history(&mut self, record: RecordHandle) -> bool;
+    /// Publishes one measurement-history entry at the ring position the shared descriptor
+    /// names, advancing the descriptor (`0xf32654`).
+    fn publish_history(&mut self, record: RecordHandle, entry: &crate::history::HistoryEntry);
+    /// Clears the shared history descriptor's presence word (`0xf32d9c`).
+    fn clear_history(&mut self, record: RecordHandle);
     /// The level the acquisition last published.
     fn acquisition_level(&mut self) -> i16;
     fn interval_history(&mut self) -> IntervalHistory;

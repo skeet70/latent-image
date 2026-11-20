@@ -42,6 +42,7 @@ fn clearing_the_selection_restarts_the_measurement_history_and_forgets_the_inter
     record::apply(RecordEffect::ClearSelection, record(), &mut history, &mut ports);
     assert!(!history.started());
     assert!(ports.records.intervals.intervals().is_empty());
+    assert!(ports.records.history_cleared);
     assert!(ports.take().is_empty());
 }
 
@@ -74,6 +75,8 @@ fn a_measurement_tick_enters_the_history_capture_with_the_focus_cell_levels() {
     assert_eq!((entry.statistics().banks[0][0], entry.statistics().banks[1][63], entry.statistics().word), (0xa0, 0xb1, PipelineWord(0x51)));
     assert_eq!(entry.reference_level(), 380);
     assert_eq!(entry.retained(), [1, 2, 3, 4, 5, 6].map(PipelineWord));
+    // 0xf32654 publishes the same entry the history keeps.
+    assert_eq!(ports.records.published, [*history.newest()]);
 }
 
 #[test]

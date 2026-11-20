@@ -1,4 +1,5 @@
 use crate::auxiliary::{self, AuxiliaryProfile, AuxiliaryPublication, AuxiliaryReading, AuxiliarySettings, Curve, CurveInputs, RequestProfile, ResourceIndex};
+use crate::history::HistoryEntry;
 use crate::image::{self, ChannelCount, ImageLog, ImageLogging, LensReport, ReplyPorts};
 use crate::lanes::Selection;
 use crate::planner::{Cadence, Mode, Work};
@@ -27,6 +28,9 @@ pub struct Records {
     pub geometry: ProfileGeometry,
     pub window: WindowRecord,
     pub window_position: WindowPosition,
+    /// The entries `publish_history` received and whether `clear_history` ran.
+    pub published: Vec<HistoryEntry>,
+    pub history_cleared: bool,
     /// Whether the writing record's grant covers its writes.
     pub granted: bool,
 }
@@ -41,6 +45,8 @@ impl Records {
             focus_invalid: false,
             acquisition_level: 0,
             intervals: IntervalHistory::default(),
+            published: Vec::new(),
+            history_cleared: false,
             profile: Profile {
                 selection: ProfileSelection::Unselected,
                 mode: ProfileMode(0),
@@ -271,6 +277,12 @@ impl<X> ProfileRecords for Ports<X> {
     }
     fn invalidate_focus_result(&mut self) { self.records.focus_invalid = true; }
     fn grants_measurement_history(&mut self, _: RecordHandle) -> bool { self.records.granted }
+    fn publish_history(&mut self, _: RecordHandle, entry: &HistoryEntry) {
+        if self.records.granted { self.records.published.push(*entry); }
+    }
+    fn clear_history(&mut self, _: RecordHandle) {
+        if self.records.granted { self.records.history_cleared = true; }
+    }
     fn acquisition_level(&mut self) -> i16 { self.records.acquisition_level }
     fn interval_history(&mut self) -> IntervalHistory { self.records.intervals }
     fn set_interval_history(&mut self, _: RecordHandle, history: IntervalHistory) {

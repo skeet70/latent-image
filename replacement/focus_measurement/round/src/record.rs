@@ -91,6 +91,9 @@ pub fn apply(effect: RecordEffect, record: RecordHandle, history: &mut Measureme
         RecordEffect::ResetSelection => ports.detach_capture_buffer(record),
         RecordEffect::ClearSelection => {
             history.restart(ports.grants_measurement_history(record));
+            // 0xf32d9c clears the shared history descriptor's presence word, preserving the
+            // index and pointer.
+            ports.clear_history(record);
             clear_intervals(record, ports);
         }
         RecordEffect::FinishSelectionClear(client) => finish_selection_clear(client, record, ports),
@@ -175,7 +178,11 @@ fn record_history(record: RecordHandle, history: &mut MeasurementHistory, ports:
     let statistics = ports.history_statistics(cell);
     let exposure = history_exposure(&snapshot, ports);
     let kept = ports.grants_measurement_history(record);
-    history.record(HistoryEntry::new(&snapshot, statistics, exposure), kept);
+    let entry = HistoryEntry::new(&snapshot, statistics, exposure);
+    history.record(entry, kept);
+    // 0xf32654 writes the entry at the ring position the shared descriptor names and
+    // advances the descriptor; the write is refused when the record does not grant group 16.
+    ports.publish_history(record, &entry);
 }
 
 /// The timing's offset and the acquisition's level, less the window level the snapshot gives.
