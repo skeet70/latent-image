@@ -143,6 +143,8 @@ haskell_binary(
         "//host:host-support",
         "//host:json",
         "//host:update-container",
+        "//replacement/display_scanout:display-scanout-artifact",
+        "//replacement/file_service:native-lib",
         "//replacement/fixed_image:contract",
     ],
 )

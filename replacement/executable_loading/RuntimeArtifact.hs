@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Independent contract over a staged Root bank that links the task60 loading
--- owner: canonical image4 plus exactly the published veneers, the fixed record
--- carrying the admitted body/BSS, and the explicit qualification policy.
+-- owner: canonical image4 plus exactly the published loading and decoder veneers,
+-- the scanout entry branches and file-service words inside its retired extents, the
+-- fixed record carrying the admitted body/BSS, and the explicit qualification policy.
 module Main (main) where
 
 import Control.Monad (forM, forM_)
@@ -10,7 +11,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Bits ((.&.), (.|.), complement)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.List (sort)
+import Data.List (partition, sort)
 import Data.Word (Word32)
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified FujiAF.FirstStage as F
@@ -19,6 +20,9 @@ import FujiAF.JSON (encodeCanonical)
 import qualified FujiAF.UpdateContainer as U
 import Replacement.FixedImage.Layout
 import Replacement.FixedImage.Record
+import qualified Replacement.DisplayScanout.Artifact as Scanout
+import qualified Replacement.FileService.Native as FileService
+import qualified Replacement.FileService.Requests as FileService
 import System.Environment (getArgs, getEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -120,7 +124,15 @@ main = do
         target <- F.symbolAddress <$> symbol symbols (entryName entry)
         new <- branch (entryAddress entry) target
         pure (entryAddress entry, word (entryAddress entry), new)
-      H.ensure (sort image4Rows == sort veneers) "image4 publications are not exactly the loading and decoder veneers"
+      scanoutSymbols <- H.readRegular (64 * 1024 * 1024) symbolsPath
+      scanout <- either (H.failH . show) pure (Scanout.canonicalPublications image scanoutSymbols)
+      let scanoutRows = [(address, old, new) | Scanout.Publication address old new <- scanout]
+          (loadingRows, unitRows) = partition (\(address, _, _) -> address `elem` map entryAddress [minBound .. maxBound]) image4Rows
+          (scanoutPublished, fileServiceRows) = partition (\(address, _, _) -> address `elem` [address' | (address', _, _) <- scanoutRows]) unitRows
+          retired address = any (\(_, extent) -> FileService.extentContains extent address) (FileService.codeExtents FileService.code)
+      H.ensure (sort loadingRows == sort veneers) "image4 publications are not exactly the loading and decoder veneers"
+      H.ensure (sort scanoutPublished == sort scanoutRows) "image4 publications are not exactly the scanout entry branches"
+      H.ensure (all (\(address, _, _) -> retired address) fileServiceRows) "an image4 publication lies outside the loading, decoder, scanout and file-service sites"
       expected <- either (H.failH . show) pure (applyPublications Image4 (LoadAddress 0x61c400) (reservationPublications ++ rows) image)
       candidate <- H.readRegular (64 * 1024 * 1024) candidatePath
       parsed <- either H.failH pure (U.parseContainer candidate)
