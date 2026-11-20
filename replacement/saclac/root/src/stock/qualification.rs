@@ -40,6 +40,7 @@
 
 use core::ptr;
 use xm1_focus_measurement_round::jobs::qualification::JobView;
+use xm1_focus_measurement_round::lanes::{Lane, Lanes};
 use xm1_focus_measurement_round::round::qualification::{FanView, PhaseView};
 use xm1_saclac_controllers::live::qualification::StateView as LiveView;
 use xm1_saclac_controllers::live_view::qualification::StateView as LiveViewControllerView;
@@ -257,6 +258,48 @@ pub fn encode_m29(view: JobView) -> u16 {
         JobView::Running => 2,
         JobView::Stopping => 3,
     }
+}
+
+// ---------------------------------------------------------------------------
+// The selection-adjustment mask: Root's category-pair decision to the stock bits.
+
+/// The stock mask bit one Root lane stands for. The bits are the category pairs
+/// `tu_00f04788.c:32-98` reads: bit0 First/Second (`m24`, the acquisition's calc1
+/// 0x3d00/0x3d01 + imgdc 3f2c/3f2d, Root completion 0x87/0x88), bit1 Mode (`m33`, the
+/// AF-search coordinator), bit2 Primary (`m14`, calc1 0x3d02, the auxiliary lane's
+/// operation), bit3 Auxiliary (`m9`, imgdc 3f30..33 + calc 0x3c0a, Root image completions
+/// 0x47/0x66/0x8b), bit4 Output (`m10`, bookkeeping), bit5 Secondary (`m29`, calc 0x3c0c,
+/// `round_services.rs:80-82` posts completion 0x8d) and bit6 Tertiary (`m30`, calc 0x3c11,
+/// `round_services.rs:88-90` posts completion 0x9a).
+pub fn lane_mask(lane: Lane) -> u8 {
+    match lane {
+        Lane::Acquisition => 0x01,
+        Lane::Search => 0x02,
+        Lane::Auxiliary => 0x04,
+        Lane::Image => 0x08,
+        Lane::Bookkeeping => 0x10,
+        Lane::Window => 0x20,
+        Lane::Source => 0x40,
+    }
+}
+
+/// Encodes the selected lanes as the stock mask; an empty selection is zero.
+pub fn encode_mask(lanes: Lanes) -> u8 {
+    let mut mask = 0;
+    for lane in xm1_focus_measurement_round::lanes::ORDER {
+        if lanes.contains(lane) { mask |= lane_mask(lane); }
+    }
+    mask
+}
+
+/// Decodes a stock mask into the lanes it names. Bits above bit6 have no Root counterpart.
+pub fn decode_mask(mask: u8) -> Result<Lanes, u32> {
+    if mask & 0x80 != 0 { return Err(1); }
+    let mut lanes = Lanes::empty();
+    for lane in xm1_focus_measurement_round::lanes::ORDER {
+        if mask & lane_mask(lane) != 0 { lanes.insert(lane); }
+    }
+    Ok(lanes)
 }
 
 // ---------------------------------------------------------------------------
@@ -507,14 +550,29 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
             Err(detail) => refusal.note(FIELD_MACHINE0 + index, detail),
         }
     }
-    // 0x16be044/+3/+4: the selection category mask and the two pair stage indices. Root's
-    // owned wake path does not write this block (the machine-8 body at
-    // `power_lifecycle/src/record_task43_machines8.rs` writes it through the stock helpers
-    // `0xf32530`/`0xf32558`/`0xf32dd8`, and the typed 0x3b4b path bypasses that body), so
-    // there is no typed counterpart to encode.
-    refusal.note(FIELD_MASK, 1);
-    refusal.note(FIELD_STAGE_FIRST, 1);
-    refusal.note(FIELD_STAGE_SECOND, 1);
+    // 0x16be044/+3/+4: the selection-adjustment mask and the two pair done bytes. The mask
+    // is Root's category-pair decision (`Round.selected`); the done bytes are
+    // `Planner::busy`, which the step reads only as zero/nonzero.
+    match view.measurement {
+        Some(measurement) => {
+            unsafe { ptr::write(out.add(OFF_MASK), encode_mask(measurement.selected)) };
+            if measurement.first_busy {
+                refusal.note(FIELD_STAGE_FIRST, 1);
+            } else {
+                unsafe { ptr::write(out.add(OFF_STAGE_FIRST), 0) };
+            }
+            if measurement.second_busy {
+                refusal.note(FIELD_STAGE_SECOND, 1);
+            } else {
+                unsafe { ptr::write(out.add(OFF_STAGE_SECOND), 0) };
+            }
+        }
+        None => {
+            refusal.note(FIELD_MASK, 4);
+            refusal.note(FIELD_STAGE_FIRST, 4);
+            refusal.note(FIELD_STAGE_SECOND, 4);
+        }
+    }
     // The live branch's grid at 0x16bf370; bytes 0..8 and 0x458 are written-first.
     unsafe {
         ptr::copy_nonoverlapping(view.live_grid.0[GRID_HEAD].as_ptr(), out.add(OFF_GRID_HEAD), GRID_HEAD.end - GRID_HEAD.start);
@@ -564,11 +622,30 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
             Err(detail) => { refusal.note(FIELD_MACHINE0 + index, detail); code = 2; }
         }
     }
-    // The mask and stage bytes have no typed counterpart.
-    refusal.note(FIELD_MASK, 1);
-    refusal.note(FIELD_STAGE_FIRST, 1);
-    refusal.note(FIELD_STAGE_SECOND, 1);
-    if code == 0 { code = 2; }
+    // The mask decodes to the selected lanes; bits above bit6 have no Root counterpart.
+    let mask = unsafe { ptr::read(stock.add(OFF_MASK)) };
+    match decode_mask(mask) {
+        Ok(lanes) => {
+            let encoded = encode_mask(lanes);
+            if encoded != mask {
+                refusal.note(FIELD_MASK, 3);
+                code = 3;
+            } else {
+                unsafe { ptr::write(out.add(OFF_MASK), encoded) };
+            }
+        }
+        Err(detail) => { refusal.note(FIELD_MASK, detail); code = 2; }
+    }
+    // The pair done bytes are zero at the wake; a nonzero byte is a status Root does not
+    // retain.
+    for (field, off) in [(FIELD_STAGE_FIRST, OFF_STAGE_FIRST), (FIELD_STAGE_SECOND, OFF_STAGE_SECOND)] {
+        if unsafe { ptr::read(stock.add(off)) } != 0 {
+            refusal.note(field, 1);
+            code = 2;
+        } else {
+            unsafe { ptr::write(out.add(off), 0) };
+        }
+    }
     // The grid's exposed ranges are the typed grid's own bytes; the copy already carries
     // them.
     // Record holes: a nonzero byte is residue with no typed counterpart.
@@ -648,6 +725,23 @@ mod tests {
         for view in PHASES { assert!((encode_m13(view)) < 6); }
         const JOBS: [JobView; 4] = [JobView::Disabled, JobView::Ready, JobView::Running, JobView::Stopping];
         for view in JOBS { assert!((encode_m24(view)) < 5); assert!((encode_m29(view)) < 4); }
+    }
+
+    #[test]
+    fn the_selection_mask_is_the_selected_lanes() {
+        use xm1_focus_measurement_round::lanes::{Lane, Lanes};
+        assert_eq!(encode_mask(Lanes::empty()), 0);
+        let mut measured = Lanes::empty();
+        measured.insert(Lane::Acquisition);
+        measured.insert(Lane::Auxiliary);
+        measured.insert(Lane::Window);
+        assert_eq!(encode_mask(measured), 0x25);
+        assert_eq!(decode_mask(0x25), Ok(measured));
+        for mask in 0..=0x7f {
+            let lanes = decode_mask(mask).expect("every mask below bit7 has a lane set");
+            assert_eq!(encode_mask(lanes), mask, "mask {mask:#04x}");
+        }
+        assert_eq!(decode_mask(0x80), Err(1));
     }
 
     #[test]

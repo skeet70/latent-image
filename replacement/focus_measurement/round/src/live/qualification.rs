@@ -6,6 +6,7 @@
 
 use super::Measurement;
 use crate::jobs::qualification::{self as jobs, JobView};
+use crate::lanes::Lanes;
 use crate::round::qualification::{self as round, FanView, PhaseView};
 use crate::window::qualification as window;
 
@@ -14,6 +15,9 @@ use crate::window::qualification as window;
 pub struct View {
     pub phase: PhaseView,
     pub fan: FanView,
+    pub selected: Lanes,
+    pub first_busy: bool,
+    pub second_busy: bool,
     pub auxiliary: JobView,
     pub window: JobView,
     pub source: JobView,
@@ -25,6 +29,9 @@ pub fn view(measurement: &Measurement) -> View {
     View {
         phase: round::phase(&measurement.round),
         fan: round::fan(&measurement.round),
+        selected: round::selected(&measurement.round),
+        first_busy: round::first_busy(&measurement.round),
+        second_busy: round::second_busy(&measurement.round),
         auxiliary: jobs::view(&measurement.auxiliary),
         window: jobs::view(&measurement.window),
         source: jobs::view(&measurement.source),

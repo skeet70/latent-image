@@ -5,6 +5,8 @@
 //! (`0x169d4c4`, 3 states). Both conversions are exhaustive over the private enums.
 
 use super::{Fan, Phase, Round};
+use crate::lanes::Lanes;
+use crate::planner::Slot;
 
 /// One variant per `Phase` value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +35,16 @@ pub fn fan(round: &Round) -> FanView {
         Fan::Stopping => FanView::Stopping,
     }
 }
+
+/// The lanes `round` has selected; the round's category-pair decision.
+pub fn selected(round: &Round) -> Lanes { round.selected }
+
+/// Whether the planner's first pair slot is busy (the stock `0x16be047` done byte is zero
+/// exactly when it is not).
+pub fn first_busy(round: &Round) -> bool { round.planner.busy(Slot::First) }
+
+/// Whether the planner's second pair slot is busy (the stock `0x16be048` done byte).
+pub fn second_busy(round: &Round) -> bool { round.planner.busy(Slot::Second) }
 
 /// Restores the phase a view names; the inverse of `phase` for every view.
 pub fn restore_phase(round: &mut Round, view: PhaseView) {
