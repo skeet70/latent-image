@@ -365,6 +365,18 @@ Scope: Current-image transition ownership, linked dispatcher/probe targets and e
 
 <!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150 -->
 
+## Settings-storage lifecycle matrix
+
+[Cell table and open refusal](../emulation/settings-lifecycle-matrix.md); `property-pair-check` qualifies the composed settings/record-store/property image only when all eight storage criteria hold.
+
+<!-- evidence-record E-SETTINGS-LIFECYCLE-MATRIX-COMPOSED-150 -->
+
+E-SETTINGS-LIFECYCLE-MATRIX-COMPOSED-150: On the composed settings/record-store/property image, both full-system observations of the 35-step settings-storage lifecycle matrix complete over two boot sessions (retained completed, owned completed). property-pair-check accepts every step before step 31 in both roles, including the changed custom save, the unchanged custom save without a custom refresh, alternate capture/restore and film-simulation repetition. Qualify retained, qualify owned and compare all refuse at step 31 half-press-handback: retained `property-pair-check: qualify refused: StorageCheckFailed (MatrixStepName "half-press-handback") UiHandback`; owned refused step 31 `property-pair-check: qualify refused: StorageCheckFailed (MatrixStepName "half-press-handback") UiHandback`; compare refused step 31.
+
+Scope: Emulated X-M1 1.50 stock DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490 against composed DAT 41b5e718a9d714a77b8b5a03dff1a35b646754c045958a0a660ccfc31d9bbe17, one observation per role by observer 94fd55718fe0b01bafb3a08879f012d32f555d1850dde8514ecc7eedb49ae0be, rechecked by the cited lifecycle-check run. The matrix does not qualify: the S1 handback, custom recall, C/M/C mode cycle and cold committed reload steps are not evaluated.
+
+<!-- /evidence-record E-SETTINGS-LIFECYCLE-MATRIX-COMPOSED-150 -->
+
 ## Authoritative references
 
 | Question | Home |
