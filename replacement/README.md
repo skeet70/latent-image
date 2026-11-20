@@ -389,6 +389,18 @@ Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26a
 
 <!-- /evidence-record E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150 -->
 
+## Property-service retirement admission
+
+[Frontier closures and named dependencies](settings-storage.md#public-entry-variant).
+
+<!-- evidence-record E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150 -->
+
+E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150: The public property stager admits retirement of the stock getter and setter bodies without --unadmitted-retirement (retirement.admitted true, 0 unresolved references, 9 named MMIO-sink dependencies whose coinciding retired words stay stock). On the staged DAT f6c64c4f6695942fbd5825cd2ee30d7fde2667cc3e77cab93ab96d1856c3f97a, the natural pair over 109 routes qualifies both roles (retained qualified, owned qualified) and compares equal; the refusal controls refuse 10/10 for the retained role and 10/10 for the owned role, and the setter-entry guest control ends refused-at-restored-arm.
+
+Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, full-system natural pair on the IMAGE SIZE-excluded route file (109 routes), one observation per role. Retirement admission is the static reference frontier over image4, image5, plain, both loaders, image2 and image3; computed addresses are outside it. Not the camera, not a native cohort on the kept-word image, not the lifecycle matrix.
+
+<!-- /evidence-record E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150 -->
+
 ## Authoritative references
 
 | Question | Home |
