@@ -113,6 +113,8 @@ pub enum ObjectRefusal {
     NonIntegralGeometry,
     /// Created size words `+8`/`+0xc` differ from the VGImage extent.
     ImageSize,
+    /// The image handle does not resolve to a live image (`0x82b428`).
+    ImageHandle(u32),
     ImageFormat,
     ImageStorage,
     ShapeMethod,
@@ -272,6 +274,63 @@ impl<'a> SceneObject<'a> {
     }
 }
 
+/// The OpenVG context returned by `0x8834a4` (`0x886614`: `I4:886680-886688`).
+const VG_CONTEXT: DataAddress = DataAddress(0x0088_dd2c);
+/// Chunk lists past the pool's first block are walked at most this many times.
+const MAX_HANDLE_CHUNKS: usize = 64;
+
+/// Handle stored at image object `+0xc4`: pool type in bits 31..28, class in 27..25, table tag in 24..16 and
+/// slot in 15..0 (`I4:82b404-82b418`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageHandle(pub u32);
+impl ImageHandle {
+    /// The record `0x82b428` returns for this handle, reached from context `+0x1c`, then `+0x1c`, then the
+    /// table header at `+0xc` (`I4:83a6c4-83a6cc`, `834878-834880`). Header word 0 is the tag and word 1 the
+    /// pool. The pool's one-entry cache `+0x34/+0x38` is consulted first (`82b458-82b464`); otherwise the slot
+    /// state halfword must hold 2 in bits 15..12 and the handle's bits 27..16 in 11..0, and the record is
+    /// element base + stride x slot (`82b468-82b4b4`) or the same within a chunk of the list at `+0x40`
+    /// (`82b4bc-82b538`).
+    pub fn resolve(self, memory: &ResourceMemory<'_>) -> Result<DataAddress, ObjectRefusal> {
+        let refused = ObjectRefusal::ImageHandle(self.0);
+        let at = |address: u32| read_word(memory, DataAddress(address)).map_err(ObjectRefusal::Memory);
+        let manager = at(VG_CONTEXT.0.wrapping_add(0x1c))?;
+        let registry = at(manager.wrapping_add(0x1c))?;
+        let header = at(registry.wrapping_add(0xc))?;
+        if at(header)? != (self.0 >> 16) & 0x1ff { return Err(refused); }
+        let pool = at(header.wrapping_add(4))?;
+        if at(pool)? != self.0 >> 28 { return Err(refused); }
+        if at(pool.wrapping_add(0x34))? == self.0 { return Ok(DataAddress(at(pool.wrapping_add(0x38))?)); }
+        let slot = self.0 & 0xffff;
+        let stride = at(pool.wrapping_add(0x20))?;
+        let live = |states: u32, index: u32| -> Result<bool, ObjectRefusal> {
+            let bytes = memory.bytes(DataAddress(states.wrapping_add(index * 2)), 2).map_err(ObjectRefusal::Memory)?;
+            let state = u32::from(half(bytes, 0));
+            Ok(state >> 12 == 2 && state & 0xfff == (self.0 >> 16) & 0xfff)
+        };
+        let record = if slot < at(pool.wrapping_add(0xc))? {
+            if !live(at(pool.wrapping_add(0x30))?, slot)? { return Err(refused); }
+            at(pool.wrapping_add(8))?.wrapping_add(stride.wrapping_mul(slot))
+        } else {
+            let mut chunk = at(pool.wrapping_add(0x40))?;
+            let mut found = None;
+            for _ in 0..MAX_HANDLE_CHUNKS {
+                if chunk == 0 { break; }
+                let first = at(chunk.wrapping_add(4))?;
+                if slot >= first && slot < first.wrapping_add(at(chunk.wrapping_add(8))?) {
+                    let index = slot - first;
+                    if !live(at(chunk.wrapping_add(0x10))?, index)? { return Err(refused); }
+                    found = Some(at(chunk)?.wrapping_add(stride.wrapping_mul(index)));
+                    break;
+                }
+                chunk = at(chunk.wrapping_add(0x14))?;
+            }
+            found.ok_or(refused)?
+        };
+        if record == 0 { return Err(refused); }
+        Ok(DataAddress(record))
+    }
+}
+
 /// The VGImage record behind image handle `+0xc4`, filled by `0x835d90`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageStorage<'a> { pub width: u16, pub height: u16, pub pixels: PixelSource<'a> }
@@ -279,8 +338,8 @@ impl<'a> ImageStorage<'a> {
     /// Accepts format 1 (`+0x14 & 0x3f`, `835f14`) with flag bytes `+0x53/+0x54` zero (`835f30-835f38`) and no
     /// sub-window offset `+0x44/+0x46` (`8391a0-8391b4`). Width/height are `+0x3c/+0x40`, stride `+0x4c`, CPU
     /// pixels `+0x68` (`835ee0-836034`). Format 1 is `VG_sRGBA_8888` from `vgc_create_image(1, w, h, 4)` (`6d8dc0-6d8dd0`).
-    pub fn decode(memory: &ResourceMemory<'a>, handle: DataAddress) -> Result<Self, ObjectRefusal> {
-        let record = memory.bytes(handle, VG_IMAGE_BYTES).map_err(ObjectRefusal::Memory)?;
+    pub fn decode(memory: &ResourceMemory<'a>, handle: ImageHandle) -> Result<Self, ObjectRefusal> {
+        let record = memory.bytes(handle.resolve(memory)?, VG_IMAGE_BYTES).map_err(ObjectRefusal::Memory)?;
         if word(record, 0x14) & 0x3f != 1 || record[0x53] != 0 || record[0x54] != 0 { return Err(ObjectRefusal::ImageFormat); }
         if half(record, 0x44) != 0 || half(record, 0x46) != 0 { return Err(ObjectRefusal::ImageStorage); }
         let width = half(record, 0x3c);
@@ -442,7 +501,7 @@ impl<'m, 'a> Scene<'m, 'a> {
         };
         let command = match object.class {
             ObjectClass::Image => {
-                let storage = ImageStorage::decode(self.memory, DataAddress(resource))?;
+                let storage = ImageStorage::decode(self.memory, ImageHandle(resource))?;
                 if base.size.width != f32::from(storage.width) || base.size.height != f32::from(storage.height) {
                     return Err(ObjectRefusal::ImageSize);
                 }

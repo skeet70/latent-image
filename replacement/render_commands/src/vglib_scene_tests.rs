@@ -14,6 +14,18 @@ const LOW_BYTES: usize = 0x18700;
 const HIGH: u32 = 0x0100_0000;
 const HIGH_BYTES: usize = 0x10000;
 const GVFF_AT: u32 = HIGH + 0x8000;
+// OpenVG context 0x88dd2c (I4:886680-886688) and its manager/registry/table-header/pool chain (I4:83a6c4-83a6cc,
+// 834878-834880, 82b428-82b4b4). Image records sit at pool element base HIGH+0x200 with stride 0x400, so the
+// record of image `index` is `block(index) + 0x200`.
+const VG: u32 = 0x0088_dd00;
+const MANAGER: u32 = HIGH + 0xf000;
+const REGISTRY: u32 = HIGH + 0xf020;
+const HEADER: u32 = HIGH + 0xf040;
+const HANDLE_POOL: u32 = HIGH + 0xf060;
+const STATES: u32 = HIGH + 0xf100;
+const CHUNK: u32 = HIGH + 0xf200;
+const CHUNK_STATES: u32 = HIGH + 0xf240;
+fn image_handle(index: u32) -> u32 { 0x2000_0000 | 1 << 25 | index }
 // First pixel as an OpenVG VG_sRGBA_8888 word 0x10203080 stored little-endian.
 const FIRST_PIXEL: [u8; 4] = [0x80, 0x30, 0x20, 0x10];
 
@@ -26,18 +38,29 @@ fn pool_address(bank: u8, slot: u8) -> u32 { 0x015e_7538 + u32::from(bank) * 0x6
 struct Placement { x: f32, y: f32, created: (u16, u16), scale: (f32, f32) }
 fn place(x: f32, y: f32, created: (u16, u16)) -> Placement { Placement { x, y, created, scale: (1.0, 1.0) } }
 
-struct Ram { low: Vec<u8>, high: Vec<u8>, pool: Vec<u8>, lists: Vec<u8> }
+struct Ram { vg: Vec<u8>, low: Vec<u8>, high: Vec<u8>, pool: Vec<u8>, lists: Vec<u8> }
 impl Ram {
     fn new() -> Self {
-        let mut ram = Self { low: vec![0; LOW_BYTES], high: vec![0; HIGH_BYTES], pool: vec![0; POOL_BYTES], lists: vec![0; LIST_BYTES] };
+        let mut ram = Self { vg: vec![0; 0x100], low: vec![0; LOW_BYTES], high: vec![0; HIGH_BYTES], pool: vec![0; POOL_BYTES], lists: vec![0; LIST_BYTES] };
         // Class tables keep the base getters of 0x7cfc94 and patch +0xa0 with the class draw (6d8d30-6d8d38, 6da644-6da64c).
         ram.ops(IMAGE_OPS, 0x006d_87dc);
         ram.ops(SHAPE_OPS, 0x006d_a0ac);
         for group in 0..24 { ram.group(group, &[]); }
+        ram.put32(0x0088_dd2c + 0x1c, MANAGER);
+        ram.put32(MANAGER + 0x1c, REGISTRY);
+        ram.put32(REGISTRY + 0xc, HEADER);
+        ram.put32(HEADER + 4, HANDLE_POOL);
+        ram.put32(HANDLE_POOL, 2);
+        ram.put32(HANDLE_POOL + 8, HIGH + 0x200);
+        ram.put32(HANDLE_POOL + 0xc, 16);
+        ram.put32(HANDLE_POOL + 0x20, 0x400);
+        ram.put32(HANDLE_POOL + 0x30, STATES);
         ram
     }
     fn bytes(&mut self, address: u32, count: usize) -> &mut [u8] {
-        if address >= HIGH { &mut self.high[(address - HIGH) as usize..][..count] } else { &mut self.low[(address - LOW) as usize..][..count] }
+        if address >= HIGH { &mut self.high[(address - HIGH) as usize..][..count] }
+        else if address >= LOW { &mut self.low[(address - LOW) as usize..][..count] }
+        else { &mut self.vg[(address - VG) as usize..][..count] }
     }
     fn put8(&mut self, address: u32, value: u8) { self.bytes(address, 1)[0] = value; }
     fn put16(&mut self, address: u32, value: u16) { self.bytes(address, 2).copy_from_slice(&value.to_le_bytes()); }
@@ -73,20 +96,22 @@ impl Ram {
         self.putf(object + 0x14, placement.scale.0);
         self.putf(object + 0x18, placement.scale.1);
     }
-    /// Image object with VGImage handle +0xc4; the record holds format +0x14, width/height +0x3c/+0x40,
-    /// stride +0x4c and CPU pixels +0x68 (835ee0-836034).
+    /// Image object with handle +0xc4 naming the VGImage record `block(index) + 0x200`, whose slot state is live
+    /// (0x2200: type 2 in bits 15..12, handle bits 27..16 in 11..0); the record holds format +0x14, width/height
+    /// +0x3c/+0x40, stride +0x4c and CPU pixels +0x68 (835ee0-836034).
     fn image(&mut self, index: u32, placement: Placement) -> u32 {
         let object = block(index);
-        let handle = object + 0x200;
+        let record = object + 0x200;
         let pixels = object + 0x280;
         let (width, height) = placement.created;
         self.base(object, IMAGE_OPS, placement);
-        self.put32(object + 0xc4, handle);
-        self.put32(handle + 0x14, 1);
-        self.put16(handle + 0x3c, width);
-        self.put16(handle + 0x40, height);
-        self.put16(handle + 0x4c, width * 4);
-        self.put32(handle + 0x68, pixels);
+        self.put32(object + 0xc4, image_handle(index));
+        self.put16(STATES + 2 * index, 0x2200);
+        self.put32(record + 0x14, 1);
+        self.put16(record + 0x3c, width);
+        self.put16(record + 0x40, height);
+        self.put16(record + 0x4c, width * 4);
+        self.put32(record + 0x68, pixels);
         self.bytes(pixels, 4).copy_from_slice(&FIRST_PIXEL);
         object
     }
@@ -129,12 +154,12 @@ impl Ram {
         self.lists[list..list + 4].copy_from_slice(&address.to_le_bytes());
         self.lists[list + 4..list + 8].copy_from_slice(&address.to_le_bytes());
     }
-    fn regions(&self) -> [DataRegion<'_>; 2] {
-        [DataRegion { base: DataAddress(LOW), bytes: &self.low }, DataRegion { base: DataAddress(HIGH), bytes: &self.high }]
+    fn regions(&self) -> [DataRegion<'_>; 3] {
+        [DataRegion { base: DataAddress(VG), bytes: &self.vg }, DataRegion { base: DataAddress(LOW), bytes: &self.low }, DataRegion { base: DataAddress(HIGH), bytes: &self.high }]
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Out {
     Clip(PanelRect),
     ResetClip,
@@ -392,6 +417,44 @@ fn image_storage_and_geometry_refusals() {
     // 8 x 1.1 = 8.8 pixels.
     let (ram, object) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale: (1.1, 1.0) });
     assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NonIntegralGeometry));
+}
+
+#[test]
+fn image_handles_resolve_only_to_live_slots_of_the_tagged_pool() {
+    let image = image_at(rect(0, 0, 8, 4), (8, 4));
+    let (ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image.clone()]);
+    // A freed slot clears the state's type nibble (82b2ec-82b2f8).
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
+    ram.put16(STATES, 0x0200);
+    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageHandle(image_handle(0))));
+    // The table header's tag must equal handle bits 24..16 (82b434-82b440).
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
+    ram.put32(HEADER, 1);
+    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageHandle(image_handle(0))));
+    // The pool's type word must equal handle bits 31..28 (82b448-82b450).
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
+    ram.put32(HANDLE_POOL, 3);
+    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageHandle(image_handle(0))));
+    // A cached handle returns the cached record without consulting slot state (82b458-82b464).
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    ram.put16(STATES, 0);
+    ram.put32(HANDLE_POOL + 0x34, image_handle(0));
+    ram.put32(HANDLE_POOL + 0x38, block(0) + 0x200);
+    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image.clone()]);
+    // A slot past the first block is found in a chunk {base, first, count, state array +0x10, next +0x14}
+    // (82b4bc-82b538): slot 20 is chunk index 2, base + 2 x stride.
+    let mut ram = Ram::new();
+    let object = ram.image(1, place(0.0, 0.0, (8, 4)));
+    ram.put32(object + 0xc4, image_handle(20));
+    ram.put32(HANDLE_POOL + 0x40, CHUNK);
+    ram.put32(CHUNK, block(1) + 0x200 - 2 * 0x400);
+    ram.put32(CHUNK + 4, 18);
+    ram.put32(CHUNK + 8, 4);
+    ram.put32(CHUNK + 0x10, CHUNK_STATES);
+    ram.put16(CHUNK_STATES + 4, 0x2200);
+    ram.group(0, &[(3, object)]);
+    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image]);
 }
 
 #[test]
