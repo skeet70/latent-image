@@ -57,6 +57,16 @@ genrule(
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
 )
 
+# scene-check rendering coverage with the per-sample reference rule (`vector_reference.rs`) instead of the row sweep.
+genrule(
+    name = "scene-check-reference-build",
+    srcs = [":module", "tests/scene_check.rs", ":libm-host"],
+    outs = ["scene-check-reference"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --cfg render_reference -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) --extern libm=$(location :libm-host) $(location tests/scene_check.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
 # Exports the rasterizer identity frame_pixel_check.rs records: rustc version, host triple and the SHA-256 of the
 # sorted `sha256sum` lines of :module.
 FRAME_PIXEL_CHECK_IDENTITY = """

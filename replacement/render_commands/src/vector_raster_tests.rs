@@ -1,6 +1,7 @@
 extern crate std;
 use super::*;
-use super::super::shape_assets::{Gvff, StyledPaths};
+use super::super::commands::SceneRect;
+use super::super::shape_assets::{Gvff, Scalar, StyledPaths};
 use std::vec;
 use std::vec::Vec;
 
@@ -28,6 +29,205 @@ fn styled(commands: &[u8], coordinates: &[f32]) -> (Vec<u8>, Vec<u8>) {
 }
 fn style(cap: LineCap, join: LineJoin) -> StrokeStyle<'static> {
     StrokeStyle { metrics: StrokeMetrics::new(2.0, 4.0).unwrap(), cap, join, dash: None }
+}
+
+/// Every `cover` call in order.
+#[derive(Debug, Default, PartialEq)]
+struct Recorder(Vec<(i32, i32, u8)>);
+impl CoverageSink for Recorder {
+    fn cover(&mut self, x: i32, y: i32, coverage: u8) { self.0.push((x, y, coverage)); }
+}
+
+/// The sweep's fill, checked against the per-sample rule.
+fn fill(path: FlattenedPath<'_>, rule: FillRule, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) {
+    let mut expected = Recorder::default();
+    reference::fill(path, rule, clip, grid, &mut TestScanlines::new().get(), &mut expected).unwrap();
+    let mut actual = Recorder::default();
+    super::fill(path, rule, clip, grid, &mut TestScanlines::new().get(), &mut actual).unwrap();
+    assert_eq!(actual, expected);
+    for (x, y, coverage) in actual.0 { sink.cover(x, y, coverage); }
+}
+
+/// The sweep's stroke, checked against the per-sample rule.
+fn stroke(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+    let mut expected = Recorder::default();
+    let expected_result = reference::stroke(path, style, workspace, budget, clip, grid, &mut TestScanlines::new().get(), &mut expected);
+    let mut actual = Recorder::default();
+    let result = super::stroke(path, style, workspace, budget, clip, grid, &mut TestScanlines::new().get(), &mut actual);
+    assert_eq!((result, &actual), (expected_result, &expected));
+    for (x, y, coverage) in actual.0 { sink.cover(x, y, coverage); }
+    result
+}
+
+fn stroke_placed_matches_reference(path: FlattenedPath<'_>, style: StrokeStyle<'_>, placement: ShapePlacement, clip: ClipBounds, grid: SampleGrid) -> usize {
+    let mut workspace = [StrokePrimitive::EMPTY; 128];
+    let mut expected = Recorder::default();
+    let expected_result = reference::stroke_placed(path, style, &mut workspace, DashBudget::new(256), placement, clip, grid, &mut TestScanlines::new().get(), &mut expected);
+    let mut actual = Recorder::default();
+    let result = super::stroke_placed(path, style, &mut workspace, DashBudget::new(256), placement, clip, grid, &mut TestScanlines::new().get(), &mut actual);
+    assert_eq!((result, &actual), (expected_result, &expected));
+    actual.0.len()
+}
+
+const GRIDS: [SampleGrid; 4] = [SampleGrid::One, SampleGrid::Two, SampleGrid::Four, SampleGrid::Eight];
+
+/// Asserts the sweep equals the per-sample rule for every grid and fill rule over a 24-pixel clip; returns the number
+/// of covered pixels.
+fn fills_match(commands: &[u8], coordinates: &[f32]) -> usize {
+    let (segments, values) = styled(commands, coordinates);
+    let item = StyledPaths::parse(&segments, &values).unwrap().items().next().unwrap();
+    let mut vertices = [Vertex::EMPTY; 256];
+    let path = flatten_path(item.path, &mut vertices, accuracy()).unwrap();
+    let mut covered = 0;
+    for grid in GRIDS {
+        for rule in [FillRule::NonZero, FillRule::EvenOdd] {
+            let mut recorder = Recorder::default();
+            fill(path, rule, ClipBounds::new(0, 0, 24, 24).unwrap(), grid, &mut recorder);
+            covered += recorder.0.len();
+        }
+    }
+    covered
+}
+
+/// As [`fills_match`] for strokes, over every cap and join.
+fn strokes_match(commands: &[u8], coordinates: &[f32], width: f32) -> usize {
+    let (segments, values) = styled(commands, coordinates);
+    let item = StyledPaths::parse(&segments, &values).unwrap().items().next().unwrap();
+    let mut vertices = [Vertex::EMPTY; 256];
+    let path = flatten_path(item.path, &mut vertices, accuracy()).unwrap();
+    let mut covered = 0;
+    for grid in GRIDS {
+        for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+            for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+                let style = StrokeStyle { metrics: StrokeMetrics::new(width, 4.0).unwrap(), cap, join, dash: None };
+                let mut recorder = Recorder::default();
+                stroke(path, style, &mut [StrokePrimitive::EMPTY; 128], DashBudget::new(256), ClipBounds::new(0, 0, 24, 24).unwrap(), grid, &mut recorder).unwrap();
+                covered += recorder.0.len();
+            }
+        }
+    }
+    covered
+}
+
+#[test]
+fn sweep_matches_samples_at_shared_vertices() {
+    // Two triangles meeting at one vertex, a bow-tie crossing itself, and two squares sharing an edge.
+    assert!(fills_match(b"MLLEMLLE", &[2.0,2.0, 10.0,2.0, 6.0,6.0, 6.0,6.0, 2.0,10.0, 10.0,10.0]) > 0);
+    assert!(fills_match(b"MLLLE", &[2.0,2.0, 12.0,12.0, 12.0,2.0, 2.0,12.0]) > 0);
+    assert!(fills_match(b"MLLLEMLLLE", &[2.0,2.0, 8.0,2.0, 8.0,8.0, 2.0,8.0, 8.0,2.0, 14.0,2.0, 14.0,8.0, 8.0,8.0]) > 0);
+    assert!(strokes_match(b"MLLL", &[3.0,3.0, 12.0,12.0, 12.0,3.0, 3.0,12.0], 2.0) > 0);
+}
+
+#[test]
+fn sweep_matches_samples_on_horizontal_edges_through_sample_rows() {
+    // Edges at the sample-row y of the one-, two-, four- and eight-sample grids, and at pixel boundaries.
+    for y in [2.5f32, 2.25, 2.125, 2.0625, 3.0] {
+        assert!(fills_match(b"MLLLE", &[1.0,y, 9.5,y, 9.5,y + 5.0, 1.0,y + 5.0]) > 0);
+        assert!(fills_match(b"MLLE", &[1.0,y, 9.5,y, 5.0,y + 6.0]) > 0);
+        assert!(strokes_match(b"ML", &[1.0,y, 9.5,y], 1.0) > 0);
+    }
+}
+
+#[test]
+fn sweep_matches_samples_one_f32_step_either_side_of_sample_centres() {
+    let steps = |value: f32| [f32::from_bits(value.to_bits() - 1), value, f32::from_bits(value.to_bits() + 1)];
+    for x in steps(4.125) {
+        for y in steps(3.375) {
+            assert!(fills_match(b"MLLE", &[x,y, 15.0,y + 7.0, x - 2.0,y + 11.0]) > 0);
+            assert!(fills_match(b"MLLLE", &[x,y, x + 6.0,y, x + 6.0,y + 6.0, x,y + 6.0]) > 0);
+            assert!(strokes_match(b"MLL", &[x,y, x + 5.0,y + 5.0, x + 9.0,y], 1.5) > 0);
+        }
+    }
+    // Diagonals through sample centres, and a stroke whose round joins and caps centre on samples.
+    assert!(fills_match(b"MLLE", &[2.125,2.125, 18.125,18.125, 2.125,18.125]) > 0);
+    assert!(strokes_match(b"MLL", &[4.125,4.125, 12.125,4.125, 12.125,12.125], 2.25) > 0);
+}
+
+#[test]
+fn sweep_matches_samples_for_placed_strokes_with_unequal_scales() {
+    let mut asset = dashed_asset(&[2.0], 0.0);
+    for (offset, value) in [(40, 0.0f32), (44, 0.0), (48, 10.0), (52, 10.0)] { asset[offset..offset + 4].copy_from_slice(&value.to_le_bytes()); }
+    let bounds: [Scalar; 4] = Gvff::parse(&asset).unwrap().bounds();
+    let (segments, values) = styled(b"MLLL", &[1.0,1.0, 8.0,3.0, 4.0,9.0, 9.0,9.0]);
+    let item = StyledPaths::parse(&segments, &values).unwrap().items().next().unwrap();
+    let mut covered = 0;
+    for dest in [SceneRect::new(1.5, 2.25, 15.0, 7.0).unwrap(), SceneRect::new(0.0, 0.0, 6.5, 20.0).unwrap()] {
+        let placement = ShapePlacement::scaled(dest, bounds).unwrap();
+        let mut vertices = [Vertex::EMPTY; 64];
+        let path = flatten_path_local(item.path, &mut vertices, accuracy(), placement).unwrap();
+        for grid in GRIDS {
+            for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+                for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+                    let style = StrokeStyle { metrics: StrokeMetrics::new(1.25, 4.0).unwrap(), cap, join, dash: None };
+                    covered += stroke_placed_matches_reference(path, style, placement, ClipBounds::new(0, 0, 24, 24).unwrap(), grid);
+                }
+            }
+        }
+    }
+    assert!(covered > 0);
+}
+
+#[test]
+fn sweep_matches_samples_for_generated_paths() {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || { state ^= state << 13; state ^= state >> 7; state ^= state << 17; state };
+    let mut covered = 0;
+    for _ in 0..200 {
+        let mut commands = Vec::new();
+        let mut coordinates = Vec::new();
+        for _ in 0..1 + next() % 2 {
+            commands.push(b'M');
+            for _ in 0..2 + next() % 6 { commands.push(b'L'); }
+            commands.push(b'E');
+        }
+        for _ in commands.iter().filter(|command| **command != b'E') {
+            for _ in 0..2 {
+                // Sixteenths land on sample centres and rows; some values step one f32 off them.
+                let value = (next() % 400) as f32 / 16.0 - 1.0;
+                coordinates.push(match next() % 4 { 0 => f32::from_bits(value.to_bits() + 1), 1 if value > 0.0 => f32::from_bits(value.to_bits() - 1), _ => value });
+            }
+        }
+        covered += fills_match(&commands, &coordinates);
+        let open: Vec<u8> = commands.iter().copied().filter(|command| *command != b'E').collect();
+        if open.iter().filter(|command| **command == b'M').count() == 1 {
+            covered += strokes_match(&open, &coordinates, [0.75f32, 1.0, 2.0, 3.25][(next() % 4) as usize]);
+        }
+    }
+    assert!(covered > 0);
+}
+
+#[test]
+fn sweep_merges_events_when_their_storage_fills() {
+    let (segments, values) = styled(b"MLLLLLLLE", &[0.3,0.2, 23.7,1.1, 0.5,3.3, 23.1,5.9, 0.9,8.4, 22.8,11.6, 1.2,15.2, 23.5,20.9]);
+    let item = StyledPaths::parse(&segments, &values).unwrap().items().next().unwrap();
+    let mut vertices = [Vertex::EMPTY; 16];
+    let path = flatten_path(item.path, &mut vertices, accuracy()).unwrap();
+    let clip = ClipBounds::new(0, 0, 24, 24).unwrap();
+    let mut expected = Recorder::default();
+    reference::fill(path, FillRule::EvenOdd, clip, SampleGrid::Eight, &mut TestScanlines::new().get(), &mut expected).unwrap();
+    let (mut crossings, mut spans, mut events) = ([Crossing::EMPTY; 16], [Span::EMPTY; 0], [Event::EMPTY; 28]);
+    let mut actual = Recorder::default();
+    super::fill(path, FillRule::EvenOdd, clip, SampleGrid::Eight, &mut Scanlines { crossings: &mut crossings, spans: &mut spans, events: &mut events }, &mut actual).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn sweep_refuses_storage_below_its_bounds() {
+    let (segments, values) = styled(b"MLLE", &[1.0,1.0, 9.0,1.0, 1.0,9.0]);
+    let item = StyledPaths::parse(&segments, &values).unwrap().items().next().unwrap();
+    let mut vertices = [Vertex::EMPTY; 8];
+    let path = flatten_path(item.path, &mut vertices, accuracy()).unwrap();
+    let clip = ClipBounds::new(0, 0, 24, 24).unwrap();
+    let mut recorder = Recorder::default();
+    let (mut crossings, mut spans, mut events) = ([Crossing::EMPTY; 8], [Span::EMPTY; 0], [Event::EMPTY; 12]);
+    let mut too_few_crossings = Scanlines { crossings: &mut crossings[..2], spans: &mut spans, events: &mut events };
+    assert_eq!(super::fill(path, FillRule::NonZero, clip, SampleGrid::Four, &mut too_few_crossings, &mut recorder), Err(VectorError::WorkspaceTooSmall));
+    let mut too_few_events = Scanlines { crossings: &mut crossings, spans: &mut spans, events: &mut events[..11] };
+    assert_eq!(super::fill(path, FillRule::NonZero, clip, SampleGrid::Four, &mut too_few_events, &mut recorder), Err(VectorError::WorkspaceTooSmall));
+    let mut primitives = [StrokePrimitive::EMPTY; 16];
+    let mut no_spans = Scanlines { crossings: &mut crossings, spans: &mut spans, events: &mut events };
+    assert_eq!(super::stroke(path, style(LineCap::Butt, LineJoin::Bevel), &mut primitives, DashBudget::new(64), clip, SampleGrid::One, &mut no_spans, &mut recorder), Err(VectorError::WorkspaceTooSmall));
+    assert!(recorder.0.is_empty());
 }
 
 #[test]

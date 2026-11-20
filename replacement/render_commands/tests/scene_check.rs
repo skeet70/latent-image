@@ -13,8 +13,7 @@ use render_commands::commands::{DrawCommand, SceneRect};
 use render_commands::producer::CommandBuffer;
 use render_commands::resources::{DataAddress, DataRegion, ResourceMemory};
 use render_commands::stock_objects::{ObjectPool, LISTS_BASE, LIST_BYTES, POOL_BASE, POOL_BYTES};
-use render_commands::vector_raster::{StrokePrimitive, Vertex};
-use render_commands::vglib_scene::{render_osd, Scene};
+use render_commands::vglib_scene::{render_osd, OsdWorkspace, Scene};
 use render_commands::SurfaceId;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -119,11 +118,9 @@ fn main() {
     let mut buffer = CommandBuffer::new(&mut storage);
     let report = scene.lower(&mut buffer).unwrap_or_else(|error| { eprintln!("FAIL lower: {error:?}"); std::process::exit(1) });
     let list = buffer.draw_list();
-
-    let mut vertices = vec![Vertex::EMPTY; 512];
-    let mut strokes = vec![StrokePrimitive::EMPTY; 256];
+    let mut workspace = Box::new(OsdWorkspace::new());
     let mut owned = vec![0u8; SurfaceId::Osd.byte_len()];
-    render_osd(list.commands(), &mut owned, &mut vertices, &mut strokes)
+    render_osd(list.commands(), &mut owned, &mut workspace)
         .unwrap_or_else(|error| { eprintln!("FAIL render: {error:?}"); std::process::exit(1) });
     for pixel in owned.chunks_exact_mut(4) { pixel.reverse(); }
 

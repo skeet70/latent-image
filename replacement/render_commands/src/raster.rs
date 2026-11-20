@@ -1,10 +1,10 @@
 use super::{FontId, PaletteIndex, PanelPoint, PanelRect, SurfaceId};
-use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, PixelSource, RecolourBlock, Rgba, SceneRect, ShapePaint, TextPenOp, TextRef};
+use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, PixelOrder, PixelSource, RecolourBlock, Rgba, SceneRect, ShapePaint, TextPenOp, TextRef};
 use super::font_core::{ByteStride, CoverageEncoding, FontAsset, FontConfig, FontEngine, FontError, FontWorkspace, GlyphId, GlyphMask, GlyphMetrics, PixelExtent, PixelOffset};
 use super::font_core::shaping::{detect_mode, detect_script_run, shape_text, CharacterCode, CharacterIndex, DirectionHint, LayoutExtent16, LayoutOffset, ScriptTables, ShapingMetrics, TextDirection, ThaiMetrics, MAX_TEXT_UNITS};
 const SCRIPT_TABLES: ScriptTables<'static> = ScriptTables::firmware();
 use super::shape_assets::{FillRule, GradientItem, Gvff, LineCap, LineJoin, Paint, PaintIndex, PaintMode, Ramp, RampStop, Recolour, Scalar, ShapeAsset, ShapeContent, ShapeError, ShapePlacement};
-use super::vector_raster::{self, ClipBounds, CurveAccuracy, DashBudget, SampleGrid, StrokeMetrics, StrokePrimitive, StrokeStyle, VectorError, Vertex};
+use super::vector_raster::{self, ClipBounds, CurveAccuracy, DashBudget, SampleGrid, Scanlines, StrokeMetrics, StrokePrimitive, StrokeStyle, VectorError, Vertex};
 
 #[cfg(test)]
 const BYTES: usize = super::PANEL_BYTES;
@@ -72,6 +72,7 @@ impl<'asset> ShapeBinding<'asset> {
 pub struct VectorWorkspace<'work> {
     pub vertices: &'work mut [Vertex],
     pub strokes: &'work mut [StrokePrimitive],
+    pub scanlines: Scanlines<'work>,
     pub dash_budget: DashBudget,
     pub accuracy: CurveAccuracy,
     pub samples: SampleGrid,
@@ -264,12 +265,23 @@ struct TextPen { x: i64, y: i64 }
 impl From<PanelPoint> for TextPen {
     fn from(point: PanelPoint) -> Self { Self { x: i64::from(point.x()), y: i64::from(point.y()) } }
 }
-pub struct Surface<'a> { id: SurfaceId, width: usize, height: usize, pixels: &'a mut [u8] }
+pub struct Surface<'a> { id: SurfaceId, width: usize, height: usize, order: PixelOrder, pixels: &'a mut [u8] }
 impl<'a> Surface<'a> {
-    pub fn new(id: SurfaceId, pixels: &'a mut [u8]) -> Result<Self, RasterError> {
+    pub fn new(id: SurfaceId, pixels: &'a mut [u8]) -> Result<Self, RasterError> { Self::with_order(id, PixelOrder::Rgba, pixels) }
+    pub fn with_order(id: SurfaceId, order: PixelOrder, pixels: &'a mut [u8]) -> Result<Self, RasterError> {
         if pixels.len() != id.byte_len() { return Err(RasterError::InvalidSurfaceBuffer); }
         let (width, height) = id.dimensions();
-        Ok(Self { id, width, height, pixels })
+        Ok(Self { id, width, height, order, pixels })
+    }
+    /// Byte offsets of red, green, blue and alpha within a pixel.
+    fn channels(&self) -> [usize; 4] {
+        match self.order { PixelOrder::Rgba => [0, 1, 2, 3], PixelOrder::Abgr => [3, 2, 1, 0] }
+    }
+    fn opaque_bytes(&self, source: Rgba) -> [u8; 4] {
+        match self.order {
+            PixelOrder::Rgba => [source.red, source.green, source.blue, 255],
+            PixelOrder::Abgr => [255, source.blue, source.green, source.red],
+        }
     }
     pub fn pixels(&self) -> &[u8] { self.pixels }
     pub(crate) fn dimensions(&self) -> (usize, usize) { (self.width, self.height) }
@@ -326,7 +338,7 @@ impl<'a> Surface<'a> {
                         let rgb = item.fill_rgb.map(|value| f64::from(value.value()));
                         let paint = PreparedPaint::Solid(rgba_from_floats([rgb[0], rgb[1], rgb[2], 1.0]));
                         let mut sink = PaintCoverage { surface: self, paint, placement, opacity: alpha, blend: PaintBlend::SourceOver };
-                        vector_raster::fill(path, item.fill_rule, clip, workspace.samples, &mut sink);
+                        vector_raster::fill(path, item.fill_rule, clip, workspace.samples, &mut workspace.scanlines, &mut sink).map_err(RasterError::Vector)?;
                     }
                     if matches!(item.mode, PaintMode::Stroke | PaintMode::StrokeAndFill) {
                         let metrics = StrokeMetrics::new(item.stroke_width.value(), item.miter_limit.value()).map_err(RasterError::Vector)?;
@@ -334,7 +346,7 @@ impl<'a> Surface<'a> {
                         let rgb = item.stroke_rgb.map(|value| f64::from(value.value()));
                         let paint = PreparedPaint::Solid(rgba_from_floats([rgb[0], rgb[1], rgb[2], 1.0]));
                         let mut sink = PaintCoverage { surface: self, paint, placement, opacity: alpha, blend: PaintBlend::SourceOver };
-                        vector_raster::stroke(path, style, workspace.strokes, workspace.dash_budget, clip, workspace.samples, &mut sink).map_err(RasterError::Vector)?;
+                        vector_raster::stroke(path, style, workspace.strokes, workspace.dash_budget, clip, workspace.samples, &mut workspace.scanlines, &mut sink).map_err(RasterError::Vector)?;
                     }
                 }
                 Ok(())
@@ -360,19 +372,19 @@ impl<'a> Surface<'a> {
                 let path = vector_raster::flatten_path_placed(item.path, workspace.vertices, workspace.accuracy, placement).map_err(RasterError::Vector)?;
                 if let Some(paint) = item.fill {
                     let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
-                    vector_raster::fill(path, state.fill_rule, clip, workspace.samples, &mut sink);
+                    vector_raster::fill(path, state.fill_rule, clip, workspace.samples, &mut workspace.scanlines, &mut sink).map_err(RasterError::Vector)?;
                 }
                 if let (Some(paint), true) = (item.stroke, unit) {
                     let style = state.stroke_style(item)?;
                     let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
-                    vector_raster::stroke(path, style, workspace.strokes, workspace.dash_budget, clip, workspace.samples, &mut sink).map_err(RasterError::Vector)?;
+                    vector_raster::stroke(path, style, workspace.strokes, workspace.dash_budget, clip, workspace.samples, &mut workspace.scanlines, &mut sink).map_err(RasterError::Vector)?;
                 }
             }
             if let (Some(paint), false) = (item.stroke, unit) {
                 let style = state.stroke_style(item)?;
                 let path = vector_raster::flatten_path_local(item.path, workspace.vertices, workspace.accuracy, placement).map_err(RasterError::Vector)?;
                 let mut sink = PaintCoverage::new(self, file, paint, recolour, placement, alpha, blend)?;
-                vector_raster::stroke_placed(path, style, workspace.strokes, workspace.dash_budget, placement, clip, workspace.samples, &mut sink).map_err(RasterError::Vector)?;
+                vector_raster::stroke_placed(path, style, workspace.strokes, workspace.dash_budget, placement, clip, workspace.samples, &mut workspace.scanlines, &mut sink).map_err(RasterError::Vector)?;
             }
         }
         Ok(())
@@ -391,9 +403,11 @@ impl<'a> Surface<'a> {
             let row_cover = rows.cover(y);
             for x in columns.first..columns.end {
                 let (column0, column1, u) = columns.texels(x);
+                let texels = [source.rgba(column0, row0), source.rgba(column1, row0), source.rgba(column0, row1), source.rgba(column1, row1)];
+                if texels.iter().all(|texel| texel.map_or(true, |texel| texel.alpha == 0)) { continue; }
                 let mut sum = [0.0f64; 4];
-                for (column, row, weight) in [(column0, row0, (1.0 - u) * (1.0 - v)), (column1, row0, u * (1.0 - v)), (column0, row1, (1.0 - u) * v), (column1, row1, u * v)] {
-                    let Some(texel) = source.rgba(column, row) else { continue };
+                for (texel, weight) in texels.into_iter().zip([(1.0 - u) * (1.0 - v), u * (1.0 - v), (1.0 - u) * v, u * v]) {
+                    let Some(texel) = texel else { continue };
                     let alpha = f64::from(texel.alpha) * weight;
                     sum[0] += f64::from(texel.red) * alpha;
                     sum[1] += f64::from(texel.green) * alpha;
@@ -623,30 +637,45 @@ impl<'a> Surface<'a> {
     pub(crate) fn blend(&mut self, x: usize, y: usize, source: Rgba) {
         if source.alpha == 0 { return; }
         let index = (y * self.width + x) * 4;
+        if source.alpha == 255 {
+            let bytes = self.opaque_bytes(source);
+            self.pixels[index..index + 4].copy_from_slice(&bytes);
+            return;
+        }
+        let [red, green, blue, alpha] = self.channels();
         let destination = &mut self.pixels[index..index + 4];
-        if source.alpha == 255 { destination.copy_from_slice(&[source.red, source.green, source.blue, 255]); return; }
         let sa = source.alpha as u32;
-        let da = destination[3] as u32;
+        let da = destination[alpha] as u32;
         let inverse = 255 - sa;
         let denominator = sa * 255 + da * inverse;
-        for (output, input) in destination[..3].iter_mut().zip([source.red, source.green, source.blue]) {
-            let numerator = input as u32 * sa * 255 + *output as u32 * da * inverse;
-            *output = ((numerator + denominator / 2) / denominator) as u8;
+        for (channel, input) in [(red, source.red), (green, source.green), (blue, source.blue)] {
+            let numerator = input as u32 * sa * 255 + destination[channel] as u32 * da * inverse;
+            destination[channel] = ((numerator + denominator / 2) / denominator) as u8;
         }
-        destination[3] = ((denominator + 127) / 255) as u8;
+        destination[alpha] = ((denominator + 127) / 255) as u8;
+    }
+    fn blend_span(&mut self, left: usize, right: usize, y: usize, source: Rgba) {
+        if source.alpha != 255 {
+            for x in left..right { self.blend(x, y, source); }
+            return;
+        }
+        let bytes = self.opaque_bytes(source);
+        let row = y * self.width * 4;
+        for pixel in self.pixels[row + left * 4..row + right * 4].chunks_exact_mut(4) { pixel.copy_from_slice(&bytes); }
     }
     fn source_coverage(&mut self, x: usize, y: usize, source: Rgba, coverage: u8) {
         if coverage == 0 { return; }
         let index = (y * self.width + x) * 4;
+        let [red, green, blue, alpha] = self.channels();
         let destination = &mut self.pixels[index..index + 4];
         let source_weight = source.alpha as u32 * coverage as u32;
-        let destination_weight = destination[3] as u32 * (255 - coverage as u32);
+        let destination_weight = destination[alpha] as u32 * (255 - coverage as u32);
         let denominator = source_weight + destination_weight;
         if denominator == 0 { destination.fill(0); return; }
-        for (output, input) in destination[..3].iter_mut().zip([source.red, source.green, source.blue]) {
-            *output = ((input as u32 * source_weight + *output as u32 * destination_weight + denominator / 2) / denominator) as u8;
+        for (channel, input) in [(red, source.red), (green, source.green), (blue, source.blue)] {
+            destination[channel] = ((input as u32 * source_weight + destination[channel] as u32 * destination_weight + denominator / 2) / denominator) as u8;
         }
-        destination[3] = ((denominator + 127) / 255) as u8;
+        destination[alpha] = ((denominator + 127) / 255) as u8;
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -749,6 +778,23 @@ impl super::vector_raster::CoverageSink for PaintCoverage<'_, '_, '_> {
                 self.surface.blend(x as usize, y as usize, colour);
             }
             PaintBlend::Source => self.surface.source_coverage(x as usize, y as usize, colour, coverage),
+        }
+    }
+    fn cover_span(&mut self, left: i32, right: i32, y: i32, coverage: u8) {
+        let PreparedPaint::Solid(paint) = &self.paint else {
+            for x in left..right { self.cover(x, y, coverage); }
+            return;
+        };
+        if y < 0 || y as usize >= self.surface.height || coverage == 0 { return; }
+        let (left, right, y) = (left.max(0) as usize, (right.max(0) as usize).min(self.surface.width), y as usize);
+        let mut colour = *paint;
+        colour.alpha = multiply(colour.alpha, self.opacity.0);
+        match self.blend {
+            PaintBlend::SourceOver => {
+                colour.alpha = multiply(colour.alpha, coverage);
+                self.surface.blend_span(left, right, y, colour);
+            }
+            PaintBlend::Source => for x in left..right { self.surface.source_coverage(x, y, colour, coverage) },
         }
     }
 }

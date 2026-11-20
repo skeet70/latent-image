@@ -17,7 +17,7 @@ use super::raster::{RasterError, Surface, VectorWorkspace};
 use super::resources::{DataAddress, ResourceError, ResourceMemory};
 use super::shape_assets::{Gvff, ShapeError};
 use super::stock_objects::{Bank, ObjectKind, ObjectPool, SlotIndex, VglibObject, BANK_COUNT};
-use super::vector_raster::{CurveAccuracy, DashBudget, SampleGrid, StrokePrimitive, Vertex};
+use super::vector_raster::{Crossing, CurveAccuracy, DashBudget, Event, SampleGrid, Scanlines, Span, StrokePrimitive, Vertex};
 use super::{PanelPoint, PanelRect, SurfaceId, PANEL_HEIGHT, PANEL_WIDTH};
 
 pub const GROUP_COUNT: usize = 24;
@@ -593,19 +593,42 @@ fn node_slot(address: u32) -> Option<usize> {
     Some(offset / NODE_BYTES)
 }
 
+/// Rasterizer storage for one OSD frame.
+pub struct OsdWorkspace {
+    vertices: [Vertex; Self::VERTICES],
+    strokes: [StrokePrimitive; Self::STROKES],
+    crossings: [Crossing; Self::VERTICES],
+    spans: [Span; 2 * Self::STROKES],
+    events: [Event; Self::EVENTS],
+}
+impl OsdWorkspace {
+    pub const VERTICES: usize = 512;
+    /// The Run-3 shooting screen's largest shape item needs 212 stroke primitives.
+    pub const STROKES: usize = 256;
+    pub const EVENTS: usize = 2 * PANEL_WIDTH;
+    pub const fn new() -> Self {
+        Self {
+            vertices: [Vertex::EMPTY; Self::VERTICES],
+            strokes: [StrokePrimitive::EMPTY; Self::STROKES],
+            crossings: [Crossing::EMPTY; Self::VERTICES],
+            spans: [Span::EMPTY; 2 * Self::STROKES],
+            events: [Event::EMPTY; Self::EVENTS],
+        }
+    }
+}
+
 /// Renders lowered stage-0 commands into a VGLIB format-1 OSD buffer (`VG_sRGBA_8888`, A,B,G,R bytes, the model's
 /// `mode1-abgr8888-straight` layer profile). The owned frame step and the host reference both render through here.
-pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], vertices: &mut [Vertex], strokes: &mut [StrokePrimitive]) -> Result<(), RasterError> {
+pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], storage: &mut OsdWorkspace) -> Result<(), RasterError> {
     let mut workspace = VectorWorkspace {
-        vertices,
-        strokes,
+        vertices: &mut storage.vertices,
+        strokes: &mut storage.strokes,
+        scanlines: Scanlines { crossings: &mut storage.crossings, spans: &mut storage.spans, events: &mut storage.events },
         dash_budget: DashBudget::new(256),
         accuracy: CurveAccuracy::new(0.25).ok_or(RasterError::InvalidSurfaceBuffer)?,
         samples: SampleGrid::Four,
     };
-    Surface::new(SurfaceId::Osd, &mut *pixels)?.render_scene(DrawList::new(SurfaceId::Osd, commands), &mut workspace)?;
-    for pixel in pixels.chunks_exact_mut(4) { pixel.reverse(); }
-    Ok(())
+    Surface::with_order(SurfaceId::Osd, PixelOrder::Abgr, pixels)?.render_scene(DrawList::new(SurfaceId::Osd, commands), &mut workspace)
 }
 
 /// At zero parameter `0x6dbb3c` leaves the translation slots at their zeroed values (`6dbd80-6dbef8`; zeroed at

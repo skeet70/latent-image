@@ -15,7 +15,8 @@ impl CurveAccuracy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SampleGrid { One, Two, Four, Eight }
 impl SampleGrid {
-    fn size(self) -> i32 { match self { Self::One => 1, Self::Two => 2, Self::Four => 4, Self::Eight => 8 } }
+    fn size(self) -> i32 { 1 << self.shift() }
+    fn shift(self) -> u32 { match self { Self::One => 0, Self::Two => 1, Self::Four => 2, Self::Eight => 3 } }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,7 +27,13 @@ impl ClipBounds {
     }
 }
 
-pub trait CoverageSink { fn cover(&mut self, x: i32, y: i32, coverage: u8); }
+pub trait CoverageSink {
+    fn cover(&mut self, x: i32, y: i32, coverage: u8);
+    /// Covers pixels `[left, right)` of row `y`.
+    fn cover_span(&mut self, left: i32, right: i32, y: i32, coverage: u8) {
+        for x in left..right { self.cover(x, y, coverage); }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Point { x: f64, y: f64 }
@@ -212,44 +219,217 @@ fn flatten<'a>(path: Path<'_>, workspace: &'a mut [Vertex], accuracy: CurveAccur
     Ok(FlattenedPath { vertices: &output.storage[..output.used] })
 }
 
-fn sample(clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink, mut contains: impl FnMut(Point) -> bool) {
-    let size = grid.size();
-    for y in clip.top..clip.bottom {
-        for x in clip.left..clip.right {
-            let mut hits = 0;
-            for sy in 0..size { for sx in 0..size {
-                let point = Point { x: x as f64 + (sx as f64 + 0.5) / size as f64, y: y as f64 + (sy as f64 + 0.5) / size as f64 };
-                hits += i32::from(contains(point));
-            } }
-            if hits != 0 { sink.cover(x, y, ((hits * 255 + size * size / 2) / (size * size)) as u8); }
-        }
+/// An edge crossing a sample row adds `winding` to every sample whose index is below `sample`.
+#[derive(Clone, Copy, Debug)]
+pub struct Crossing { sample: i32, winding: i32 }
+impl Crossing { pub const EMPTY: Self = Self { sample: 0, winding: 0 }; }
+
+/// Samples `[start, end)` of one sample row.
+#[derive(Clone, Copy, Debug)]
+pub struct Span { start: i32, end: i32 }
+impl Span { pub const EMPTY: Self = Self { start: 0, end: 0 }; }
+
+/// From `pixel` on, `level` more sample rows cover whole pixels; `pixel` alone gains `partial` samples.
+#[derive(Clone, Copy, Debug)]
+pub struct Event { pixel: i32, level: i16, partial: i16 }
+impl Event { pub const EMPTY: Self = Self { pixel: 0, level: 0, partial: 0 }; }
+
+/// Storage of the row sweep: a fill needs one crossing per path vertex, a stroke two spans per primitive, and
+/// `events` the clipped width plus four.
+pub struct Scanlines<'a> { pub crossings: &'a mut [Crossing], pub spans: &'a mut [Span], pub events: &'a mut [Event] }
+
+/// Row-sweep storage for test paths of up to 256 vertices and 128 stroke primitives on the full panel.
+#[cfg(test)]
+pub(crate) struct TestScanlines { crossings: [Crossing; 256], spans: [Span; 256], events: [Event; 2 * super::PANEL_WIDTH] }
+#[cfg(test)]
+impl TestScanlines {
+    pub(crate) fn new() -> Self { Self { crossings: [Crossing::EMPTY; 256], spans: [Span::EMPTY; 256], events: [Event::EMPTY; 2 * super::PANEL_WIDTH] } }
+    pub(crate) fn get(&mut self) -> Scanlines<'_> { Scanlines { crossings: &mut self.crossings, spans: &mut self.spans, events: &mut self.events } }
+}
+
+/// One sample row: samples are indexed across the row, pixel `index >> shift`, sample `index & (size - 1)` within it.
+#[derive(Clone, Copy)]
+struct SampleRow { first: i32, end: i32, shift: u32, y: f64 }
+impl SampleRow {
+    fn x(self, index: i32) -> f64 {
+        let size = 1 << self.shift;
+        (index >> self.shift) as f64 + ((index & (size - 1)) as f64 + 0.5) / size as f64
+    }
+    fn point(self, index: i32) -> Point { Point { x: self.x(index), y: self.y } }
+}
+
+/// The first index in `[low, high)` where `holds` is false, for a predicate true on a prefix of that range.
+fn prefix_end(mut low: i32, mut high: i32, holds: impl Fn(i32) -> bool) -> i32 {
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if holds(middle) { low = middle + 1 } else { high = middle }
+    }
+    low
+}
+
+/// The indices in `[low, high)` where `holds` is true, for a predicate true on a prefix or a suffix of that range.
+fn monotone_run(low: i32, high: i32, holds: impl Fn(i32) -> bool) -> (i32, i32) {
+    if low >= high { return (low, low); }
+    match (holds(low), holds(high - 1)) {
+        (true, true) => (low, high),
+        (false, false) => (low, low),
+        (true, false) => (low, prefix_end(low, high, holds)),
+        (false, true) => (prefix_end(low, high, |index| !holds(index)), high),
     }
 }
 
-fn crossing(a: Point, b: Point, point: Point) -> i32 {
-    if a.y <= point.y && point.y < b.y {
-        if b.sub(a).cross(point.sub(a)) > 0.0 { 1 } else { 0 }
-    } else if b.y <= point.y && point.y < a.y {
-        if b.sub(a).cross(point.sub(a)) < 0.0 { -1 } else { 0 }
-    } else { 0 }
+/// The covered samples of one pixel row as coverage changes along it.
+struct PixelRow<'a> { events: &'a mut [Event], used: usize, shift: u32 }
+impl PixelRow<'_> {
+    fn push(&mut self, event: Event) -> Result<(), VectorError> {
+        if self.used == self.events.len() { self.coalesce(); }
+        let slot = self.events.get_mut(self.used).ok_or(VectorError::WorkspaceTooSmall)?;
+        *slot = event;
+        self.used += 1;
+        Ok(())
+    }
+    /// Sorts the events by pixel and merges those of one pixel, leaving at most one per pixel.
+    fn coalesce(&mut self) {
+        let events = &mut self.events[..self.used];
+        sort_by_key(events, |event| event.pixel);
+        let mut kept = 0usize;
+        for index in 0..events.len() {
+            let event = events[index];
+            if kept > 0 && events[kept - 1].pixel == event.pixel {
+                events[kept - 1].level += event.level;
+                events[kept - 1].partial += event.partial;
+            } else {
+                events[kept] = event;
+                kept += 1;
+            }
+        }
+        self.used = kept;
+    }
+    /// Adds the samples `[start, end)` of one sample row; `start < end`.
+    fn add(&mut self, start: i32, end: i32) -> Result<(), VectorError> {
+        let size = 1 << self.shift;
+        let (first, first_offset) = (start >> self.shift, start & (size - 1));
+        let (last, last_offset) = (end >> self.shift, (end & (size - 1)) as i16);
+        if first == last { return self.push(Event { pixel: first, level: 0, partial: (end - start) as i16 }); }
+        let mut whole = first;
+        if first_offset != 0 {
+            self.push(Event { pixel: first, level: 0, partial: (size - first_offset) as i16 })?;
+            whole += 1;
+        }
+        if whole < last {
+            self.push(Event { pixel: whole, level: 1, partial: 0 })?;
+            self.push(Event { pixel: last, level: -1, partial: last_offset })
+        } else if last_offset != 0 {
+            self.push(Event { pixel: last, level: 0, partial: last_offset })
+        } else { Ok(()) }
+    }
+    fn emit(&mut self, y: i32, sink: &mut impl CoverageSink) {
+        self.coalesce();
+        let samples_shift = 2 * self.shift;
+        let coverage = |hits: i32| ((hits * 255 + (1 << samples_shift) / 2) >> samples_shift) as u8;
+        let events = &self.events[..self.used];
+        let mut level = 0;
+        for (index, event) in events.iter().enumerate() {
+            level += i32::from(event.level);
+            let next = events.get(index + 1).map_or(event.pixel + 1, |next| next.pixel);
+            let whole = level << self.shift;
+            if event.partial != 0 {
+                sink.cover(event.pixel, y, coverage(whole + i32::from(event.partial)));
+                if whole != 0 && next > event.pixel + 1 { sink.cover_span(event.pixel + 1, next, y, coverage(whole)); }
+            } else if whole != 0 {
+                sink.cover_span(event.pixel, next, y, coverage(whole));
+            }
+        }
+        self.used = 0;
+    }
 }
 
-pub fn fill(path: FlattenedPath<'_>, rule: FillRule, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) {
-    let clip = bounded_clip(clip, path.vertices.iter().map(|vertex| vertex.point));
-    sample(clip, grid, sink, |point| {
-        let mut winding = 0i64;
-        let mut first = None;
-        let mut previous = None;
-        for vertex in path.vertices {
-            if vertex.begins {
-                if let (Some(last), Some(start)) = (previous, first) { winding += crossing(last, start, point) as i64; }
-                first = Some(vertex.point);
-            } else if let Some(last) = previous { winding += crossing(last, vertex.point, point) as i64; }
-            previous = Some(vertex.point);
+/// Insertion sort; the bank builder refuses recursion, which `core`'s sorts use.
+fn sort_by_key<T: Copy>(items: &mut [T], key: impl Fn(&T) -> i32) {
+    for index in 1..items.len() {
+        let item = items[index];
+        let mut slot = index;
+        while slot > 0 && key(&items[slot - 1]) > key(&item) {
+            items[slot] = items[slot - 1];
+            slot -= 1;
         }
-        if let (Some(last), Some(start)) = (previous, first) { winding += crossing(last, start, point) as i64; }
-        match rule { FillRule::EvenOdd => winding % 2 != 0, FillRule::NonZero => winding != 0 }
-    });
+        items[slot] = item;
+    }
+}
+
+/// Covers each pixel of `clip` with the share of its pixel-centred grid samples that `row` adds for every sample row.
+fn sweep(clip: ClipBounds, grid: SampleGrid, events: &mut [Event], sink: &mut impl CoverageSink, mut row: impl FnMut(SampleRow, &mut PixelRow<'_>) -> Result<(), VectorError>) -> Result<(), VectorError> {
+    if clip.left >= clip.right || clip.top >= clip.bottom { return Ok(()); }
+    let (size, shift) = (grid.size(), grid.shift());
+    let (Some(first), Some(end)) = (clip.left.checked_mul(size), clip.right.checked_mul(size)) else { return Err(VectorError::WorkspaceTooSmall) };
+    if events.len() < (clip.right - clip.left) as usize + 4 { return Err(VectorError::WorkspaceTooSmall); }
+    let mut pixels = PixelRow { events, used: 0, shift };
+    for y in clip.top..clip.bottom {
+        for sy in 0..size {
+            row(SampleRow { first, end, shift, y: y as f64 + (sy as f64 + 0.5) / size as f64 }, &mut pixels)?;
+        }
+        pixels.emit(y, sink);
+    }
+    Ok(())
+}
+
+fn for_each_edge(path: FlattenedPath<'_>, mut edge: impl FnMut(Point, Point)) {
+    let mut first = None;
+    let mut previous = None;
+    for vertex in path.vertices {
+        if vertex.begins {
+            if let (Some(last), Some(start)) = (previous, first) { edge(last, start); }
+            first = Some(vertex.point);
+        } else if let Some(last) = previous { edge(last, vertex.point); }
+        previous = Some(vertex.point);
+    }
+    if let (Some(last), Some(start)) = (previous, first) { edge(last, start); }
+}
+
+/// A sample is inside when the edges it lies left of wind around it under `rule`: an edge rising through the sample's
+/// y counts +1 when the sample is left of it, a falling edge -1. Along a sample row each edge's test is monotone in x,
+/// so the samples it counts are a prefix found by bisection.
+#[cfg(not(render_reference))]
+pub fn fill(path: FlattenedPath<'_>, rule: FillRule, clip: ClipBounds, grid: SampleGrid, scanlines: &mut Scanlines<'_>, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+    if scanlines.crossings.len() < path.vertices.len() { return Err(VectorError::WorkspaceTooSmall); }
+    let clip = bounded_clip(clip, path.vertices.iter().map(|vertex| vertex.point));
+    let crossings = &mut *scanlines.crossings;
+    sweep(clip, grid, scanlines.events, sink, |row, pixels| {
+        let mut count = 0;
+        for_each_edge(path, |a, b| {
+            let rising = a.y <= row.y && row.y < b.y;
+            if !rising && !(b.y <= row.y && row.y < a.y) { return; }
+            let end = prefix_end(row.first, row.end, |index| {
+                let side = b.sub(a).cross(row.point(index).sub(a));
+                if rising { side > 0.0 } else { side < 0.0 }
+            });
+            if end > row.first {
+                crossings[count] = Crossing { sample: end, winding: if rising { 1 } else { -1 } };
+                count += 1;
+            }
+        });
+        let crossings = &mut crossings[..count];
+        sort_by_key(crossings, |crossing| crossing.sample);
+        let mut winding: i32 = crossings.iter().map(|crossing| crossing.winding).sum();
+        let mut start = row.first;
+        let mut open: Option<Span> = None;
+        for crossing in crossings.iter() {
+            let inside = match rule { FillRule::EvenOdd => winding % 2 != 0, FillRule::NonZero => winding != 0 };
+            if inside && crossing.sample > start {
+                open = match open {
+                    Some(span) if span.end == start => Some(Span { start: span.start, end: crossing.sample }),
+                    previous => {
+                        if let Some(span) = previous { pixels.add(span.start, span.end)?; }
+                        Some(Span { start, end: crossing.sample })
+                    }
+                };
+            }
+            start = start.max(crossing.sample);
+            winding -= crossing.winding;
+        }
+        if let Some(span) = open { pixels.add(span.start, span.end)?; }
+        Ok(())
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -285,32 +465,53 @@ impl Primitive {
             ],
         }
     }
-    fn contains(self, point: Point) -> bool {
+    /// Calls `out` with runs of samples in `[low, high)` that the primitive contains, where `at` maps a sample index to
+    /// the primitive's coordinates monotonically in each axis. Every test is the per-sample containment test.
+    fn runs(self, low: i32, high: i32, at: &impl Fn(i32) -> Point, out: &mut impl FnMut(i32, i32) -> Result<(), VectorError>) -> Result<(), VectorError> {
         match self {
-            Self::Empty => false,
-            Self::Disk { center, radius } => { let d = point.sub(center); d.dot(d) <= radius * radius }
-            Self::HalfDisk { center, radius, direction } => {
-                let d = point.sub(center);
-                d.dot(direction) >= 0.0 && d.dot(d) <= radius * radius
-            }
-            Self::Triangle(vertices) => polygon_contains(&vertices, point),
-            Self::Quad(vertices) => polygon_contains(&vertices, point),
+            Self::Empty => Ok(()),
+            Self::Disk { center, radius } => disk_runs(center, radius, None, low, high, at, out),
+            Self::HalfDisk { center, radius, direction } => disk_runs(center, radius, Some(direction), low, high, at, out),
+            Self::Triangle(vertices) => polygon_runs(&vertices, low, high, at, out),
+            Self::Quad(vertices) => polygon_runs(&vertices, low, high, at, out),
         }
     }
 }
-fn polygon_contains(vertices: &[Point], point: Point) -> bool {
-    let mut positive = false;
-    let mut negative = false;
+/// Inside when no side is negative or no side is positive; each side's sign is monotone along a sample row.
+fn polygon_runs(vertices: &[Point], low: i32, high: i32, at: &impl Fn(i32) -> Point, out: &mut impl FnMut(i32, i32) -> Result<(), VectorError>) -> Result<(), VectorError> {
     let mut area = 0.0;
-    for i in 0..vertices.len() {
-        let a = vertices[i];
-        let b = vertices[(i + 1) % vertices.len()];
-        area += a.cross(b);
-        let side = b.sub(a).cross(point.sub(a));
-        positive |= side > 0.0;
-        negative |= side < 0.0;
+    for i in 0..vertices.len() { area += vertices[i].cross(vertices[(i + 1) % vertices.len()]); }
+    if area == 0.0 { return Ok(()); }
+    for excluded_positive in [false, true] {
+        let (mut start, mut end) = (low, high);
+        for i in 0..vertices.len() {
+            if start >= end { break; }
+            let a = vertices[i];
+            let b = vertices[(i + 1) % vertices.len()];
+            (start, end) = monotone_run(start, end, |index| {
+                let side = b.sub(a).cross(at(index).sub(a));
+                if excluded_positive { !(side > 0.0) } else { !(side < 0.0) }
+            });
+        }
+        if start < end { out(start, end)?; }
     }
-    area != 0.0 && !(positive && negative)
+    Ok(())
+}
+/// The squared distance is monotone on each side of the first sample at or right of the centre, and the half-disk's
+/// facing test is monotone along the row.
+fn disk_runs(center: Point, radius: f64, direction: Option<Point>, low: i32, high: i32, at: &impl Fn(i32) -> Point, out: &mut impl FnMut(i32, i32) -> Result<(), VectorError>) -> Result<(), VectorError> {
+    let (facing_start, facing_end) = match direction {
+        Some(direction) => monotone_run(low, high, |index| at(index).sub(center).dot(direction) >= 0.0),
+        None => (low, high),
+    };
+    let (right_start, right_end) = monotone_run(low, high, |index| at(index).sub(center).x >= 0.0);
+    for (start, end) in [(low, right_start), (right_start, right_end), (right_end, high)] {
+        let (start, end) = (start.max(facing_start), end.min(facing_end));
+        if start >= end { continue; }
+        let (start, end) = monotone_run(start, end, |index| { let d = at(index).sub(center); d.dot(d) <= radius * radius });
+        if start < end { out(start, end)?; }
+    }
+    Ok(())
 }
 struct Primitives<'a> { storage: &'a mut [StrokePrimitive], used: usize }
 impl Primitives<'_> {
@@ -533,28 +734,62 @@ fn closing_direction(vertices: &[Vertex]) -> Option<Point> {
     if closed { last } else { None }
 }
 
-pub fn stroke(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+#[cfg(not(render_reference))]
+pub fn stroke(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, clip: ClipBounds, grid: SampleGrid, scanlines: &mut Scanlines<'_>, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
     let used = stroke_primitives(path, style, workspace, budget)?;
-    if used == 0 { return Ok(()); }
     let primitives = &workspace[..used];
     let clip = bounded_clip(clip, primitives.iter().flat_map(|primitive| primitive.0.extent()));
-    sample(clip, grid, sink, |point| primitives.iter().any(|primitive| primitive.0.contains(point)));
-    Ok(())
+    cover_primitives(primitives, clip, grid, scanlines, sink, |point| point, |x| x, |y| y)
 }
 
 /// Strokes a path flattened by [`flatten_path_local`] in path coordinates, so width, caps, joins and dashes follow
 /// `placement` including unequal axis scales; each sample point is mapped back into path coordinates.
-pub fn stroke_placed(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, placement: ShapePlacement, clip: ClipBounds, grid: SampleGrid, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
+#[cfg(not(render_reference))]
+pub fn stroke_placed(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], budget: DashBudget, placement: ShapePlacement, clip: ClipBounds, grid: SampleGrid, scanlines: &mut Scanlines<'_>, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
     let used = stroke_primitives(path, style, workspace, budget)?;
-    if used == 0 { return Ok(()); }
     let primitives = &workspace[..used];
-    let extents = primitives.iter().flat_map(|primitive| primitive.0.extent()).map(|point| Point { x: placement.map_x(point.x), y: placement.map_y(point.y) });
-    let clip = bounded_clip(clip, extents);
-    sample(clip, grid, sink, |point| {
-        let local = Point { x: placement.unmap_x(point.x), y: placement.unmap_y(point.y) };
-        primitives.iter().any(|primitive| primitive.0.contains(local))
-    });
-    Ok(())
+    let device = |point: Point| Point { x: placement.map_x(point.x), y: placement.map_y(point.y) };
+    let clip = bounded_clip(clip, primitives.iter().flat_map(|primitive| primitive.0.extent()).map(device));
+    cover_primitives(primitives, clip, grid, scanlines, sink, device, |x| placement.unmap_x(x), |y| placement.unmap_y(y))
+}
+
+/// Covers the union of `primitives`, given in coordinates that `local_x`/`local_y` map panel coordinates to and
+/// `device` maps back. A primitive is skipped on sample rows more than one pixel outside its device extent.
+fn cover_primitives(primitives: &[StrokePrimitive], clip: ClipBounds, grid: SampleGrid, scanlines: &mut Scanlines<'_>, sink: &mut impl CoverageSink, device: impl Fn(Point) -> Point, local_x: impl Fn(f64) -> f64, local_y: impl Fn(f64) -> f64) -> Result<(), VectorError> {
+    if primitives.is_empty() { return Ok(()); }
+    if scanlines.spans.len() < 2 * primitives.len() { return Err(VectorError::WorkspaceTooSmall); }
+    let spans = &mut *scanlines.spans;
+    sweep(clip, grid, scanlines.events, sink, |row, pixels| {
+        let y = local_y(row.y);
+        let at = |index| Point { x: local_x(row.x(index)), y };
+        let mut count = 0;
+        for primitive in primitives {
+            let (top, bottom) = primitive.0.extent().iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(top, bottom), point| {
+                let y = device(*point).y;
+                (top.min(y), bottom.max(y))
+            });
+            if row.y < top - 1.0 || row.y > bottom + 1.0 { continue; }
+            primitive.0.runs(row.first, row.end, &at, &mut |start, end| {
+                *spans.get_mut(count).ok_or(VectorError::WorkspaceTooSmall)? = Span { start, end };
+                count += 1;
+                Ok(())
+            })?;
+        }
+        let spans = &mut spans[..count];
+        sort_by_key(spans, |span| span.start);
+        let mut open: Option<Span> = None;
+        for span in spans.iter() {
+            open = match open {
+                Some(merged) if span.start <= merged.end => Some(Span { start: merged.start, end: merged.end.max(span.end) }),
+                previous => {
+                    if let Some(merged) = previous { pixels.add(merged.start, merged.end)?; }
+                    Some(*span)
+                }
+            };
+        }
+        if let Some(merged) = open { pixels.add(merged.start, merged.end)?; }
+        Ok(())
+    })
 }
 
 fn stroke_primitives(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace: &mut [StrokePrimitive], mut budget: DashBudget) -> Result<usize, VectorError> {
@@ -597,3 +832,9 @@ fn stroke_primitives(path: FlattenedPath<'_>, style: StrokeStyle<'_>, workspace:
 #[cfg(test)]
 #[path = "vector_raster_tests.rs"]
 mod tests;
+
+#[cfg(any(test, render_reference))]
+#[path = "vector_reference.rs"]
+mod reference;
+#[cfg(render_reference)]
+pub use reference::{fill, stroke, stroke_placed};

@@ -639,7 +639,7 @@ fn tree_and_picker_native_labels_resolve_both_shape_kinds_to_gvff_pixels() {
     use crate::render_commands::{DrawReport, NodeId, ResourceId};
     use crate::render_commands::raster::{FontRegistry, VectorWorkspace};
     use crate::render_commands::resources::TextBinding;
-    use crate::render_commands::vector_raster::{CurveAccuracy, DashBudget, SampleGrid, Vertex};
+    use crate::render_commands::vector_raster::{CurveAccuracy, DashBudget, SampleGrid, TestScanlines, Vertex};
     enum Caller { Tree, Picker }
     enum SourcePaint { Black, White, Red, Green }
     static TREE_ONE: StaticBuffers = StaticBuffers::new(0);
@@ -714,7 +714,8 @@ fn tree_and_picker_native_labels_resolve_both_shape_kinds_to_gvff_pixels() {
         let pack = AssetPack::parse(&pack_bytes, AssetProvenance::Original { author: "Latent Image original four-by-three solid rectangle scenarios" }).unwrap();
         let mut vertices = [Vertex::EMPTY; 5];
         let mut strokes = [];
-        let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+        let mut scanlines = TestScanlines::new();
+        let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines: scanlines.get(), dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
         let mut resources = RasterResources::new(&pack, FontRegistry::Coverage8, &shapes, Some(workspace)).unwrap();
         let mut actor = panel_actor(buffers, identity);
         let mut commands = [DrawCommand::ResetClip; 16];

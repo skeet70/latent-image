@@ -10,8 +10,7 @@ use crate::render_commands::publisher::{BufferIndex, BufferState, ContextId, Dra
 use crate::render_commands::resources::{DataAddress, DataRegion, ResourceMemory};
 use crate::render_commands::scanout_latch::{ScanoutAddress, ScanoutLatch};
 use crate::render_commands::stock_objects::{ObjectPool, LISTS_BASE, LIST_BYTES, POOL_BASE, POOL_BYTES};
-use crate::render_commands::vector_raster::{StrokePrimitive, Vertex};
-use crate::render_commands::vglib_scene::{render_osd, Scene, SceneError};
+use crate::render_commands::vglib_scene::{render_osd, OsdWorkspace, Scene, SceneError};
 use crate::render_commands::SurfaceId;
 use core::ptr::{read_volatile, write_volatile};
 
@@ -57,13 +56,9 @@ const RAM_LOW: (u32, usize) = (0x0000_1000, 0x0400_0000 - 0x1000);
 const RAM_ALIAS: (u32, usize) = (0x4000_0000, 0x0400_0000);
 
 const COMMAND_CAPACITY: usize = 96;
-const VERTEX_CAPACITY: usize = 512;
-/// The Run-3 shooting screen's largest shape item needs 212 stroke primitives.
-const STROKE_CAPACITY: usize = 256;
 /// Bytes of the frame statics in the bank engine region, excluding code.
 const FRAME_STATIC_BYTES: usize = COMMAND_CAPACITY * core::mem::size_of::<DrawCommand<'static>>()
-    + VERTEX_CAPACITY * core::mem::size_of::<Vertex>()
-    + STROKE_CAPACITY * core::mem::size_of::<StrokePrimitive>()
+    + core::mem::size_of::<OsdWorkspace>()
     + core::mem::size_of::<ObjectPool<'static>>()
     + core::mem::size_of::<FrameState>()
     + core::mem::size_of::<FrameRecord>();
@@ -164,8 +159,7 @@ struct FrameState {
 
 static mut STATE: FrameState = FrameState { publisher: None, buffers: None, owned_front: None, stock_since: false, next_context: 1, prepared: None };
 static mut COMMANDS: [DrawCommand<'static>; COMMAND_CAPACITY] = [DrawCommand::ResetClip; COMMAND_CAPACITY];
-static mut VERTICES: [Vertex; VERTEX_CAPACITY] = [Vertex::EMPTY; VERTEX_CAPACITY];
-static mut STROKES: [StrokePrimitive; STROKE_CAPACITY] = [StrokePrimitive::EMPTY; STROKE_CAPACITY];
+static mut OSD: OsdWorkspace = OsdWorkspace::new();
 static mut POOL: ObjectPool<'static> = ObjectPool::empty();
 static mut REGIONS: [DataRegion<'static>; 2] = [DataRegion { base: DataAddress(0), bytes: &[] }; 2];
 /// Accessed only through `with_latch`.
@@ -351,7 +345,7 @@ fn rasterize(state: &mut FrameState, decided: Decided) -> Result<Prepared, Fallb
     let all: &'static [DrawCommand<'static>; COMMAND_CAPACITY] = unsafe { &*(&raw const COMMANDS) };
     let commands = &all[..commands];
     let drawn = publisher.drawing_pixels(frame).map_err(|_| ()).and_then(|pixels| {
-        render_osd(commands, pixels, unsafe { &mut *(&raw mut VERTICES) }, unsafe { &mut *(&raw mut STROKES) }).map_err(|_| ())
+        render_osd(commands, pixels, unsafe { &mut *(&raw mut OSD) }).map_err(|_| ())
     });
     if drawn.is_err() || publisher.publish(frame).is_err() || publisher.queued() != Some(frame) {
         let _ = publisher.cancel(frame);

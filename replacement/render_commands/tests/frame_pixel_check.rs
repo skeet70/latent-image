@@ -15,9 +15,8 @@ use render_commands::commands::DrawCommand;
 use render_commands::producer::CommandBuffer;
 use render_commands::resources::{DataAddress, DataRegion, ResourceError, ResourceMemory};
 use render_commands::stock_objects::{ObjectPool, PoolError, LISTS_BASE, LIST_BYTES, POOL_BASE, POOL_BYTES};
-use render_commands::vector_raster::{StrokePrimitive, Vertex};
 use render_commands::{RasterError, PANEL_BYTES, PANEL_WIDTH};
-use render_commands::vglib_scene::{render_osd, Scene, SceneError};
+use render_commands::vglib_scene::{render_osd, OsdWorkspace, Scene, SceneError};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -27,8 +26,6 @@ const LOW_BASE: u32 = 0x0000_1000;
 const ALIAS_BASE: u32 = 0x4000_0000;
 const PHYSICAL_MASK: u32 = 0x3fff_ffff;
 const COMMAND_CAPACITY: usize = 96;
-const VERTEX_CAPACITY: usize = 512;
-const STROKE_CAPACITY: usize = 256;
 /// Stage-0 image objects `O(0,0)` and `O(0,1)`; each holds its buffer address at `+0x1c`.
 const IMAGE_OBJECTS: [u32; 2] = [0x008e_2158, 0x008e_215c];
 const IMAGE_ADDRESS: u32 = 0x1c;
@@ -214,9 +211,7 @@ impl FrameRecord {
 
 fn host_render(commands: &[DrawCommand<'_>]) -> Result<Vec<u8>, RasterError> {
     let mut pixels = vec![0u8; PANEL_BYTES];
-    let mut vertices = vec![Vertex::EMPTY; VERTEX_CAPACITY];
-    let mut strokes = vec![StrokePrimitive::EMPTY; STROKE_CAPACITY];
-    render_osd(commands, &mut pixels, &mut vertices, &mut strokes)?;
+    render_osd(commands, &mut pixels, &mut Box::new(OsdWorkspace::new()))?;
     Ok(pixels)
 }
 
@@ -327,8 +322,8 @@ fn summary(check: &Check, stock: &Path, owned: &Path, record: RecordAddress) -> 
                 quoted(&format!("{blocker:?}"))).unwrap();
         }
     }
-    writeln!(json, "  \"rasterizer\": {{\"implementation\": {}, \"host_target\": {}, \"rustc\": {}, \"module_sources_sha256\": {}, \"vertices\": {VERTEX_CAPACITY}, \"strokes\": {STROKE_CAPACITY}}},",
-        quoted(RASTERIZER), quoted(HOST_TRIPLE), quoted(RUSTC_VERSION), quoted(MODULE_SHA256)).unwrap();
+    writeln!(json, "  \"rasterizer\": {{\"implementation\": {}, \"host_target\": {}, \"rustc\": {}, \"module_sources_sha256\": {}, \"vertices\": {}, \"strokes\": {}}},",
+        quoted(RASTERIZER), quoted(HOST_TRIPLE), quoted(RUSTC_VERSION), quoted(MODULE_SHA256), OsdWorkspace::VERTICES, OsdWorkspace::STROKES).unwrap();
     writeln!(json, "  \"passed\": {}\n}}", check.passed()).unwrap();
     json
 }
@@ -484,7 +479,7 @@ mod tests {
         let source = PixelSource::new(2, 2, 8, PixelOrder::Abgr, &IMAGE).unwrap();
         let commands = [DrawCommand::ResetClip, DrawCommand::ScaledImage { dest: SceneRect::new(IMAGE_X as f32, IMAGE_Y as f32, 2.0, 2.0).unwrap(), source }];
         let mut pixels = vec![0; PANEL_BYTES];
-        render_osd(&commands, &mut pixels, &mut [Vertex::EMPTY; VERTEX_CAPACITY], &mut [StrokePrimitive::EMPTY; STROKE_CAPACITY]).unwrap();
+        render_osd(&commands, &mut pixels, &mut Box::new(OsdWorkspace::new())).unwrap();
         guest.put(BUFFER, &pixels);
     }
 

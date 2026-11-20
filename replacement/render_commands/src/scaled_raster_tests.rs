@@ -33,7 +33,8 @@ fn render_shapes(commands: &[DrawCommand<'_>]) -> Result<Vec<u8>, RasterError> {
     let pack = AssetPack::parse(EMPTY_PACK, AssetProvenance::Original { author: "test vectors" }).unwrap();
     let mut vertices = [Vertex::EMPTY; 64];
     let mut strokes = [StrokePrimitive::EMPTY; 64];
-    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+    let mut scanlines = super::super::vector_raster::TestScanlines::new();
+    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines: scanlines.get(), dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
     let mut resources = RasterResources::new(&pack, FontRegistry::Coverage8, &[], Some(workspace))?;
     let mut bytes = vec![0; BYTES];
     Surface::new(SurfaceId::Osd, &mut bytes)?.render(DrawList::new(SurfaceId::Osd, commands), &mut resources)?;
@@ -293,7 +294,8 @@ fn malformed_or_unplaceable_scaled_shapes_are_typed_errors() {
 fn render_scene(commands: &[DrawCommand<'_>]) -> Result<Vec<u8>, RasterError> {
     let mut vertices = [Vertex::EMPTY; 64];
     let mut strokes = [StrokePrimitive::EMPTY; 64];
-    let mut workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+    let mut scanlines = super::super::vector_raster::TestScanlines::new();
+    let mut workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines: scanlines.get(), dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
     let mut bytes = vec![7; BYTES];
     Surface::new(SurfaceId::Osd, &mut bytes)?.render_scene(DrawList::new(SurfaceId::Osd, commands), &mut workspace)?;
     Ok(bytes)

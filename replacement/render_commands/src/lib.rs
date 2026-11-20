@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(unexpected_cfgs)]
 
 pub const PANEL_WIDTH: usize = 720;
 pub const PANEL_HEIGHT: usize = 480;

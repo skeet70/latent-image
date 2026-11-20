@@ -737,7 +737,8 @@ fn decoded_gvff_shape_command_consumes_bounded_workspace_and_natural_placement()
     let pack = pack(&pack_bytes);
     let mut vertices = [Vertex::EMPTY;5];
     let mut strokes = [];
-    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+    let mut scanlines = super::super::vector_raster::TestScanlines::new();
+    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines: scanlines.get(), dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
     let mut resources = RasterResources::new(&pack,FontRegistry::Coverage8,&bindings,Some(workspace)).unwrap();
     let commands = [
         DrawCommand::Clip(rect(4,4,1,2)),
@@ -795,7 +796,8 @@ fn actual_styled_request_command_uses_constructor_height_and_supplied_rgb() {
     let pack = pack(&pack_bytes);
     let mut vertices = [Vertex::EMPTY;5];
     let mut strokes = [];
-    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+    let mut scanlines = super::super::vector_raster::TestScanlines::new();
+    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines: scanlines.get(), dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
     let mut resources = RasterResources::new(&pack,FontRegistry::Coverage8,&shapes,Some(workspace)).unwrap();
     let commands = [DrawCommand::Shape { origin: point(2,3), image: ImageId::new(8).unwrap(), alpha: Alpha(128), paint: ShapePaint::Original }];
     let mut bytes = vec![0;BYTES];
@@ -832,7 +834,8 @@ fn per_draw_shape_palettes_preserve_primary_alpha_and_selected_secondary_source(
     let pack = pack(&pack_bytes);
     let mut vertices = [Vertex::EMPTY;5];
     let mut strokes = [];
-    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+    let mut scanlines = super::super::vector_raster::TestScanlines::new();
+    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines: scanlines.get(), dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
     let mut resources = RasterResources::new(&pack,FontRegistry::Coverage8,&shapes,Some(workspace)).unwrap();
     let commands = [
         DrawCommand::Shape { origin: point(0,0), image: black_entry.image, alpha: Alpha::OPAQUE, paint: ShapePaint::Recolour(first) },

@@ -13,8 +13,8 @@ use render_commands::guest_assets::{whole_ram, FontFile, GuestAssets, PackReques
 use render_commands::raster::{AssetProvenance, RasterResources, Surface, VectorWorkspace};
 use render_commands::resources::{BitmapKind, TextVariant};
 use render_commands::shape_assets::ShapeAsset;
-use render_commands::vector_raster::{CurveAccuracy, DashBudget, SampleGrid, StrokePrimitive, Vertex};
-use render_commands::{CatalogTextId, PaletteIndex, PanelPoint, ResourceId, SurfaceId};
+use render_commands::vector_raster::{Crossing, CurveAccuracy, DashBudget, Event, SampleGrid, Scanlines, Span, StrokePrimitive, Vertex};
+use render_commands::{CatalogTextId, PaletteIndex, PanelPoint, ResourceId, SurfaceId, PANEL_WIDTH};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -155,6 +155,9 @@ fn bitmaps(assets: &GuestAssets<'_>, directory: &Path, report: &mut Report) {
     let catalog = assets.bitmaps().unwrap();
     let mut vertices = vec![Vertex::EMPTY; 1 << 16];
     let mut strokes = vec![StrokePrimitive::EMPTY; 1 << 16];
+    let mut crossings = vec![Crossing::EMPTY; 1 << 16];
+    let mut spans = vec![Span::EMPTY; 2 << 16];
+    let mut events = vec![Event::EMPTY; 2 * PANEL_WIDTH];
     let mut entries = Vec::new();
     for value in BITMAPS {
         let resource = ResourceId(value);
@@ -179,7 +182,8 @@ fn bitmaps(assets: &GuestAssets<'_>, directory: &Path, report: &mut Report) {
                     })
             }
             BitmapKind::ShapeKindOne | BitmapKind::ShapeKindTwo => {
-                let mut workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(1 << 12), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::Four };
+                let scanlines = Scanlines { crossings: &mut crossings, spans: &mut spans, events: &mut events };
+                let mut workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, scanlines, dash_budget: DashBudget::new(1 << 12), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::Four };
                 ShapeAsset::decode(entry, &memory).map_err(|error| format!("{error:?}")).and_then(|asset| {
                     Surface::new(SurfaceId::Osd, &mut pixels).unwrap().draw_shape(origin, asset, Alpha::OPAQUE, ShapePaint::Original, &mut workspace).map_err(|error| format!("{error:?}"))
                 })
