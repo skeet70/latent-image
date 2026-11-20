@@ -997,7 +997,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
           NativeEvidence view -> isLeft (validateNativeImage4View view mutated)
           StagedEvidence _ _ _ -> isLeft (case shape of
             CanonicalEntry -> validateStagedImage4 (sourceHull source) artifact image4 mutated
-            PublicWrapperEntry -> validateLocalImage4 artifact image4 mutated))
+            PublicWrapperEntry -> validateLocalImage4 (sourceKept source) artifact image4 mutated))
       at address after = Patch address (candidateWord address) after
       admissionControls :: [(String, Bool)]
       admissionControls =

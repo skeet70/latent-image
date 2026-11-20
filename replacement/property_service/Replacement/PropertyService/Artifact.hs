@@ -21,6 +21,7 @@ module Replacement.PropertyService.Artifact
   , sourceHull
   , sourceImage4
   , sourceScanned
+  , sourceKept
   , sourceRetainedFieldEvidence
   , deriveArtifact
   , derivePublicArtifact

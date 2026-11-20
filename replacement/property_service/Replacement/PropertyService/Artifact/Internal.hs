@@ -23,6 +23,7 @@ module Replacement.PropertyService.Artifact.Internal
   , sourceHull
   , sourceImage4
   , sourceScanned
+  , sourceKept
   , sourceRetainedFieldEvidence
   , deriveArtifact
   , derivePublicArtifact
@@ -87,7 +88,8 @@ import Replacement.PropertyService.ClassRecord (classValue, summaryValue)
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding
 import Replacement.PropertyService.Placement
-import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence, retainedFieldEvidence, retiredReferences, retiredRegions)
+import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence, keptWords, retainedDependencies, retainedFieldEvidence, retiredReferences, retiredRegions)
+import Replacement.PropertyService.RetainedClosure (DevicePremise (..), MmioRegister (..), RetainedDependency (..))
 import ServiceInventory (Image (..))
 
 newtype SourceIdentity = SourceIdentity SHA.Sha256
@@ -107,6 +109,7 @@ data CanonicalSource = CanonicalSource
   , sourceIdentities :: [(SourceRole, SourceIdentity)]
   , sourceProperties :: [Property]
   , sourceHull :: HullScan
+  , sourceDependencies :: [RetainedDependency]
   }
 
 data ArtifactInput = ArtifactInput
@@ -240,7 +243,7 @@ canonicalSource dat four loaderA loaderB five plain two = do
         ]
   properties <- either (Left . ClassificationRejected) Right (classify image4)
   hull <- either (Left . PlacementRejected) Right (scanHull image4 scanned properties)
-  pure (CanonicalSource dat image4 scanned identities properties hull)
+  pure (CanonicalSource dat image4 scanned identities properties hull (retainedDependencies scanned))
 
 storageStoreName :: StorageWidth -> String
 storageStoreName width = case width of
@@ -642,9 +645,10 @@ sourceRetainedFieldEvidence source = retainedFieldEvidence (sourceScanned source
 nativeRetiredReferences :: CanonicalSource -> [ScanHit]
 nativeRetiredReferences = retiredReferences . sourceScanned
 
--- | Place the fixed carrier and the two public root branches and trap the retired bodies.
-stageNativePlacement :: [Property] -> Image -> LinkedArtifact -> Either ArtifactError StagedPlacement
-stageNativePlacement properties (Image _ _ base original) artifact = do
+-- | Place the fixed carrier and the two public root branches and trap the retired bodies except
+-- the kept words.
+stageNativePlacement :: S.Set GuestAddress -> [Property] -> Image -> LinkedArtifact -> Either ArtifactError StagedPlacement
+stageNativePlacement kept properties (Image _ _ base original) artifact = do
   require (artifactCarrier artifact == stage4Carrier)
     (PlacementRejected (CarrierNotCandidate (carrierStart (artifactCarrier artifact))))
   require (length properties == 645 && all (\property -> case propertyClass property of Owned _ -> True; Delegated _ -> False) properties) TableRejected
@@ -653,20 +657,20 @@ stageNativePlacement properties (Image _ _ base original) artifact = do
     && U.word32At original (fromIntegral (0x624694 - base)) == 0xe92d49f8)
     (PlacementRejected PublicEntryDisagrees)
   require (B.length original `mod` 4 == 0 && B.length (linkedBytes artifact) <= carrierBytes stage4Carrier) StagingRejected
-  let staged = B.concat [U.putWord32 (localWord artifact original address) | address <- [base, base + 4 .. base + fromIntegral (B.length original) - 4]]
-  validateLocalImage4 artifact original staged
+  let staged = B.concat [U.putWord32 (localWord kept artifact original address) | address <- [base, base + 4 .. base + fromIntegral (B.length original) - 4]]
+  validateLocalImage4 kept artifact original staged
   pure (StagedPlacement (HullScan retiredHull [] [] (Just stage4Carrier)) staged)
 
 -- | The word at `address` of a locally placed image4.
-localWord :: LinkedArtifact -> B.ByteString -> Word32 -> Word32
-localWord artifact original address
+localWord :: S.Set GuestAddress -> LinkedArtifact -> B.ByteString -> Word32 -> Word32
+localWord kept artifact original address
   | guest == getterStockEntry = adapterWord guest getter
   | guest == setterStockEntry = adapterWord guest setter
   | inCarrier (artifactCarrier artifact) guest =
       if fromIntegral (address - codeLow) < B.length (linkedBytes artifact)
         then U.word32At (linkedBytes artifact) (fromIntegral (address - codeLow))
         else fillWord
-  | any (`inCarrier` guest) retiredRegions = fillWord
+  | any (`inCarrier` guest) retiredRegions && not (S.member guest kept) = fillWord
   | otherwise = U.word32At original (fromIntegral (address - 0x61c400))
   where
     guest = GuestAddress address
@@ -675,8 +679,8 @@ localWord artifact original address
 
 -- | Check a locally placed image4: the carrier, the two root branches and the trapped retired
 -- bodies are the only differences.
-validateLocalImage4 :: LinkedArtifact -> B.ByteString -> B.ByteString -> Either ArtifactError ()
-validateLocalImage4 artifact original staged = do
+validateLocalImage4 :: S.Set GuestAddress -> LinkedArtifact -> B.ByteString -> B.ByteString -> Either ArtifactError ()
+validateLocalImage4 kept artifact original staged = do
   let EntryAddresses getter setter = artifactEntries artifact
       entryStarts = [GuestAddress low | FunctionExtent _ (GuestAddress low) _ <- artifactFunctions artifact]
   require (B.length original == B.length staged && B.length original `mod` 4 == 0
@@ -689,18 +693,21 @@ validateLocalImage4 artifact original staged = do
   forM_ [(getterStockEntry, getter), (setterStockEntry, setter)] $ \(site@(GuestAddress address), target@(GuestAddress destination)) ->
     require (A.decode address (adapterWord site target) == A.Branch always False destination) StagingRejected
   forM_ [0x61c400, 0x61c404 .. 0x61c400 + fromIntegral (B.length original) - 4] $ \address ->
-    require (U.word32At staged (fromIntegral (address - 0x61c400)) == localWord artifact original address) StagingRejected
+    require (U.word32At staged (fromIntegral (address - 0x61c400)) == localWord kept artifact original address) StagingRejected
 
 nativeImage4View :: CanonicalSource -> LinkedArtifact -> Either ArtifactError NativeImage4View
 nativeImage4View source artifact =
-  NativeImage4View source artifact <$> stageNativePlacement (sourceProperties source) (sourceImage4 source) artifact
+  NativeImage4View source artifact <$> stageNativePlacement (sourceKept source) (sourceProperties source) (sourceImage4 source) artifact
+
+sourceKept :: CanonicalSource -> S.Set GuestAddress
+sourceKept = keptWords . sourceDependencies
 
 nativeViewBytes :: NativeImage4View -> B.ByteString
 nativeViewBytes (NativeImage4View _ _ placement) = placementBytes placement
 
 validateNativeImage4View :: NativeImage4View -> B.ByteString -> Either ArtifactError ()
 validateNativeImage4View (NativeImage4View source artifact _) =
-  validateLocalImage4 artifact (imageBytes (sourceImage4 source))
+  validateLocalImage4 (sourceKept source) artifact (imageBytes (sourceImage4 source))
 
 nativeViewIdentityValue :: NativeImage4View -> Value
 nativeViewIdentityValue view@(NativeImage4View source artifact _) = object
@@ -715,6 +722,7 @@ nativeViewIdentityValue view@(NativeImage4View source artifact _) = object
   , "native_image4_sha256" .= identityText (identity (nativeViewBytes view))
   , "carrier" .= object ["start" .= low, "end" .= high, "bytes" .= carrierBytes carrier, "fill_word" .= fillWord]
   , "trapped_regions" .= [object ["start" .= start, "end" .= end] | Carrier (GuestAddress start) (GuestAddress end) <- retiredRegions]
+  , "kept_words" .= [address | GuestAddress address <- S.toList (sourceKept source)]
   , "public_wrappers" .= object ["getter" .= getter, "setter" .= setter]
   , "public_entry_words" .=
       [object ["address" .= address, "original" .= U.word32At original (fromIntegral (address - 0x61c400)), "patched" .= adapterWord (GuestAddress address) target]
@@ -736,7 +744,7 @@ stageNativeImage4 :: RetirementAuthority -> CanonicalSource -> LinkedArtifact ->
 stageNativeImage4 authority source artifact = do
   let hits = retiredReferences (sourceScanned source)
   require (authority == UnadmittedRetirement || null hits) (PlacementRejected (RetiredReferenced hits))
-  (\placement -> StagedImage4 source artifact placement hits) <$> stageNativePlacement (sourceProperties source) (sourceImage4 source) artifact
+  (\placement -> StagedImage4 source artifact placement hits) <$> stageNativePlacement (sourceKept source) (sourceProperties source) (sourceImage4 source) artifact
 
 -- | The staged image4 for an admitted artifact, or the refusal `stageImage4` gives.
 stagedImage4Bytes :: CanonicalSource -> LinkedArtifact -> Either ArtifactError B.ByteString
@@ -811,7 +819,7 @@ candidateContractValueWith shape (StagedCandidate staged@(StagedImage4 source ar
       [ object ["address" .= address, "word" .= adapterWord (GuestAddress address) target]
       | (address, target) <- [(0x61e110, getterEntry (artifactEntries artifact)), (0x624694, setterEntry (artifactEntries artifact))]
       ]
-  , "retained_regions" .= [object ["start" .= a, "end" .= b] | Carrier (GuestAddress a) (GuestAddress b) <- retainedRegions scan]
+  , "retained_regions" .= [object ["start" .= a, "end" .= b] | Carrier (GuestAddress a) (GuestAddress b) <- retainedRegions scan ++ keptRegions]
   , "scan" .= object
       [ "images" .=
           [ object ["image" .= scanLabel label, "base" .= imageBase scannedImage, "bytes" .= B.length (imageBytes scannedImage), "sha256" .= identityText (identity (imageBytes scannedImage)), "instructions" .= (scanDepth label == InstructionsAndWords)]
@@ -857,10 +865,21 @@ candidateContractValueWith shape (StagedCandidate staged@(StagedImage4 source ar
            [ "admitted" .= null obligations
            , "trapped_regions" .= [object ["start" .= start, "end" .= end] | Carrier (GuestAddress start) (GuestAddress end) <- retiredRegions]
            , "obligations" .= [object ["image" .= scanLabel label, "site" .= site, "word" .= word, "target" .= target, "reference" .= show reference, "listing" .= hitListing hit] | hit@(ScanHit label (GuestAddress site) word reference) <- obligations, let GuestAddress target = hitTarget hit]
+           , "dependencies" .= [dependencyValue dependency | dependency <- sourceDependencies source]
            ]
        | shape == PublicContract ]
   where
     carrier@(Carrier (GuestAddress low) (GuestAddress high)) = artifactCarrier artifact
+    keptRegions = case shape of
+      PublicContract -> [Carrier address (GuestAddress (word + 4)) | address@(GuestAddress word) <- S.toList (sourceKept source)]
+      CanonicalContract -> []
+    dependencyValue (RetainedDependency label (GuestAddress site) word kept premise) = object
+      [ "image" .= scanLabel label, "site" .= site, "word" .= word
+      , "kept_words" .= [address | GuestAddress address <- kept]
+      , "premise" .= case premise of
+          MmioStoreOnly (MmioRegister register) -> object ["kind" .= ("mmio-store-only" :: String), "register" .= register]
+          DeviceReadTable (MmioRegister register) -> object ["kind" .= ("device-read-table" :: String), "register" .= register]
+      ]
     EntryAddresses (GuestAddress getterAddress) (GuestAddress setterAddress) = artifactEntries artifact
     Carrier (GuestAddress hullLow) (GuestAddress hullHigh) = hullRegion scan
     proof = artifactProof artifact

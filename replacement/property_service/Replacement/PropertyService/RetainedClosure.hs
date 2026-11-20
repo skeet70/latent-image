@@ -7,6 +7,10 @@ module Replacement.PropertyService.RetainedClosure
   ( ClosedRole (..)
   , ClosedSite (..)
   , closesHit
+  , MmioRegister (..)
+  , DevicePremise (..)
+  , RetainedDependency (..)
+  , accountsHit
   , FunctionBinding (..)
   , reachableInstructions
   , instructionSites
@@ -55,6 +59,36 @@ closesHit closed hit =
       (ConsumedData, BranchInto _) -> True
       (UnreferencedData, BranchInto _) -> True
       _ -> False
+
+newtype MmioRegister = MmioRegister Word32
+  deriving (Eq, Ord, Show)
+
+-- | Why a retained word cannot be closed from bytes.
+data DevicePremise
+  = -- | Bound CPU code passes the value only to this register; the device's interpretation of it
+    -- is unproved.
+    MmioStoreOnly MmioRegister
+  | -- | The device reads the word itself from the container whose base bound CPU code stores only
+    -- to this register.
+    DeviceReadTable MmioRegister
+  deriving (Eq, Show)
+
+-- | A retained word whose device consumer is unproved. Staging leaves the stock words in
+-- `dependencyKept` untrapped instead of closing the hit.
+data RetainedDependency = RetainedDependency
+  { dependencyImage :: ScanImage
+  , dependencySite :: GuestAddress
+  , dependencyWord :: Word32
+  , dependencyKept :: [GuestAddress]
+  , dependencyPremise :: DevicePremise
+  }
+  deriving (Eq, Show)
+
+accountsHit :: RetainedDependency -> ScanHit -> Bool
+accountsHit dependency hit =
+  dependencyImage dependency == hitImage hit
+    && dependencySite dependency == hitSite hit
+    && dependencyWord dependency == hitWord hit
 
 -- | A function's complete words from its entry; the extent is half-open.
 data FunctionBinding = FunctionBinding

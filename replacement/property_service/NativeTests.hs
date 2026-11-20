@@ -22,7 +22,7 @@ import Replacement.PropertyService.Artifact
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding (EncodedTables (..), EncodingError (..), encodeTables)
 import Replacement.PropertyService.Placement
-import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence (..), retainedFieldEvidence, retiredReferences)
+import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence (..), keptWords, retainedDependencies, retainedFieldEvidence, retiredReferences)
 import Replacement.PropertyService.RetainedGvff (GvffUnclosedPremise (..))
 import ServiceInventory (Image (..))
 import System.Environment (getArgs)
@@ -179,7 +179,7 @@ placementTests :: [Property] -> LinkedArtifact -> IO ()
 placementTests properties artifact = do
   let stock = syntheticImage4 properties
       image bytes = Image "image4" "" 0x61c400 bytes
-      stage bytes = stageNativePlacement properties (image bytes) artifact
+      stage bytes = stageNativePlacement S.empty properties (image bytes) artifact
       EntryAddresses (GuestAddress getter) (GuestAddress setter) = artifactEntries artifact
       changed address value = putWordAt 0x61c400 address value
   placement <- either (fail . show) pure (stage stock)
@@ -192,8 +192,8 @@ placementTests properties artifact = do
   expect "retired setter body is trapped" 0xe7f000f0 (word 0x630200)
   expect "unaltered wrapper" 0 (word 0x6245f8)
   expect "stock word past the setter body" 0 (word 0x6309c4)
-  expect "valid locally placed image" (Right ()) (validateLocalImage4 artifact stock staged)
-  let refusal label address value = expectRefusal label StagingRejected (validateLocalImage4 artifact stock (changed address value staged))
+  expect "valid locally placed image" (Right ()) (validateLocalImage4 S.empty artifact stock staged)
+  let refusal label address value = expectRefusal label StagingRejected (validateLocalImage4 S.empty artifact stock (changed address value staged))
   refusal "getter redirected" 0x61e110 (branchWord False 0x61e110 setter)
   refusal "setter redirected" 0x624694 (branchWord False 0x624694 getter)
   refusal "getter BL" 0x61e110 (branchWord True 0x61e110 getter)
@@ -201,6 +201,14 @@ placementTests properties artifact = do
   refusal "retained wrapper overwritten" 0x6245f8 1
   refusal "retired getter bytes changed" 0x624400 0xe12fff1e
   refusal "retired setter bytes changed" 0x630200 0xe12fff1e
+  let keptStock = changed 0x630060 0x00630062 stock
+      kept = S.singleton (GuestAddress 0x630060)
+  keptPlacement <- either (fail . show) pure (stageNativePlacement kept properties (image keptStock) artifact)
+  let keptStaged = placementBytes keptPlacement
+  expect "kept retired word stays stock" 0x00630062 (U.word32At keptStaged (fromIntegral (0x630060 - 0x61c400 :: Word32)))
+  expect "word after a kept word is trapped" 0xe7f000f0 (U.word32At keptStaged (fromIntegral (0x630064 - 0x61c400 :: Word32)))
+  expectRefusal "trapped kept word" StagingRejected (validateLocalImage4 kept artifact keptStock (changed 0x630060 0xe7f000f0 keptStaged))
+  expectRefusal "kept word without its dependency" StagingRejected (validateLocalImage4 S.empty artifact keptStock keptStaged)
   refusal "stock table changed" 0x61e12c 0x61eb40
   let referencedStock = changed 0x61c400 0x61eb40 stock
       hits = retiredReferences [(ScanImage4, Image "image4" "" 0x61c400 referencedStock)]
@@ -277,7 +285,12 @@ canonicalTests inputs paths = do
           expect "native readback identity" (Just (toJSON (SHA.sha256Hex (SHA.sha256 bytes)))) (KM.lookup "native_image4_sha256" identity)
         _ -> fail "native view identity is not an object"
       let hits = nativeRetiredReferences source
-      expect "strict canonical reference refusal" 16 (length hits)
+      expect "every canonical retired reference is closed or a named dependency" 0 (length hits)
+      expect "kept words are the retired words device-bound values coincide with"
+        (S.fromList (map GuestAddress [0x620004, 0x620060, 0x620154, 0x6207c8, 0x630060, 0x630064, 0x630168]))
+        (sourceKept source)
+      expect "native view keeps the stock word under a dependency" (U.word32At four (fromIntegral (0x630064 - 0x61c400 :: Word32))) (word 0x630064)
+      expect "native view traps the word after a kept word" 0xe7f000f0 (word 0x630068)
       let at label address hit = hitImage hit == label && hitSite hit == GuestAddress address
           proved = [(ScanImage4,0x6a49ac),(ScanImage5,0xd96fac),(ScanImage5,0xee99e0),(ScanImage5,0xee9a2c),(ScanPlain,0x11126e0),(ScanPlain,0x1112764)]
       expect "six exact instruction encodings are not pointer fields" []
@@ -304,6 +317,17 @@ canonicalTests inputs paths = do
       let changedBlock = [(label, if label == ScanPlain then image {imageBytes = putWordAt (imageBase image) 0x12c0000 0 (imageBytes image)} else image) | (label, image) <- sourceScanned source]
       expect "changed WLAN firmware block withdraws its closure" True
         (any (at ScanPlain 0x12ba48c) (retiredReferences changedBlock))
+      let refusedAfter label address value (siteImage, site) = any (at siteImage site) (retiredReferences (withImage label (putImageWord address value)))
+      expect "changed imaging-config records withdraw their closures and dependencies" True
+        (refusedAfter ScanImage4 0x7c2e00 0 (ScanImage4, 0x7c3858) && refusedAfter ScanImage4 0x7c2e00 0 (ScanImage4, 0x7c5810))
+      expect "changed image-processor table withdraws its dependency" True
+        (refusedAfter ScanImage5 0x106f3e8 0 (ScanImage5, 0x10701c4))
+      expect "changed image-processor table keeps no word" False
+        (S.member (GuestAddress 0x630064) (keptWords (retainedDependencies (withImage ScanImage5 (putImageWord 0x106f3e8 0)))))
+      expect "changed log table withdraws its closure" True
+        (refusedAfter ScanImage5 0x101e134 0 (ScanImage5, 0x101e1bc))
+      expect "changed DFShaper blob withdraws its closure" True
+        (refusedAfter ScanPlain 0x1183610 0 (ScanPlain, 0x1183950))
     _ -> fail "canonical tests require seven input paths"
 
 admitImages :: [FilePath] -> IO ()
