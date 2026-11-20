@@ -82,28 +82,39 @@ pub const FIELD_LAYOUT: usize = 24;
 pub const FIELD_ENTRIES_POINTER: usize = 25;
 /// The descriptor's word 3 at `0x009190fc`; no reader uses it and stock leaves it zero.
 pub const FIELD_DESCRIPTOR_WORD3: usize = 26;
-/// The adjustment block's word at `0x016d8708` (`blk_016d8708` offset 0). The block's getter
-/// `0xfa7f00` reads it and compares it with 1 (`id5.dis:965365-965368`); no writer of this
-/// word exists in the image, and all 57 dumps hold 0. Root keeps no counterpart.
+/// The adjustment block's word at `0x016d8708` (`blk_016d8708` offset 0). It is a constant of
+/// the stock artifact: the block's getter `0xfa7f00` reads it and compares it with 1
+/// (`id5.dis:965365-965368`), but no store reaches the word. Every `movw #0x8708` / `movt
+/// #0x16d` sequence in `id5.dis` is one of the block's accessors and stores only at `+0x04`,
+/// `+0x08`, `+0x40`, `+0x44`, `+0x48`, `+0x4c`, `+0x54` or `+0x58`; `id4.dis` has no
+/// `#0x8708` at all, and neither image has a literal-pool `0x016d8708`. The word is 0 in all
+/// 57 dumps, so it cannot take another value and is not Root state.
 pub const FIELD_ADJUSTMENT_00: usize = 27;
-/// The policy word at `0x016d8748` (block offset 0x40). `s54y_select_policy` (`0xfa992c`,
-/// the planner's policy selection) reads it through `0xfa7eac` and converts it with
-/// `FUN_00fa95a8` to the frame-rate band (`id5.dis:967091-967094`; `tu_00fa9588.c:441-448`).
-/// `s54_initialize_fixed/auxiliary/continuous_exposure_info` (`0xf33a18`/`0xf33ef4`/
-/// `0xf34710`) and `FUN_00f35d14` write it from the exposure-info struct's `+0x14`
-/// (`id5.dis:846983,847458,847873,849398`), so it is configuration, not per-round state; all
-/// 57 dumps hold 12. Root's same decision is `planned_mode` (`live.rs:206-212`) from
+/// The policy word at `0x016d8748` (block offset 0x40). Its only in-step read is
+/// `s54y_select_policy` (`0xfa992c`) at `0xfa99f4` (`id5.dis:967091`), which passes it to
+/// `FUN_00fa95a8` (`0xfa95a8` -> `z_read_profile_period`, `0x1005f60`) and uses the returned
+/// period only as a nonzero gate for the timer/threshold comparison that selects modes 4/5
+/// (`tu_00fa9588.c:441-448`). The word is the profile-period selector, not the band itself,
+/// so a band-preserving canonical word is not established; the field refuses. Its writers are
+/// the exposure-info initialisers `s54_initialize_fixed/auxiliary/continuous_exposure_info`
+/// (`0xf33a18`/`0xf33ef4`/`0xf34710`) and `FUN_00f35d14`, each copying the exposure-info
+/// struct's `+0x14` (`id5.dis:846983,847458,847873,849398`), so it is configuration; all 57
+/// dumps hold 12. Root's same decision is `planned_mode` (`live.rs:206-212`) from
 /// `effects.frame_interval(...)` and `frame_rate_threshold()`; Root does not retain this
-/// cached word.
+/// cached selector.
 pub const FIELD_CLASSIFICATION: usize = 28;
 /// The adjustment block's word at `0x016d8750` (block offset 0x48). `FUN_00f308d4` sets it to
-/// 1 or 0 beside the profile-selection writes (`id5.dis:843828-843831`); `FUN_00f30f64`,
+/// 1 or 0 beside its writes of the shared round words `AT_0140`/`AT_0144`/`AT_0148`
+/// (`0x756a0c`/`0x756a54`/`0x756a9c`; `id5.dis:843828-843831`), and `FUN_00f30f64`,
 /// `FUN_00f33094` (the measurement controller's row function) and others read it
-/// (`id5.dis:844141,846183,847211`). All 57 dumps hold 0. Root keeps no word for it.
+/// (`id5.dis:844141,846183,847211`). All 57 dumps hold 0. Root has no retained word for this
+/// profile-selection flag; `Round.selected` is the category-pair decision, not it.
 pub const FIELD_ADJUSTMENT_48: usize = 29;
 /// The adjustment block's word at `0x016d8760` (block offset 0x58). `FUN_00ef9930` sets it to
-/// 1 (`id5.dis:787434`) and `FUN_00f3a564` reads and clears it (`id5.dis:853713,853739`); all
-/// 57 pre-state dumps hold 0. Root keeps no word for it.
+/// 1 (`id5.dis:787434`) from the record/reccont module (`0xe20c4c`, `0xe219c8`, `0xe39050`),
+/// and `FUN_00f3a564` reads and clears it (`id5.dis:853713,853739`). All 57 pre-state dumps
+/// hold 0. Root has no persistent counterpart: its `MeasurementUpdate`/`RecordEffect`
+/// handoffs are created and consumed within one dispatch, not a flag a later step reads.
 pub const FIELD_ADJUSTMENT_58: usize = 30;
 /// `Planner.first_cursor` at `0x016d8778` (`tu_00fa9588.c:415,462-465,480`).
 pub const FIELD_FIRST_CURSOR: usize = 31;
@@ -789,9 +800,10 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
         put_u32(out, OFF_ENTRIES_POINTER, entries_pointer(present));
         put_u32(out, OFF_DESCRIPTOR_WORD3, 0);
     }
-    // The adjustment block's words have no retained Root counterpart (gap G12): the stock
-    // entries buffer is not a field (the step writes it before reading it).
-    refusal.note(FIELD_ADJUSTMENT_00, 5);
+    // The adjustment block's word at +0x00 is a constant of the stock artifact (no store
+    // reaches it), so it is written as 0; the other three have no retained Root counterpart
+    // (gap G12).
+    unsafe { put_u32(out, OFF_ADJUSTMENT_00, 0) };
     refusal.note(FIELD_CLASSIFICATION, 5);
     refusal.note(FIELD_ADJUSTMENT_48, 5);
     refusal.note(FIELD_ADJUSTMENT_58, 5);
@@ -906,8 +918,11 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
     }
     let word3 = unsafe { get_u32(stock, OFF_DESCRIPTOR_WORD3) };
     if word3 != 0 { refusal.note(FIELD_DESCRIPTOR_WORD3, 2); code = 2; } else { unsafe { put_u32(out, OFF_DESCRIPTOR_WORD3, 0) } }
-    // The adjustment block's words have no Root read (gap G12).
-    for field in [FIELD_ADJUSTMENT_00, FIELD_CLASSIFICATION, FIELD_ADJUSTMENT_48, FIELD_ADJUSTMENT_58] {
+    // The adjustment block's word at +0x00 is a stock constant (0); the other three have no
+    // Root read (gap G12).
+    let constant = unsafe { get_u32(stock, OFF_ADJUSTMENT_00) };
+    if constant != 0 { refusal.note(FIELD_ADJUSTMENT_00, 2); code = 2; } else { unsafe { put_u32(out, OFF_ADJUSTMENT_00, 0) } }
+    for field in [FIELD_CLASSIFICATION, FIELD_ADJUSTMENT_48, FIELD_ADJUSTMENT_58] {
         refusal.note(field, 2);
         code = 2;
     }
@@ -1147,10 +1162,10 @@ mod tests {
             // The adjustment block's untyped words are the declared gaps; nothing else
             // refuses.
             assert_eq!(code, 2, "cursor {cursor} phase {phase}");
-            assert_eq!(gap, Some(gap_word(FIELD_ADJUSTMENT_00, 2)), "cursor {cursor} phase {phase}");
+            assert_eq!(gap, Some(gap_word(FIELD_CLASSIFICATION, 2)), "cursor {cursor} phase {phase}");
             // Every non-gap field round-trips to itself.
             for (field, entry) in QUALIFICATION_FIELDS.iter().enumerate() {
-                if matches!(field, FIELD_ADJUSTMENT_00 | FIELD_CLASSIFICATION | FIELD_ADJUSTMENT_48 | FIELD_ADJUSTMENT_58) { continue; }
+                if matches!(field, FIELD_CLASSIFICATION | FIELD_ADJUSTMENT_48 | FIELD_ADJUSTMENT_58) { continue; }
                 let (address, length) = (entry[0], entry[1]);
                 let _ = address;
                 let at = overlay_offset(field);
@@ -1158,6 +1173,22 @@ mod tests {
                 assert_eq!(out[range.clone()], overlay[range], "field {field}");
             }
         }
+    }
+
+    #[test]
+    fn the_adjustment_word_zero_is_the_stock_constant() {
+        // `0x016d8708` is 0 in every state and no store reaches it; any other value refuses.
+        let mut overlay = [0u8; OVERLAY_BYTES];
+        overlay[OFF_QUEUE..OFF_QUEUE + 4].copy_from_slice(&u32::from(peers::CALC.queue.number()).to_le_bytes());
+        let mut out = [0u8; OVERLAY_BYTES];
+        let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!(code, 2);
+        assert_eq!(gap, Some(gap_word(FIELD_CLASSIFICATION, 2)));
+        assert_eq!(&out[OFF_ADJUSTMENT_00..OFF_ADJUSTMENT_00 + 4], &[0; 4]);
+        overlay[OFF_ADJUSTMENT_00] = 1;
+        let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!(code, 2);
+        assert_eq!(gap, Some(gap_word(FIELD_ADJUSTMENT_00, 2)));
     }
 
     /// The overlay offset of a field index, from the offsets the codec uses.
