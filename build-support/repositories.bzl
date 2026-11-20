@@ -66,6 +66,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-composite-cpu.patch",
     "//build-support:fujimod-composite-watch.patch",
     "//build-support:fujimod-fetch-attribution.patch",
+    "//build-support:fujimod-lz-masked-completion.patch",
     "//build-support:fujimod-observation-context.patch",
     "//build-support:fujimod-passive-af-retention.patch",
     "//build-support:fujimod-observation-backing-tests.patch",

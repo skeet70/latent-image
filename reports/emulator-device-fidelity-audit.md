@@ -19,7 +19,7 @@ Three laws besides the timer are contradicted by hardware reads: the boot-ROM ex
 | Interrupt controller `+0x1c0` | conflicting snapshot | 2.2 |
 | Interrupt controller enables, priorities, acknowledge, EOI, nesting, line-32 fan-out, WFI | no hardware evidence | 2.2 |
 | Memory DMA `0xfff02000` | no hardware evidence | 2.3 |
-| LZ decoder `0xfff43000` | agreement on output | 2.3 |
+| LZ decoder `0xfff43000` | agreement on output; masked-completion law source-inferred (patched) | 2.3 |
 | Display timing, scanout, formatter | no hardware evidence | 2.4 |
 | Boot ROM extent | agreement after the decode widening (fix 1) | 2.5 |
 | Boot ROM content, boot-source latch `0xfff98000` | agreement | 2.5 |
@@ -61,6 +61,7 @@ Three laws besides the timer are contradicted by hardware reads: the boot-ROM ex
 
 - Memory DMA (`0xfff02000`, `0xfff02300`; `emulator-exr2-serial/src/dma/memory.rs`): three accepted configurations (loader fill without interrupt, application fill and copy with interrupt `0x5b`) (`:111-157`), completion after `max(2, bytes/32)` ticks (`:161`), status `+0x24` 1 while busy and `0x40` when done (`:342-363`), abort by writing 8 (`:312-316`). The route uses it for the image-4 BSS fill before image 4 starts and the `[0x01460000,0x0171be40)` fill before image 5 (`reports/firmware-extraction.md:227-231`, `E-FFF02000-CALLSITE-150`, static). Hardware: none. The bit-6 completion poll agrees with static reading only; the BSS is rewritten at runtime, so Run-3 cannot test the fills.
 - LZ decoder (`lz`, `0xfff43000`; `emulator-exr2-codecs/src/lz.rs`, interrupt line 69): decodes image 4 on every boot. Hardware: the loaded images equal the DAT decodes apart from listed runtime bytes (`E-RAM-PROBE-150`, `E-DUMP-RAM-150`), and image 4 differs from the body in 80 bytes on both engines (`reports/ram-calibration.md`). Agreement on output; timing and interrupt delivery have no hardware evidence.
+- LZ completion inside an enable clear: source-inferred law, not measured, adopted by `fujimod-lz-masked-completion.patch` (`E-FUJIMOD-LZ-ENABLE-WINDOW-150`). The pinned model refused a completion when line 69's enable on the start core was clear at completion (`lz.rs:663-668`); stock kernel0 `kernel_enable_irq`/`kernel_disable_irq` clear all of a group's enables before rewriting the mask, so a completion can land in that window. The patched model pulses the start core anyway and the controller latches it pending until the enable returns (`irq.rs:613-617`, delivery `:316`). Source: exact x70view `kernel_disable_irq` (`kernel0/src/irq/irq_controller_disable.c`, 55436fc8) clears the line's pending bits at `+0xe0`/`+0x120` after removing its enable, which presupposes a masked line latches pending. A completion that finds the line enabled on the other core still refuses.
 
 ### 2.4 Display: timing, scanout, formatter
 
