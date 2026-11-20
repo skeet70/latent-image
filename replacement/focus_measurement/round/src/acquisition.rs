@@ -208,3 +208,7 @@ impl<P: ports::Ports> Work for S1Steps<'_, '_, P> {
     }
     fn selection_changed(&mut self) -> bool { false }
 }
+
+#[cfg(saclac_qualification)]
+#[path = "acquisition/qualification_stage.rs"]
+pub mod qualification;

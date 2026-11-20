@@ -39,6 +39,7 @@
 //! are written by the step before it reads them.
 
 use core::ptr;
+use xm1_focus_measurement_round::acquisition::qualification::StageView;
 use xm1_focus_measurement_round::jobs::qualification::JobView;
 use xm1_focus_measurement_round::lanes::{Lane, Lanes};
 use xm1_focus_measurement_round::round::qualification::{FanView, PhaseView};
@@ -240,13 +241,19 @@ pub fn encode_m13(view: PhaseView) -> u16 {
     }
 }
 
-/// Machine 24: the window calculation job. Stock state 4 has no typed counterpart.
-pub fn encode_m24(view: JobView) -> u16 {
+/// Machine 24: the acquisition machine. The cell table at `0xf11a04` writes 3 on event
+/// 0xc8 (row 3, action `0xf0de30` = the 0x3d00 producer) and 2 on 0xc9 (row 4, action
+/// `0xf0de44` = the 0x3d01 producer); the acquisition's `Primary` is the 0x3d00 request and
+/// `Secondary` the 0x3d01 request. Stock state 4 (a start while a request is in flight) has
+/// no acquisition stage and is refused on decode.
+pub fn encode_m24(view: StageView) -> u16 {
     match view {
-        JobView::Disabled => 0,
-        JobView::Ready => 1,
-        JobView::Running => 2,
-        JobView::Stopping => 3,
+        StageView::Disabled => 0,
+        StageView::Ready => 1,
+        StageView::Primary => 3,
+        StageView::Secondary => 2,
+        StageView::StoppingPrimary => 4,
+        StageView::StoppingSecondary => 4,
     }
 }
 
@@ -423,12 +430,12 @@ pub fn decode_m13(state: u16) -> Result<PhaseView, u32> {
     }
 }
 
-pub fn decode_m24(state: u16) -> Result<JobView, u32> {
+pub fn decode_m24(state: u16) -> Result<StageView, u32> {
     match state {
-        0 => Ok(JobView::Disabled),
-        1 => Ok(JobView::Ready),
-        2 => Ok(JobView::Running),
-        3 => Ok(JobView::Stopping),
+        0 => Ok(StageView::Disabled),
+        1 => Ok(StageView::Ready),
+        2 => Ok(StageView::Secondary),
+        3 => Ok(StageView::Primary),
         _ => Err(1),
     }
 }
@@ -438,7 +445,6 @@ pub fn decode_m29(state: u16) -> Result<JobView, u32> {
         0 => Ok(JobView::Disabled),
         1 => Ok(JobView::Ready),
         2 => Ok(JobView::Running),
-        3 => Ok(JobView::Stopping),
         _ => Err(1),
     }
 }
@@ -462,7 +468,7 @@ pub fn encode_machine(machine: u32, view: &RuntimeView) -> Result<u16, u32> {
             None => Err(4),
         },
         24 => match view.measurement {
-            Some(measurement) => Ok(encode_m24(measurement.window)),
+            Some(measurement) => Ok(encode_m24(measurement.acquisition)),
             None => Err(4),
         },
         29 => match view.measurement {
@@ -686,8 +692,13 @@ mod tests {
         assert_eq!(decode_m11(6), Ok(LiveView::SecondaryLive));
         assert_eq!(decode_m12(5), Ok(LiveViewControllerView::Configuring));
         assert_eq!(decode_m13(2), Ok(PhaseView::Armed));
-        assert_eq!(decode_m24(1), Ok(JobView::Ready));
+        assert_eq!(decode_m24(1), Ok(StageView::Ready));
+        assert_eq!(decode_m24(2), Ok(StageView::Secondary));
+        assert_eq!(decode_m24(3), Ok(StageView::Primary));
+        assert_eq!(decode_m24(4), Err(1));
         assert_eq!(decode_m29(1), Ok(JobView::Ready));
+        assert_eq!(decode_m29(2), Ok(JobView::Running));
+        assert_eq!(decode_m29(3), Err(1));
         for (index, machine) in MACHINES.into_iter().enumerate() {
             assert_eq!(decode_machine(machine, MEASURED[index]), Ok(()), "machine {machine}");
             assert_eq!(reencode_machine(machine, MEASURED[index]), Ok(MEASURED[index]), "machine {machine}");
@@ -720,8 +731,10 @@ mod tests {
         for view in VIEWS { assert!((encode_m12(view)) < 25); }
         const PHASES: [PhaseView; 5] = [PhaseView::Dormant, PhaseView::Idle, PhaseView::Armed, PhaseView::Running, PhaseView::Stopping];
         for view in PHASES { assert!((encode_m13(view)) < 6); }
+        const STAGES: [StageView; 6] = [StageView::Disabled, StageView::Ready, StageView::Primary, StageView::Secondary, StageView::StoppingPrimary, StageView::StoppingSecondary];
+        for view in STAGES { assert!((encode_m24(view)) < 5); }
         const JOBS: [JobView; 4] = [JobView::Disabled, JobView::Ready, JobView::Running, JobView::Stopping];
-        for view in JOBS { assert!((encode_m24(view)) < 5); assert!((encode_m29(view)) < 4); }
+        for view in JOBS { assert!((encode_m29(view)) < 4); }
     }
 
     #[test]

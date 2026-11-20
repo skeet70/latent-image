@@ -5,6 +5,7 @@
 //! is built by exhaustive conversions, so a new private state fails this crate's compile.
 
 use super::Measurement;
+use crate::acquisition::qualification::StageView;
 use crate::jobs::qualification::{self as jobs, JobView};
 use crate::lanes::Lanes;
 use crate::round::qualification::{self as round, FanView, PhaseView};
@@ -16,6 +17,7 @@ pub struct View {
     pub phase: PhaseView,
     pub fan: FanView,
     pub selected: Lanes,
+    pub acquisition: StageView,
     pub first_busy: bool,
     pub second_busy: bool,
     pub auxiliary: JobView,
@@ -30,6 +32,7 @@ pub fn view(measurement: &Measurement) -> View {
         phase: round::phase(&measurement.round),
         fan: round::fan(&measurement.round),
         selected: round::selected(&measurement.round),
+        acquisition: crate::acquisition::qualification::stage(&measurement.acquisition),
         first_busy: round::first_busy(&measurement.round),
         second_busy: round::second_busy(&measurement.round),
         auxiliary: jobs::view(&measurement.auxiliary),
