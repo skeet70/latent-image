@@ -677,6 +677,7 @@ matrixObservationFrom witnesses family role bootTrace changes = Observation
       , "storage_before" .= appliedStateValue,"storage_after" .= rebootedStateValue
       , "result" .= object
           [ "kind" .= ("cold-reboot"::T.Text),"export" .= committedExport role oldCounter
+          , "power_off" .= object ["switched" .= counterValue oldCounter,"terminal" .= counterValue oldCounter]
           , "prior_session" .= finalSdk role (BootSession 0) firstReset oldCounter
           , "new_start" .= freshStart role (BootSession 1) childReset,"new_reset" .= decodeWire childReset
           , "input_committed_sha256" .= roleExportDigest role,"next_session" .= (1::Word32),"new_hits_start" .= cursorValue oldEnd
@@ -993,6 +994,10 @@ coldProvenanceCases =
       (transformObservation (mapWireTree laterReset) ownedMatrix)
   , refusalCase "fresh child cannot load a saved emulator checkpoint" OwnedRole
       (transformObservation (mapWireTree savedCheckpoint) ownedMatrix)
+  , refusalCase "cold export must be at the POWER OFF terminal" OwnedRole
+      (alterColdResult (wireField ["power_off","terminal"] (Number 0)) ownedMatrix)
+  , refusalCase "POWER OFF must be switched at the previous action's end" OwnedRole
+      (alterColdResult (wireField ["power_off","switched"] (Number 0)) ownedMatrix)
   , comparisonCase "initial adjustment NAND remains a cross-role cohort input" RolesDiffer retainedMatrix changedInitialSeed
   , semanticRefusalCase "C scanner bit25 is an observed selection requirement"
       (mapStorageSnapshots (wireField ["c_input_bitmap"] (Number 0)) ownedMatrix)

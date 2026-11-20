@@ -52,7 +52,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (find, sort, zip4)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isNothing, isJust, catMaybes)
+import Data.Maybe (fromMaybe, isNothing, isJust, catMaybes, listToMaybe)
 import Data.Int (Int32)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Set as S
@@ -2037,6 +2037,8 @@ data StorageColdBoot = StorageColdBoot
   , coldPhases :: [(AttachPhase,Interval)]
   , coldExport :: CommittedExport
   , coldInputDigest :: Sha256
+  -- | Instructions at which POWER was switched OFF; the export is at the reported terminal.
+  , coldPowerOffSwitched :: Instructions
   }
 data ObservedStorageStep = ObservedStorageStep
   { observedStorageNumber :: Int
@@ -2183,7 +2185,7 @@ parseStorageStep manifests resets expectedSession expected spec value = do
       (dial,endpoint) <- parseModeDialWitness position result
       pure (warm Nothing (Just endpoint) (Just dial) Nothing)
     Storage.ColdReboot -> do
-      exact ["kind","export","prior_session","new_start","new_reset","input_committed_sha256","next_session","new_hits_start","regions_before_reboot","storage_before_reboot"] result
+      exact ["kind","power_off","export","prior_session","new_start","new_reset","input_committed_sha256","next_session","new_hits_start","regions_before_reboot","storage_before_reboot"] result
       unless (KM.lookup "kind" result == Just (String "cold-reboot")) (Left "storage cold reboot has another result kind")
       next <- at "next_session" result >>= parseBootSession
       unless (toInteger (bootSessionNumber next) == toInteger (bootSessionNumber session)+1) (Left "cold reboot skips a session")
@@ -2193,8 +2195,14 @@ parseStorageStep manifests resets expectedSession expected spec value = do
       unless (start == manifestStart nextManifest) (Left "cold reboot supplied another fresh start")
       exported <- at "export" result >>= parseCommittedExport (Storage.storageStepName spec)
       inputDigest <- at "input_committed_sha256" result >>= parseDigest
+      powerOff <- at "power_off" result >>= asObject
+      exact ["switched","terminal"] powerOff
+      switched <- at "switched" powerOff >>= asWord64
+      terminal <- at "terminal" powerOff >>= asWord64
+      unless (switched <= terminal) (Left "POWER OFF terminal precedes its switch")
       unless (exportedParent exported == manifestIdentity oldManifest
         && exportedInstructions exported == manifestInstructions oldManifest
+        && exportedInstructions exported == Instructions terminal
         && inputDigest == exportedDigest exported
         && identitySeed (manifestIdentity nextManifest) == CommittedBoot inputDigest)
         (Left "committed export does not bind the actual parent and child boots")
@@ -2211,8 +2219,9 @@ parseStorageStep manifests resets expectedSession expected spec value = do
         [] -> False) (Left "cold reboot after-state is not its fresh attach state")
       beforeReboot <- at "regions_before_reboot" result >>= parseRegions
       oldSnapshot <- at "storage_before_reboot" result >>= parseStorageSnapshot
-      unless (storageBefore == oldSnapshot) (Left "cold reboot advanced before exporting its medium")
-      let cold = StorageColdBoot next phases exported inputDigest
+      forM_ (snapshotMismatch oldSnapshot beforeReboot) $ \address ->
+        Left ("storage snapshot before reboot differs from watched bytes at " ++ show address)
+      let cold = StorageColdBoot next phases exported inputDigest (Instructions switched)
       pure (ObservedStorageStep number spec session (Interval (StepInterval number) before beforeReboot rows (from,newStart) Nothing)
         range after storageBefore storageAfter Nothing Nothing Nothing (Just cold))
 
@@ -2224,12 +2233,17 @@ snapshotSegments snapshot =
   ]
   where bank (StorageBankBytes bytes)=bytes; record (CustomRecordWire bytes)=bytes
 
-checkSnapshotRegions :: Int -> StorageSnapshot -> Regions -> Either Refusal ()
-checkSnapshotRegions number snapshot regions = do
-  forM_ (snapshotSegments snapshot) $ \(address,bytes) ->
-    unless (case M.lookupLE address regions of
+-- | The first snapshot segment address whose bytes differ from the watched regions.
+snapshotMismatch :: StorageSnapshot -> Regions -> Maybe Word32
+snapshotMismatch snapshot regions = listToMaybe
+  [ address | (address,bytes) <- snapshotSegments snapshot
+  , not (case M.lookupLE address regions of
       Just (base,region) -> let offset=fromIntegral (address-base) in offset+B.length bytes <= B.length region && B.take (B.length bytes) (B.drop offset region) == bytes
-      _ -> False) (Left (StorageShape ("storage snapshot differs from watched bytes in step " ++ show number ++ " at " ++ show address)))
+      _ -> False) ]
+
+checkSnapshotRegions :: Int -> StorageSnapshot -> Regions -> Either Refusal ()
+checkSnapshotRegions number snapshot regions = forM_ (snapshotMismatch snapshot regions) $ \address ->
+  Left (StorageShape ("storage snapshot differs from watched bytes in step " ++ show number ++ " at " ++ show address))
 
 data StorageCall = StorageCall
   { boundaryEntryIndex :: Int
@@ -2592,7 +2606,7 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
       result <- field "result" value
       case observedStorageCold step of
         Just cold -> do
-          unless (clock == exportedInstructions (coldExport cold)) (Left "cold export advanced beyond the previous action")
+          unless (clock == coldPowerOffSwitched cold) (Left "POWER OFF does not continue the previous action")
           maybe (Left "fresh child has no attached clock") Right (M.lookup (coldNextSession cold) attachedClocks)
         Nothing -> do
           prefix <- field "bounded_post_settle_prefix" result

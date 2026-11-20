@@ -37,6 +37,14 @@ const TOP_CONTROLLER_STATE: u64 = 0x0146_761c;
 /// `[0x0096cc64, 0x0096ce26)`, the extent the stock BACK settings restore copies.
 const LIVE_SETTINGS: u64 = 0x0096_cc64;
 const LIVE_SETTINGS_BYTES: usize = 450;
+const POWER_OFF_POLL: u64 = 1_000_000;
+
+/// Instruction counts at which POWER was switched OFF and core 0 was seen at the stock terminal.
+#[derive(Debug, Serialize)]
+pub struct PowerOff {
+    pub switched: u64,
+    pub terminal: u64,
+}
 
 #[derive(Serialize)]
 pub struct LocalUiDrain {
@@ -386,6 +394,25 @@ impl Ff80 {
             }
             if self.machine.instructions() >= end {
                 return Ok(RunOutcome::Completed);
+            }
+        }
+    }
+
+    /// Switches POWER OFF and runs until core 0 executes the stock terminal self-branch, within
+    /// `budget` instructions.
+    pub fn power_off(&mut self, budget: u64) -> Result<PowerOff, String> {
+        self.machine.switch_power_off()?;
+        let switched = self.machine.instructions();
+        loop {
+            if self.machine.at_power_off_terminal()? {
+                return Ok(PowerOff { switched, terminal: self.machine.instructions() });
+            }
+            let spent = self.machine.instructions() - switched;
+            if spent >= budget {
+                return Err(format!("POWER OFF did not reach the stock terminal within {budget} instructions"));
+            }
+            if self.advance((budget - spent).min(POWER_OFF_POLL))? != RunOutcome::Completed {
+                return Err("POWER OFF run paused before the stock terminal".into());
             }
         }
     }
