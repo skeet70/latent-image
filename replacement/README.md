@@ -377,6 +377,18 @@ Scope: Emulated X-M1 1.50 stock DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122d
 
 <!-- /evidence-record E-SETTINGS-LIFECYCLE-MATRIX-COMPOSED-150 -->
 
+## Property-service public native cohort
+
+[Property service](settings-storage.md#property-service); the full cohort's only failing control is replaced by `c-gate-read`.
+
+<!-- evidence-record E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150 -->
+
+E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150: The full native public-entry cohort of the trapped property image (owned image4 c7f0aa63a66010260c5a48b56b8bc5c6cc60f481e248c28515e4c3d6f8d0200a) matches stock on pass 2 for 79168 cases with 0 failing; the independent model disagrees on 0 of 79168 owned-id stock cases (649 ids); wrappers fail 0 of 1947 and entry adapters 0 of 18300. Of its 49 controls only c-gate-byte does not hold. That control is replaced by c-gate-read, which patches the owned setter's literal gate address: the id-0x49 rerun with every control fails it on 240 of 320 cases (holds: true), pass 2 matches 2246 cases with 0 failing and the oracle verdict is passed=true on the same owned image4 c7f0aa63a66010260c5a48b56b8bc5c6cc60f481e248c28515e4c3d6f8d0200a.
+
+Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, stock image4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, user-ARM native profile (native-only scope, not the camera, not a DAT retirement). The full cohort is projected from its results.json.gz after its recorded digest check; its run never closed (unjudged). The rerun covers only id 0x49 plus every control.
+
+<!-- /evidence-record E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150 -->
+
 ## Authoritative references
 
 | Question | Home |

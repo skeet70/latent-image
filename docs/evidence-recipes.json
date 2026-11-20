@@ -4271,5 +4271,134 @@
         "pointer": ["compare", "message"]
       }
     ]
+  },
+  {
+    "id": "E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150",
+    "claim": "The full native public-entry cohort of the trapped property image (owned image4 {{owned_sha256}}) matches stock on pass 2 for {{full_pass2_passed}} cases with {{full_pass2_failed}} failing; the independent model disagrees on {{full_model_disagreeing}} of {{full_modelled}} owned-id stock cases ({{full_modelled_ids}} ids); wrappers fail {{full_wrappers_failed}} of {{full_wrappers_cases}} and entry adapters {{full_entry_failed}} of {{full_entry_cases}}. Of its {{full_controls}} controls only {{full_failing_controls}} does not hold. That control is replaced by {{gate_control}}, which patches the owned setter's literal gate address: the id-0x49 rerun with every control fails it on {{gate_control_failed}} of {{gate_control_cases}} cases (holds: {{gate_control_holds}}), pass 2 matches {{gate_pass2_passed}} cases with {{gate_pass2_failed}} failing and the oracle verdict is passed={{gate_passed}} on the same owned image4 {{gate_owned_sha256}}.",
+    "scope": "Emulated X-M1 1.50 DAT {{firmware_sha256}}, stock image4 {{stock_image4}}, user-ARM native profile (native-only scope, not the camera, not a DAT retirement). The full cohort is projected from its results.json.gz after its recorded digest check; its run never closed (unjudged). The rerun covers only id 0x49 plus every control.",
+    "notes": "c-gate-byte moved only the SPECIALS gate offset, which the owned setter never reads (lib.rs discards it for Hook::GatedResave); the owned setter loads the gate byte through its literal 0x0096b4e8 at 0x62e318, which c-gate-read patches. All other batches of the full cohort are byte-identical in both runs. No full-cohort run carries c-gate-read.",
+    "artifacts": [
+      "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/digest-check.txt",
+      "private-data/scratch/PropertyOracleMemory/runs/20261120T070301Z-native-trapped/result/results.json.sha256",
+      "private-data/scratch/PropertyOracleMemory/runs/20261120T070301Z-native-trapped/result/native.log",
+      "private-data/scratch/PropertyOracleMemory/runs/20261120T070301Z-native-trapped/result/inputs.sha256",
+      "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+      "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/inputs.sha256",
+      "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/native.log"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["dat_sha256"]
+      },
+      {
+        "name": "stock_image4",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["image_sha256"]
+      },
+      {
+        "name": "owned_sha256",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["owned_sha256"]
+      },
+      {
+        "name": "full_pass2_passed",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["pass2", "passed"]
+      },
+      {
+        "name": "full_pass2_failed",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["pass2", "failed"]
+      },
+      {
+        "name": "full_model_disagreeing",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["model_agreement", "disagreeing_cases"]
+      },
+      {
+        "name": "full_modelled",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["model_agreement", "modelled_cases"]
+      },
+      {
+        "name": "full_modelled_ids",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["model_agreement", "modelled_ids"]
+      },
+      {
+        "name": "full_wrappers_failed",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["wrappers", "failed"]
+      },
+      {
+        "name": "full_wrappers_cases",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["wrappers", "cases"]
+      },
+      {
+        "name": "full_entry_failed",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["entry_adapters", "failed"]
+      },
+      {
+        "name": "full_entry_cases",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["entry_adapters", "cases"]
+      },
+      {
+        "name": "full_controls",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["controls"],
+        "operation": "length"
+      },
+      {
+        "name": "full_failing_controls",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T154619Z-cohort-summary/result/summary.json",
+        "pointer": ["failing_controls", "0"]
+      },
+      {
+        "name": "gate_control",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["controls", "20", "name"]
+      },
+      {
+        "name": "gate_control_failed",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["controls", "20", "failed_cases"]
+      },
+      {
+        "name": "gate_control_cases",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["controls", "20", "cases"]
+      },
+      {
+        "name": "gate_control_holds",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["controls", "20", "holds"]
+      },
+      {
+        "name": "gate_pass2_passed",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["pass2", "passed"]
+      },
+      {
+        "name": "gate_pass2_failed",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["pass2", "failed"]
+      },
+      {
+        "name": "gate_passed",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["passed"]
+      },
+      {
+        "name": "gate_owned_sha256",
+        "path": "private-data/scratch/PropertyOracleMemory/runs/20261120T141741Z-native-gate-read/result/results.json",
+        "pointer": ["owned_sha256"]
+      }
+    ]
   }
 ]
