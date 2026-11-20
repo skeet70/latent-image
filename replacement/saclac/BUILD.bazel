@@ -578,9 +578,62 @@ xm1_rust_elf(
         "-Wl,--undefined=xm1_saclac_qualification_roundtrip",
         "-Wl,--undefined=XM1_SACLAC_QUALIFICATION_FIELDS",
         "-Wl,--undefined=XM1_SACLAC_QUALIFICATION_FIELD_COUNT",
+        "-Wl,--undefined=XM1_SACLAC_QUALIFICATION_OWNER_SIZE",
+        "-Wl,--undefined=XM1_SACLAC_QUALIFICATION_READY_SIZE",
     ],
     testonly = True,
     tags = ["qualification"],
+)
+
+haskell_library(
+    name = "qualification-symbol-binding",
+    srcs = ["Replacement/Saclac/SymbolBinding.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "qualification-symbol-binding-check",
+    srcs = ["SymbolBindingMain.hs"],
+    main_file = "SymbolBindingMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification-symbol-binding",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "qualification-symbol-binding-tests",
+    size = "small",
+    srcs = ["SymbolBindingTests.hs"],
+    main_file = "SymbolBindingTests.hs",
+    args = [
+        "$(rootpath :saclac-image.symbols)",
+        "$(rootpath :saclac-image-debug.symbols)",
+        "$(rootpath :saclac-image-wrong-driver-store.symbols)",
+        "$(rootpath :saclac-image-wrong-driver-store-debug.symbols)",
+    ],
+    data = [
+        ":saclac-image.symbols",
+        ":saclac-image-debug.symbols",
+        ":saclac-image-wrong-driver-store.symbols",
+        ":saclac-image-wrong-driver-store-debug.symbols",
+    ],
+    tags = ["manual", "qualification"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification-symbol-binding",
+        "//host:base",
+        "//host:host-support",
+    ],
 )
 
 haskell_library(

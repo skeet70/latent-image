@@ -14,8 +14,12 @@ SECTIONS
     .rodata : {
         KEEP(*(.rodata.XM1_SACLAC_QUALIFICATION_FIELDS))
         KEEP(*(.rodata.XM1_SACLAC_QUALIFICATION_FIELD_COUNT))
+        KEEP(*(.rodata.XM1_SACLAC_QUALIFICATION_OWNER_SIZE))
+        KEEP(*(.rodata.XM1_SACLAC_QUALIFICATION_READY_SIZE))
         KEEP(*(.data.rel.ro.XM1_SACLAC_QUALIFICATION_FIELDS))
         KEEP(*(.data.rel.ro.XM1_SACLAC_QUALIFICATION_FIELD_COUNT))
+        KEEP(*(.data.rel.ro.XM1_SACLAC_QUALIFICATION_OWNER_SIZE))
+        KEEP(*(.data.rel.ro.XM1_SACLAC_QUALIFICATION_READY_SIZE))
         *(.rodata .rodata.*)
         *(.data.rel.ro .data.rel.ro.*)
         *(.got .got.*)
