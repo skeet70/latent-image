@@ -855,12 +855,14 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
           patches <- slotPatch "c-selector-3" identifier arm arm {slotDefault = SlotStock (Stock61d65c Profile3)}
           Right (Control "c-selector-3" MustFail (PatchedCandidate patches) (acrossVariants identifier defaultOperations) ("0x61d65c selector 2 -> 3 for " ++ propertyHex identifier))
         [] -> Left "c-selector-3: no slot field calls 0x61d65c with selector 2"
-      gateByteControl = case [(identifier, arm, gateOffset) | (identifier, OwnedField arm@(FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gateOffset)))) <- armsWhere gated] of
-        (identifier, arm, gateOffset) : _ -> do
-          patches <- specialPatches "c-gate-byte" identifier (HookedField arm) (HookedField arm {fieldHook = ConfigGatedResave (ConfigOffset (gateOffset + 1))})
-          Right (Control "c-gate-byte" MustFail (PatchedCandidate patches) (acrossVariants identifier [o | o@(Set {}) <- operations])
-            ("gate byte " ++ hex (configBase + fromIntegral gateOffset) ++ " -> " ++ hex (configBase + fromIntegral gateOffset + 1) ++ " for " ++ propertyHex identifier))
-        [] -> Left "c-gate-byte: no gated field"
+      -- The owned setter reads the gate through its configuration service's literal address, not through the
+      -- SPECIALS hook offset, so the control moves that literal.
+      gateReadControl = case [(identifier, configBase + fromIntegral gateOffset) | (identifier, OwnedField (FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gateOffset)))) <- armsWhere gated] of
+        (identifier, gateAddress) : _ -> case [address | address <- [carrierStart, carrierStart + 4 .. carrierEnd - 4], candidateWord address == gateAddress] of
+          [site] -> Right (Control "c-gate-read" MustFail (PatchedCandidate [Patch site gateAddress (gateAddress + 1)]) (acrossVariants identifier [o | o@(Set {}) <- operations])
+            ("gate read " ++ hex gateAddress ++ " -> " ++ hex (gateAddress + 1) ++ " at the owned literal " ++ hex site ++ " for " ++ propertyHex identifier))
+          sites -> Left ("c-gate-read: the owned carrier holds " ++ show (length sites) ++ " literals of gate " ++ hex gateAddress)
+        [] -> Left "c-gate-read: no gated field"
       mirrorControl name chosen note = case [(identifier, arm) | (identifier, OwnedSlotField arm@(SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)] of
         (identifier, arm) : _ -> do
           index <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no slot index")) Right (slotIndexOf identifier)
@@ -918,7 +920,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             "defect build: the configuration default's store saves first"
         , defectControl "c-gate-inverted" "invert_gate" [RunCase variant (OracleCase identifier o) | (identifier, _) <- armsWhere gated, variant <- allVariants, o@(Set {}) <- operations]
             "defect build: the gated resave runs when the gate byte is not 0"
-        , gateByteControl
+        , gateReadControl
         , mirrorControl "c-mirror-getter" [o | o@(Get {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the getter reads the requested slot"
         , mirrorControl "c-mirror-write" [o | o@(Set {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the set omits the record-0 write"
         , readOnlyControl "c-read-only-stores" (\arm -> HookedField arm) [o | o@(Set {}) <- operations] "SPECIALS subkind read-only -> hooked field; the set stores the field"
