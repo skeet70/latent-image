@@ -4210,73 +4210,65 @@
   },
   {
     "id": "E-SETTINGS-LIFECYCLE-MATRIX-COMPOSED-150",
-    "claim": "On the composed settings/record-store/property image, both full-system observations of the {{steps}}-step settings-storage lifecycle matrix complete over two boot sessions (retained {{retained_outcome}}, owned {{owned_outcome}}). property-pair-check accepts every step before step {{retained_refused_step}} in both roles: film-simulation repetition, alternate capture/restore, the changed custom save, the unchanged custom save without a custom refresh, the S1 half-press handback through the enqueue/dequeue/M74 path, and C/M/C custom recall. Qualify retained, qualify owned and compare all refuse at step {{retained_refused_step}} {{retained_refused_name}}: retained `{{retained_message}}`; owned refused step {{owned_refused_step}} `{{owned_message}}`; compare refused step {{compare_refused_step}}.",
-    "scope": "Emulated X-M1 1.50 stock DAT {{firmware_sha256}} against composed DAT {{owned_dat}}, one observation per role by observer {{observer}}, rechecked by the cited lifecycle-check run. The matrix does not qualify: the cold committed reload is refused and whole-matrix criterion coverage is not evaluated.",
-    "notes": "The cold step exports NAND without the POWER OFF path. The child boot reads the saved sequence-1 record, but its boot custom refresh sees the settings image's pre-save payload at backing +0x140 and commits it as sequence 2, identically in both roles; the step models power loss, not a power cycle (emulation/settings-lifecycle-matrix.md). At row 15 S1 is enqueued by action 160 (0xc77b24), not action 161. No camera run.",
+    "claim": "On the composed settings/record-store/property image, both full-system observations of the {{steps}}-step settings-storage lifecycle matrix complete over two boot sessions (retained {{retained_outcome}}, owned {{owned_outcome}}), the cold step after the stock POWER OFF. property-pair-check qualifies each role over all steps and all {{criteria}} storage criteria (retained `{{retained_message}}`; owned `{{owned_message}}`): film-simulation repetition, alternate cancellation, changed and unchanged custom saves, custom recall and the C/live/C cycle, the S1 half-press handback and the committed reload after POWER OFF and cold boot. The cross-role comparison refuses: `{{compare_message}}`.",
+    "scope": "Emulated X-M1 1.50 stock DAT {{firmware_sha256}} against composed DAT {{owned_dat}}, one observation per role by observer {{observer}}, rechecked by the cited lifecycle-check run. Each role qualifies alone; the pair does not compare equal.",
+    "notes": "The comparison difference is the S1 handback frame at step 31: word +0x20 of the 80-byte frame copied from 0x944580 differs (stock 0x4005726c, owned 0x00a22198); every other step and the rest of the frame are equal. Whether that word is role-local residue is not established. Power-loss reboot (NAND export without POWER OFF) is a separate scenario this record does not accept (emulation/settings-lifecycle-matrix.md). At row 15 S1 is enqueued by action 160 (0xc77b24), not action 161. No camera run.",
     "artifacts": [
-      "private-data/scratch/PropertyRetirement/runs/20261119T192520Z-lifecycle-composed/result/matrix.json",
-      "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/inputs.sha256"
+      "private-data/scratch/PropertyRetirement/runs/20261120T044534Z-lifecycle-composed/result/matrix.json",
+      "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/inputs.sha256",
+      "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/qualify-retained.json"
     ],
     "facts": [
       {
         "name": "firmware_sha256",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261119T192520Z-lifecycle-composed/result/receipt-retained.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044534Z-lifecycle-composed/result/receipt-retained.json",
         "pointer": ["inputs", "dat", "sha256"]
       },
       {
         "name": "owned_dat",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261119T192520Z-lifecycle-composed/result/receipt-owned.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044534Z-lifecycle-composed/result/receipt-owned.json",
         "pointer": ["inputs", "dat", "sha256"]
       },
       {
         "name": "observer",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261119T192520Z-lifecycle-composed/result/receipt-retained.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044534Z-lifecycle-composed/result/receipt-retained.json",
         "pointer": ["inputs", "observer", "sha256"]
       },
       {
         "name": "retained_outcome",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261119T192520Z-lifecycle-composed/result/receipt-retained.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044534Z-lifecycle-composed/result/receipt-retained.json",
         "pointer": ["outcome", "status"]
       },
       {
         "name": "owned_outcome",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261119T192520Z-lifecycle-composed/result/receipt-owned.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044534Z-lifecycle-composed/result/receipt-owned.json",
         "pointer": ["outcome", "status"]
       },
       {
         "name": "steps",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/verdict.json",
         "pointer": ["matrix_steps"]
       },
       {
-        "name": "retained_refused_step",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
-        "pointer": ["qualify_retained", "refused_step"]
-      },
-      {
-        "name": "retained_refused_name",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
-        "pointer": ["qualify_retained", "refused_step_name"]
+        "name": "criteria",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/qualify-owned.json",
+        "pointer": ["storage", "criteria"],
+        "operation": "length"
       },
       {
         "name": "retained_message",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/verdict.json",
         "pointer": ["qualify_retained", "message"]
       },
       {
-        "name": "owned_refused_step",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
-        "pointer": ["qualify_owned", "refused_step"]
-      },
-      {
         "name": "owned_message",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/verdict.json",
         "pointer": ["qualify_owned", "message"]
       },
       {
-        "name": "compare_refused_step",
-        "path": "private-data/scratch/PropertyRetirement/runs/20261120T042127Z-lifecycle-check/result/verdict.json",
-        "pointer": ["compare", "refused_step"]
+        "name": "compare_message",
+        "path": "private-data/scratch/PropertyRetirement/runs/20261120T044939Z-lifecycle-check/result/verdict.json",
+        "pointer": ["compare", "message"]
       }
     ]
   }
