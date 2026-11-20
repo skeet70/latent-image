@@ -4383,5 +4383,261 @@
         ]
       }
     ]
+  },
+  {
+    "id": "E-MENU-ENGINE-CUTOVER-150",
+    "claim": "The seek-moved menu-engine matrix is {{seek_status}} at source {{seek_source}} with owned archive {{seek_archive}} and trajectory inventory {{seek_inventory}}: {{seek_passed_pairs}} of {{seek_required_pairs}} pairs pass the menu, render and settings comparisons, and {{seek_completed_roles}} roles complete ({{seek_executed_roles}} executed, {{seek_reused_roles}} reused, {{seek_failed_roles}} failed, {{seek_partial_roles}} partial). Under the engine criterion picker-15 has pair status {{picker15_pair_status}} (pass {{picker15_pass}}) and picker-250 pair status {{picker250_pair_status}} (pass {{picker250_pass}}); the added oracle-open-seek-moved pair passes ({{moved_pass}}). The SeekStepsFirst control archive {{control_archive}} in the owned role is detected on oracle-open-seek-moved (detected {{control_detected}}, pair status {{control_moved_pair_status}}) and not on {{control_open_seek_case}} (detected {{control_open_seek_detected}}). The engine225 matrix with archive {{e225_archive}} remains {{e225_status}} with {{e225_pairs}} pairs and {{e225_completed_roles}} complete roles at source {{e225_source}}.",
+    "scope": "X-M1 1.50 cardless RAM-push engine-only controlled-RTC cutover: the engine225 matrix and the increment-7 seek-moved matrix, which adds the moved open-seek route and links the archive owning kind 1 with seek id 0x17, run in {{seek_seconds}} seconds at one emulator slot. Owned renderer, full native and hardware remain separate.",
+    "notes": "Reused seek-moved roles were observed in an earlier attempt at the same inputs whose source lacks only the design-report commit; execution identity excludes the source commit. The control commands were run with MATRIX_ROOT naming the kept stock roles, and the matrix with SEED_ROOTS naming the earlier attempt; neither variable is in the recorded argv. On oracle-open-seek the guest comparison does not detect SeekStepsFirst; the host oracle does. Page steps, multi-level moves, seek id 0x18, kind 0xe with seek id 0x17, kind 1 with ids 0xe/0x10 and kinds 0xa/0xb landing on type 5/7 nodes stay with stock; no key route reaches them. Equivalent picker-15 plus picker-250 functionality does not qualify IMAGE SIZE/observe1 or per-boundary highlight pixels. The time-services qualification keeps the engine225 pins.",
+    "artifacts": [
+      "reports/owned-menu-engine-design.md",
+      "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+      "private-data/scratch/ControllerStrategy/engine225/bounded-qual/review-packet.json",
+      "private-data/scratch/MenuSourcePort/technical-review.json",
+      "private-data/scratch/MenuEngineSteps/inputs/engine.a",
+      "private-data/scratch/MenuEngineSteps/inputs/control-seek-steps-first.a",
+      "private-data/scratch/MenuEngineSteps/inputs/control-seek-steps-first.patch",
+      "emulation/menu-oracle-open-seek-moved.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-review-packet.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-gate.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-host-build-verdicts.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/stdout.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/measurement.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/pairs.jsonl",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/role-summaries.jsonl",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/input-sha256.txt",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek-moved/pair.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek-moved/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/checks/oracle-open-seek-moved/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/input-sha256.txt",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/qualifier-control.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/checks/oracle-open-seek/pair-check.log"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "firmware"
+        ]
+      },
+      {
+        "name": "seek_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "seek_source",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "seek_archive",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "seek_inventory",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "trajectory_inventory"
+        ]
+      },
+      {
+        "name": "seek_required_pairs",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "required_pairs"
+        ]
+      },
+      {
+        "name": "seek_passed_pairs",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/stdout.json",
+        "pointer": [
+          "passed_pairs"
+        ]
+      },
+      {
+        "name": "seek_completed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      },
+      {
+        "name": "seek_executed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "executed_roles"
+        ]
+      },
+      {
+        "name": "seek_reused_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "reused_roles"
+        ]
+      },
+      {
+        "name": "seek_failed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "failed_roles"
+        ]
+      },
+      {
+        "name": "seek_partial_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "partial_roles"
+        ]
+      },
+      {
+        "name": "seek_seconds",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/measurement.json",
+        "pointer": [
+          "wall_seconds"
+        ]
+      },
+      {
+        "name": "picker15_pair_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair.json",
+        "pointer": [
+          "pair_status"
+        ]
+      },
+      {
+        "name": "picker15_pass",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "picker250_pair_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair.json",
+        "pointer": [
+          "pair_status"
+        ]
+      },
+      {
+        "name": "picker250_pass",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "moved_pass",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek-moved/pair.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "control_archive",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+        "pointer": [
+          "control_archive"
+        ]
+      },
+      {
+        "name": "control_detected",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+        "pointer": [
+          "detected"
+        ]
+      },
+      {
+        "name": "control_moved_pair_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+        "pointer": [
+          "pairs",
+          "0",
+          "comparison",
+          "pair_status"
+        ]
+      },
+      {
+        "name": "control_open_seek_case",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/qualifier-control.json",
+        "pointer": [
+          "pairs",
+          "0",
+          "case"
+        ]
+      },
+      {
+        "name": "control_open_seek_detected",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/qualifier-control.json",
+        "pointer": [
+          "pairs",
+          "0",
+          "detected"
+        ]
+      },
+      {
+        "name": "e225_status",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "e225_source",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "e225_archive",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "e225_pairs",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "pairs"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "e225_completed_roles",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      }
+    ]
   }
 ]

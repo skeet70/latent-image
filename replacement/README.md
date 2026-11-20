@@ -57,6 +57,18 @@ Scope: Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and o
 
 <!-- /evidence-record E-RENDER-R1-MAIN-COHORT-150 -->
 
+## Menu engine cutover
+
+`menu-engine-qualify-bounded` runs the engine-only stock/owned matrix ([design](../reports/owned-menu-engine-design.md#engine-only-cutover-qualification)). `--matrix seek-moved` selects the increment-7 archive and its 68 pairs; the default keeps the engine225 pins.
+
+<!-- evidence-record E-MENU-ENGINE-CUTOVER-150 -->
+
+E-MENU-ENGINE-CUTOVER-150: The seek-moved menu-engine matrix is qualified at source 242b593f32f014970ad70a9af769c5c1e6db4e46 with owned archive 0eb8673c593e5210d6cb405990fd3eb19bebe994671fa602ff65c320a82e6150 and trajectory inventory aee608db82f49d574730210f66f1bdc7a84cd6b00d61ff7347b0260cca6b37ad: 68 of 68 pairs pass the menu, render and settings comparisons, and 136 roles complete (102 executed, 34 reused, 0 failed, 0 partial). Under the engine criterion picker-15 has pair status 0 (pass true) and picker-250 pair status 0 (pass true); the added oracle-open-seek-moved pair passes (true). The SeekStepsFirst control archive cfc72cbb2bde4fca78d164a45558e3166c1a9985a6b8703ae4ba0229e5cb6871 in the owned role is detected on oracle-open-seek-moved (detected true, pair status 1) and not on oracle-open-seek (detected false). The engine225 matrix with archive 6fab2c4279be4a4bf4f584389b8bbbca9bc17a2e60ecbc123ba7bb06e9fb11dd remains qualified with 67 pairs and 134 complete roles at source 8450beee30cdccd4d869604b99932a7fd8d2d2d8.
+
+Scope: X-M1 1.50 cardless RAM-push engine-only controlled-RTC cutover: the engine225 matrix and the increment-7 seek-moved matrix, which adds the moved open-seek route and links the archive owning kind 1 with seek id 0x17, run in 14530 seconds at one emulator slot. Owned renderer, full native and hardware remain separate.
+
+<!-- /evidence-record E-MENU-ENGINE-CUTOVER-150 -->
+
 ## Fixed owned image
 
 `replacement/fixed_image/layout.json` defines the layout constants. `//replacement/fixed_image:contract` exposes them through `Replacement.FixedImage.Layout`; `//replacement/fixed_image:layout` exposes the Rust rlib `xm1_fixed_image_layout`. The reserved RAM range is `[0x00ba0000, 0x00be0000)`. Its 32-byte record header precedes the linked body at `0x00ba0020`; flash starts at `0x00900000` and holds at most two 128 KiB blocks.

@@ -297,7 +297,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "df4353c2e84993108b598595bde0175631de337e636a784524a6d055497c47f7"
+      "expected_sha256": "6aba4849d29de7308d316178b4025b0fba526fd7d9e3c47c0bdcf9777351dcf4"
     },
     {
       "id": "//host/firmware:engine-elf-modal75-menu-engine-render",
@@ -378,7 +378,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "633b0a291b8d7af38e09a1c4a62253b55cee4af7a5a7e19044d35f6401a352e7"
+      "expected_sha256": "50e978d88ee720480c30f6eafe4d729a18355f2bd94ae455c9ef56379c77d8cb"
     },
     {
       "id": "//replacement/abi:pilot-image",
