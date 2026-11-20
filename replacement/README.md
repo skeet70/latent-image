@@ -99,6 +99,18 @@ Scope: Emulated X-M1 1.50 fixed-record boot, one staged startup boundary entry, 
 - Publication: the probe checks its staged branch at handoff and observes its entry only afterward. Each subsystem's own publication manifest still needs its earliest retained callers observed on that subsystem's scenarios.
 - Silicon: DMA-loaded instruction visibility, later MPU changes and card-backed heap demand remain camera final-pass measurements.
 
+## Display scanout fixed image
+
+`//replacement/display_scanout:display-scanout-fixed-image` links the scanout driver into the fixed range through `//replacement/bank:bank-display-scanout`. `//replacement/display_scanout:artifact publish IMAGE4 SYMBOLS PUBLICATIONS_JSON CONTRACT_JSON` writes the publication manifest for `stage-fixed-image`, one branch at each of twelve stock entries, and the contract `//emulation:scanout-pair` reads. Admit each entry with `check-fixed-image replacement/display_scanout/fixed-allowlist.json ELF BODY xm1_scanout_ENTRY 2048 OUTPUT_JSON`. The [scanout report](../reports/display-render-contracts/scanout.md#fixed-bank-image-and-stockowned-pair) holds the pair method, the 216-byte `commit_one` interrupt-stack obligation and the Root integration obligation: this crate joins Root's bank root as an rlib, and the standalone fixed link script and staticlibs are then removed.
+
+<!-- evidence-record E-DISPLAY-SCANOUT-FIXED-PAIR-150 -->
+
+E-DISPLAY-SCANOUT-FIXED-PAIR-150: On the fixed-bank display scanout image (ELF fbcf9d95892353cd639654f5a972e1fa07511c519514b3167d2de5380874d038), the natural no-card stock/owned route pair is equal (qualified true): 25 route checkpoints equal (true) over 2127 compared calls (1996 interrupt, 131 task). Both roles make 1233 commits with 383 pending images and 35 drained callbacks; unattributed writes are equal (true). The deepest owned entry's sp is 176 bytes below its paired stock entry's. Owned commit_one executes 4148802 instructions over 1233 calls against stock's 1603402, and the owned body 4415811 fetches against stock's carrier 810890. The register-order control is refused on register-sequence (true) and the skipped-drain control on drain (true). Fixed admission gives commit_one 1832 owned stack bytes on a 2048-byte budget.
+
+Scope: Emulated X-M1 1.50 on FujiMod: one natural no-card boot-to-menus route, the owned role replaying the stock role's route ticks, candidate DAT 8ccc81ff21a8adbeab92d990f87233dc61cb6edfba82b0748ed5079c9d7024ce and contract bfca5f758023585703f04efd8dd51d348855bb31aa126a4cb978525f189e9ad5. Twelve stock entries are published; the route reaches capture, commit_one, isr_one, scheduler_register and the four shadow setters.
+
+<!-- /evidence-record E-DISPLAY-SCANOUT-FIXED-PAIR-150 -->
+
 ## Lens transport
 
 [`lens_transport/`](lens_transport/) contains the allocation-free lens wire engine, bounded packet codecs, serial/DMA and timer programming, and firmware publications. Its host scenarios supply wire bytes and timer expirations explicitly. `//replacement/lens_transport:host-tests` covers the public request/completion lifecycle; `//replacement/lens_transport:codec` and `//replacement/lens_transport/native:codec-suite` provide the bounded stock-byte/owned-A32 comparison source.
