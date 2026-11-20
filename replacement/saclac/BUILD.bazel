@@ -15,6 +15,12 @@ _ARM_DEPS = {
     "xm1_image5_decoder": "//replacement/image5_load:decoder-arm",
 }
 
+# The wrong wake-publication control links the root rlib compiled with its cfg.
+_ARM_DEPS_WRONG_WAKE_PUBLICATION = dict(
+    _ARM_DEPS,
+    xm1_saclac_root = "//replacement/saclac/root:root-wrong-wake-publication",
+)
+
 _ARM_SEARCH_DEPS = [
 
     "//replacement/calibration_core:libxm1_calibration_core",
@@ -124,9 +130,33 @@ xm1_rust_staticlib(
     dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
 )
 
+# The wrong wake-publication control: the defect is the cfg-compiled root rlib's
+# `publish_history` index advance, so this staticlib links that root variant.
+xm1_rust_staticlib(
+    name = "saclac-rust-wrong-wake-publication",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_wrong_wake_publication"],
+    data = _SOURCES,
+    rlib_deps = _ARM_DEPS_WRONG_WAKE_PUBLICATION,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+)
+
 xm1_rust_elf(
     name = "saclac-image-wrong-driver-store",
     rust_staticlib = ":saclac-rust-wrong-driver-store",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+)
+
+# The same driver entry as the wrong-driver-store control, so the per-cycle comparison can
+# capture the 0x3b4b wake step end and see the two-slot publication.
+xm1_rust_elf(
+    name = "saclac-image-wrong-wake-publication",
+    rust_staticlib = ":saclac-rust-wrong-wake-publication",
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_driver_entry",
     link_script = ":saclac.ld",
@@ -150,6 +180,17 @@ xm1_rust_elf(
 xm1_rust_elf(
     name = "saclac-image-wrong-driver-store-debug",
     rust_staticlib = ":saclac-rust-wrong-driver-store",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac-debug.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+    testonly = True,
+    tags = ["qualification"],
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-wake-publication-debug",
+    rust_staticlib = ":saclac-rust-wrong-wake-publication",
     asm_srcs = ["entry.S"],
     entry = "xm1_saclac_driver_entry",
     link_script = ":saclac-debug.ld",
@@ -245,7 +286,7 @@ genrule(
 # One owned post, owned callback and client call entry per compared Root image variant, bound from
 # each link, so a single sites file observes the candidate and its wrong-driver-store control
 # through every relink. Owned callbacks come from the payload contract's declared identities.
-_CENSUS_IMAGES = ["saclac-image", "saclac-image-wrong-driver-store"]
+_CENSUS_IMAGES = ["saclac-image", "saclac-image-wrong-driver-store", "saclac-image-wrong-wake-publication"]
 
 _CENSUS_IMAGE_FILES = [
     ":" + image + suffix
@@ -303,6 +344,14 @@ genrule(
     srcs = [":saclac-image-wrong-driver-store.elf"],
     outs = ["saclac-image-wrong-driver-store.sections"],
     cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-driver-store.elf) > $@",
+    tools = ["@lab_llvm//:bin/llvm-readelf"],
+)
+
+genrule(
+    name = "saclac-image-wrong-wake-publication-sections",
+    srcs = [":saclac-image-wrong-wake-publication.elf"],
+    outs = ["saclac-image-wrong-wake-publication.sections"],
+    cmd = "$(location @lab_llvm//:bin/llvm-readelf) -S $(location :saclac-image-wrong-wake-publication.elf) > $@",
     tools = ["@lab_llvm//:bin/llvm-readelf"],
 )
 
@@ -773,11 +822,13 @@ haskell_test(
         "$(rootpath :saclac-image.elf)",
         "$(rootpath :saclac-image.symbols)",
         "$(rootpath :saclac-image-wrong-driver-store.symbols)",
+        "$(rootpath :saclac-image-wrong-wake-publication.symbols)",
     ],
     data = [
         ":saclac-image.elf",
         ":saclac-image.symbols",
         ":saclac-image-wrong-driver-store.symbols",
+        ":saclac-image-wrong-wake-publication.symbols",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [

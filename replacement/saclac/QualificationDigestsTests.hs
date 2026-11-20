@@ -10,20 +10,23 @@ import System.Environment (getArgs)
 expected :: [(String, String)]
 expected =
   [ ( "saclac-image.elf"
-    , "cc89d725f9ca28cdb4cf6268b93a2042dc7000fc8a5368156a4d64b5a6da83f5"
+    , "ee7e28d678a52f0bee46337c0491d866b0154945291da7f3c20fa49a0544e6d0"
     )
   , ( "saclac-image.symbols"
-    , "e4b1302de99d2a7027204721d2564615d8d547182b0933078824e13d12a62831"
+    , "70a29c7e903e28529426f62dc46d66713939664d111a1c8de31de46700ab7ddb"
     )
   , ( "saclac-image-wrong-driver-store.symbols"
-    , "8f05c7ba9ef8ed91491ae677d97bee821e8eef9714f9082ee830095ab93fb527"
+    , "c92c87146dc2a84c8f59e3ea9a8d72583dea247ccd93d909eafec820dddf4ff1"
+    )
+  , ( "saclac-image-wrong-wake-publication.symbols"
+    , "5fb944fcf77bacbfb2cc63646f7a32c25d1c6957d3fbe9f4ebf2a8374be8dbe2"
     )
   ]
 
 main :: IO ()
 main = do
   paths <- getArgs
-  H.ensure (length paths == length expected) "expected three artifact paths"
+  H.ensure (length paths == length expected) "expected four artifact paths"
   mapM_ check (zip expected paths)
   where
     check ((label, want), path) = do

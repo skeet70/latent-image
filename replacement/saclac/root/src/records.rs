@@ -132,7 +132,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileRecords for Servi
             0
         } else {
             // 0xf326ec..0xf32704: `uxtb(index + 1)`, and any value above four becomes zero.
-            let index = descriptor[4].wrapping_add(1);
+            let index = advance(descriptor[4]);
             if index > 4 { 0 } else { index }
         };
         descriptor[4] = index;
@@ -234,3 +234,13 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> ProfileHeaders for Servi
         settings::ProfileMode(self.entries.header_byte(record, SharedHeaderByte::At47))
     }
 }
+
+/// 0xf326ec's index advance: one slot forward; the caller turns a value above four into zero.
+#[cfg(not(saclac_wrong_wake_publication))]
+#[inline(always)]
+const fn advance(index: u8) -> u8 { index.wrapping_add(1) }
+
+/// The comparison's wrong wake-publication control: two slots forward, wrapping modulo five.
+#[cfg(saclac_wrong_wake_publication)]
+#[inline(always)]
+const fn advance(index: u8) -> u8 { index.wrapping_add(2) % 5 }

@@ -70,6 +70,42 @@ xm1_rust_rlib(
     ],
 )
 
+# The comparison's wrong wake-publication control: `publish_history` advances the
+# area-statistics descriptor by two slots instead of one (still modulo five). The production
+# graph is unaffected; only the wrong variant compiles this cfg.
+xm1_rust_rlib(
+    name = "root-wrong-wake-publication",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac_root",
+    out = "arm/libxm1_saclac_root_wrong_wake_publication.rlib",
+    rustc_flags = ["--cfg", "saclac_wrong_wake_publication"],
+    data = _SOURCES,
+    rlib_search_deps = _ARM_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+    rlib_deps = {
+        "xm1_calibration_core": "//replacement/calibration_core:libxm1_calibration_core",
+        "xm1_power_lifecycle": "//replacement/power_lifecycle:arm-core",
+        "xm1_vendor_protocol": "//replacement/vendor_protocol:core-arm",
+        "xm1_saclac_search_bindings": "//replacement/saclac/root/search_bindings:bindings",
+        "xm1_shot_sequence": "//replacement/shot_sequence:shot-sequence",
+        "xm1_saclac_focus_search": "//replacement/saclac/focus_search:focus-search",
+        "display_scanout_panel": "//replacement/display_scanout:libdisplay_scanout_panel",
+        "calibration_liveview": "//replacement/calibration_liveview:libcalibration_liveview",
+        "xm1_focus_measurement_round": "//replacement/focus_measurement/round:round",
+        "xm1_kernel": "//replacement/kernel:arm",
+        "xm1_saclac_calc": "//replacement/saclac/calc:calc",
+        "xm1_saclac_config": "//replacement/saclac/config:config",
+        "xm1_saclac_controllers": "//replacement/saclac/controllers:controllers",
+        "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
+        "xm1_saclac_imaging": "//replacement/saclac/imaging:imaging",
+        "xm1_saclac_lens_drive": "//replacement/saclac/lens_drive:lens-drive",
+        "xm1_saclac_peers": "//replacement/saclac/peers:peers",
+        "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
+        "xm1_saclac_profile_records": "//replacement/saclac/profile_records:profile_records",
+        "xm1_saclac_shared": "//replacement/saclac/shared:shared",
+    },
+)
+
 xm1_rust_host_test(
     name = "host-tests",
     src = "src/lib.rs",
