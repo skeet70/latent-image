@@ -1,0 +1,16 @@
+file_service_semaphore_wait = 0x724b68;
+file_service_semaphore_signal = 0x724c00;
+file_service_cache_claim = 0x71e960;
+file_service_current_task = 0x723cb8;
+file_service_local_record = 0x7111c4;
+file_service_local_position = 0x7111e0;
+file_service_local_open = 0x711200;
+file_service_device_for_letter = 0x70ec84;
+file_service_copy_string = 0x70e748;
+file_service_copy_bytes = 0x722054;
+file_service_media_report = 0x726c74;
+file_service_send = 0x72503c;
+file_service_receive_request = 0x71fe2c;
+file_service_sleep = 0x7240c8;
+file_service_wake = 0x724144;
+file_service_ticks = 0x7257a8;

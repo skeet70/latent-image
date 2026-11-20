@@ -1811,6 +1811,12 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
+sh_binary(
+    name = "scanout-pair",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-scanout-pair"],
+    visibility = ["//visibility:public"],
+)
+
 haskell_binary(
     name = "time-prefix",
     srcs = ["TimePrefix.hs"],
@@ -3235,7 +3241,10 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
-    visibility = ["//transport:__pkg__"],
+    visibility = [
+        "//replacement/file_service:__pkg__",
+        "//transport:__pkg__",
+    ],
     deps = [
         ":case-sha256",
         ":key-release-observations",

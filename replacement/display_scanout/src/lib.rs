@@ -51,7 +51,7 @@ pub trait Hardware {
 pub enum Error { Uninitialized, InvalidArgument, Capacity }
 impl Error { pub const fn stock(self) -> i32 { match self { Self::Uninitialized => -10, Self::InvalidArgument => -30, Self::Capacity => -20 } } }
 
-#[cfg(all(target_arch = "arm", not(feature = "library")))]
+#[cfg(all(target_arch = "arm", not(feature = "library"), not(feature = "fixed_bank")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! { loop { core::hint::spin_loop(); } }
 #[cfg(test)]
