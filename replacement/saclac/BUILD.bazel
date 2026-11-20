@@ -717,17 +717,18 @@ haskell_test(
 # refuses it, so these stay out of `bazel test //...`.
 haskell_test(
     name = "qualification-layout-production",
-    size = "small",
+    size = "large",
+    timeout = "long",
     srcs = ["QualificationLayoutProductionTests.hs"],
     main_file = "QualificationLayoutProductionTests.hs",
     args = [
         "$(rootpath @lab_llvm//:bin/llvm-dwarfdump)",
-        "$(rootpath :saclac-image-debug.elf)",
+        "$(rootpath //replacement/saclac/root:root)",
         "$(rootpath :saclac-qualification.elf)",
     ],
     data = [
         "@lab_llvm//:bin/llvm-dwarfdump",
-        ":saclac-image-debug.elf",
+        "//replacement/saclac/root:root",
         ":saclac-qualification.elf",
     ],
     tags = ["manual", "qualification"],
@@ -741,17 +742,18 @@ haskell_test(
 
 haskell_test(
     name = "qualification-layout-wrong",
-    size = "small",
+    size = "large",
+    timeout = "long",
     srcs = ["QualificationLayoutProductionTests.hs"],
     main_file = "QualificationLayoutProductionTests.hs",
     args = [
         "$(rootpath @lab_llvm//:bin/llvm-dwarfdump)",
-        "$(rootpath :saclac-image-wrong-driver-store-debug.elf)",
+        "$(rootpath //replacement/saclac/root:root)",
         "$(rootpath :saclac-qualification.elf)",
     ],
     data = [
         "@lab_llvm//:bin/llvm-dwarfdump",
-        ":saclac-image-wrong-driver-store-debug.elf",
+        "//replacement/saclac/root:root",
         ":saclac-qualification.elf",
     ],
     tags = ["manual", "qualification"],

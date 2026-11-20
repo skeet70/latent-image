@@ -1,8 +1,10 @@
 module Main (main) where
 
 import qualified Crypto.Hash.SHA256 as SHA256
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified FujiAF.Host as H
+import Numeric (showHex)
 import System.Environment (getArgs)
 
 expected :: [(String, String)]
@@ -25,5 +27,12 @@ main = do
   mapM_ check (zip expected paths)
   where
     check ((label, want), path) = do
-      got <- show . SHA256.hashlazy <$> BL.readFile path
+      got <- hexDigest <$> BL.readFile path
       H.ensure (got == want) (label ++ " digest " ++ got ++ " /= " ++ want)
+
+hexDigest :: BL.ByteString -> String
+hexDigest = concatMap byte . B.unpack . SHA256.hashlazy
+  where
+    byte value =
+      let digits = showHex value ""
+      in if length digits == 1 then '0' : digits else digits
