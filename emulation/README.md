@@ -2323,7 +2323,7 @@ Every numbered SDK boot must cover its actual hit interval and bind its model, r
 Qualification requires all eight original full-system behavioral criteria, not just completed key operations or a route count:
 
 - A changed save has a completed custom refresh, an actual append/program success and a sealed full 52-byte record with the captured live payload.
-- An unchanged save has a completed refresh, unchanged previous record and no custom append, program or erase in its checked step.
+- An unchanged save makes no area-3 append, custom program or erase in its checked step, leaves banks 0 and 1, the previous and backing images and the previous custom record byte-equal, and completes any custom refresh it takes as unchanged. Stock reaches the refresh (`0x6a86c4`) only when a settings write covers offset `0x140`. The step's property commit count and bank-apply arguments are compared across roles.
 - Custom recall exposes an earlier confirmed saved payload through both the active bank and backing view while the physical C selection and completed property access agree.
 - A physical C-to-live-to-C dial cycle occurs within one boot, with observed profile selection at each detent.
 - DISP/B cancellation restores the alternate bank after a prior capture and an intervening change, preserving the complete 450-byte images and body-copy relation.

@@ -13,7 +13,7 @@ import Data.Either (isLeft)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word16, Word32, Word64)
+import Data.Word (Word8, Word16, Word32, Word64)
 import Emulation.PropertyPairCheck
 import Emulation.PropertyPairPlan hiding (image4Base)
 import Emulation.PropertyPairRoutes (AttachPhase (..))
@@ -287,14 +287,17 @@ matrixAdmitted = matrixAdmittedFor Storage.FilmSimulation
 data WriteWitness = WriteWitness { writeTrace :: [Value], writeRows :: [Value] }
 
 changedWrites :: Role -> Regions -> Regions -> WriteWitness
-changedWrites role before after = WriteWitness traces rows
+changedWrites role before after = byteWrites role
+  [ (start+fromIntegral index,old,new)
+  | (start,oldBytes) <- M.toAscList before
+  , let newBytes=case M.lookup start after of Just bytes -> bytes; Nothing -> error "missing after region"
+  , (index,(old,new)) <- zip [0::Int ..] (zip (B.unpack oldBytes) (B.unpack newBytes)),old /= new
+  ]
+
+-- | One single-byte CPU write per (address, old, new).
+byteWrites :: Role -> [(Word32,Word8,Word8)] -> WriteWitness
+byteWrites role changes = WriteWitness traces rows
   where
-    changes =
-      [ (start+fromIntegral index,old,new)
-      | (start,oldBytes) <- M.toAscList before
-      , let newBytes=case M.lookup start after of Just bytes -> bytes; Nothing -> error "missing after region"
-      , (index,(old,new)) <- zip [0::Int ..] (zip (B.unpack oldBytes) (B.unpack newBytes)),old /= new
-      ]
     accessor address = if address >= 0x89f834 && address < 0x89f8a8 then CustomByte else StorageByte
     site wanted = case [address+fromIntegral (index*4) | (kind,address,_,index) <- composedBoundaries,kind == wanted] of
       address:_ -> address
@@ -337,6 +340,23 @@ programHit :: Role -> Value
 programHit role = matrixHit role RecordProgram 0x6ab2f4 [0x89fa80,0,0,0x600] 0 (matrixStack role) 0
   [programBytes]
 
+programResultHit :: Role -> Value
+programResultHit role = matrixHit role RecordProgramResult 0x6ab390 [0] 0 (matrixStack role) 0 []
+
+commitHit :: Role -> Value
+commitHit role = matrixHit role PropertyCommit propertyCommit [] 0 (matrixStack role) 0 []
+
+-- | An unchanged save whose settings write stores the current 40 bytes at backing `+0x140`, so stock
+-- reaches the custom refresh, which reports no change.
+coveredUnchangedSave :: Role -> WriteWitness
+coveredUnchangedSave role = WriteWitness
+  ([refreshHit role Storage.CustomRefreshEntry savedState] ++ writeTrace stored
+   ++ [refreshHit role Storage.CustomRefreshReturn savedState,commitHit role])
+  (writeRows stored)
+  where
+    stored=byteWrites role [(0x9c281c+0x140+fromIntegral index,byte,byte)
+      | (index,byte) <- zip [0::Int ..] (B.unpack (B.take 40 (B.drop 0x140 (bankBytes (backingImage savedState)))))]
+
 readHit :: Role -> Value
 readHit role = matrixHit role RecordRead 0x6aad94 [0xb00000,0x8a0080] 0 (matrixStack role) 0 []
 
@@ -362,11 +382,11 @@ stepWitness family role step = case step of
         third=stateWrites role committedState savedState
     in WriteWitness
       ([refreshHit role Storage.CustomRefreshEntry initialState] ++ writeTrace first
-       ++ [appendHit role,programHit role,matrixHit role RecordProgramResult 0x6ab390 [0] 0 (matrixStack role) 0 []]
+       ++ [appendHit role,programHit role,programResultHit role]
        ++ writeTrace second ++ writeTrace third ++ [refreshHit role Storage.CustomRefreshReturn savedState]
        ++ profileHits role Storage.LiveProfile)
       (writeRows first ++ writeRows second ++ writeRows third)
-  SaveUnchanged -> WriteWitness [refreshHit role Storage.CustomRefreshEntry savedState,refreshHit role Storage.CustomRefreshReturn savedState] []
+  SaveUnchanged -> WriteWitness [commitHit role] []
   CaptureAlternate -> copy Storage.Capture liveState capturedState
   RestoreAlternate -> copy Storage.Restore editedState restoredState
   SelectCustom -> withState (profileHits role Storage.StoredCustom)
@@ -618,12 +638,20 @@ matrixObservationWithBoot :: Role -> [Value] -> M.Map FixtureStep TraceMutation 
 matrixObservationWithBoot = matrixObservationForSetting Storage.FilmSimulation
 
 matrixObservationForSetting :: Storage.StorageSetting -> Role -> [Value] -> M.Map FixtureStep TraceMutation -> Observation
-matrixObservationForSetting family role bootTrace changes = Observation
+matrixObservationForSetting family role = matrixObservationFrom (matrixWitnessesFor family role) family role
+
+-- | The film-simulation lifecycle with one step's witness replaced.
+matrixObservationReplacing :: FixtureStep -> WriteWitness -> Role -> M.Map FixtureStep TraceMutation -> Observation
+matrixObservationReplacing step witness role =
+  matrixObservationFrom (M.insert step witness (matrixWitnessesFor Storage.FilmSimulation role)) Storage.FilmSimulation role []
+
+matrixObservationFrom :: M.Map FixtureStep WriteWitness -> Storage.StorageSetting -> Role -> [Value] -> M.Map FixtureStep TraceMutation -> Observation
+matrixObservationFrom witnesses family role bootTrace changes = Observation
   { obsReceipt=receipt,obsSpec=spec,obsReset=firstReset,obsHits=hits,obsSteps=steps,obsSession=sessionBytes
   , obsBootResets=M.singleton (BootSession 1) childReset
   }
   where
-    prepared=prepareSteps (matrixWitnessesFor family role) changes bootTrace
+    prepared=prepareSteps witnesses changes bootTrace
     firstReset=if null bootTrace then matrixInitialReset else initialReset bootTrace
     resetDigest=if null bootTrace then matrixInitialResetDigest else sha256 firstReset
     (oldEnd,oldCounter)=case reverse prepared of
@@ -829,10 +857,19 @@ matrixConsumerCases =
   , stepRefusalCase "changed refresh cannot report success before programming" SaveChanged (swapFixtureSites RecordProgram RecordProgramResult)
   , stepRefusalCase "changed refresh requires its actual append request" SaveChanged (withoutSite Area3Append)
   , stepRefusalCase "changed refresh requires actual return" SaveChanged (withoutSite (StorageSite Storage.CustomRefreshReturn))
-  , stepRefusalCase "unchanged save requires an invocation rather than absence of NV events" SaveUnchanged
-      (withoutSite (StorageSite Storage.CustomRefreshEntry) . withoutSite (StorageSite Storage.CustomRefreshReturn))
-  , stepRefusalCase "unchanged refresh cannot fail" SaveUnchanged
-      (alterFirstSite (StorageSite Storage.CustomRefreshReturn) (fixtureArgument 0 1))
+  ] ++
+  [ unchangedRefusalCase ("unchanged save refuses an area-3 append and record program " ++ roleWire role) role
+      (matrixObservation role (M.singleton SaveUnchanged (++ [appendHit role,programHit role,programResultHit role])))
+  | role <- [RetainedRole,OwnedRole]
+  ] ++
+  [ comparisonCase "unchanged save through the refresh taken when a settings write covers 0x140 qualifies and compares" RolesAgree
+      (matrixObservationReplacing SaveUnchanged (coveredUnchangedSave RetainedRole) RetainedRole M.empty)
+      (matrixObservationReplacing SaveUnchanged (coveredUnchangedSave OwnedRole) OwnedRole M.empty)
+  , unchangedRefusalCase "unchanged refresh cannot fail" OwnedRole
+      (matrixObservationReplacing SaveUnchanged (coveredUnchangedSave OwnedRole) OwnedRole
+        (M.singleton SaveUnchanged (alterFirstSite (StorageSite Storage.CustomRefreshReturn) (fixtureArgument 0 1))))
+  , comparisonCase "unchanged save property commits are compared across roles" StorageEvidenceDiffers retainedMatrix
+      (matrixObservation OwnedRole (M.singleton SaveUnchanged (++ [commitHit OwnedRole])))
   , stepRefusalCase "alternate cancellation requires restore direction" RestoreAlternate
       (alterFirstSite (StorageSite Storage.ExchangeAlternateEntry) (fixtureArgument 0 0))
   , stepRefusalCase "alternate capture compares all 450 bytes" CaptureAlternate
@@ -892,6 +929,12 @@ mapStorageSnapshots change = transformObservation (mapWireTree update)
   where
     update value@(Object fields) | KM.member "c_scanner_row" fields = change value
     update value = value
+
+unchangedRefusalCase :: String -> Role -> Observation -> (String,Bool)
+unchangedRefusalCase label role observation =
+  let result=qualifiedMatrix role observation
+  in (label ++ outcomeDescription result,case result of
+    Left (StorageCheckFailed name (Storage.CustomCommit Storage.Unchanged)) -> Storage.matrixStepNameText name == stepName SaveUnchanged; _ -> False)
 
 semanticRefusalCase :: String -> Observation -> (String,Bool)
 semanticRefusalCase label observation =

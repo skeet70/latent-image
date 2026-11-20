@@ -1840,7 +1840,10 @@ data StorageStepEvidence = StorageStepEvidence
   , storageEvidenceDial :: Maybe ModeDialWitness
   , storageEvidenceEe :: [EeWitness]
   , storageEvidenceHandback :: [S1Witness]
+  , storageEvidenceUnchangedCommit :: Maybe CommitActivity
   } deriving (Eq, Show)
+-- | A step's property commit count and bank-apply entry arguments r0-r2, in order.
+data CommitActivity = CommitActivity Int [[Word32]] deriving (Eq, Show)
 data BootChain = BootChain BootSession Sha256 Sha256 deriving Eq
 data StorageEvidence = StorageEvidence
   { storageEvidenceSteps :: [StorageStepEvidence]
@@ -2427,6 +2430,8 @@ storageEvidenceValue evidence = object
           object ["sample" .= sample,"low" .= low,"high" .= high,"menu" .= sdkMenuValue menu]) (storageEvidenceDial step)
       , "ee" .= map eeWitnessValue (storageEvidenceEe step)
       , "s1" .= map s1WitnessValue (storageEvidenceHandback step)
+      , "unchanged_commit" .= fmap (\(CommitActivity commits applies) ->
+          object ["property_commits" .= commits,"bank_applies" .= applies]) (storageEvidenceUnchangedCommit step)
       ]
     snapshotValue snapshot =
       let ModeClassWord modeClass=snapshotModeClass snapshot
@@ -2749,14 +2754,22 @@ checkStorageStep contract hits paired events applications handbacks allCopies re
         (_,interval):_ -> snd (intervalHits interval)
         [] -> from
   criteria <- fmap concat . forM (Storage.storageStepChecks spec) $ \check -> case check of
-    Storage.CustomCommit change -> do
-      let matching=filter (refreshMatches change events) localRefreshes
-          persisted=snapshotCustomPrevious after
+    Storage.CustomCommit Storage.Changed -> do
+      let persisted=snapshotCustomPrevious after
           finishedRecord call=case refreshImages (boundaryReturn call) of Just (RefreshImages record _ _) -> record == persisted; _ -> False
-      reject check (any finishedRecord matching && case change of
-        Storage.Changed -> sealedCustomRecord persisted && persisted `elem` confirmedRecords (eventsBetween events (from,to))
-        Storage.Unchanged -> snapshotCustomPrevious before == persisted && not (any isPersistentCustom (eventsBetween events (from,to))))
-      pure [case change of Storage.Changed -> ChangedCustomSave; Storage.Unchanged -> UnchangedCustomSave]
+      reject check (any finishedRecord (filter (refreshMatches Storage.Changed events) localRefreshes)
+        && sealedCustomRecord persisted && persisted `elem` confirmedRecords (eventsBetween events (from,to)))
+      pure [ChangedCustomSave]
+    Storage.CustomCommit Storage.Unchanged -> do
+      let persistentWrite event=case event of HistoricalAppend _ -> True; _ -> isPersistentCustom event
+          persistentImages snapshot=(snapshotBank0 snapshot,snapshotBank1 snapshot,snapshotPrevious snapshot
+            ,snapshotBacking snapshot,snapshotCustomPrevious snapshot)
+          unchangedRefresh call=refreshMatches Storage.Unchanged events call && case refreshImages (boundaryReturn call) of
+            Just (RefreshImages record _ _) -> record == snapshotCustomPrevious after
+            Nothing -> False
+      reject check (not (any persistentWrite (eventsBetween events (from,to)))
+        && persistentImages before == persistentImages after && all unchangedRefresh localRefreshes)
+      pure [UnchangedCustomSave]
     Storage.BankCopy family direction -> do
       let matching=[witness | witness <- localCopies,copyFamily witness == family,copyDirection witness == direction]
           canceled restored=case copyBefore restored of
@@ -2797,8 +2810,12 @@ checkStorageStep contract hits paired events applications handbacks allCopies re
       pure [ColdCommittedReload]
   let commits=if Storage.CustomCommit Storage.Changed `elem` Storage.storageStepChecks spec
         then M.insert name (snapshotCustomPrevious after) (proofCommitted proof) else proofCommitted proof
+      unchangedCommit=if Storage.CustomCommit Storage.Unchanged `elem` Storage.storageStepChecks spec
+        then Just (CommitActivity (length [() | index <- [from..to-1],hitSite (hits V.! index) == PlanSite PropertyCommit])
+          [take 3 (hitArguments hit) | index <- [from..to-1],let hit=hits V.! index,storageSite hit == Just Storage.BankApplyEntry])
+        else Nothing
       evidence=StorageStepEvidence name before after (observedStorageEndpoint step) (Storage.storageStepChecks spec)
-        (observedStorageDial step) localEe observedHandbacks
+        (observedStorageDial step) localEe observedHandbacks unchangedCommit
   pure (MatrixProof (M.insert name step (proofSteps proof)) commits (proofCopies proof ++ localCopies)
     (criteria ++ proofCoverage proof) (evidence:proofEvidence proof))
 
