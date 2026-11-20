@@ -1855,7 +1855,7 @@
     },
     "//replacement/rtos_timer:synthetic.bzl%synthetic_source_inputs": {
       "general": {
-        "bzlTransitiveDigest": "JyUrJcMJfpbaI5eTUORQeX2Iis7ox95cQEqaK5xUhoo=",
+        "bzlTransitiveDigest": "HjRJzvcBXgAUz3jXFYnkRXPeF8AQGqrknSujsJOg1Ok=",
         "usagesDigest": "zrtiqr84oE8gQiOIVM79HfpfH5LurbKVi9Xi/MZcq9k=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -1867,7 +1867,13 @@
             "attributes": {}
           }
         },
-        "recordedRepoMappingEntries": []
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "rules_shell",
+            "rules_shell~"
+          ]
+        ]
       }
     },
     "@@apple_support~//crosstool:setup.bzl%apple_cc_configure_extension": {

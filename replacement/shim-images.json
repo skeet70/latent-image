@@ -297,7 +297,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "c255cdffda9cd095b81d0a5cce1213d9a7e5b615f99270278a7877b4ed774b33"
+      "expected_sha256": "2cf5a06cf0fc08dc56c2ce8df1ee7f929a8d516c4a4b01d0ee2760f982f5a49d"
     },
     {
       "id": "//host/firmware:engine-elf-modal75-menu-engine-render",
@@ -378,7 +378,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "92d7227d7bd81b078322d26043f30395efd3b2257012c20a38136c77670b19a6"
+      "expected_sha256": "3ef63effe0d2e18cd52c3a142353ad8aa40ac74755df27b14b9c22ff70a6d072"
     },
     {
       "id": "//replacement/abi:pilot-image",
@@ -649,7 +649,7 @@
         "scanout_leave_critical",
         "scanout_yield"
       ],
-      "expected_sha256": "aeecf6fbb36131ca70e758c461ca914ab1ab2e5e12ad15b31117900a35605d17"
+      "expected_sha256": "a11d3c327608f5823d12dcb0f116ace68044cd31b513f79394f22539d0c609e9"
     },
     {
       "id": "//replacement/display_scanout:display-scanout-panel",
@@ -673,7 +673,7 @@
         "xm1_power_restore_irq",
         "xm1_power_save_irq"
       ],
-      "expected_sha256": "0ef6a8022546e739cdb4da87e9ad36aafec20eff3fa5c2ef8ec82f946ad40ed0"
+      "expected_sha256": "f8f0ab497cc259eeeaa33a028e8f316a4c1921e2b6476d421345c9c38f59cbec"
     },
     {
       "id": "//replacement/first_stage:first-stage-fixed-image",
@@ -698,7 +698,7 @@
         "xm1_vector_table_end",
         "xm1_vector_table_start"
       ],
-      "expected_sha256": "01005940980c0f166b0d677e56dce1dae795c49b75e86cf0c57379aab30778ca"
+      "expected_sha256": "55cbdc022b373e1cf1afc9541c6140962be8b5e16891520f2c858af160ad13e0"
     },
     {
       "id": "//replacement/first_stage:first-stage-image",
@@ -740,7 +740,7 @@
       "allowed_imports": [
         "xm1_fixed_test_resume"
       ],
-      "expected_sha256": "858541a2af98a7b7e0f9b6164398cbce7a660978cb647f20c46c3d2d5e22adbc"
+      "expected_sha256": "9e002d3dce00914bd0a654ba7eea179fbd2c8a01f15d5cf4e8786d1a66d7ac16"
     },
     {
       "id": "//replacement/general_heap:general-heap-fixed-image",
@@ -757,7 +757,7 @@
         "__heap_retained_lock",
         "__heap_retained_unlock"
       ],
-      "expected_sha256": "f53c2442289be02a1fbe863e136f0045fbedb6f5ef8dfecb1c4c021da3c94089"
+      "expected_sha256": "e2b3d751b310ea675b6e48864f93701211895dd2550ce39e7f7492a4e4a20a4b"
     },
     {
       "id": "//replacement/general_heap:general-heap-image",
@@ -873,7 +873,7 @@
         "xm1_decoder_route",
         "xm1_decoder_take"
       ],
-      "expected_sha256": "d67530a7748fee834912326f191335e68efa311711a7e784ba7c81ae8179cd8a"
+      "expected_sha256": "e419f9702e0f8188965284ea4a0c365516dd5cb6575da2a38cde11ff882c2847"
     },
     {
       "id": "//replacement/image5_load:image5-load-image",
@@ -1613,11 +1613,11 @@
         "xm1_task_mask_restore",
         "xm1_task_mask_save"
       ],
-      "expected_sha256": "a8f9761dd06aad27aa9ca07eeae0ebf83b45ac74899a1154a25b3c4bcd7b4613",
+      "expected_sha256": "1dbbf8d5d6c1b93c7555f07b44a8a2711d2439f3a4af5eef4e16770241692ba6",
       "qualified_artifacts": [
         {
           "path": "replacement/rtos_platform/platform-a.bin",
-          "sha256": "794469dd05ccc1f1a03d02dbca386a6af7be1580fdbc57bc39615182ec698d2b"
+          "sha256": "a31e8f095722b190eb86e5a46580d3c9a70c1ab3339b49e679e20d492aa78469"
         }
       ]
     },
@@ -1721,11 +1721,11 @@
         "xm1_task_mask_restore",
         "xm1_task_mask_save"
       ],
-      "expected_sha256": "f0ee66abe4473b6e5b9bb70f847b4fbfacc1477d72684b9b25c5621bd800bcb8",
+      "expected_sha256": "39ee435d8141c64ed45a1832c410515359e3ade3df6c727f5121ee7c10fa76c7",
       "qualified_artifacts": [
         {
           "path": "replacement/rtos_platform/platform-b.bin",
-          "sha256": "d5cda3314bbe2217c64e6f870e681a453d731a82fd543ad592ba9cd30c688f39"
+          "sha256": "7890d0927bb922354178bd48b271fae642413ba9422817c09f030b2d717236f7"
         }
       ]
     },
@@ -1733,12 +1733,17 @@
       "id": "//replacement/saclac:saclac-image",
       "elf": "replacement/saclac/saclac-image.elf",
       "units": [
+        "display_scanout",
+        "executable_loading",
+        "file_service",
         "rtos_objects",
         "saclac",
         "saclac_interface"
       ],
       "classification": "production",
       "contracts": [
+        "replacement/display_scanout/Replacement/DisplayScanout/Artifact.hs",
+        "replacement/file_service/retired.ld",
         "replacement/saclac/Replacement/Saclac/Artifact.hs",
         "replacement/saclac/saclac.ld"
       ],
@@ -1747,6 +1752,27 @@
         "__saclac_runtime_create_task",
         "__saclac_runtime_malloc",
         "__saclac_runtime_stack_words",
+        "file_service_cache_claim",
+        "file_service_copy_bytes",
+        "file_service_copy_string",
+        "file_service_current_task",
+        "file_service_device_for_letter",
+        "file_service_local_open",
+        "file_service_local_position",
+        "file_service_local_record",
+        "file_service_media_report",
+        "file_service_receive_request",
+        "file_service_semaphore_signal",
+        "file_service_semaphore_wait",
+        "file_service_send",
+        "file_service_sleep",
+        "file_service_ticks",
+        "file_service_wake",
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield",
         "xm1_decoder_clock_give",
         "xm1_decoder_clock_take",
         "xm1_decoder_complete_entry",
@@ -1761,6 +1787,29 @@
         "xm1_kernel_console9",
         "xm1_kernel_critical_enter",
         "xm1_kernel_critical_exit",
+        "xm1_loading_action1",
+        "xm1_loading_action2",
+        "xm1_loading_auxiliary",
+        "xm1_loading_cache",
+        "xm1_loading_create_channel",
+        "xm1_loading_create_task",
+        "xm1_loading_current_task",
+        "xm1_loading_delay",
+        "xm1_loading_extents",
+        "xm1_loading_give",
+        "xm1_loading_initialize_storage",
+        "xm1_loading_mode",
+        "xm1_loading_plain_progress",
+        "xm1_loading_receive_message",
+        "xm1_loading_region",
+        "xm1_loading_register_completion",
+        "xm1_loading_section3",
+        "xm1_loading_segment",
+        "xm1_loading_selected",
+        "xm1_loading_send_message",
+        "xm1_loading_signal_reserved",
+        "xm1_loading_take",
+        "xm1_loading_wait_reserved",
         "xm1_lower_read_clean_invalidate",
         "xm1_lower_read_clock_mask",
         "xm1_lower_read_clock_restore",
@@ -1787,7 +1836,7 @@
         "xm1_rtos_timer_remove_a",
         "xm1_rtos_timer_remove_b"
       ],
-      "expected_sha256": "55bb03656124a5e4822f4647e6864f884433338ca612f88bc0cc155a33260e75"
+      "expected_sha256": "00f0f20eb2f52247e14241904942de84de8447bdb234b0918978f26b575e38e3"
     },
     {
       "id": "//replacement/save:save-owned",
@@ -2197,7 +2246,7 @@
         "xm1_kernel_critical_enter",
         "xm1_kernel_critical_exit"
       ],
-      "expected_sha256": "5ab93a829d00bdddb516fd777eaeb8ecaf9751b53e2a01b99cbc2c99ec773211"
+      "expected_sha256": "99eb2727c16381480fbbdb296cc6fc35ce97fb9bf7f27f5434a6bc639180ebaf"
     },
     {
       "id": "//replacement/validator:area3-arm",

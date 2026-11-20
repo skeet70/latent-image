@@ -13,7 +13,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/fixed_image:fixed-bank-image",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "export",
           "symbols": [
             "xm1_file_service_entry_close",
@@ -46,7 +46,7 @@
             "xm1_file_service_entry_write_async",
             "xm1_file_service_entry_write_wait"
           ],
-          "contract": "replacement/fixed_image/fixed-bank.ld",
+          "contract": "replacement/file_service/retired.ld",
           "requirement": "The linker places each four-byte A32 branch at its stock entry address and fills the rest of every retired extent with 0xe7f000f0.",
           "retained_targets": []
         }
@@ -67,7 +67,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/fixed_image:fixed-bank-image",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "export",
           "symbols": [
             "xm1_file_service_close",
@@ -100,7 +100,7 @@
             "xm1_file_service_write_async",
             "xm1_file_service_write_wait"
           ],
-          "contract": "replacement/fixed_image/fixed-bank.ld",
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
           "requirement": "The linker places every body in OWNED_FIXED with no writable statics.",
           "retained_targets": []
         }
@@ -113,7 +113,7 @@
     },
     {
       "id": "file_service-03",
-      "shim": "Retained kernel, media and copy services in `file_service/imports.ld`",
+      "shim": "Retained kernel, media and copy services in `Artifact.unitImports`",
       "kind": "trampoline into retained stock",
       "other_side": "semaphore wait 0x724b68 and signal 0x724c00, cache claim 0x71e960, current task 0x723cb8, local record 0x7111c4, position 0x7111e0 and open 0x711200, device lookup 0x70ec84, strcpy 0x70e748, memcpy 0x722054, media report 0x726c74, send 0x72503c, request receive 0x71fe2c, sleep 0x7240c8, wake 0x724144 and tick read 0x7257a8",
       "owned": "no",
@@ -121,7 +121,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/fixed_image:fixed-bank-image",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "retained-import",
           "symbols": [
             "file_service_cache_claim",
@@ -141,7 +141,7 @@
             "file_service_ticks",
             "file_service_wake"
           ],
-          "contract": "replacement/file_service/imports.ld",
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
           "requirement": "The linker binds each retained service to its stock entry address.",
           "retained_targets": []
         }
@@ -162,7 +162,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/fixed_image:fixed-bank-image",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "layout",
           "symbols": [
             "xm1_file_service_map_bind",
@@ -177,7 +177,7 @@
             "xm1_file_service_tag_allocate",
             "xm1_file_service_tag_release"
           ],
-          "contract": "replacement/fixed_image/fixed-bank.ld",
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
           "requirement": "The bodies read and write the stock handle, tag, result-slot, media-context and mediamsg words in place."
         }
       ],
@@ -197,44 +197,16 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/fixed_image:fixed-bank-image",
+          "image": "//replacement/saclac:saclac-image",
           "kind": "retained-entry",
           "symbols": [
             "xm1_file_service_media_task",
             "xm1_file_service_open_intercept",
             "xm1_file_service_route"
           ],
-          "contract": "replacement/fixed_image/fixed-bank.ld",
+          "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
           "requirement": "The media task, mediamsg router and open interceptor call guest code words that are not definite linked references.",
           "retained_targets": []
-        }
-      ],
-      "predicates": {
-        "caller_closure": "unestablished",
-        "same_image_comparison": "unestablished",
-        "direct_owned_api": "unestablished"
-      }
-    },
-    {
-      "id": "file_service-untyped-publication",
-      "shim": "Global untyped assembly entries and linker publication labels",
-      "kind": "veneer or carrier at a stock address",
-      "other_side": "retained entry, compiler ABI and image-layout consumers",
-      "owned": "partly",
-      "removal": "no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image",
-      "state": "required",
-      "evidence": [
-        {
-          "image": "//replacement/fixed_image:fixed-bank-image",
-          "kind": "publication",
-          "symbols": [
-            "__fixed_body_end",
-            "__fixed_body_start",
-            "__fixed_bss_end",
-            "__fixed_bss_start"
-          ],
-          "contract": "replacement/fixed_image/fixed-bank.ld",
-          "requirement": "The exact global STT_NOTYPE entry and layout labels remain published by this linked image. Untyped symbols are not exempt from family accounting."
         }
       ],
       "predicates": {
