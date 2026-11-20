@@ -46,7 +46,35 @@ def render_sites($role; $name):
     ["runtime:rb_render_picker_entry","render-picker-adapter",{"sp":true}],
     ["runtime:rb_render_pane_entry","render-pane-adapter",{"sp":true}]
   ] else [] end) else [] end;
-def render_reads: if render_enabled then render_capture_reads else [] end;
+
+# Frame publication observation (FramePresentation.hs), enabled by `--argjson frame_objects [O(0,0), O(0,1)]`:
+# the stage-0 buffer objects whose +0x1c words are the two display images. `frame_record` is the owned role's
+# rb_render_frame_record address (render-frame-record.json of the installed package); that package's
+# rb_render_frame_scanout_bridge registers owned frames' display completion in place of 0x6d80f0.
+def frame_objects: $ARGS.named.frame_objects // null;
+def frame_record: if $ARGS.named.role == "owned" then $ARGS.named.frame_record // null else null end;
+def frame_enabled:
+  if frame_objects == null then false
+  elif frame_objects | type == "array" and length == 2 and all(.[]; type == "number" and . == floor and . > 0) then true
+  else error("frame_objects must be the two stage-0 object addresses") end;
+def frame_step_reads: [
+  ["008e21f8", 1], ["008e2158", 8],
+  [(frame_objects[0] + 28 | hex8), 4], [(frame_objects[1] + 28 | hex8), 4],
+  ["0096bc10", 4]
+] + (if frame_record != null then [[(frame_record | hex8), 120]] else [] end);
+def frame_sites: if frame_enabled then [
+  ["006d7920", "frame-step-entry", {"lr": true, "reads": frame_step_reads}],
+  ["006d6f08", "frame-dispatch-return", {"reads": frame_step_reads}],
+  ["006d7da4", "frame-wait-return"],
+  ["006c9cf4", "frame-item-configuration", {"lr": true}],
+  ["006d80f0", "frame-display-registration"],
+  ["006d7f30", "frame-display-post"]
+] + (if frame_record != null then [["runtime:rb_render_frame_scanout_bridge", "frame-display-registration"]] else [] end) else [] end;
+def frame_capture_reads: if frame_enabled then
+  [["frame-display-record", "0095a69c", 20]]
+  + (if frame_record != null then [["frame-record", (frame_record | hex8), 120]] else [] end)
+  else [] end;
+def render_reads: (if render_enabled then render_capture_reads else [] end) + frame_capture_reads;
 
 # The owned menu engine pair's reads and trace sites (reports/owned-menu-engine-design.md, Verification).
 # Labels are those of replacement/modal_runtime/Replacement/ModalRuntime/MenuEnginePair.hs.
@@ -71,7 +99,7 @@ def engine_sites($role; $name): [
   ["00bfad04", "menu-seek", {"lr": true}],
   ["0063270c", "menu-event-post"]
 ] + (if $role == "owned" then [["runtime:rb_menu_engine_guard_failure", "menu-engine-guard-failure"]]
-     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name);
+     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name) + frame_sites;
 def presented_handoff:
   if length == 0 then . else .[-1] |= (if length == 4 then . + [{completion:"presented-frame"}] else .[4].completion = "presented-frame" end) end;
 def render_trajectory:

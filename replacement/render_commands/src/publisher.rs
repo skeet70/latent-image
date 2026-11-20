@@ -6,6 +6,7 @@ impl ContextId {
     pub const fn new(value: u64) -> Option<Self> {
         match core::num::NonZeroU64::new(value) { Some(value) => Some(Self(value)), None => None }
     }
+    pub const fn value(self) -> u64 { self.0.get() }
 }
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct FrameId { context: ContextId, sequence: u64 }
@@ -24,6 +25,12 @@ pub enum DrainState { Pending, Drained }
 pub enum CloseState { Pending, Released }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FramePresented { pub surface: SurfaceId, pub frame: FrameId }
+/// One of a surface's two buffers, in the order `Publisher::new` received them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BufferIndex { First, Second }
+impl BufferIndex {
+    const fn slot(self) -> usize { match self { Self::First => 0, Self::Second => 1 } }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubmissionError<E> { Rejected(E), Uncertain(E) }
@@ -60,6 +67,17 @@ impl Publisher {
     pub fn begin(&mut self) -> Result<FrameId, PublisherError> {
         if self.closed { return Err(PublisherError::Closed); }
         let index = self.buffers.iter().position(|buffer| buffer.state == BufferState::Free).ok_or(PublisherError::Busy)?;
+        self.reserve(index)
+    }
+
+    /// `begin` restricted to `index`, which must be `Free`.
+    pub fn begin_into(&mut self, index: BufferIndex) -> Result<FrameId, PublisherError> {
+        if self.closed { return Err(PublisherError::Closed); }
+        if self.buffers[index.slot()].state != BufferState::Free { return Err(PublisherError::Busy); }
+        self.reserve(index.slot())
+    }
+
+    fn reserve(&mut self, index: usize) -> Result<FrameId, PublisherError> {
         let next = self.next_sequence.checked_add(1).ok_or(PublisherError::SequenceExhausted)?;
         let frame = FrameId { context: self.context, sequence: self.next_sequence };
         self.next_sequence = next;

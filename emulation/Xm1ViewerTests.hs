@@ -11,7 +11,7 @@ import Emulation.EmulatorSlot (pinExecutable)
 import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import Emulation.Sha256 (parseSha256Hex, sha256, sha256Hex)
 import EmulatorUsb (InstalledObservationIdentity (..))
-import Data.Aeson (Value (..), object, toJSON, (.=))
+import Data.Aeson (Value (..), decodeStrict, encode, object, toJSON, (.=))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
@@ -60,9 +60,101 @@ refuses label arguments = do
   result <- try (Viewer.parseCommand arguments) :: IO (Either IOException Viewer.Command)
   check label (either (const True) (const False) result)
 
+renderFramePresentation :: IO ()
+renderFramePresentation = do
+  scratch <- maybe getTemporaryDirectory pure =<< lookupEnv "TEST_TMPDIR"
+  let site :: String -> String -> Value
+      site pc word = object ["pc" .= pc, "word" .= word]
+      sites = object ["after_wait" .= site "0x04010a40" "0xe1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]
+      record presentation = object $
+        [ "symbol" .= String "rb_render_frame_record", "address" .= String "0x04012000", "bytes" .= (120 :: Int)
+        , "layout" .= (1 :: Int), "scanout_latch" .= object ["bridge" .= String "0x04013000", "delivery" .= String "0x04013100"] ]
+        ++ ["presentation" .= value | Just value <- [presentation]]
+      publication :: String -> String -> String -> Value
+      publication address old new = object
+        ["address" .= address, "old" .= old, "new" .= new, "phase" .= String "activation", "core" .= String "unknown"]
+      engine = publication "0x00bf95c8" "0xe92d4ff0" "0xea0e5a8c"
+      frame = publication "0x006d7920" "0xe92d49f0" "0xea4cd0c6"
+      manifest rows = object ["schema" .= (1 :: Int), "publications" .= (rows :: [Value])]
+      package name recordValue manifestValue = do
+        let directory = scratch </> ("render-frame-package-" ++ name)
+        createDirectoryIfMissing True directory
+        forM_ recordValue $ \value -> BL.writeFile (directory </> "render-frame-record.json") (encode value)
+        BL.writeFile (directory </> "ram-push-manifest.json") (encode manifestValue)
+        pure directory
+      derive ownership directory =
+        try (Viewer.renderFramePresentation ownership directory) :: IO (Either IOException (Maybe E2E.PresentationSites))
+      expected = E2E.PresentationSites 0xea4cd0c6
+        (E2E.PresentationInstruction 0x04010a40 0xe1a04000) (E2E.PresentationInstruction 0x04010b04 0xe1a00004)
+      bridgeSettings configured = E2E.E2ESettings
+        { E2E.relinkMode = E2E.UnreviewedRelink E2E.EnforceAllowlist
+        , E2E.bootMode = E2E.FreshBoot
+        , E2E.checkpointRoot = "checkpoints"
+        , E2E.segmentSelection = Nothing
+        , E2E.pushMode = E2E.RamPush
+        , E2E.e2ePayload = E2E.bankD3Payload
+        , E2E.attachHold = E2E.NoAttachHold
+        , E2E.flashUiConversion = E2E.StrictUiConversion
+        , E2E.emulationCardMode = E2E.Cardless
+        , E2E.fixedSceneFrame = Nothing
+        , E2E.cardAttachKey = Nothing
+        , E2E.emulationRuntime = E2E.FujiModRuntime (E2E.FujiModBridge "bridge" "run.json" "boot.bin")
+        , E2E.firmwareSource = "firmware.dat"
+        , E2E.experimentReads = []
+        , E2E.modalDiagnostic = NoModalDiagnostic
+        , E2E.modalLifetimeGuard = ContinuousModalLifetimeGuard
+        , E2E.modalOwnedPackage = Nothing
+        , E2E.prelinkedModalBuild = Nothing
+        , E2E.afOwnershipPlanFile = Nothing
+        , E2E.afOwnershipControl = False
+        , E2E.presentationSites = configured
+        , E2E.ramCapture = E2E.NoRamCapture
+        }
+      bridge configured = E2E.sessionBridge configured "python" "installed.dat" "adjustment.bin" E2E.FreshBoot "receipt"
+      refused = either (const True) (const False)
+  good <- package "good" (Just (record (Just sites))) (manifest [engine, frame])
+  derived <- derive Viewer.OwnedRenderFrameStep (Just good)
+  check "the owned frame step derives its presentation sites from the package" (either (const False) (== Just expected) derived)
+  retained <- derive Viewer.RetainedRender (Just good)
+  check "other render roles carry no presentation sites" (either (const False) (== Nothing) retained)
+  (_, arguments) <- bridge (bridgeSettings (Just expected))
+  let sent = case dropWhile (/= "--presentation-sites") arguments of
+        _ : value : _ -> decodeStrict (BC.pack value)
+        _ -> Nothing
+  check "the FujiMod bridge receives the derived presentation sites"
+    (sent == Just (object ["published_enter" .= String "0xea4cd0c6", "after_wait" .= site "0x04010a40" "0xe1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]))
+  (_, unconfigured) <- bridge (bridgeSettings Nothing)
+  check "an unconfigured bridge receives no presentation sites" ("--presentation-sites" `notElem` unconfigured)
+  retainedBridge <- try (bridge ((bridgeSettings (Just expected)) { E2E.emulationRuntime = E2E.RetainedRuntime }))
+    :: IO (Either IOException (FilePath, [String]))
+  check "retained bridges refuse owned presentation sites" (refused retainedBridge)
+  (_, capturing) <- bridge ((bridgeSettings Nothing) { E2E.ramCapture = E2E.CaptureRam })
+  check "a RAM-capturing session passes --capture-ram to the FujiMod bridge" ("--capture-ram" `elem` capturing)
+  check "an ordinary session does not capture RAM" ("--capture-ram" `notElem` unconfigured)
+  retainedCapture <- try (bridge ((bridgeSettings Nothing) { E2E.ramCapture = E2E.CaptureRam, E2E.emulationRuntime = E2E.RetainedRuntime }))
+    :: IO (Either IOException (FilePath, [String]))
+  check "retained bridges refuse RAM capture" (refused retainedCapture)
+  absent <- derive Viewer.OwnedRenderFrameStep Nothing
+  check "the owned frame step refuses a missing prelinked package" (refused absent)
+  let malformed =
+        [ ("missing-record", Nothing, manifest [frame])
+        , ("missing-presentation", Just (record (Nothing :: Maybe Value)), manifest [frame])
+        , ("missing-finish", Just (record (Just (object ["after_wait" .= site "0x04010a40" "0xe1a04000"]))), manifest [frame])
+        , ("unprefixed-pc", Just (record (Just (object ["after_wait" .= site "04010a40" "0xe1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]))), manifest [frame])
+        , ("wide-word", Just (record (Just (object ["after_wait" .= site "0x04010a40" "0x1e1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]))), manifest [frame])
+        , ("numeric-pc", Just (record (Just (object ["after_wait" .= object ["pc" .= (0x04010a40 :: Int), "word" .= String "0xe1a04000"], "finish" .= site "0x04010b04" "0xe1a00004"]))), manifest [frame])
+        , ("unpublished-entry", Just (record (Just sites)), manifest [engine])
+        , ("twice-published-entry", Just (record (Just sites)), manifest [frame, frame])
+        , ("foreign-entry-word", Just (record (Just sites)), manifest [publication "0x006d7920" "0xe92d41f0" "0xea4cd0c6"]) ]
+  forM_ malformed $ \(name, recordValue, manifestValue) -> do
+    directory <- package name recordValue manifestValue
+    outcome <- derive Viewer.OwnedRenderFrameStep (Just directory)
+    check ("the owned frame step refuses a " ++ name ++ " package") (refused outcome)
+
 main :: IO ()
 main = do
   observedInstallProofs
+  renderFramePresentation
   let keeper = ["--property-allocation-keeper", "--cardless", "--fujimod", "--fresh-boot"
         , "--allocation-image4", "image4.bin", "--allocation-contract", "composition.json"]
   held <- acceptedOptions keeper
@@ -160,6 +252,8 @@ main = do
           , E2E.prelinkedModalBuild = Nothing
           , E2E.afOwnershipPlanFile = Just "af-plan.json"
           , E2E.afOwnershipControl = disabled
+          , E2E.presentationSites = Nothing
+          , E2E.ramCapture = E2E.NoRamCapture
           }
     (executable, arguments) <- E2E.sessionBridge settings "python" "installed.dat" "adjustment.bin" E2E.FreshBoot "receipt"
     check "both AF arms select the actual bridge" (executable == "bridge")
@@ -411,17 +505,26 @@ main = do
   forM_ [stock ++ [scoped, engine] ++ owned, engine : owned ++ scoped : stock] $ \arguments -> do
     candidate <- acceptedOptions arguments
     check "the owned engine selects the scoped payload with the engine" (Viewer.menuEngineOwnedOption candidate && Viewer.ramPayloadOption candidate == Viewer.BankModal75Choice)
-    check "default engine selection excludes render" (not (Viewer.renderOwnedOption candidate))
+    check "default engine selection excludes render" (Viewer.renderOwnershipOption candidate == Viewer.RetainedRender)
     check "default engine role retains 225 publications" (payloadPublicationCount (Viewer.selectedPayload candidate) == 225)
   render <- acceptedOptions (stock ++ [scoped, engine, "--render-owned"] ++ owned)
-  check "render flag selects the composed render role" (Viewer.renderOwnedOption render && Viewer.menuEngineOwnedOption render)
+  check "render flag selects the composed render role" (Viewer.renderOwnershipOption render == Viewer.OwnedRenderSeams && Viewer.menuEngineOwnedOption render)
   check "render role selects 228 publications" (payloadPublicationCount (Viewer.selectedPayload render) == 228)
   refuses "render requires engine" (stock ++ [scoped,"--render-owned"] ++ owned)
   refuses "render requires archive" (stock ++ [scoped,engine,"--render-owned"])
   refuses "render flag refuses duplicates" (stock ++ [scoped,engine,"--render-owned","--render-owned"] ++ owned)
+  frame <- acceptedOptions (stock ++ [scoped, engine, "--render-frame-owned"] ++ owned ++ ["--modal75-prelinked", "prelinked"])
+  refuses "frame requires the prelinked package" (stock ++ [scoped,engine,"--render-frame-owned"] ++ owned)
+  check "frame flag selects the render-frame role" (Viewer.renderOwnershipOption frame == Viewer.OwnedRenderFrameStep && Viewer.menuEngineOwnedOption frame)
+  check "render-frame role selects 229 publications" (payloadPublicationCount (Viewer.selectedPayload frame) == 229)
+  refuses "frame requires engine" (stock ++ [scoped,"--render-frame-owned"] ++ owned)
+  refuses "frame requires archive" (stock ++ [scoped,engine,"--render-frame-owned"])
+  refuses "frame excludes render" (stock ++ [scoped,engine,"--render-owned","--render-frame-owned"] ++ owned)
+  refuses "frame excludes render in reverse order" (stock ++ [scoped,engine,"--render-frame-owned","--render-owned"] ++ owned)
+  refuses "frame excludes value" (stock ++ [scoped,engine,"--render-frame-owned","--menu-value-owned"] ++ owned)
   value <- acceptedOptions (stock ++ [scoped, engine, "--menu-value-owned"] ++ owned)
   check "value flag selects the owned value role"
-    (Viewer.menuValueOwnedOption value && Viewer.menuEngineOwnedOption value && not (Viewer.renderOwnedOption value))
+    (Viewer.menuValueOwnedOption value && Viewer.menuEngineOwnedOption value && Viewer.renderOwnershipOption value == Viewer.RetainedRender)
   check "value role selects 226 publications" (payloadPublicationCount (Viewer.selectedPayload value) == 226)
   refuses "value requires engine" (stock ++ [scoped,"--menu-value-owned"] ++ owned)
   refuses "value requires archive" (stock ++ [scoped,engine,"--menu-value-owned"])

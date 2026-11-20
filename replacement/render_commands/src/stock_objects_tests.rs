@@ -1,7 +1,5 @@
 extern crate std;
 use super::*;
-use super::super::resources::{DataRegion, ResourceMemory};
-use super::super::ImageId;
 use std::vec;
 use std::vec::Vec;
 
@@ -59,46 +57,6 @@ impl Fixture {
 
 fn bank(index: u8) -> Bank { Bank::new(index).unwrap() }
 fn slots(pool: &ObjectPool<'_>, index: u8) -> Vec<u8> { pool.listed(bank(index)).map(|object| object.slot.index()).collect() }
-
-// Descriptor table at 0x0022a8b4: width, height, kind word, data (`BitmapCatalog::entry`).
-fn descriptors(entries: &[(u32, u16, u16, u32)]) -> Vec<u8> {
-    let mut bytes = vec![0; 0x839 * 12];
-    for (payload, width, height, kind) in entries {
-        let start = *payload as usize * 12;
-        bytes[start..start + 2].copy_from_slice(&width.to_le_bytes());
-        bytes[start + 2..start + 4].copy_from_slice(&height.to_le_bytes());
-        bytes[start + 4..start + 8].copy_from_slice(&kind.to_le_bytes());
-        bytes[start + 8..start + 12].copy_from_slice(&0x0030_0000u32.to_le_bytes());
-    }
-    bytes
-}
-const BITMAPS: &[(u32, u16, u16, u32)] = &[(0x10, 8, 6, 0), (0x11, 4, 3, 1), (0x12, 5, 5, 2), (0x838, 1, 1, 1)];
-// Indices 2 and 5 share RGB (1,2,3).
-const COMPONENTS: [u8; 18] = [0, 0, 0, 255, 255, 255, 1, 2, 3, 9, 9, 9, 7, 7, 7, 1, 2, 3];
-
-fn lower_with(objects: &[StockObject], output: OutputSelector) -> Result<Vec<DrawCommand<'static>>, ProducerError> {
-    let table = descriptors(BITMAPS);
-    let regions = [DataRegion { base: DataAddress(0x0022a8b4), bytes: &table }];
-    let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
-    let context = LoweringContext { bitmaps: &bitmaps, components: ComponentTable::new(&COMPONENTS).unwrap(), output };
-    let mut storage: [DrawCommand<'static>; 32] = [DrawCommand::ResetClip; 32];
-    let mut out = CommandBuffer::new(&mut storage);
-    for object in objects { object.lower(&context, &mut out)?; }
-    let count = out.draw_list().commands().len();
-    Ok(storage[..count].to_vec())
-}
-
-fn single(spec: Spec) -> StockObject {
-    let mut fixture = Fixture::new();
-    fixture.put(2, 0, spec);
-    fixture.link(2, &[0]);
-    let pool = fixture.parse().unwrap();
-    let object = pool.listed(bank(2)).next().unwrap();
-    object
-}
-
-fn rect(x: u16, y: u16, width: u16, height: u16) -> PanelRect { PanelRect::new(PanelPoint::new(x, y).unwrap(), width, height).unwrap() }
-fn panel() -> PanelRect { rect(0, 0, 720, 480) }
 
 #[test]
 fn lists_follow_next_words_in_append_order() {
@@ -196,142 +154,6 @@ fn free_members_are_listed_but_not_live() {
     assert_eq!(live, [1, 3]);
 }
 
-#[test]
-fn solid_resource_lowers_to_a_fill_in_the_lowest_matching_palette_index() {
-    let object = single(Spec { primary: [255, 255, 255, 0], secondary: [1, 2, 3, 200], ..spec(0xff00_0838, 5, 10, 20, [30, 40]) });
-    assert_eq!(lower_with(&[object], OutputSelector::Identity).unwrap(), [
-        DrawCommand::Clip(panel()),
-        DrawCommand::Fill { rect: rect(10, 20, 30, 40), colour: Colour { palette: PaletteIndex(2), alpha: Alpha(200) } },
-        DrawCommand::ResetClip,
-    ]);
-}
-
-#[test]
-fn panel_output_scales_horizontal_geometry_by_nine_eighths() {
-    let fill = |x, width| single(Spec { secondary: [0, 0, 0, 255], ..spec(0xff00_0838, 5, x, 7, [width, 9]) });
-    let colour = Colour { palette: PaletteIndex(0), alpha: Alpha(255) };
-    // 640 * 1.125 = 720; the 720-wide clip becomes 810 and is cut at the panel edge.
-    assert_eq!(lower_with(&[fill(0, 640)], OutputSelector::Panel).unwrap()[..2], [
-        DrawCommand::Clip(panel()),
-        DrawCommand::Fill { rect: rect(0, 7, 720, 9), colour },
-    ]);
-    // 112.5 rounds away from zero to 113; 50.625 truncates to 50; round(164.25) - (113 + 50) = 1 adds nothing.
-    assert_eq!(lower_with(&[fill(100, 45)], OutputSelector::Panel).unwrap()[1], DrawCommand::Fill { rect: rect(113, 7, 50, 9), colour });
-    // round(3.375) = 3, trunc(3.375) = 3, round(7.875) - (3 + 3) = 2 widens the span by one.
-    assert_eq!(lower_with(&[fill(3, 3)], OutputSelector::Panel).unwrap()[1], DrawCommand::Fill { rect: rect(3, 7, 4, 9), colour });
-}
-
-#[test]
-fn bitmaps_lower_to_images_and_shapes_at_the_stored_position() {
-    let image = single(spec(0xff00_0010, 2, 50, 60, [8, 6]));
-    assert_eq!(lower_with(&[image], OutputSelector::Identity).unwrap()[1],
-        DrawCommand::Image { origin: PanelPoint::new(50, 60).unwrap(), image: ImageId::new(0x10).unwrap(), alpha: Alpha::OPAQUE });
-
-    let primary = [10, 20, 30, 40];
-    let secondary = [50, 60, 70, 80];
-    let recoloured = single(Spec { primary, secondary, style: 1, ..spec(0xff00_0011, 5, 1, 2, [4, 3]) });
-    assert_eq!(lower_with(&[recoloured], OutputSelector::Identity).unwrap()[1], DrawCommand::Shape {
-        origin: PanelPoint::new(1, 2).unwrap(), image: ImageId::new(0x11).unwrap(), alpha: Alpha::OPAQUE,
-        paint: ShapePaint::Recolour(ShapePalette {
-            primary: Rgba { red: 10, green: 20, blue: 30, alpha: 40 },
-            secondary: Rgba { red: 50, green: 60, blue: 70, alpha: 80 },
-            secondary_source: ShapeSecondarySource::Red,
-        }),
-    });
-    let white = single(Spec { primary, secondary, ..spec(0xff00_0011, 5, 1, 2, [4, 3]) });
-    assert!(matches!(lower_with(&[white], OutputSelector::Identity).unwrap()[1],
-        DrawCommand::Shape { paint: ShapePaint::Recolour(ShapePalette { secondary_source: ShapeSecondarySource::White, .. }), .. }));
-
-    let original = single(spec(0xff00_0012, 6, 3, 4, [5, 5]));
-    assert_eq!(lower_with(&[original], OutputSelector::Identity).unwrap()[1],
-        DrawCommand::Shape { origin: PanelPoint::new(3, 4).unwrap(), image: ImageId::new(0x12).unwrap(), alpha: Alpha::OPAQUE, paint: ShapePaint::Original });
-}
-
-#[test]
-fn objects_without_a_vglib_object_lower_to_nothing() {
-    let mut empty = Fixture::new();
-    empty.put(2, 0, spec(0xff00_0010, 2, 0, 0, [8, 6]));
-    empty.object(2, 0)[0xc..0x10].fill(0);
-    empty.link(2, &[0]);
-    let pool = empty.parse().unwrap();
-    assert!(lower_with(&pool.listed(bank(2)).collect::<Vec<_>>(), OutputSelector::Identity).unwrap().is_empty());
-    let free = single(Spec { state: 2, ..spec(0xff00_0010, 2, 0, 0, [8, 6]) });
-    assert!(lower_with(&[free], OutputSelector::Identity).unwrap().is_empty());
-}
-
-#[test]
-fn unestablished_objects_are_refused_by_name() {
-    let refusal = |spec: Spec, output| lower_with(&[single(spec)], output).unwrap_err();
-    let missing = ProducerError::MissingSemantic;
-    let id = |value| ResourceId(value);
-    use SemanticPrerequisite as P;
-    let image = spec(0xff00_0010, 2, 50, 60, [8, 6]);
-    assert_eq!(refusal(Spec { state: 1, ..image }, OutputSelector::Identity), missing(P::ReusedObject(id(0xff00_0010))));
-    assert_eq!(refusal(Spec { state: 3, ..image }, OutputSelector::Identity), missing(P::ReusedObject(id(0xff00_0010))));
-    assert_eq!(refusal(spec(0x27a, 1, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::ObjectText(id(0x27a))));
-    assert_eq!(refusal(spec(0xfe00_0000, 1, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::TextCache));
-    assert_eq!(refusal(spec(0xfc00_0000, 3, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::PlaneResource(id(0xfc00_0000))));
-    assert_eq!(refusal(spec(0xfd00_0001, 2, 0, 0, [0, 0]), OutputSelector::Identity), missing(P::CustomResource(id(0xfd00_0001))));
-    assert_eq!(refusal(image, OutputSelector::Doubled), missing(P::ObjectTransform(id(0xff00_0010))));
-    assert_eq!(refusal(image, OutputSelector::Panel), missing(P::ObjectTransform(id(0xff00_0010))));
-    assert_eq!(refusal(spec(0xff00_0010, 2, 0, 0, [16, 6]), OutputSelector::Identity), missing(P::ObjectTransform(id(0xff00_0010))));
-    assert_eq!(refusal(spec(0xff00_0010, 5, 0, 0, [8, 6]), OutputSelector::Identity), missing(P::BitmapKind(id(0xff00_0010))));
-    assert_eq!(refusal(Spec { secondary: [4, 5, 6, 255], ..spec(0xff00_0838, 5, 0, 0, [1, 1]) }, OutputSelector::Identity), missing(P::ObjectColour(id(0xff00_0838))));
-    assert_eq!(refusal(Spec { primary: [0, 0, 0, 1], ..spec(0xff00_0838, 5, 0, 0, [1, 1]) }, OutputSelector::Identity), missing(P::ObjectStyling(id(0xff00_0838))));
-
-    let mut offset = Fixture::new();
-    offset.put(2, 0, image);
-    offset.object(2, 0)[0x48] = 1;
-    offset.link(2, &[0]);
-    let pool = offset.parse().unwrap();
-    assert_eq!(lower_with(&pool.listed(bank(2)).collect::<Vec<_>>(), OutputSelector::Identity).unwrap_err(), missing(P::ObjectStyling(id(0xff00_0010))));
-
-    let mut option = Fixture::new();
-    option.put(2, 0, image);
-    option.object(2, 0)[0x59] = 1;
-    option.link(2, &[0]);
-    let pool = option.parse().unwrap();
-    assert_eq!(lower_with(&pool.listed(bank(2)).collect::<Vec<_>>(), OutputSelector::Panel).unwrap_err(), missing(P::ObjectTransform(id(0xff00_0010))));
-}
-
-fn frame(fixture: &Fixture) -> Result<Vec<DrawCommand<'static>>, ProducerError> {
-    let pool = fixture.parse().unwrap();
-    let table = descriptors(BITMAPS);
-    let regions = [DataRegion { base: DataAddress(0x0022a8b4), bytes: &table }];
-    let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
-    let context = LoweringContext { bitmaps: &bitmaps, components: ComponentTable::new(&COMPONENTS).unwrap(), output: OutputSelector::Identity };
-    let mut storage: [DrawCommand<'static>; 32] = [DrawCommand::ResetClip; 32];
-    let mut out = CommandBuffer::new(&mut storage);
-    frame_commands(&pool, &context, &mut out)?;
-    let count = out.draw_list().commands().len();
-    Ok(storage[..count].to_vec())
-}
-
-#[test]
-fn frames_composite_higher_banks_first_and_list_order_within_a_bank() {
-    let mut fixture = Fixture::new();
-    fixture.put(1, 0, spec(0xff00_0010, 2, 1, 1, [8, 6]));
-    fixture.put(18, 4, Spec { secondary: [9, 9, 9, 255], ..spec(0xff00_0838, 5, 0, 0, [720, 480]) });
-    fixture.put(9, 3, spec(0xff00_0012, 6, 30, 0, [5, 5]));
-    fixture.put(9, 1, spec(0xff00_0012, 6, 20, 0, [5, 5]));
-    fixture.put(9, 2, Spec { state: 2, ..spec(0xff00_0012, 6, 10, 0, [5, 5]) });
-    fixture.link(1, &[0]);
-    fixture.link(18, &[4]);
-    fixture.link(9, &[3, 2, 1]);
-    let drawn: Vec<DrawCommand<'static>> = frame(&fixture).unwrap().into_iter()
-        .filter(|command| !matches!(command, DrawCommand::Clip(_) | DrawCommand::ResetClip)).collect();
-    let shape = |x| DrawCommand::Shape { origin: PanelPoint::new(x, 0).unwrap(), image: ImageId::new(0x12).unwrap(), alpha: Alpha::OPAQUE, paint: ShapePaint::Original };
-    assert_eq!(drawn, [
-        DrawCommand::Fill { rect: panel(), colour: Colour { palette: PaletteIndex(3), alpha: Alpha(255) } },
-        shape(30), shape(20),
-        DrawCommand::Image { origin: PanelPoint::new(1, 1).unwrap(), image: ImageId::new(0x10).unwrap(), alpha: Alpha::OPAQUE },
-    ]);
-
-    fixture.put(0, 0, spec(0xff00_0010, 2, 1, 1, [8, 6]));
-    fixture.link(0, &[0]);
-    assert_eq!(frame(&fixture).unwrap_err(), ProducerError::MissingSemantic(SemanticPrerequisite::CompositeOrder));
-}
-
 // Captured pool: first `render-pane-return` hit (line 59) of
 // private-data/scratch/BasicKernelRequal/runs/20261114T130148Z-basic-render-current/work/pairs/runs/picker-15-owned/e2e-observation-3.trace-hits.jsonl
 // (phase owned-picker-keys, sha256 b845550c5ad828f71892b47ffece0dfa63c9ddcc88a97ee0b18293cc3cd0154e).
@@ -403,13 +225,4 @@ fn captured_picker_pane_pool_decodes_to_the_observed_objects() {
     let icon = pool.listed(bank(4)).next().unwrap();
     assert!(icon.options.enabled);
     assert_eq!(icon.kind, ObjectKind::ShapeKindTwo);
-
-    let table = descriptors(&[]);
-    let regions = [DataRegion { base: DataAddress(0x0022a8b4), bytes: &table }];
-    let bitmaps = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
-    let context = LoweringContext { bitmaps: &bitmaps, components: ComponentTable::new(&COMPONENTS).unwrap(), output: OutputSelector::Panel };
-    let mut storage = [DrawCommand::ResetClip; 8];
-    let mut out = CommandBuffer::new(&mut storage);
-    assert_eq!(frame_commands(&pool, &context, &mut out),
-        Err(ProducerError::MissingSemantic(SemanticPrerequisite::ReusedObject(ResourceId(0xff00_0838)))));
 }

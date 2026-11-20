@@ -10,7 +10,7 @@ stack_base=${RENDER_STACK_BASE:-10800640}
 fold=$S/picker-fold
 runs4=$O/runs
 trajectories=$O/trajectories
-archive=$render_build/bank-modal75-engine-render.a
+archive=${RENDER_ARCHIVE:-$render_build/bank-modal75-engine-render.a}
 pickers=(15 26 36 163 211 214 239 250 260 270 271 272 273 297 312 314 320 450 488)
 oracles=(wrap push pop open push-restored push-classifier scroll scroll-up scroll-down pop-deep
   pop-remember pop-remember-off push-same-parent push-remember-off close frame-seek-down frame-seek-up
@@ -21,8 +21,8 @@ oracles=(wrap push pop open push-restored push-classifier scroll scroll-up scrol
   fn fn-down fn-auto-open)
 output_base=${RENDER_BAZEL_OUTPUT_BASE:-$HOME/.cache/bazel/latent-image-CutoverTooling}
 B=(devenv shell -- host-build --output_base="$output_base")
-firmware=private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT
-nand=private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand
+firmware=${RENDER_FIRMWARE:-private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT}
+nand=${RENDER_NAND:-private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand}
 boot_rom=private-data/analysis/x-m1-1.50/bootrom/bootrom-0x80000000-4000.bin
 run_document=${RENDER_RUN_DOCUMENT:-$O/render-run-document.json}
 source_commit=${RENDER_SOURCE_COMMIT:-$(git rev-parse --short=8 HEAD)}
@@ -37,6 +37,14 @@ stock_packet=${RENDER_STOCK_REUSE_PACKET:-}
 stock_source=${RENDER_STOCK_REUSE_RECEIPT:-}
 archive_sha=${RENDER_ARCHIVE_SHA:-}
 checker=${RENDER_CHECKER:-$PWD/bazel-bin/host/firmware/check-bank-allowlist}
+# RENDER_FRAME_STEP=1: the owned role installs the render-frame package (RENDER_BUILD and RENDER_PRELINKED name it).
+frame_step=${RENDER_FRAME_STEP:-}
+# RENDER_FRAME_OBJECTS=O00,O01: trace frame publication, with the stage-0 buffer objects at 0x8e2158/0x8e215c.
+frame_objects=${RENDER_FRAME_OBJECTS:-}
+case "$frame_step" in ''|1) ;; *) printf 'RENDER_FRAME_STEP must be empty or 1\n' >&2; exit 2 ;; esac
+# RENDER_CAPTURE_RAM=1: every capture of both roles also writes screenshots/LABEL.ram.bin for frame-pixel-pairs.sh.
+capture_ram=${RENDER_CAPTURE_RAM:-}
+case "$capture_ram" in ''|1) ;; *) printf 'RENDER_CAPTURE_RAM must be empty or 1\n' >&2; exit 2 ;; esac
 
 reply() { jq -c '.key_reply.menu | [.menu_id, .setting_id, .cursor]' "$1/menu-observe.json"; }
 landing() {
@@ -72,8 +80,8 @@ prepare() {
       | select(.endpoint.kind == "registers") | .endpoint.options.clock) = null' \
       emulation/fujimod-xm1/data/xm1-150.json > "$run_document" || exit 1
   fi
-  prepare_trajectories || exit 1
   prepare_prelinked || exit 1
+  prepare_trajectories || exit 1
 }
 
 prepare_trajectories() {
@@ -109,7 +117,7 @@ prepare_prelinked() {
     return 2
   fi
   mkdir -p "$prelinked" || return 2
-  RB_BAZEL_OUTPUT_BASE="$output_base" devenv shell -- bash replacement/render_adapter/relink.sh \
+  RB_RENDER_FRAME="${frame_step:-0}" RB_BAZEL_OUTPUT_BASE="$output_base" devenv shell -- bash replacement/render_adapter/relink.sh \
     "$allocation_base" "$archive" "$prelinked" || return 2
 }
 
@@ -118,12 +126,26 @@ check_end() {
     -f emulation/menu-engine-pair-trajectories/end-check.jq > /dev/null || exit 1
 }
 
+# The frame observation's generator arguments for ROLE: none without RENDER_FRAME_OBJECTS; the owned
+# role of the frame package also reads its rb_render_frame_record.
+frame_arguments() {
+  FRAME=()
+  [ -n "$frame_objects" ] || return 0
+  local first="${frame_objects%%,*}" second="${frame_objects#*,}" record
+  FRAME=(--argjson frame_objects "[$((first)),$((second))]")
+  if [ "$1" = owned ] && [ -n "$frame_step" ]; then
+    record=$(jq -er '.address' "$prelinked/render-frame-record.json") || { printf 'missing frame record: %s\n' "$prelinked/render-frame-record.json" >&2; return 2; }
+    FRAME+=(--argjson frame_record "$((record))")
+  fi
+}
+
 write_trajectories() {
   mkdir -p "$trajectories"
   D=emulation/menu-engine-pair-trajectories
   for role in stock owned; do
+    frame_arguments "$role" || exit 2
     for p in "${pickers[@]}"; do
-      jq -L "$D" --argjson render true --argjson render_banks "$render_banks" --argjson render_stack_base "$stack_base" --arg role "$role" -f "$D/picker.jq" "emulation/modal75-picker-trajectories/picker-$p.json" \
+      jq -L "$D" --argjson render true --argjson render_banks "$render_banks" --argjson render_stack_base "$stack_base" --arg role "$role" "${FRAME[@]}" -f "$D/picker.jq" "emulation/modal75-picker-trajectories/picker-$p.json" \
         > "$trajectories/picker-$p.$role.json" || exit 1
       check_end "picker-$p" "$trajectories/picker-$p.$role.json"
     done
@@ -133,7 +155,7 @@ write_trajectories() {
         generator="$D/fn-oracle.jq"
         receipt=(--arg receipt_source "$S/inc5/$n/menu-observe.json" --slurpfile receipt "$S/inc5/$n/menu-observe.json")
         ;; esac
-      jq -n -L "$D" --argjson render true --argjson render_banks "$render_banks" --argjson render_stack_base "$stack_base" --arg role "$role" --arg name "$n" --slurpfile config "emulation/menu-oracle-$n.json" \
+      jq -n -L "$D" --argjson render true --argjson render_banks "$render_banks" --argjson render_stack_base "$stack_base" --arg role "$role" "${FRAME[@]}" --arg name "$n" --slurpfile config "emulation/menu-oracle-$n.json" \
         --slurpfile graph "$S/crawl-5/crawl-graph.json" --argjson landing "$(landing "$n")" --argjson sample "$(sample "$n")" \
         "${receipt[@]}" -f "$generator" > "$trajectories/oracle-$n.$role.json" || exit 1
       check_end "oracle-$n" "$trajectories/oracle-$n.$role.json"
@@ -209,10 +231,12 @@ guest_arguments() {
     --fujimod-run-document "$run_document"
     --trajectories "$trajectories/$name.$role.json"
     --output "$runs4/$dir-runtime" --receipt-output "$PWD/$runs4/$dir")
+  [ -n "$capture_ram" ] && GUEST+=(--capture-ram)
   case "$role" in
     stock) GUEST+=(--modal-lifetime-guard) ;;
     owned) GUEST+=(--ram-push-modal-scoped --modal75-owned-archive "$archive"
-             --modal75-retired "$fold/modal75-retired-picker.json" --menu-engine-owned --render-owned
+             --modal75-retired "$fold/modal75-retired-picker.json" --menu-engine-owned
+             "$([ -n "$frame_step" ] && echo --render-frame-owned || echo --render-owned)"
              --modal75-prelinked "$prelinked") ;;
     *) printf 'role must be stock or owned\n' >&2; return 2 ;;
   esac

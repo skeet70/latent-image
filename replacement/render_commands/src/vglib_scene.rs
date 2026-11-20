@@ -11,12 +11,14 @@
 //! `+0xa0` and increments `0x8e2098+0x158` (`6d73e0-6d7414`). Away from frame modes 8 and 10 the filter is -1
 //! (`6d7a90-6d7aa0`, `6d7b0c-6d7b10`), which draws every visible object (`6d7368-6d7378`).
 
-use super::commands::{DrawCommand, PixelOrder, PixelSource, RecolourBlock, SceneRect};
+use super::commands::{DrawCommand, DrawList, PixelOrder, PixelSource, RecolourBlock, SceneRect};
 use super::producer::CommandBuffer;
+use super::raster::{RasterError, Surface, VectorWorkspace};
 use super::resources::{DataAddress, ResourceError, ResourceMemory};
 use super::shape_assets::{Gvff, ShapeError};
 use super::stock_objects::{Bank, ObjectKind, ObjectPool, SlotIndex, VglibObject, BANK_COUNT};
-use super::{PanelPoint, PanelRect, PANEL_HEIGHT, PANEL_WIDTH};
+use super::vector_raster::{CurveAccuracy, DashBudget, SampleGrid, StrokePrimitive, Vertex};
+use super::{PanelPoint, PanelRect, SurfaceId, PANEL_HEIGHT, PANEL_WIDTH};
 
 pub const GROUP_COUNT: usize = 24;
 /// Group sentinels `{next, prev, object}`, 12 bytes each (`0x6d920c`: `6d9224-6d9230`).
@@ -58,8 +60,6 @@ const BASE_BYTES: usize = 0xc4;
 const IMAGE_BYTES: usize = 0xd4;
 const SHAPE_BYTES: usize = 0x14c;
 const VG_IMAGE_BYTES: usize = 0x6c;
-/// Largest distance from an integer that a destination edge may have and still be lowered as that integer.
-const INTEGRAL_TOLERANCE: f32 = 1.0 / 1024.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub struct GroupIndex(u8);
@@ -588,8 +588,23 @@ fn node_slot(address: u32) -> Option<usize> {
 
 fn integral(value: f32) -> Option<i32> {
     let nearest = libm::roundf(value);
-    if libm::fabsf(value - nearest) > INTEGRAL_TOLERANCE || !(-2_147_483_648.0..2_147_483_648.0).contains(&nearest) { return None; }
+    if value != nearest || !(-2_147_483_648.0..2_147_483_648.0).contains(&nearest) { return None; }
     Some(nearest as i32)
+}
+
+/// Renders lowered stage-0 commands into a VGLIB format-1 OSD buffer (`VG_sRGBA_8888`, A,B,G,R bytes, the model's
+/// `mode1-abgr8888-straight` layer profile). The owned frame step and the host reference both render through here.
+pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], vertices: &mut [Vertex], strokes: &mut [StrokePrimitive]) -> Result<(), RasterError> {
+    let mut workspace = VectorWorkspace {
+        vertices,
+        strokes,
+        dash_budget: DashBudget::new(256),
+        accuracy: CurveAccuracy::new(0.25).ok_or(RasterError::InvalidSurfaceBuffer)?,
+        samples: SampleGrid::Four,
+    };
+    Surface::new(SurfaceId::Osd, &mut *pixels)?.render_scene(DrawList::new(SurfaceId::Osd, commands), &mut workspace)?;
+    for pixel in pixels.chunks_exact_mut(4) { pixel.reverse(); }
+    Ok(())
 }
 
 /// At zero parameter `0x6dbb3c` leaves the translation slots at their zeroed values (`6dbd80-6dbef8`; zeroed at

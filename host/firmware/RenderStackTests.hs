@@ -16,14 +16,21 @@ word value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 2
 half :: Word32 -> B.ByteString
 half = B.take 2 . word
 
-fixture :: Word32 -> Word32 -> Word32 -> Word32 -> Either String ELF.Elf
-fixture treeReservation pickerReservation paneReservation bankReservation = ELF.parseElf bytes
+entries :: [String]
+entries =
+  [ "rb_render_tree_entry", "rb_render_picker_entry", "rb_render_pane_entry", "rb_bank_draw_root", "rb_render_frame_entry"
+  , "rb_render_frame_commit", "rb_render_frame_complete", "rb_render_frame_scanout_bridge", "rb_render_frame_scanout_delivery" ]
+
+-- | One `sub sp, sp, #reservation; bx lr` function per entry, in `entries` order.
+fixture :: [Word32] -> Either String ELF.Elf
+fixture reservations = ELF.parseElf bytes
  where
-  code = B.concat [word (0xe24dd000 + reservation) <> word 0xe12fff1e | reservation <- [treeReservation,pickerReservation,paneReservation,bankReservation]]
+  code = B.concat [word (0xe24dd000 + reservation) <> word 0xe12fff1e | reservation <- reservations]
   names = C.pack "\0.text\0.shstrtab\0.strtab\0.symtab\0"
-  strings = C.pack "\0rb_render_tree_entry\0rb_render_picker_entry\0rb_render_pane_entry\0rb_bank_draw_root\0"
+  strings = C.pack (concatMap ('\0' :) entries ++ "\0")
+  nameOffsets = scanl (\offset name -> offset + fromIntegral (length name) + 1) 1 entries
   symbol name address = B.concat (map word [name, address, 8]) <> B.pack [0x12, 0] <> half 1
-  symbols = B.replicate 16 0 <> symbol 1 base <> symbol 22 (base + 8) <> symbol 45 (base + 16) <> symbol 66 (base + 24)
+  symbols = B.replicate 16 0 <> B.concat [symbol name (base + 8 * index) | (index, name) <- zip [0 ..] (take (length entries) nameOffsets)]
   namesAt = 0x100 + B.length code
   stringsAt = namesAt + B.length names
   symbolsAt = stringsAt + B.length strings
@@ -48,7 +55,17 @@ check :: Word32 -> Word32 -> Either String RenderStackReport
 check tree picker = checkWith tree picker 16 16
 
 checkWith :: Word32 -> Word32 -> Word32 -> Word32 -> Either String RenderStackReport
-checkWith tree picker pane bank = fixture tree picker pane bank >>= \elf -> checkRenderStack elf (\address -> base <= address && address < base + 32)
+checkWith tree picker pane bank = fixture [tree, picker, pane, bank, 16, 16, 16, 16, 16] >>= \elf -> checkRenderStack elf inRuntime
+
+checkFrame :: Word32 -> Word32 -> Either String RenderEntryReport
+checkFrame frame commit = frameWith frame commit 16 16 16
+
+frameWith :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Either String RenderEntryReport
+frameWith frame commit complete bridge delivery =
+  fixture [16, 16, 16, 16, frame, commit, complete, bridge, delivery] >>= \elf -> checkRenderFrameStack elf inRuntime
+
+inRuntime :: Word32 -> Bool
+inRuntime address = base <= address && address < base + 8 * fromIntegral (length entries)
 
 main :: IO ()
 main = do
@@ -60,6 +77,13 @@ main = do
         , ("picker may exceed the tree allowance", not (isLeft (check 16 0xc0a)))
         , ("pane exceeding headroom refuses", isLeft (checkWith 16 16 0xc0c 16))
         , ("bank root prefix reduces pane headroom", isLeft (checkWith 16 16 16 0xc0c))
+        , ("frame entry is bounded against task 73's entry headroom", checkFrame 16 16 == Right (RenderEntryReport 16 4032 1024))
+        , ("frame raster path calls no stock code and needs no margin", checkFrame 0xc0c 16 == Right (RenderEntryReport 3072 4032 1024))
+        , ("frame entry exceeding headroom refuses", isLeft (checkFrame 0xa01 16))
+        , ("frame commit keeps the stock margin above the entry frame", isLeft (checkFrame 16 0xc0c) && not (isLeft (checkFrame 16 0xc0a)))
+        , ("frame completion keeps the stock margin above the entry frame", isLeft (frameWith 16 16 0xc0c 16 16) && not (isLeft (frameWith 16 16 0xc0a 16 16)))
+        , ("scanout bridge and delivery stay within 0x6d80f0's frame",
+            not (isLeft (frameWith 16 16 16 32 32)) && isLeft (frameWith 16 16 16 36 16) && isLeft (frameWith 16 16 16 16 36))
         ]
       failures = [name | (name, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

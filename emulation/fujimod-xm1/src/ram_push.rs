@@ -14,6 +14,7 @@ use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, enc
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, SCANNED_HOLD, key_pulse};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
+use fujimod_xm1::presentation::OwnedSites;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
 use fujimod_xm1::reset_observation::{ResetObserver, Spec as ResetObservationSpec};
@@ -39,7 +40,13 @@ use std::{
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
 (--adjustment-nand NAND [--record-nand NAND] | --committed-nand NAND --fresh-boot) --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] \
-[--attach-hold-key KEY] [--fresh-boot [--reset-observation SPEC.json] [--af-prestate-proof | --prepare-af-reset-cache]]\n";
+[--attach-hold-key KEY] [--capture-ram] [--presentation-sites JSON] [--fresh-boot [--reset-observation SPEC.json] [--af-prestate-proof | --prepare-af-reset-cache]]\n";
+
+/// Guest physical RAM `[0, CAPTURED_RAM_BYTES)`, which `--capture-ram` writes beside each capture's PNG.
+const CAPTURED_RAM_BYTES: usize = 0x0400_0000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RamCapture { Disabled, Enabled }
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
@@ -103,6 +110,12 @@ struct Arguments {
     attach_hold: Option<RouteKey>,
     fresh_boot: bool,
     af_reset: AfResetMode,
+    ram_capture: RamCapture,
+    presentation_sites: Option<OwnedSites>,
+}
+
+fn presentation_sites(text: &str) -> Result<OwnedSites, String> {
+    serde_json::from_str(text).map_err(|error| format!("--presentation-sites: {error}"))
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -110,6 +123,8 @@ fn arguments() -> Result<Arguments, String> {
     let mut fresh_boot = false;
     let mut attach_hold = None;
     let mut af_reset = AfResetMode::Disabled;
+    let mut ram_capture = RamCapture::Disabled;
+    let mut sites = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.to_str().ok_or(USAGE)?.to_owned();
@@ -120,6 +135,18 @@ fn arguments() -> Result<Arguments, String> {
         }
         if flag == "--fresh-boot" {
             fresh_boot = true;
+            continue;
+        }
+        if flag == "--capture-ram" {
+            if ram_capture == RamCapture::Enabled { return Err(USAGE.into()); }
+            ram_capture = RamCapture::Enabled;
+            continue;
+        }
+        if flag == "--presentation-sites" {
+            let text = args.next().ok_or(USAGE)?;
+            if sites.replace(presentation_sites(text.to_str().ok_or(USAGE)?)?).is_some() {
+                return Err("--presentation-sites may appear only once".into());
+            }
             continue;
         }
         if flag == "--attach-hold-key" {
@@ -177,6 +204,8 @@ fn arguments() -> Result<Arguments, String> {
         attach_hold,
         fresh_boot,
         af_reset,
+        ram_capture,
+        presentation_sites: sites,
     })
 }
 
@@ -553,6 +582,8 @@ struct Server {
     nand_source: NandSourceKind,
     modal_request: Option<Vec<u8>>,
     installed_observation: Option<ObservedInstall>,
+    ram_capture: RamCapture,
+    presentation_sites: Option<OwnedSites>,
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -1669,9 +1700,15 @@ impl Server {
                 std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
                 let path = directory.join(format!("{label}.png"));
                 let capture = capture.write(&path)?;
-                let shot = json!({"label": label, "path": capture.png.path, "frame_number": null,
+                let mut shot = json!({"label": label, "path": capture.png.path, "frame_number": null,
                     "sha256": capture.png.sha256, "scanout_evidence": capture.scanout_evidence,
                     "menu": menu_value(self.bridge.machine.menu()?)});
+                if self.ram_capture == RamCapture::Enabled {
+                    let bytes = self.bridge.machine.read(0, CAPTURED_RAM_BYTES)?;
+                    let path = directory.join(format!("{label}.ram.bin"));
+                    write(&path, &bytes)?;
+                    shot["ram"] = json!({"path": path, "sha256": sha256(&bytes), "bytes": bytes.len()});
+                }
                 self.screenshots.push(shot.clone());
                 shot
             }
@@ -1844,7 +1881,7 @@ impl Server {
             serde_json::to_writer(&mut *output, value).map_err(|error| error.to_string())?;
             output.write_all(b"\n").and_then(|()| output.flush()).map_err(|error| error.to_string())
         }
-        self.bridge.machine.begin_render_provenance()?;
+        self.bridge.machine.begin_render_provenance(self.presentation_sites)?;
         emit_reply(&mut output, &json!({"ok": true, "event": "ready", "device": encode_hex(&self.attachment.device),
             "configuration": encode_hex(&self.attachment.configuration),
             "pre_attach": self.attachment.pre_attach, "checkpoint": self.checkpoint}))?;
@@ -2168,6 +2205,8 @@ fn drive() -> Result<(), String> {
         nand_source,
         modal_request: None,
         installed_observation,
+        ram_capture: arguments.ram_capture,
+        presentation_sites: arguments.presentation_sites,
     };
     server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites), None)?;
     server.serve()
@@ -2193,6 +2232,21 @@ mod tests {
     use fujimod_xm1::reset_observation::AttachPhase;
     use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn presentation_sites_argument_admits_the_viewer_encoding_and_refuses_malformed_text() {
+        let viewer = r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":"0xea4cd0c6"}"#;
+        assert!(presentation_sites(viewer).is_ok());
+        for text in [
+            "",
+            "{}",
+            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"}}"#,
+            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":"0xe92d49f0"}"#,
+            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":3930902726}"#,
+        ] {
+            assert!(presentation_sites(text).is_err(), "{text}");
+        }
+    }
 
     #[test]
     fn jpeg_observation_commands_reject_all_arguments() {
@@ -2592,6 +2646,8 @@ mod tests {
             nand_source: NandSourceKind::InitialSeeded,
             modal_request: None,
             installed_observation: None,
+            ram_capture: RamCapture::Disabled,
+            presentation_sites: None,
         }
     }
 
@@ -3373,8 +3429,10 @@ mod tests {
         assert!(server.bridge.machine.instructions() < 8_000_000);
     }
 
-    #[test]
-    fn active_capture_writes_the_observed_png_without_guest_or_modeled_time_advancement() {
+    const LOWER_PLANE: [u8; 20] = [128, 40, 50, 60, 128, 70, 80, 90, 0, 0, 0, 0, 128, 10, 20, 30, 128, 50, 60, 70];
+
+    /// Scanout instance 0 shows a 2 x 2 frame of graphics planes at RAM 0x3000 (`LOWER_PLANE`) and 0x2000.
+    fn two_by_two_scanout_server() -> Server {
         let mut server = server(&[0xe5810000, 0xeafffffe]);
         let machine = &mut server.bridge.machine;
         for (offset, value) in [
@@ -3411,8 +3469,15 @@ mod tests {
             machine.require_running().unwrap();
         }
         machine.session.board.write_physical(0x4000_2000, &[255, 30, 60, 210].repeat(4)).unwrap();
-        let lower_plane = [128, 40, 50, 60, 128, 70, 80, 90, 0, 0, 0, 0, 128, 10, 20, 30, 128, 50, 60, 70];
-        machine.session.board.write_physical(0x4000_3000, &lower_plane).unwrap();
+        machine.session.board.write_physical(0x4000_3000, &LOWER_PLANE).unwrap();
+        server
+    }
+
+    #[test]
+    fn active_capture_writes_the_observed_png_without_guest_or_modeled_time_advancement() {
+        let mut server = two_by_two_scanout_server();
+        let machine = &mut server.bridge.machine;
+        let lower_plane = LOWER_PLANE;
         let counts = machine.session.board.instruction_counts();
         let before: ModelClock = serde_json::from_value(machine.session.board.observation().unwrap()).unwrap();
         let mut output = Vec::new();
@@ -3505,6 +3570,33 @@ mod tests {
         assert!(receipt.screenshots.is_empty());
         assert!(receipt.bridge_error.is_some());
         assert_eq!(server.bridge.machine.session.board.instruction_counts(), counts);
+    }
+
+    #[test]
+    fn ram_capture_writes_the_guest_ram_image_and_its_digest_only_when_enabled() {
+        for ram_capture in [RamCapture::Disabled, RamCapture::Enabled] {
+            let mut server = two_by_two_scanout_server();
+            server.ram_capture = ram_capture;
+            server.bridge.machine.session.board.write_physical(0x0123_4560, b"ram capture marker").unwrap();
+            let shot = server.handle(request(json!({"command": "capture", "label": "menu"}))).unwrap().unwrap();
+            let image = server.output.join("screenshots").join("menu.ram.bin");
+            match ram_capture {
+                RamCapture::Disabled => {
+                    assert!(shot.get("ram").is_none());
+                    assert!(!image.exists());
+                }
+                RamCapture::Enabled => {
+                    let bytes = std::fs::read(&image).unwrap();
+                    assert_eq!(bytes.len(), 0x0400_0000);
+                    assert_eq!(&bytes[0x0123_4560..0x0123_4572], b"ram capture marker");
+                    assert_eq!(shot["ram"]["sha256"], sha256(&bytes));
+                    assert_eq!(shot["ram"]["bytes"], bytes.len());
+                    assert_eq!(shot["ram"]["path"], json!(image));
+                }
+            }
+            assert!(server.output.join("screenshots").join("menu.png").exists());
+            std::fs::remove_dir_all(&server.output).unwrap();
+        }
     }
 
     #[test]
@@ -3854,6 +3946,8 @@ mod tests {
             attach_hold: None,
             fresh_boot: false,
             af_reset: AfResetMode::Disabled,
+            ram_capture: RamCapture::Disabled,
+            presentation_sites: None,
         };
         let without = boot_key(&arguments(None), &inputs, &adjustment, None, None).unwrap();
         let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first"), None).unwrap();

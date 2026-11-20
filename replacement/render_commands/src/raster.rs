@@ -1,5 +1,5 @@
 use super::{FontId, PaletteIndex, PanelPoint, PanelRect, SurfaceId};
-use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, PixelSource, Rgba, SceneRect, ShapePaint, TextPenOp, TextRef};
+use super::commands::{Alpha, CatalogTextId, CustomTextId, ImageId, Colour, DrawCommand, DrawList, PixelSource, RecolourBlock, Rgba, SceneRect, ShapePaint, TextPenOp, TextRef};
 use super::font_core::{ByteStride, CoverageEncoding, FontAsset, FontConfig, FontEngine, FontError, FontWorkspace, GlyphId, GlyphMask, GlyphMetrics, PixelExtent, PixelOffset};
 use super::font_core::shaping::{detect_mode, detect_script_run, shape_text, CharacterCode, CharacterIndex, DirectionHint, LayoutExtent16, LayoutOffset, ScriptTables, ShapingMetrics, TextDirection, ThaiMetrics, MAX_TEXT_UNITS};
 const SCRIPT_TABLES: ScriptTables<'static> = ScriptTables::firmware();
@@ -49,6 +49,8 @@ pub enum RasterError {
     /// GVFF bounds with a zero or non-finite width or height cannot be mapped onto a `SceneRect`.
     DegenerateShapeBounds,
     Vector(VectorError),
+    /// A command outside `Clip`, `ResetClip`, `ScaledImage` and `ScaledShape` given to `render_scene`.
+    UnsupportedSceneCommand,
 }
 
 pub struct FontBinding<'asset, 'work> { id: FontId, engine: FontEngine<'asset, 'work> }
@@ -444,11 +446,8 @@ impl<'a> Surface<'a> {
                 }
                 DrawCommand::ScaledImage { dest, source } => self.scaled_image(dest, source, clip),
                 DrawCommand::ScaledShape { dest, gvff, recolour } => {
-                    let file = Gvff::parse(gvff).map_err(RasterError::Shape)?;
-                    let recolour = recolour.map(|block| Recolour::parse(&block.0)).transpose().map_err(RasterError::InvalidRecolour)?;
-                    let placement = ShapePlacement::scaled(dest, file.bounds()).ok_or(RasterError::DegenerateShapeBounds)?;
                     let workspace = resources.vector.as_mut().ok_or(RasterError::MissingVectorWorkspace)?;
-                    self.draw_gvff_clipped(placement, file, recolour, Alpha::OPAQUE, clip, workspace)?;
+                    self.scaled_shape(dest, gvff, recolour, clip, workspace)?;
                 }
                 DrawCommand::Glyph { origin, font, glyph, colour } => {
                     let colour = resources.pack.colour(colour)?;
@@ -492,6 +491,30 @@ impl<'a> Surface<'a> {
             }
         }
         Ok(())
+    }
+    /// `render` restricted to the commands a VGLIB scene lowers to: clips and scaled draws, with no asset pack or fonts.
+    pub fn render_scene(&mut self, list: DrawList<'_>, workspace: &mut VectorWorkspace<'_>) -> Result<(), RasterError> {
+        if self.id != list.surface() { return Err(RasterError::SurfaceMismatch); }
+        self.pixels.fill(0);
+        let extent = Bounds { left: 0, top: 0, right: self.width, bottom: self.height };
+        let mut clip = extent;
+        for command in list.commands() {
+            match *command {
+                DrawCommand::Clip(rect) => clip = Bounds::rect(rect).intersect(extent),
+                DrawCommand::ResetClip => clip = extent,
+                DrawCommand::ScaledImage { dest, source } => self.scaled_image(dest, source, clip),
+                DrawCommand::ScaledShape { dest, gvff, recolour } => self.scaled_shape(dest, gvff, recolour, clip, workspace)?,
+                _ => return Err(RasterError::UnsupportedSceneCommand),
+            }
+        }
+        Ok(())
+    }
+    #[inline(always)]
+    fn scaled_shape(&mut self, dest: SceneRect, gvff: &[u8], recolour: Option<RecolourBlock>, clip: Bounds, workspace: &mut VectorWorkspace<'_>) -> Result<(), RasterError> {
+        let file = Gvff::parse(gvff).map_err(RasterError::Shape)?;
+        let recolour = recolour.map(|block| Recolour::parse(&block.0)).transpose().map_err(RasterError::InvalidRecolour)?;
+        let placement = ShapePlacement::scaled(dest, file.bounds()).ok_or(RasterError::DegenerateShapeBounds)?;
+        self.draw_gvff_clipped(placement, file, recolour, Alpha::OPAQUE, clip, workspace)
     }
     fn text(&mut self, mut pen: TextPen, text: TextRef<'_>, font: FontId, colour: Colour, clip: Bounds, resources: &mut RasterResources<'_, '_, '_>) -> Result<TextPen, RasterError> {
         let assets = resources.pack;

@@ -1072,9 +1072,9 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
-    pub(crate) fn begin_presentation_tracking(&mut self, session: &Session) -> Result<(), String> {
+    pub(crate) fn begin_presentation_tracking(&mut self, session: &Session, sites: Option<crate::presentation::OwnedSites>) -> Result<(), String> {
         if self.presentation.is_some() { return Err("presentation tracking already active".into()); }
-        self.presentation = Some(crate::presentation::Tracker::default());
+        self.presentation = Some(crate::presentation::Tracker::new(sites));
         self.rearm_points(session, PointScope::UserAndModal)
     }
     pub(crate) fn presentation_tracking_active(&self) -> bool { self.presentation.is_some() }
@@ -1677,8 +1677,8 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
-        if self.presentation.is_some() {
-            addresses.extend(crate::presentation::Site::ALL.map(|site| u64::from(site.address())));
+        if let Some(tracker) = &self.presentation {
+            addresses.extend(tracker.addresses().map(u64::from));
         }
         if addresses.is_empty() { return Ok(()); }
         let addresses: Vec<u64> = addresses.into_iter().collect();
@@ -1708,8 +1708,8 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
-        if self.presentation.is_some() {
-            addresses.extend(crate::presentation::Site::ALL.map(|site| u64::from(site.address())));
+        if let Some(tracker) = &self.presentation {
+            addresses.extend(tracker.addresses().map(u64::from));
         }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         (0..session.board.instruction_counts().len())
@@ -1811,13 +1811,13 @@ impl TraceSites {
             let Some(pending) = self.pending_points[point_index] else { continue };
             let address = pending.pc.0;
             let pc = u64::from(address);
-            if let Some(tracker) = &mut self.presentation {
-                if let Some(site) = crate::presentation::Site::at(address) {
-                    let mut word = [0; 4];
-                    session.board.read_physical(u64::from(address), &mut word)?;
+            if let Some(tracker) = self.presentation.as_mut().filter(|tracker| tracker.addresses().any(|site| site == address)) {
+                let mut word = [0; 4];
+                session.board.read_physical(u64::from(address), &mut word)?;
+                if let Some(site) = tracker.site(address, u32::from_le_bytes(word))? {
                     let cpsr = register(session, *core, arm::Register::Cpsr)?;
-                    if u32::from_le_bytes(word) != site.word() || cpsr & 0x0100_0220 != 0 {
-                        return Err("presentation instruction differs from X-M1 1.50 A32 source".into());
+                    if cpsr & 0x0100_0220 != 0 {
+                        return Err("presentation instruction is not executing in A32 state".into());
                     }
                     let frame = match site {
                         crate::presentation::Site::Enter => register(session, *core, arm::Register::R(13))?

@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, sessionBridge, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding, ObservedInstallProof, parseObservedInstallProof, checkObservedInstallProof) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), RamCapture (..), PresentationSites (..), PresentationInstruction (..), readPresentationSites, ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, sessionBridge, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding, ObservedInstallProof, parseObservedInstallProof, checkObservedInstallProof) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, throwIO, try)
@@ -112,6 +112,9 @@ data UiConversionProfile = StrictUiConversion | DeclaredUiCpuFallback deriving (
 -- through the cardless RAM-push bridge.
 data CardMode = CardBacked FilePath | Cardless deriving (Eq, Show)
 
+-- | CaptureRam makes every FujiMod `capture` also write guest physical RAM `[0, 0x4000000)` beside its PNG.
+data RamCapture = NoRamCapture | CaptureRam deriving (Eq, Show)
+
 -- | The FujiMod RAM-push bridge (`emulation/fujimod-xm1`), its run document and the boot ROM.
 data FujiModBridge = FujiModBridge
   { fujimodBridge :: FilePath
@@ -171,7 +174,68 @@ data E2ESettings = E2ESettings
   , prelinkedModalBuild :: Maybe FilePath
   , afOwnershipPlanFile :: Maybe FilePath
   , afOwnershipControl :: Bool
+  -- | The render-frame package's owned sites the FujiMod presentation tracker accepts.
+  , presentationSites :: Maybe PresentationSites
+  , ramCapture :: RamCapture
   }
+
+-- | An instruction the FujiMod presentation tracker observes and the A32 word it must hold.
+data PresentationInstruction = PresentationInstruction
+  { presentationPc :: Word32
+  , presentationWord :: Word32
+  } deriving (Eq, Show)
+
+-- | The branch a render-frame package publishes over stock 0x006d7920, and its owned
+-- AfterWait and Finish instructions.
+data PresentationSites = PresentationSites
+  { publishedEnter :: Word32
+  , ownedAfterWait :: PresentationInstruction
+  , ownedFinish :: PresentationInstruction
+  } deriving (Eq, Show)
+
+-- | The sites from a render-frame package directory's `render-frame-record.json` `presentation`
+-- object and its `ram-push-manifest.json` publication at 0x006d7920.
+readPresentationSites :: FilePath -> IO PresentationSites
+readPresentationSites directory = do
+  let recordPath = directory </> "render-frame-record.json"
+      manifestPath = directory </> "ram-push-manifest.json"
+  forM_ [recordPath, manifestPath] $ \path ->
+    doesFileExist path >>= \present -> require present ("render-frame package lacks " ++ path)
+  recordDocument <- B.readFile recordPath
+  manifestDocument <- B.readFile manifestPath
+  either (ioError . userError . ("render-frame presentation sites: " ++)) pure
+    (parsePresentationSites recordDocument manifestDocument)
+
+parsePresentationSites :: B.ByteString -> B.ByteString -> Either String PresentationSites
+parsePresentationSites recordDocument manifestDocument = do
+  (waitSite, finishSite) <- eitherDecodeStrict' recordDocument >>= parseEither (withObject "render frame record" $ \fields ->
+    fields .: "presentation" >>= withObject "render frame presentation" (\sites ->
+      (,) <$> (sites .: "after_wait" >>= ownedSite) <*> (sites .: "finish" >>= ownedSite)))
+  rows <- eitherDecodeStrict' manifestDocument >>= parseEither (withObject "RAM-push manifest" $ \fields ->
+    fields .: "publications" >>= mapM (withObject "publication" $ \row ->
+      (,,) <$> (row .: "address" >>= packageWord) <*> (row .: "old" >>= packageWord) <*> (row .: "new" >>= packageWord)))
+  branch <- case [(stock, replacement) | (site, stock, replacement) <- rows, site == 0x006d7920] of
+    [(0xe92d49f0, replacement)] -> Right replacement
+    [_] -> Left "the 0x006d7920 publication does not replace the stock word 0xe92d49f0"
+    [] -> Left "the manifest publishes nothing at 0x006d7920"
+    _ -> Left "the manifest publishes 0x006d7920 more than once"
+  pure (PresentationSites branch waitSite finishSite)
+  where
+    ownedSite = withObject "presentation instruction" $ \fields ->
+      PresentationInstruction <$> (fields .: "pc" >>= packageWord) <*> (fields .: "word" >>= packageWord)
+    packageWord :: String -> Parser Word32
+    packageWord text = case text of
+      '0' : 'x' : digits | not (null digits), length digits <= 8, [(word, "")] <- readHex digits -> pure word
+      _ -> fail ("not a 0x-prefixed 32-bit hex word: " ++ text)
+
+-- | The FujiMod bridge's `--presentation-sites` argument.
+presentationSitesArguments :: PresentationSites -> [String]
+presentationSitesArguments configured =
+  [ "--presentation-sites", C.unpack (BL.toStrict (encode (object
+    [ "published_enter" .= hexAddress (publishedEnter configured)
+    , "after_wait" .= siteJson (ownedAfterWait configured)
+    , "finish" .= siteJson (ownedFinish configured) ]))) ]
+  where siteJson owned = object ["pc" .= hexAddress (presentationPc owned), "word" .= hexAddress (presentationWord owned)]
 
 -- | A bank Rust archive built with the owned controller-75 table, and the
 -- stock extents its generic actions retire.
@@ -263,8 +327,11 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--adjustment-nand", adjustmentNand
       , "--output", output
       , "--ram-push-checkpoints", checkpointRoot settings
-      ] ++ freshArguments ++ ["--af-prestate-proof" | isJust (afOwnershipPlanFile settings)] ++ cardArguments card ++ attachHoldArguments (attachHold settings))
+      ] ++ freshArguments ++ ["--af-prestate-proof" | isJust (afOwnershipPlanFile settings)] ++ cardArguments card ++ attachHoldArguments (attachHold settings)
+        ++ maybe [] presentationSitesArguments (presentationSites settings) ++ ["--capture-ram" | ramCapture settings == CaptureRam])
   (RetainedRuntime, CardBacked cardImage) -> do
+    retainedTracker
+    retainedRamCapture
     key <- maybe (ioError (userError "the card attach key is unset")) pure (cardAttachKey settings)
     pure (python,
       [ "tools/continue_rec_scanout.py"
@@ -280,6 +347,8 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
       , "--checkpoint-inputs", C.unpack (BL.toStrict (encode (routeKeyDocument key)))
       ] ++ freshArguments ++ profileArguments ++ attachHoldArguments (attachHold settings) ++ frameArguments)
   (RetainedRuntime, Cardless) -> do
+    retainedTracker
+    retainedRamCapture
     require (attachHold settings == NoAttachHold) "the cardless RAM-push bridge holds no key across the attach edge"
     bridge <- runfilesCardlessBridge
     pure (bridge,
@@ -297,6 +366,8 @@ sessionBridge settings python installedMedia adjustmentNand boot output = case (
     frameArguments = fixedSceneFrameArguments (fixedSceneFrame settings)
     cardArguments (CardBacked image) = ["--sd-card-image", image]
     cardArguments Cardless = []
+    retainedTracker = require (not (isJust (presentationSites settings))) "owned presentation sites require the FujiMod bridge"
+    retainedRamCapture = require (ramCapture settings == NoRamCapture) "--capture-ram requires the FujiMod bridge"
 
 payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of

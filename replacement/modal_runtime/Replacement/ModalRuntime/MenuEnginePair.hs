@@ -14,6 +14,7 @@ module Replacement.ModalRuntime.MenuEnginePair
   , parseObservation
   , ObservationReader (..)
   , readObservationReader
+  , receiptObservations
   , checkRoleReader
   , checkStackReader
   , comparePairReader
@@ -54,14 +55,17 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import Data.Char (isDigit)
+import Data.List (sortOn, stripPrefix)
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32, Word64)
-import Emulation.ObservationStream (foldTraceHitLines)
+import Emulation.ObservationStream (foldTraceHitLines, loadReceiptObservationValues)
 import Numeric (readHex)
 import Replacement.ModalRuntime.MenuEngineClass
 import Replacement.ModalRuntime.RenderObjectProvenance
 import Replacement.ModalRuntime.RenderStackEvidence (InstructionCounter (..))
-import System.FilePath (takeDirectory)
+import System.Directory (listDirectory)
+import System.FilePath ((</>), takeDirectory, takeFileName)
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
@@ -339,6 +343,32 @@ foldHitLines directory value step initial = do
 -- | An observation's phase, read before its residency is known.
 observationPhaseOf :: J.Value -> J.Parser T.Text
 observationPhaseOf = J.withObject "e2e observation" (.: "phase")
+
+-- | The receipt's observations, `e2e-observation-N.json` for each of its N segments in run order;
+-- each takes the residency of the segment at its position.
+receiptObservations :: FilePath -> IO [ObservationReader]
+receiptObservations directory = do
+  resultBytes <- B.readFile (directory </> "e2e-result.json")
+  resultValue <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure (J.eitherDecodeStrict' resultBytes)
+  phases <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure
+    (J.parseEither (J.withObject "e2e result" $ \fields ->
+      fields .: "phases" >>= mapM (J.withObject "phase" (.: "name"))) resultValue)
+  let segments = segmentResidencies phases
+  names <- listDirectory directory
+  let numbered = sortOn fst [(read digits :: Int, name) | name <- names, Just rest <- [stripPrefix "e2e-observation-" name]
+        , let digits = takeWhile isDigit rest, not (null digits), drop (length digits) rest == ".json"]
+  unless (map fst numbered == [0 .. length segments - 1])
+    (fail (directory ++ ": observation files " ++ show (map fst numbered) ++ " are not one per segment of the run's " ++ show (length segments)))
+  verified <- either (fail . ((directory ++ ": ") ++)) pure =<< loadReceiptObservationValues directory resultValue
+  unless (map (takeFileName . fst) verified == map snd numbered)
+    (fail (directory ++ ": observation references do not name its numbered documents"))
+  forM numbered $ \(index, name) -> do
+    let path = directory </> name
+    bytes <- B.readFile path
+    value <- either (fail . ((path ++ ": ") ++)) pure (J.eitherDecodeStrict' bytes)
+    phase <- either (fail . ((path ++ ": ") ++)) pure (J.parseEither observationPhaseOf value)
+    residency <- either (fail . ((path ++ ": ") ++)) pure (residencyAt segments index phase)
+    either (fail . ((path ++ ": ") ++)) pure =<< readObservationReader residency path
 
 -- | Task 1's stack, `[0x00a4c200, 0x00a4ce00)` (E-RECOVERY-MAINUI-CREATE-150).
 taskStackStart, taskStackBytes :: Word32

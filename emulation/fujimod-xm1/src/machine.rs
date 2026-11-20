@@ -195,11 +195,11 @@ impl Machine {
         })
     }
 
-    pub fn begin_render_provenance(&mut self) -> Result<(), String> {
+    pub fn begin_render_provenance(&mut self, presentation: Option<crate::presentation::OwnedSites>) -> Result<(), String> {
         if self.render_provenance.is_some() { return Err("render provenance already active".into()); }
         let (_, graph) = crate::run::graph(&self.document)?;
         self.render_provenance = Some(crate::render_provenance::Collector::begin(&self.session, graph.mappings)?);
-        self.traces.begin_presentation_tracking(&self.session)?;
+        self.traces.begin_presentation_tracking(&self.session, presentation)?;
         self.traces.render_object_provenance_sequence = Some(0);
         Ok(())
     }
@@ -855,7 +855,7 @@ pub(crate) mod tests {
     fn render_provenance_refuses_unrelated_code_at_source_address() {
         use fujimod_emulator_cpu::Register;
         let mut machine = machine();
-        machine.begin_render_provenance().unwrap();
+        machine.begin_render_provenance(None).unwrap();
         machine.session.board.write_physical(0x6dcc44, &SPIN.to_le_bytes()).unwrap();
         machine.session.board.write_register(0, Register::Pc, 0x6dcc44).unwrap();
         assert_eq!(machine.run(100), RunOutcome::Failed);
@@ -887,7 +887,7 @@ pub(crate) mod tests {
     #[test]
     fn render_provenance_covers_idle_gaps_and_preserves_free_reuse_identity() {
         let mut machine = machine();
-        machine.begin_render_provenance().unwrap();
+        machine.begin_render_provenance(None).unwrap();
         render_event(&mut machine, 0x6dcc44, 0x01000000, 0);
         render_event(&mut machine, 0x117d804, 0x01000000, 0x02000000);
         let first = render_batch(&mut machine);
@@ -914,7 +914,7 @@ pub(crate) mod tests {
     #[test]
     fn render_trace_hits_carry_the_exact_provenance_boundary() {
         let mut machine = machine();
-        machine.begin_render_provenance().unwrap();
+        machine.begin_render_provenance(None).unwrap();
         machine.traces.arm(&machine.session, [(0x117d804, "bind".into())].into()).unwrap();
         render_event(&mut machine, 0x6dcc44, 0x01000000, 0);
         render_event(&mut machine, 0x117d804, 0x01000000, 0x02000000);
@@ -946,7 +946,7 @@ pub(crate) mod tests {
         use crate::presentation::Site;
         use crate::trace::{CaptureCursor, CaptureScope};
         let mut machine = machine();
-        machine.begin_render_provenance().unwrap();
+        machine.begin_render_provenance(None).unwrap();
         machine.traces.arm(&machine.session, Site::ALL.map(|site| (site.address(), format!("user-{:x}", site.address()))).into()).unwrap();
         machine.begin_capture_observation(CaptureScope::Capture).unwrap();
         for _ in 0..64 {
@@ -984,6 +984,78 @@ pub(crate) mod tests {
         machine.disarm().unwrap();
         machine.rearm().unwrap();
         assert!(machine.select_presentation_target().unwrap().is_none());
+    }
+
+    /// An A32 `b 0x0` placed at `pc`.
+    fn branch_to_zero(pc: u32) -> u32 { 0xea00_0000 | ((0u32.wrapping_sub(pc + 8) >> 2) & 0x00ff_ffff) }
+
+    /// Runs `word` at `pc` with sp 0x00a00000, r11 `fp` and r0 = r4 = `result`, then `b 0x0`.
+    fn instruction_event(machine: &mut Machine, pc: u32, word: u32, fp: u32, result: u32) -> RunOutcome {
+        use fujimod_emulator_cpu::{Register, arm};
+        machine.session.board.write_physical(u64::from(pc), &word.to_le_bytes()).unwrap();
+        machine.session.board.write_physical(u64::from(pc + 4), &branch_to_zero(pc + 4).to_le_bytes()).unwrap();
+        for (register, value) in [
+            (Register::Pc, pc), (Register::Arm32(arm::Register::R(13)), 0x00a00000),
+            (Register::Arm32(arm::Register::R(11)), fp),
+            (Register::Arm32(arm::Register::R(0)), result), (Register::Arm32(arm::Register::R(4)), result),
+        ] {
+            machine.session.board.write_register(0, register, u64::from(value)).unwrap();
+        }
+        machine.run(100)
+    }
+
+    const ENTER: u32 = 0x006d_7920;
+    const OWNED_WAIT: u32 = 0x006d_8000;
+    const OWNED_FINISH: u32 = 0x006d_8100;
+    const MOV_R4_R0: u32 = 0xe1a0_4000;
+    const MOV_R0_R4: u32 = 0xe1a0_0004;
+
+    fn owned_sites() -> crate::presentation::OwnedSites {
+        serde_json::from_value(serde_json::json!({
+            "published_enter": format!("{:#010x}", branch_to_zero(ENTER)),
+            "after_wait": {"pc": format!("{OWNED_WAIT:#010x}"), "word": "0xe1a04000"},
+            "finish": {"pc": format!("{OWNED_FINISH:#010x}"), "word": "0xe1a00004"},
+        })).unwrap()
+    }
+
+    #[test]
+    fn configured_owned_sites_acknowledge_an_owned_frame_and_a_stock_fallback_frame() {
+        let mut machine = machine();
+        machine.begin_render_provenance(Some(owned_sites())).unwrap();
+        assert_eq!(instruction_event(&mut machine, ENTER, branch_to_zero(ENTER), 0, 0), RunOutcome::Completed);
+        let owned = machine.select_presentation_target().unwrap().unwrap();
+        assert_eq!(instruction_event(&mut machine, OWNED_WAIT, MOV_R4_R0, 0x009ffffc, 0), RunOutcome::Completed);
+        assert!(machine.presentation_acknowledgement(owned).unwrap().is_none());
+        assert_eq!(instruction_event(&mut machine, OWNED_FINISH, MOV_R0_R4, 0x009ffffc, 0), RunOutcome::Completed);
+        assert!(machine.presentation_acknowledgement(owned).unwrap().is_some());
+        assert_eq!(instruction_event(&mut machine, ENTER, 0xe92d_49f0, 0, 0), RunOutcome::Completed);
+        let fallback = machine.select_presentation_target().unwrap().unwrap();
+        assert_ne!(fallback, owned);
+        assert_eq!(instruction_event(&mut machine, 0x006d_7da4, 0xe284_4f46, 0x009ffffc, 0), RunOutcome::Completed);
+        assert_eq!(instruction_event(&mut machine, 0x006d_7df4, MOV_R0_R4, 0x009ffffc, 0), RunOutcome::Completed);
+        assert!(machine.presentation_acknowledgement(fallback).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_failed_owned_wait_refuses_the_owned_frame() {
+        let mut machine = machine();
+        machine.begin_render_provenance(Some(owned_sites())).unwrap();
+        assert_eq!(instruction_event(&mut machine, ENTER, branch_to_zero(ENTER), 0, 0), RunOutcome::Completed);
+        let owned = machine.select_presentation_target().unwrap().unwrap();
+        assert_eq!(instruction_event(&mut machine, OWNED_WAIT, MOV_R4_R0, 0x009ffffc, (-50i32) as u32), RunOutcome::Completed);
+        assert_eq!(instruction_event(&mut machine, OWNED_FINISH, MOV_R0_R4, 0x009ffffc, 0), RunOutcome::Completed);
+        assert!(machine.presentation_acknowledgement(owned).is_err());
+    }
+
+    #[test]
+    fn the_published_entry_without_configuration_and_a_wrong_owned_word_stop_the_machine() {
+        for (sites, pc, word) in [(None, ENTER, branch_to_zero(ENTER)), (Some(owned_sites()), OWNED_WAIT, 0xe284_4f46)] {
+            let mut machine = machine();
+            machine.begin_render_provenance(sites).unwrap();
+            let first = instruction_event(&mut machine, pc, word, 0x009ffffc, 0);
+            let outcome = if first == RunOutcome::Failed { first } else { machine.run(1) };
+            assert_eq!(outcome, RunOutcome::Failed);
+        }
     }
 
     fn write_row(machine: &Machine, row: u64, record: &[u8; 28]) {

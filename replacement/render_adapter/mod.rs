@@ -5,14 +5,18 @@ extern crate menu_engine_adapter;
 extern crate menu_widgets;
 extern crate render_commands;
 
-#[cfg(target_arch = "arm")]
+#[cfg(all(target_arch = "arm", not(rb_render_frame_owned)))]
 core::arch::global_asm!(include_str!("entry.S"), options(raw));
+#[cfg(all(target_arch = "arm", rb_render_frame_owned))]
+core::arch::global_asm!(concat!(include_str!("entry.S"), include_str!("frame.S")), options(raw));
 
 pub(crate) mod class;
 mod picker;
 mod tree;
 mod pane;
 mod calls;
+#[cfg(rb_render_frame_owned)]
+mod frame;
 
 use class::{DrawFunction, EntryClass, ReturnAddress};
 use crate::menu_widgets::value_picker::{value_picker, DrawArgs, DrawMode, LabelBound};

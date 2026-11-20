@@ -15,24 +15,23 @@ import qualified Data.Aeson.Types as J
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
-import Data.Char (isDigit)
-import Data.List (nub, sort, sortOn, stripPrefix)
+import Data.List (nub, sort, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import qualified EngineStack as S
 import Emulation.ObservationStream (countObservationDrawersValue, loadReceiptObservationValues)
 import qualified RenderStack as R
 import Numeric (readHex)
-import RamPushLayout (BankVariant, PublicationAddress (..), menuEngineHookAddress, menuValueHookAddress, modalEngineBankVariant, modalRenderBankVariant, modalValueBankVariant, renderHookAddresses, runtimeAllocationSizeFor, safePublicationOrderForVariant)
+import RamPushLayout (BankVariant, PublicationAddress (..), menuEngineHookAddress, menuValueHookAddress, modalEngineBankVariant, modalRenderBankVariant, modalRenderFrameBankVariant, modalValueBankVariant, parseBankVariantTag, renderHookAddresses, runtimeAllocationSizeFor, safePublicationOrderForVariant)
 import Replacement.ModalRuntime.MenuEngineClass (MenuTree, menuTree)
 import Replacement.ModalRuntime.MenuEnginePair
 import Replacement.ModalRuntime.MenuEngineTree (TablesDocument, composePackage, parsePackagePlan)
 import Replacement.ModalRuntime.RenderPair
 import qualified Replacement.ModalRuntime.RenderStackEvidence as E
-import System.Directory (doesFileExist, listDirectory)
+import System.Directory (doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
-import System.FilePath ((</>), takeFileName)
+import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
 data RenderSelection = OwnedRender RenderConfig | RetainedRender RenderConfig deriving (Eq)
@@ -40,32 +39,6 @@ data RenderSelection = OwnedRender RenderConfig | RetainedRender RenderConfig de
 mapSelection :: (RenderConfig -> RenderConfig) -> RenderSelection -> RenderSelection
 mapSelection f (OwnedRender config) = OwnedRender (f config)
 mapSelection f (RetainedRender config) = RetainedRender (f config)
-
--- | The receipt's observations, `e2e-observation-N.json` for each of its N segments in run order;
--- each takes the residency of the segment at its position.
-observations :: FilePath -> IO [ObservationReader]
-observations directory = do
-  resultBytes <- B.readFile (directory </> "e2e-result.json")
-  resultValue <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure (J.eitherDecodeStrict' resultBytes)
-  phases <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure
-    (J.parseEither (J.withObject "e2e result" $ \fields ->
-      fields J..: "phases" >>= mapM (J.withObject "phase" (J..: "name"))) resultValue)
-  let segments = segmentResidencies phases
-  names <- listDirectory directory
-  let numbered = sortOn fst [(read digits :: Int, name) | name <- names, Just rest <- [stripPrefix "e2e-observation-" name]
-        , let digits = takeWhile isDigit rest, not (null digits), drop (length digits) rest == ".json"]
-  unless (map fst numbered == [0 .. length segments - 1])
-    (fail (directory ++ ": observation files " ++ show (map fst numbered) ++ " are not one per segment of the run's " ++ show (length segments)))
-  verified <- either (fail . ((directory ++ ": ") ++)) pure =<< loadReceiptObservationValues directory resultValue
-  unless (map (takeFileName . fst) verified == map snd numbered)
-    (fail (directory ++ ": observation references do not name its numbered documents"))
-  forM numbered $ \(index, name) -> do
-    let path = directory </> name
-    bytes <- B.readFile path
-    value <- either (fail . ((path ++ ": ") ++)) pure (J.eitherDecodeStrict' bytes)
-    phase <- either (fail . ((path ++ ": ") ++)) pure (J.parseEither observationPhaseOf value)
-    residency <- either (fail . ((path ++ ": ") ++)) pure (residencyAt segments index phase)
-    either (fail . ((path ++ ": ") ++)) pure =<< readObservationReader residency path
 
 sessionHits :: FilePath -> IO (Either String [Hit])
 sessionHits directory = do
@@ -83,8 +56,8 @@ checkLifetime directory = do
 
 runRetained :: RenderConfig -> Bool -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
 runRetained config write tree stockTables document stockPath ownedPath = do
-  stock <- observations stockPath
-  owned <- observations ownedPath
+  stock <- receiptObservations stockPath
+  owned <- receiptObservations ownedPath
   unless (not (null stock) && not (null owned)) (fail "a role has no e2e observations")
   results <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> do
     checked <- checkRoleReader tree role segments
@@ -227,8 +200,8 @@ runCheck arguments = do
       unless ok exitFailure
       exitSuccess
     _ -> pure ()
-  stock <- observations stockPath
-  owned <- observations ownedPath
+  stock <- receiptObservations stockPath
+  owned <- receiptObservations ownedPath
   unless (not (null stock) && not (null owned)) (fail "a role has no e2e observations")
   results <- forM [(StockRole, stock), (OwnedRole, owned)] $ \(role, segments) -> do
     checked <- checkRoleReader tree role segments
@@ -255,7 +228,11 @@ runCheck arguments = do
   elf <- B.readFile (ownedPath </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
   variant <- case render of
     Nothing -> either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineManifest)
-    Just _ -> pure modalRenderBankVariant
+    Just _ -> do
+      tagged <- either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither (J.withObject "manifest" (J..: "bank_variant")))
+      selected <- either fail pure (parseBankVariantTag tagged)
+      unless (selected `elem` [modalRenderBankVariant, modalRenderFrameBankVariant]) (fail "render manifest is neither the render nor the render-frame variant")
+      pure selected
   let size = runtimeAllocationSizeFor variant
   valueLifecycle <- checkValue variant owned
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))

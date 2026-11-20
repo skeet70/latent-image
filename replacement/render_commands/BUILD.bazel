@@ -57,6 +57,49 @@ genrule(
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
 )
 
+# Exports the rasterizer identity frame_pixel_check.rs records: rustc version, host triple and the SHA-256 of the
+# sorted `sha256sum` lines of :module.
+FRAME_PIXEL_CHECK_IDENTITY = """
+rustc=$(location @lab_rustc//:bin/rustc)
+export FRAME_PIXEL_CHECK_RUSTC_VERSION="$$($$rustc --version)"
+FRAME_PIXEL_CHECK_HOST_TRIPLE=
+while read -r key value; do if [ "$$key" = host: ]; then FRAME_PIXEL_CHECK_HOST_TRIPLE=$$value; fi; done < <($$rustc -vV)
+export FRAME_PIXEL_CHECK_HOST_TRIPLE
+module=$$($(location @lab_coreutils//:bin/sha256sum) $(locations :module) | LC_ALL=C $(location @lab_coreutils//:bin/sort) -k2 | $(location @lab_coreutils//:bin/sha256sum))
+export FRAME_PIXEL_CHECK_MODULE_SHA256=$${module%% *}
+"""
+
+FRAME_PIXEL_CHECK_TOOLS = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang", "@lab_coreutils//:bin/sha256sum", "@lab_coreutils//:bin/sort"]
+
+# Compares the decoded VGLIB scenes of a stock and an owned guest RAM image and the owned published OSD buffer with
+# the host render of the owned scene.
+genrule(
+    name = "frame-pixel-check-build",
+    srcs = [":module", "tests/frame_pixel_check.rs", ":libm-host"],
+    outs = ["frame-pixel-check"],
+    cmd = FRAME_PIXEL_CHECK_IDENTITY + "$$rustc --edition=2021 -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) --extern libm=$(location :libm-host) $(location tests/frame_pixel_check.rs) -o $@",
+    executable = True,
+    tools = FRAME_PIXEL_CHECK_TOOLS,
+)
+
+genrule(
+    name = "frame-pixel-check-tests-build",
+    srcs = [":module", "tests/frame_pixel_check.rs", ":libm-host"],
+    outs = ["frame-pixel-check-tests-bin"],
+    cmd = FRAME_PIXEL_CHECK_IDENTITY + "$$rustc --edition=2021 --test -C opt-level=2 -C linker=$(location @lab_clang//:bin/clang) --extern libm=$(location :libm-host) $(location tests/frame_pixel_check.rs) -o $@",
+    executable = True,
+    testonly = True,
+    tools = FRAME_PIXEL_CHECK_TOOLS,
+)
+
+sh_test(
+    name = "frame-pixel-check-tests",
+    size = "medium",
+    srcs = ["tests/run.sh"],
+    args = ["$(location :frame-pixel-check-tests-build)"],
+    data = [":frame-pixel-check-tests-build"],
+)
+
 rust_source_boundary_test(
     name = "unsafe-boundary-check",
     declaration = "unsafe-boundary.json",

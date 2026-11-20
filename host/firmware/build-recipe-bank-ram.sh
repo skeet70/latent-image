@@ -90,6 +90,22 @@ case "${RB_PUBLICATION_GROUPS:-}" in
       -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_data
       -Wl,--undefined=cc_ram_convert)
     ;;
+  modal75,menu-engine,render,render-frame)
+    builder_mode=(--ram-push-variant modal75,menu-engine,render,render-frame)
+    allocation_size=0x6dd00
+    publication_count=229
+    activation_count=98
+    modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry
+      -Wl,--undefined=rb_render_tree_entry -Wl,--undefined=rb_render_picker_entry -Wl,--undefined=rb_render_pane_entry
+      -Wl,--undefined=rb_render_frame_entry)
+    engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
+    variant_link=(-Wl,--defsym=RAM_PUSH_BANK_VARIANT=3 -Wl,--defsym=RAM_PUSH_RENDER_FRAME=1)
+    gc_link=(-Wl,--gc-sections -Wl,--undefined=ram_push_install
+      -Wl,--undefined=ram_push_rollback -Wl,--undefined=ram_push_status
+      -Wl,--undefined=rb_select_values -Wl,--undefined=rb_select_labels
+      -Wl,--undefined=rb_capture_develop_wait -Wl,--undefined=cc_ram_data
+      -Wl,--undefined=cc_ram_convert)
+    ;;
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac
 
@@ -148,7 +164,7 @@ printf -v rb_bank_end '0x%08x' "$bank_end"
 printf -v rb_installer_start '0x%08x' "$installer_start"
 if (( ${#engine_link[@]} )); then
   engine_start=$((base_value + 0x1dcc0))
-  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render || ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,menu-value ]]; then
+  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render || ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render,render-frame || ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,menu-value ]]; then
     engine_start=$((base_value + 0x1dd00))
   fi
   if [[ ${RB_PROPERTY_PUBLICATION:-0} == 1 ]]; then
@@ -198,13 +214,21 @@ fi
 if (( ${#engine_link[@]} )); then
   # The engine's sections take the names menu/recipe_bank_ram_engine.ld places.
   engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_menu_value_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|10menu_value|18menu_value_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
-  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render ]]; then
+  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render || ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render,render-frame ]]; then
     engine_section='^\.(text|rodata|data|bss)\.(rb_menu_engine_|rb_render_|xm1_storage_|xm1_property_|SLOT_BYTES|TAIL_BYTES|XM1_KERNEL_BOUNDARY|.*(11menu_engine(6engine|5block|5state|4tree|5frame)|19menu_engine_adapter|15render_commands|12menu_widgets|14render_adapter|20xm1_property_service|25xm1_settings_storage_core|10xm1_kernel))'
+  fi
+  # The render-frame unit also places every section of the render, core, libm and
+  # compiler-builtins members in the engine region, including their unnamed constants.
+  engine_member='^$'
+  if [[ ${RB_PUBLICATION_GROUPS:-} == modal75,menu-engine,render,render-frame ]]; then
+    engine_member='\(((librender_commands|librender_adapter_frame|liblibm-arm)\.|(core|compiler_builtins)-)'
   fi
   declare -A renamed=()
   renames=()
-  while read -r _ section _; do
-    if [[ $section =~ $engine_section && -z ${renamed[$section]:-} ]]; then
+  member=
+  while read -r first section _; do
+    if [[ $section == file ]]; then member=$first; continue; fi
+    if [[ ( $section =~ $engine_section || ( -n $member && $member =~ $engine_member && $section =~ ^\.(text|rodata|data|bss)\. ) ) && -z ${renamed[$section]:-} ]]; then
       renamed[$section]=1
       case "$section" in
         *.data.*) renames+=(--rename-section "$section=.menu_engine_data$section") ;;

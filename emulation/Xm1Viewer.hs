@@ -7,8 +7,8 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import FujiAF.RamPush (Payload, emulatorExperimentPayload)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import FujiAF.RamPush (Payload, bankModalRenderFramePayload, emulatorExperimentPayload)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PresentationSites, PushMode (..), RamCapture (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import qualified Xm1RamPushE2E as RamE2E
 import Data.List (isPrefixOf, nub)
 import Data.Maybe (isJust, isNothing)
@@ -42,6 +42,9 @@ newtype FujiModRunFile = FujiModRunFile FilePath deriving (Eq)
 newtype ExperimentName = ExperimentName String deriving (Eq)
 data RamPayloadChoice = BankD3Choice | BankModal75Choice | BankLifecycleChoice | BankModalLifecycleChoice | ClassicChromeChoice | ClassicChromeIconChoice | ExperimentChoice ExperimentName deriving (Eq)
 
+-- | The render seams an owned engine role publishes.
+data RenderOwnership = RetainedRender | OwnedRenderSeams | OwnedRenderFrameStep deriving (Eq, Show)
+
 data Options = Options
   { workspaceOption :: Maybe Workspace
   , outputOption :: Maybe Runtime
@@ -74,7 +77,7 @@ data Options = Options
   , modal75RetiredOption :: Maybe FilePath
   , prelinkedModalOption :: Maybe FilePath
   , menuEngineOwnedOption :: Bool
-  , renderOwnedOption :: Bool
+  , renderOwnershipOption :: RenderOwnership
   , menuValueOwnedOption :: Bool
   , screenProbeOption :: Maybe ScreenProbe
   , propertyAllocationKeeperOption :: Bool
@@ -82,6 +85,7 @@ data Options = Options
   , allocationContractOption :: Maybe FilePath
   , afOwnershipPlanOption :: Maybe FilePath
   , afOwnershipControlOption :: Bool
+  , ramCaptureOption :: RamCapture
   }
 
 -- | A no-install observation that drives its own keys from held snapshots, with its config path.
@@ -159,8 +163,12 @@ usage = unlines
   , "                         --cfg rb_menu_engine_owned) into the 225-publication bank that"
   , "                         publishes the owned menu engine at 0xbf95c8"
   , "  --render-owned         With --menu-engine-owned: publish the three owned render seams (228 publications)"
+  , "  --render-frame-owned   With --menu-engine-owned and --modal75-prelinked: publish the three render seams"
+  , "                         and the owned VGLIB frame step at 0x006d7920 (229 publications); excludes"
+  , "                         --render-owned. The FujiMod frame tracker accepts the package's published"
+  , "                         branch and owned sites from render-frame-record.json and its manifest"
   , "  --menu-value-owned     With --menu-engine-owned: publish the owned value seam at 0x00d50084"
-  , "                         (226 publications); excludes --render-owned"
+  , "                         (226 publications); excludes owned render"
   , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
   , "                         Cannot combine with the continuously guarded --ram-push-modal-scoped route"
   , "                         Requires --ram-push-e2e --fujimod --unreviewed-relink"
@@ -178,6 +186,8 @@ usage = unlines
   , "                         The fallback is an unmeasured UI-only model."
   , "  --fixed-scene-frame N  Pin every scene render to the positive frame index N for the run"
   , "                         instead of the advancing synthetic source; unselected by default"
+  , "  --capture-ram          --ram-push-e2e --fujimod: each capture also writes guest physical RAM"
+  , "                         [0, 0x4000000) to screenshots/LABEL.ram.bin and its SHA-256 to the shot"
   , ""
   , "Default DAT: private-data/firmware/x-m1-1.50/FWUP0002.DAT"
   , "Source: emulation/xm1-upstream; native engine and Python come from devenv."
@@ -191,7 +201,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False False False Nothing False Nothing Nothing Nothing False
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing False RetainedRender False Nothing False Nothing Nothing Nothing False NoRamCapture
     go options [] = validateModalLifetimeOptions options >> validateAllocationKeeperOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -267,6 +277,9 @@ parseCommand args
     go options ("--af-ownership-control" : rest) = do
       require (not (afOwnershipControlOption options)) "--af-ownership-control may appear only once"
       go options { afOwnershipControlOption = True } rest
+    go options ("--capture-ram" : rest) = do
+      require (ramCaptureOption options == NoRamCapture) "--capture-ram may appear only once"
+      go options { ramCaptureOption = CaptureRam } rest
     go options ("--modal-lifetime-guard" : rest) = do
       require (modalLifetimeGuardOption options == NoModalLifetimeGuard) "--modal-lifetime-guard may appear only once"
       go options { modalLifetimeGuardOption = ContinuousModalLifetimeGuard } rest
@@ -329,8 +342,11 @@ parseCommand args
       require (not (menuEngineOwnedOption options)) "--menu-engine-owned may appear only once"
       go options { menuEngineOwnedOption = True } rest
     go options ("--render-owned" : rest) = do
-      require (not (renderOwnedOption options)) "--render-owned may appear only once"
-      go options { renderOwnedOption = True } rest
+      require (renderOwnershipOption options == RetainedRender) "--render-owned and --render-frame-owned select owned render once"
+      go options { renderOwnershipOption = OwnedRenderSeams } rest
+    go options ("--render-frame-owned" : rest) = do
+      require (renderOwnershipOption options == RetainedRender) "--render-owned and --render-frame-owned select owned render once"
+      go options { renderOwnershipOption = OwnedRenderFrameStep } rest
     go options ("--menu-value-owned" : rest) = do
       require (not (menuValueOwnedOption options)) "--menu-value-owned may appear only once"
       go options { menuValueOwnedOption = True } rest
@@ -358,7 +374,7 @@ validateAllocationKeeperOptions options = do
       && modalLifetimeGuardOption options == NoModalLifetimeGuard && screenProbeOption options == Nothing
       && modal75ArchiveOption options == Nothing && modal75RetiredOption options == Nothing
       && prelinkedModalOption options == Nothing && not (menuEngineOwnedOption options)
-      && not (renderOwnedOption options) && isNothing (fixedSceneFrameOption options))
+      && renderOwnershipOption options == RetainedRender && isNothing (fixedSceneFrameOption options))
       "property allocation keeper refuses publication, trajectory, checkpoint and diagnostic options"
 
 validateModalLifetimeOptions :: Options -> IO ()
@@ -396,12 +412,14 @@ validateModalLifetimeOptions options = do
   when (menuEngineOwnedOption options) $
     require (ramPayloadOption options == BankModal75Choice && isJust (modal75ArchiveOption options))
       "--menu-engine-owned requires --ram-push-modal-scoped and --modal75-owned-archive"
-  when (renderOwnedOption options) $
+  when (renderOwnershipOption options /= RetainedRender) $
     require (menuEngineOwnedOption options && isJust (modal75ArchiveOption options))
-      "--render-owned requires --menu-engine-owned and --modal75-owned-archive"
+      "--render-owned and --render-frame-owned require --menu-engine-owned and --modal75-owned-archive"
+  when (renderOwnershipOption options == OwnedRenderFrameStep) $
+    require (isJust (prelinkedModalOption options)) "--render-frame-owned requires --modal75-prelinked"
   when (menuValueOwnedOption options) $
-    require (menuEngineOwnedOption options && not (renderOwnedOption options) && isJust (modal75ArchiveOption options))
-      "--menu-value-owned requires --menu-engine-owned and --modal75-owned-archive without --render-owned"
+    require (menuEngineOwnedOption options && renderOwnershipOption options == RetainedRender && isJust (modal75ArchiveOption options))
+      "--menu-value-owned requires --menu-engine-owned and --modal75-owned-archive without owned render"
 
 -- | A regular file beneath workspace/private-data/.
 privateRegularInput :: Workspace -> String -> FilePath -> IO FilePath
@@ -422,6 +440,12 @@ privateDirectoryInput root flag supplied = do
   present <- doesDirectoryExist path
   require present (flag ++ " must be a directory")
   pure path
+
+-- | The owned frame step's presentation sites from the prelinked render-frame package.
+renderFramePresentation :: RenderOwnership -> Maybe FilePath -> IO (Maybe PresentationSites)
+renderFramePresentation OwnedRenderFrameStep (Just package) = Just <$> RamE2E.readPresentationSites package
+renderFramePresentation OwnedRenderFrameStep Nothing = ioError (userError "--render-frame-owned requires --modal75-prelinked")
+renderFramePresentation _ _ = pure Nothing
 
 validateVirtualSDImage :: Workspace -> VirtualSDImage -> IO VirtualSDImage
 validateVirtualSDImage root (VirtualSDImage supplied) = do
@@ -464,7 +488,8 @@ bindAddress IPv4Loopback = "127.0.0.1"
 selectedPayload :: Options -> Payload
 selectedPayload options = case ramPayloadOption options of
   BankD3Choice -> bankD3Payload
-  BankModal75Choice | renderOwnedOption options -> bankModalRenderPayload
+  BankModal75Choice | renderOwnershipOption options == OwnedRenderFrameStep -> bankModalRenderFramePayload
+                    | renderOwnershipOption options == OwnedRenderSeams -> bankModalRenderPayload
                     | menuValueOwnedOption options -> bankModalValuePayload
                     | menuEngineOwnedOption options -> bankModalEnginePayload
                     | otherwise -> bankModal75Payload
@@ -546,6 +571,9 @@ launch options = do
     require (pushModeOption options == RamPush) "--flash-candidate belongs to --ram-push-e2e"
     require (ramPayloadOption options == BankD3Choice) "RAM payload selections belong to --ram-push-e2e"
     require (attachHoldOption options == NoAttachHold) "--attach-hold-q belongs to --ram-push-e2e"
+    require (ramCaptureOption options == NoRamCapture) "--capture-ram belongs to --ram-push-e2e"
+  require (ramCaptureOption options == NoRamCapture || runtimeOption options == FujiModChoice)
+    "--capture-ram requires --fujimod"
   require (ramPayloadOption options == BankD3Choice || pushModeOption options /= FlashCandidate)
     "RAM payload selections cannot be combined with --flash-candidate"
   require (allowlistOverrideOption options == Nothing || relinkModeOption options /= ReviewedRelink)
@@ -590,6 +618,7 @@ launch options = do
             Just <$> loadModalOwnedPackage archivePath retiredPath
           _ -> pure Nothing
         prelinked <- traverse (privateDirectoryInput root "--modal75-prelinked") (prelinkedModalOption options)
+        presentation <- renderFramePresentation (renderOwnershipOption options) prelinked
         checkpointOverride <- lookupEnv "XM1_RAM_PUSH_CHECKPOINT_ROOT"
         let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
             receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
@@ -627,6 +656,8 @@ launch options = do
               (modalLifetimeGuardOption options) owned prelinked
               (resolve root <$> afOwnershipPlanOption options)
               (afOwnershipControlOption options)
+              presentation
+              (ramCaptureOption options)
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do

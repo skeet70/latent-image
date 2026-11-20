@@ -30,12 +30,17 @@ module RamPushLayout
   , modalLifecycleBankVariant
   , modalEngineBankVariant
   , modalRenderBankVariant
+  , modalRenderFrameBankVariant
   , modalValueBankVariant
   , bankVariantTag
   , parseBankVariantTag
   , bankVariantFromIdentity
   , renderHookAddresses
   , renderHookWordFor
+  , renderFrameHookAddress
+  , renderFrameStockWord
+  , renderFrameStockResume
+  , renderFrameHookWordFor
   , menuEngineHookAddress
   , menuEngineHookWordFor
   , menuEngineRegionStart
@@ -183,21 +188,24 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
-data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication | RenderPublication | MenuValuePublication
+data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication | RenderPublication | MenuValuePublication | RenderFramePublication
   deriving (Eq, Ord, Show)
 
 newtype BankVariant = BankVariant [PublicationGroup]
   deriving (Eq, Show)
 
--- | Render requires the modal75 and menu-engine groups.
+-- | Render requires the modal75 and menu-engine groups; render-frame requires render.
 bankVariant :: [PublicationGroup] -> Either String BankVariant
 bankVariant groups = do
   let ordered = sort groups
+      withoutFrame = filter (/= RenderFramePublication) ordered
   when (or (zipWith (==) ordered (drop 1 ordered))) $
     Left "duplicate publication group"
-  when (RenderPublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication, RenderPublication]) $
+  when (RenderFramePublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication, RenderPublication, RenderFramePublication]) $
+    Left "the render-frame group requires exactly modal75, menu-engine and render"
+  when (RenderPublication `elem` ordered && withoutFrame /= [Modal75Publication, MenuEnginePublication, RenderPublication]) $
     Left "the render group requires exactly modal75 and menu-engine"
-  when (MenuEnginePublication `elem` ordered && filter (\group -> group /= RenderPublication && group /= MenuValuePublication) ordered /= [Modal75Publication, MenuEnginePublication]) $
+  when (MenuEnginePublication `elem` ordered && filter (\group -> group /= RenderPublication && group /= MenuValuePublication && group /= RenderFramePublication) ordered /= [Modal75Publication, MenuEnginePublication]) $
     Left "the menu-engine group requires exactly the modal75 group"
   when (MenuValuePublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication, MenuValuePublication]) $
     Left "the menu-value group requires exactly the modal75 and menu-engine groups"
@@ -222,6 +230,10 @@ modalRenderBankVariant = BankVariant [Modal75Publication, MenuEnginePublication,
 modalValueBankVariant :: BankVariant
 modalValueBankVariant = BankVariant [Modal75Publication, MenuEnginePublication, MenuValuePublication]
 
+-- | The render variant plus the owned VGLIB frame step at `0x006d7920`.
+modalRenderFrameBankVariant :: BankVariant
+modalRenderFrameBankVariant = BankVariant [Modal75Publication, MenuEnginePublication, RenderPublication, RenderFramePublication]
+
 bankVariantTag :: BankVariant -> String
 bankVariantTag variant
   | variant == standardBankVariant = "standard"
@@ -232,6 +244,7 @@ bankVariantTag variant
   groupTag MenuEnginePublication = "menu-engine"
   groupTag RenderPublication = "render"
   groupTag MenuValuePublication = "menu-value"
+  groupTag RenderFramePublication = "render-frame"
   concatTags [] = ""
   concatTags [tag] = tag
   concatTags (tag : rest) = tag ++ "," ++ concatTags rest
@@ -241,7 +254,7 @@ parseBankVariantTag tag = case filter ((== tag) . bankVariantTag) variants of
   [variant] -> Right variant
   _ -> Left "unknown bank variant tag"
  where
-  variants = [standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, modalValueBankVariant]
+  variants = [standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant, modalRenderBankVariant, modalValueBankVariant, modalRenderFrameBankVariant]
 
 -- | Untagged schema-1 packages retain their legacy count identities.
 bankVariantFromIdentity :: Maybe String -> Int -> Either String BankVariant
@@ -267,6 +280,7 @@ publicationCountFor variant = publicationCount + sum (map groupCount (publicatio
   groupCount MenuEnginePublication = 1
   groupCount RenderPublication = 3
   groupCount MenuValuePublication = 1
+  groupCount RenderFramePublication = 1
 
 publicationActivationCountFor :: BankVariant -> Int
 publicationActivationCountFor variant = publicationCountFor variant - publicationSetupCount
@@ -278,7 +292,7 @@ runtimeInstallerExtentFor variant
 
 runtimeAllocationSizeFor :: BankVariant -> Word32
 runtimeAllocationSizeFor variant
-  | hasPublicationGroup MenuValuePublication variant =
+  | hasPublicationGroup MenuValuePublication variant || hasPublicationGroup RenderFramePublication variant =
       menuEngineRegionStartFor variant 0 + menuEngineRegionExtentFor variant
   | hasPublicationGroup MenuEnginePublication variant =
       menuEngineRegionStart 0 + menuEngineRegionExtent
@@ -466,6 +480,18 @@ menuValueHookAddress = PublicationAddress 0x00d50084
 renderHookAddresses :: [PublicationAddress]
 renderHookAddresses = map PublicationAddress [0x01164e1c, 0x01163f2c, 0x011662a0]
 
+-- | VGLIB's frame step `FUN_006d7920`, the render-frame group's final publication.
+renderFrameHookAddress :: PublicationAddress
+renderFrameHookAddress = PublicationAddress 0x006d7920
+
+-- | `push {r4-r8,r11,lr}` at `0x006d7920`.
+renderFrameStockWord :: Word32
+renderFrameStockWord = 0xe92d49f0
+
+-- | The stock step after its prologue and the lock call `bl 0x6d9478` (`0x006d7920..0x006d792c`).
+renderFrameStockResume :: Word32
+renderFrameStockResume = 0x006d7930
+
 -- | The owned engine's code and tree, placed after the scoped modal
 -- allocation's end.
 menuEngineRegionStart :: Word32 -> Word32
@@ -484,6 +510,8 @@ menuEngineRegionStartFor variant base
 menuEngineRegionExtentFor :: BankVariant -> Word32
 menuEngineRegionExtentFor variant
   | hasPublicationGroup MenuValuePublication variant = 0x16000
+  -- The render region plus 0x30000 bytes for the frame step and the render, core, libm and builtins code it places here.
+  | hasPublicationGroup RenderFramePublication variant = 0x50000
   | otherwise = menuEngineRegionStart 0 + menuEngineRegionExtent - menuEngineRegionStartFor variant 0
 
 lifecycleHookAddresses :: [PublicationAddress]
@@ -499,9 +527,11 @@ safePublicationOrderForVariant variant addresses = do
   let modalSelected = hasPublicationGroup Modal75Publication variant
       engineSelected = hasPublicationGroup MenuEnginePublication variant
       valueSelected = hasPublicationGroup MenuValuePublication variant
+      frameSelected = hasPublicationGroup RenderFramePublication variant
       finalHooks = [modalHookAddress | modalSelected] <> [menuEngineHookAddress | engineSelected]
         <> [menuValueHookAddress | valueSelected]
         <> [hook | hasPublicationGroup RenderPublication variant, hook <- renderHookAddresses]
+        <> [renderFrameHookAddress | frameSelected]
   when (not (null finalHooks) && drop (length addresses - length finalHooks) addresses /= finalHooks) $
     Left "scoped modal hook must occur once at the final logical index"
   when (not modalSelected && modalHookAddress `elem` addresses) $
@@ -510,6 +540,8 @@ safePublicationOrderForVariant variant addresses = do
     Left "menu engine hook present without its publication group"
   when (not valueSelected && menuValueHookAddress `elem` addresses) $
     Left "menu value hook present without its publication group"
+  when (not frameSelected && renderFrameHookAddress `elem` addresses) $
+    Left "render frame hook present without its publication group"
   let lifecycleAddresses = if hasPublicationGroup LifecyclePublications variant then lifecycleHookAddresses else []
       selectedAddresses = lifecycleAddresses <> finalHooks
   when (drop publicationCount addresses /= selectedAddresses) $
@@ -548,6 +580,17 @@ renderHookWordFor variant base hook target source = do
     Left "render target leaves the engine region"
   hookBranchWord variant base hook target
 
+-- | The branch at `0x006d7920` to `rb_render_frame_entry` in the engine region.
+renderFrameHookWordFor :: BankVariant -> Word32 -> Word32 -> Word32 -> Either String Word32
+renderFrameHookWordFor variant base target source = do
+  when (not (hasPublicationGroup RenderFramePublication variant)) $
+    Left "render frame hook requires the render-frame publication group"
+  when (source /= renderFrameStockWord) $
+    Left "stock frame step entry is not push r4-r8,r11,lr"
+  when (target .&. 3 /= 0 || target < menuEngineRegionStartFor variant base || target >= menuEngineRegionStartFor variant base + menuEngineRegionExtentFor variant) $
+    Left "render frame target leaves the engine region"
+  hookBranchWord variant base renderFrameHookAddress target
+
 hookBranchWord :: BankVariant -> Word32 -> PublicationAddress -> Word32 -> Either String Word32
 hookBranchWord variant base (PublicationAddress hook) target = do
   when (base .&. 7 /= 0 || base > maxBound - runtimeAllocationSizeFor variant) $
@@ -563,9 +606,10 @@ hookBranchWord variant base (PublicationAddress hook) target = do
 staleFixedReferences :: Word32 -> Word32 -> B.ByteString -> [(Int, Word32)]
 staleFixedReferences low high bytes = direct <> movPairs
  where
+  -- Literal-pool and data pointers are word-aligned; unaligned windows are code or constant bytes.
   direct =
     [ (offset, value)
-    | offset <- [0 .. B.length bytes - 4]
+    | offset <- [0, 4 .. B.length bytes - 4]
     , let value = wordAt offset
     , low <= value
     , value < high

@@ -32,7 +32,7 @@ import qualified EngineStack
 import qualified RenderStack
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication, RenderPublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, modalValueBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
+import RamPushLayout (BankVariant, PublicationGroup (MenuEnginePublication, RenderFramePublication, RenderPublication), hasPublicationGroup, bankVariantFromIdentity, bankVariantTag, modalRenderBankVariant, modalRenderFrameBankVariant, modalValueBankVariant, menuEngineRegionExtentFor, menuEngineRegionStartFor, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 data Allowlist = Allowlist
   { stockCalls :: [StockCall]
@@ -257,6 +257,7 @@ readLayout elf = do
     [] -> Right Nothing
     [1] -> Right (Just (bankVariantTag modalRenderBankVariant))
     [2] -> Right (Just (bankVariantTag modalValueBankVariant))
+    [3] -> Right (Just (bankVariantTag modalRenderFrameBankVariant))
     _ -> Left "layout: unsupported bank variant identity"
   variant <- bankVariantFromIdentity tag (fromIntegral count)
   let allocationSize = runtimeAllocationSizeFor variant
@@ -388,6 +389,9 @@ checkBank allowlist elf = do
                         _ <- EngineStack.checkEngineStack EngineStack.taskOneBudget elf inside
                         when (hasPublicationGroup RenderPublication (layoutBankVariant layout)) $ do
                           _ <- RenderStack.checkRenderStack elf inside
+                          pure ()
+                        when (hasPublicationGroup RenderFramePublication (layoutBankVariant layout)) $ do
+                          _ <- RenderStack.checkRenderFrameStack elf inside
                           pure ()
                    in case result of Left problem -> [Finding (textStart layout) "<stack>" Violation StackBudgetViolation problem]; Right () -> []
   report <- checkImageInterfaces allowlist elf (InterfaceLayout

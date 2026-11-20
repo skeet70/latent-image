@@ -24,6 +24,9 @@ __rb_menu_value_shared_tail = 0x00d52674;
 PROVIDE(__rb_render_tree_stock_resume = 0x01164e20);
 PROVIDE(__rb_render_picker_stock_resume = 0x01163f30);
 PROVIDE(__rb_render_pane_stock_resume = 0x011662a4);
+PROVIDE(__rb_render_frame_stock_resume = 0x006d7930);
+PROVIDE(rb_render_stock_6c7318 = 0x006c7318);
+PROVIDE(rb_render_stock_6d7f30 = 0x006d7f30);
 
 SECTIONS {
   .menu_engine RAM_PUSH_MENU_ENGINE_START : {
@@ -47,7 +50,8 @@ ASSERT(__rb_menu_engine_data_start >= __rb_menu_engine_end, "menu engine data ov
 ASSERT(__rb_menu_engine_data_end <= RAM_PUSH_MENU_ENGINE_END, "menu engine data overflows its region")
 ASSERT(RAM_PUSH_MENU_ENGINE_START >= __ram_push_end, "menu engine region overlaps the installer")
 ASSERT(!DEFINED(RAM_PUSH_BANK_VARIANT) || DEFINED(RAM_PUSH_MENU_VALUE) || DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || RAM_PUSH_MENU_ENGINE_START == RAM_PUSH_BASE + 0x1dd00, "render region start differs")
-ASSERT(!DEFINED(RAM_PUSH_BANK_VARIANT) || DEFINED(RAM_PUSH_MENU_VALUE) || DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || RAM_PUSH_MENU_ENGINE_END == RAM_PUSH_BASE + 0x3dd00, "render allocation end differs")
+ASSERT(!DEFINED(RAM_PUSH_BANK_VARIANT) || DEFINED(RAM_PUSH_MENU_VALUE) || DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || DEFINED(RAM_PUSH_RENDER_FRAME) || RAM_PUSH_MENU_ENGINE_END == RAM_PUSH_BASE + 0x3dd00, "render allocation end differs")
+ASSERT(!DEFINED(RAM_PUSH_RENDER_FRAME) || RAM_PUSH_MENU_ENGINE_END == RAM_PUSH_BASE + 0x6dd00, "render frame allocation end differs")
 ASSERT(!DEFINED(RAM_PUSH_MENU_VALUE) || RAM_PUSH_MENU_ENGINE_END == RAM_PUSH_BASE + 0x33d00, "menu value allocation end differs")
 ASSERT(!DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || RAM_PUSH_MENU_ENGINE_START == RAM_PUSH_BASE + 0x2dcc0, "property render region start differs")
 ASSERT(!DEFINED(RAM_PUSH_PROPERTY_PUBLICATION) || RAM_PUSH_MENU_ENGINE_END == RAM_PUSH_BASE + 0x3dc80, "property render allocation end differs")

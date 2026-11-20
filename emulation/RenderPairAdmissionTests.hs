@@ -52,6 +52,17 @@ data Fixture = Fixture
   , fixtureExpected :: Expected
   }
 
+-- | The owned role's installed publication vector.
+data OwnedVector = RenderSeamsVector | RenderFrameVector deriving (Eq)
+
+vectorTag :: OwnedVector -> T.Text
+vectorTag RenderSeamsVector = "modal75,menu-engine,render"
+vectorTag RenderFrameVector = "modal75,menu-engine,render,render-frame"
+
+vectorPublications :: OwnedVector -> Int
+vectorPublications RenderSeamsVector = 228
+vectorPublications RenderFrameVector = 229
+
 main :: IO ()
 main = do
   temporary <- getTemporaryDirectory
@@ -59,7 +70,8 @@ main = do
   let root = temporary </> ("render-pair-admission-tests-" ++ show pid)
   removeIfPresent root
   createDirectoryIfMissing True root
-  results <- concat <$> mapM (runRoot root) [("stock", StockRole), ("owned", OwnedRole)]
+  results <- concat <$> mapM (runRoot root)
+    [("stock", StockRole, RenderSeamsVector), ("owned", OwnedRole, RenderSeamsVector), ("owned-frame", OwnedRole, RenderFrameVector)]
   removeDirectoryRecursive root
   unless (and results) exitFailure
   putStrLn ("render pair admission tests passed: " ++ show (length results))
@@ -70,12 +82,12 @@ removeIfPresent path = do
   directory <- doesDirectoryExist path
   if not present then pure () else if directory then removeDirectoryRecursive path else removeFile path
 
-runRoot :: FilePath -> (String, Role) -> IO [Bool]
-runRoot root (label, role) = do
+runRoot :: FilePath -> (String, Role, OwnedVector) -> IO [Bool]
+runRoot root (label, role, vector) = do
   let directory = root </> label
       receipt = directory </> "receipt"
   createDirectoryIfMissing True receipt
-  fixture <- buildFixture directory receipt role
+  fixture <- buildFixture directory receipt role vector
   original <- getCurrentDirectory
   setCurrentDirectory directory
   bound <- bindReceipt (fixtureExpected fixture) receipt GuestRun
@@ -142,6 +154,13 @@ runRoot root (label, role) = do
   failingReport <- if role == OwnedRole then badPrelinkedFailingReport fixture else pure (Right ())
   failingReportOk <- if role == OwnedRole then expectLeft (label ++ " failing EnforceAllowlist report refuses") failingReport else pure True
   imported <- importSynthetic root label fixture
+  let other = if vector == RenderSeamsVector then RenderFrameVector else RenderSeamsVector
+  sameVectorOk <- if role == OwnedRole
+    then rebindWithVector fixture receipt "same-vector" vector >>= accepts (label ++ " copied receipt with its own lifetime vector binds")
+    else pure True
+  crossedOk <- if role == OwnedRole
+    then rebindWithVector fixture receipt "crossed-vector" other >>= expectLeft (label ++ " lifetime vector differing from the relinked manifest refuses")
+    else pure True
   let mismatchedOutcome = if role == StockRole then "qualified-scoped-lifetime-diagnostic" else "candidate-qualified"
   refused <- mapM (\(control, name, key, replacement) -> do
     let path = receipt </> name
@@ -159,10 +178,39 @@ runRoot root (label, role) = do
     ]
   setCurrentDirectory original
   pure ([admitted, admittedFile, reusedOk, priorSchemaOk, tamperedOk, missingListOk, emptyListOk, unboundSidecarOk, unboundSourcesOk, changedOk, missingOk, wrongTrajectoryOk, wrongRoleOk, malformedOk, emptyOk, prelinkedBaseOk, prelinkedSizeOk, mutatedPrelinkedOk
-       , alteredElfOk, alteredRuntimeOk, alteredInputOk, alteredReportOk, alteredProofOk, alteredCheckerOk, alteredArchiveOk, alteredSourceOk, missingCheckerOk, failingReportOk, imported] ++ refused)
+       , alteredElfOk, alteredRuntimeOk, alteredInputOk, alteredReportOk, alteredProofOk, alteredCheckerOk, alteredArchiveOk, alteredSourceOk, missingCheckerOk, failingReportOk, imported, sameVectorOk, crossedOk] ++ refused)
 
-buildFixture :: FilePath -> FilePath -> Role -> IO Fixture
-buildFixture directory receipt role = do
+-- | Binds a fresh copy of the receipt whose lifetime request and permit carry `vector`, consistently.
+rebindWithVector :: Fixture -> FilePath -> FilePath -> OwnedVector -> IO (Either String ReceiptIdentity)
+rebindWithVector fixture receipt name vector = do
+  let copy = fixtureRoot fixture </> name </> takeFileName receipt
+  copyTreeForTest receipt copy
+  removeIfPresent (copy </> "admission.json")
+  BL.writeFile (copy </> "e2e-modal-observation.json") (J.encode (modalObservation True vector) <> "\n")
+  bindReceipt (fixtureExpected fixture) copy GuestRun
+
+modalObservation :: Bool -> OwnedVector -> J.Value
+modalObservation verified vector =
+  let variant = if verified then vectorTag vector else "standard"
+      publications = if verified then vectorPublications vector else 223
+      entries = if verified then [J.object ["controller" J..= (75 :: Word32)]] else []
+  in J.object
+        [ "task_identity_verified" J..= verified
+        , "whole_installed_lifetime_coverage" J..= True
+        , "request" J..= J.object
+            [ "lifetime" J..= J.object
+                [ "bank_variant" J..= variant
+                , "publications" J..= replicate publications (1 :: Word32)
+                ]
+            ]
+        , "permit_end" J..= J.object
+            [ "task_entries" J..= entries
+            , "lifetime" J..= J.object ["publication_count" J..= publications]
+            ]
+        ]
+
+buildFixture :: FilePath -> FilePath -> Role -> OwnedVector -> IO Fixture
+buildFixture directory receipt role vector = do
   let write name bytes = B.writeFile (directory </> name) bytes
       elfBytes = B.pack [0x7f, 0x45, 0x4c, 0x46, 1, 1, 1, 0]
       firmwareBytes = B.pack [5, 6, 7]
@@ -195,7 +243,8 @@ buildFixture directory receipt role = do
     , "fujimodRamPushBridge = \"" ++ sdk ++ "/bin/fujimod-xm1-ram-push\""
     , "fujimodRun = \"" ++ sdk ++ "/share/fujimod-xm1/xm1-150.json\""
     ])
-  let sources = [(relative, B.pack [fromIntegral index, 0]) | (index, relative) <- zip [1 :: Int ..] renderSourceIdentityPaths]
+  let sourcePaths = renderSourceIdentityPaths ++ (if vector == RenderFrameVector then renderFrameSourceIdentityPaths else [])
+      sources = [(relative, B.pack [fromIntegral index, 0]) | (index, relative) <- zip [1 :: Int ..] sourcePaths]
   forM_ sources $ \(relative, bytes) -> do
     let path = directory </> relative
     createDirectoryIfMissing True (takeDirectory path)
@@ -227,24 +276,7 @@ buildFixture directory receipt role = do
         , "observations" J..= [observationRef]
         , "phases" J..= [J.object ["name" J..= ("segment render-baseline" :: T.Text)]]
         ]
-  let verified = role == OwnedRole
-      variant = if verified then "modal75,menu-engine,render" else "standard"
-      publications = if verified then 228 else 223 :: Int
-      entries = if verified then [J.object ["controller" J..= (75 :: Word32)]] else []
-  let modal = J.object
-        [ "task_identity_verified" J..= verified
-        , "whole_installed_lifetime_coverage" J..= True
-        , "request" J..= J.object
-            [ "lifetime" J..= J.object
-                [ "bank_variant" J..= (variant :: T.Text)
-                , "publications" J..= replicate publications (1 :: Word32)
-                ]
-            ]
-        , "permit_end" J..= J.object
-            [ "task_entries" J..= entries
-            , "lifetime" J..= J.object ["publication_count" J..= (publications :: Int)]
-            ]
-        ]
+  let modal = modalObservation (role == OwnedRole) vector
   let manifest = J.object ["bytes" J..= (32 :: Word32)]
   BL.writeFile (receipt </> "e2e-result.json") (J.encode result <> "\n")
   BL.writeFile (receipt </> "emulator-session.json") (J.encode session <> "\n")
@@ -258,7 +290,7 @@ buildFixture directory receipt role = do
   archiveSha <- digestFile archivePath
   prelinkedPath <- if role == OwnedRole then do
     let prelinked = directory </> "prelinked"
-        proofVariant = "modal75,menu-engine,render" :: T.Text
+        proofVariant = vectorTag vector
         prelinkedManifest sourceIdentityBytes = J.object
           [ "base" J..= ("0x00c40000" :: T.Text)
           , "size" J..= (32 :: Word32)

@@ -417,6 +417,9 @@ fn image_storage_and_geometry_refusals() {
     // 8 x 1.1 = 8.8 pixels.
     let (ram, object) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale: (1.1, 1.0) });
     assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NonIntegralGeometry));
+    // A position 1/2048 off an integer.
+    let (ram, object) = single_image(place(3.0 + 1.0 / 2048.0, 0.0, (8, 4)));
+    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NonIntegralGeometry));
 }
 
 #[test]

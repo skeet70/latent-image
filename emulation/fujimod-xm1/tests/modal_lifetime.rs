@@ -1170,3 +1170,28 @@ fn menu_value_variant_admits_226_publications_and_unknown_tags_stay_refused() {
         assert!(matches!(config(unknown), Err(LifetimeFailure::InvalidRequest)), "{tag}");
     }
 }
+
+fn render_frame_request(added: u32) -> Value {
+    let mut value = request();
+    value["bank_variant"] = json!("modal75,menu-engine,render,render-frame");
+    let mut publications = value["publications"].clone();
+    for index in 0..added {
+        publications.as_array_mut().unwrap().push(json!({"address": 0x0120_037c + index * 4, "old": 0, "new": 0x1000 + index}));
+    }
+    value["publications"] = publications;
+    value
+}
+
+#[test]
+fn render_frame_variant_admits_229_publications_only_under_its_tag() {
+    assert!(config(render_frame_request(6)).is_ok());
+    assert!(matches!(config(render_frame_request(5)), Err(LifetimeFailure::InvalidRequest)));
+    let mut render_tag = render_frame_request(6);
+    render_tag["bank_variant"] = json!("modal75,menu-engine,render");
+    assert!(matches!(config(render_tag), Err(LifetimeFailure::InvalidRequest)));
+    for tag in ["render-frame", "modal75,menu-engine,render-frame", "modal75,menu-engine,menu-value,render-frame"] {
+        let mut unknown = render_frame_request(6);
+        unknown["bank_variant"] = json!(tag);
+        assert!(matches!(config(unknown), Err(LifetimeFailure::InvalidRequest)), "{tag}");
+    }
+}

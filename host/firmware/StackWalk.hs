@@ -16,7 +16,8 @@ import Data.Bits (shiftR, testBit, (.&.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 
--- | `Permissive` is EngineStack's handling: VFP refuses, `UndefinedEncoding` ends the path,
+-- | `Permissive` is EngineStack's handling: VPUSH/VPOP adjust SP, other VFP words that write SP refuse and the
+-- rest are neutral, `UndefinedEncoding` ends the path,
 -- every other rejected word and every conditional SP adjustment continues as written.
 -- `Strict` continues only through the stack-neutral classes, refuses every other rejected
 -- word, and refuses SP adjustments that only some paths make.
@@ -157,7 +158,7 @@ classify strictness address word = case A32.decode address word of
     | strictness == Strict && rt == A32.pc && base == A32.pc -> JumpTable cond index
   A32.Load _ _ _ rt _ _ _ | rt == A32.pc -> Refuse LoadedBranch
   A32.Rejected (A32.Coprocessor coprocessor) | coprocessor `elem` [10, 11] ->
-    if strictness == Strict && vfpStatusTransfer then Neutral else Refuse FloatingPoint
+    if strictness == Permissive then vfpEffect else if vfpStatusTransfer then Neutral else Refuse FloatingPoint
   A32.Rejected A32.UndefinedEncoding -> if strictness == Strict then Refuse UnadmittedEncoding else Stop
   A32.Rejected reason | strictness == Strict -> strictRejected reason
   A32.LoadMultiple cond base A32.IncrementAfter True regs
@@ -177,6 +178,16 @@ classify strictness address word = case A32.decode address word of
   field high low = (word `shiftR` low) .&. ((2 :: Word32) ^ (high - low + 1) - 1)
   -- VMSR/VMRS: cond 1110 111L reg Rt 1010 0001 0000.
   vfpStatusTransfer = word .&. 0x0fe00fff == 0x0ee00a10 && field 15 12 /= 13
+  -- VFP words by encoding: two-register transfer (cond 1100 010L), load/store (cond 110P UDWL Rn), single-register
+  -- transfer to a core register (cond 1110 xxx1 .... Rt 101x ...1). VPUSH is VSTMDB sp!, VPOP is VLDMIA sp!.
+  vfpEffect
+    | word .&. 0x0fe00000 == 0x0c400000 = if testBit word 20 && (field 15 12 == 13 || field 19 16 == 13) then Refuse UnaccountedSpWrite else Neutral
+    | word .&. 0x0e000000 == 0x0c000000 && field 19 16 == 13 && testBit word 21 =
+        if word .&. 0x0fbf0e00 == 0x0d2d0a00 then Reserve (4 * field 7 0)
+        else if word .&. 0x0fbf0e00 == 0x0cbd0a00 then Release (4 * field 7 0)
+        else Refuse UnaccountedSpWrite
+    | word .&. 0x0f000010 == 0x0e000010 && testBit word 20 && field 15 12 == 13 = Refuse UnaccountedSpWrite
+    | otherwise = Neutral
   -- MCR/MRC to coprocessor 14 or 15 with a register other than SP: a register transfer with no memory access.
   systemTransfer = word .&. 0x0f000010 == 0x0e000010 && field 11 8 `elem` [14, 15] && field 15 12 /= 13
   exclusiveTarget = field 15 12 `notElem` [13, 15]

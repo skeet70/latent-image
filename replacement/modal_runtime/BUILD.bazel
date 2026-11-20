@@ -672,6 +672,7 @@ haskell_test(
 haskell_library(
     name = "menu-engine-pair-lib",
     srcs = [
+        "Replacement/ModalRuntime/FramePresentation.hs",
         "Replacement/ModalRuntime/MenuEngineClass.hs",
         "Replacement/ModalRuntime/MenuEnginePair.hs",
         "Replacement/ModalRuntime/RenderPair.hs",
@@ -690,6 +691,7 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
         "//host:filepath",
         "//host:text",
     ],
@@ -727,6 +729,34 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "frame-presentation-check",
+    srcs = ["FramePresentationCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts", "-with-rtsopts=-A8m -M1400m"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-engine-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "frame-presentation-tests",
+    srcs = ["FramePresentationTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-engine-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
         "//host:text",
     ],
 )

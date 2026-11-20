@@ -96,6 +96,27 @@ xm1_rust_staticlib(
     testonly = True,
 )
 
+# The modal75,menu-engine,render,render-frame link unit: the render unit plus the owned VGLIB
+# stage-0 frame step published at 0x006d7920.
+_ENGINE_FRAME_RLIB_DEPS = dict(_ENGINE_RLIB_DEPS)
+
+_ENGINE_FRAME_RLIB_DEPS.update({
+    "render_adapter": "//replacement/render_adapter:arm-frame",
+})
+
+xm1_rust_staticlib(
+    name = "bank-modal75-engine-render-frame",
+    src = "lib.rs",
+    crate_name = "bank",
+    rustc_flags = _ENGINE_FLAGS,
+    rlib_deps = _ENGINE_FRAME_RLIB_DEPS,
+    visibility = [
+        "//emulation:__pkg__",
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
 # The 225-publication modal75,menu-engine link unit: the full engine unit
 # without the render rlibs and cfg, so drawing stays stock.
 _ENGINE_STOCK_DRAW_RLIB_DEPS = {

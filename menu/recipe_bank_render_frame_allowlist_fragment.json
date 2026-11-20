@@ -1,0 +1,46 @@
+{
+  "schema": 2,
+  "stock_calls": [
+    {
+      "address": "0x006d7930",
+      "name": "__rb_render_frame_stock_resume",
+      "source": "replacement/render_adapter/frame.S; frame step after its prologue and lock call"
+    },
+    {
+      "address": "0x006d9478",
+      "name": "rb_render_call_6d9478",
+      "source": "replacement/render_adapter/frame.S; VGLIB lock, semaphore 53"
+    },
+    {
+      "address": "0x006d9494",
+      "name": "rb_render_call_6d9494",
+      "source": "replacement/render_adapter/frame.rs; VGLIB unlock, semaphore 53"
+    },
+    {
+      "address": "0x006499d0",
+      "name": "rb_render_call_6499d0",
+      "source": "replacement/render_adapter/frame.rs; option 0x30d/0x16 set and restore"
+    },
+    {
+      "address": "0x006d76ec",
+      "name": "rb_render_call_6d76ec",
+      "source": "replacement/render_adapter/frame.rs; display hand-off, publisher submit transport"
+    },
+    {
+      "address": "0x006cfc68",
+      "name": "rb_render_call_6cfc68",
+      "source": "replacement/render_adapter/frame.rs; secondary display callback queue"
+    },
+    {
+      "address": "0x006c7318",
+      "name": "rb_render_stock_6c7318",
+      "source": "menu/recipe_bank_ram_engine.ld; scheduler one-shot registration from the scanout bridge"
+    },
+    {
+      "address": "0x006d7f30",
+      "name": "rb_render_stock_6d7f30",
+      "source": "menu/recipe_bank_ram_engine.ld; vglib_post_display_event, the 0xfefe post on scanout-latch delivery"
+    }
+  ],
+  "stock_regions": []
+}

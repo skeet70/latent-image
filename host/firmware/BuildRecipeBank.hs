@@ -1143,6 +1143,10 @@ relocatedD3 base rc0Id4 rc0Id5 d3Id4 = do
        [RamPublication 0x00d50a48 (readWord rc0Id5 0x00bf1a00 0x00d50a48) branch,
         RamPublication 0x00d5a088 (readWord rc0Id5 0x00bf1a00 0x00d5a088) 0xe320f000])
 
+-- | `size_of::<FrameRecord>()` in replacement/render_adapter/frame.rs, layout 1.
+renderFrameRecordBytes :: Word32
+renderFrameRecordBytes = 0x78
+
 emitRamPush :: Maybe PropertyPublicationLayout -> BankVariant -> Word32 -> WritePlan -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainPath out = do
   setFileMode out 0o700
@@ -1208,6 +1212,36 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
           putStrLn ("render " ++ name ++ " stack: " ++ show (Render.entryDepth entry)
             ++ " bytes + stock margin " ++ show (Render.entryStockMargin entry)
             ++ ", headroom " ++ show (Render.entryHeadroom entry))
+      when (hasPublicationGroup RenderFramePublication variant) $ do
+        frame <- either (H.failH . ("ram-push: " ++)) pure (Render.checkRenderFrameStack elf inRuntime)
+        putStrLn ("render frame stack: " ++ show (Render.entryDepth frame)
+          ++ " bytes + stock margin " ++ show (Render.entryStockMargin frame)
+          ++ ", headroom " ++ show (Render.entryHeadroom frame))
+        record <- case [s | s <- ELF.elfSymbols elf, ELF.symbolName s == "rb_render_frame_record"] of
+          [s] -> pure s
+          _ -> H.failH "ram-push: rb_render_frame_record is missing or repeated"
+        let recordAddress = ELF.symbolValue record
+        unless (ELF.symbolSize record == renderFrameRecordBytes && recordAddress .&. 7 == 0
+            && recordAddress >= dataStart && recordAddress + renderFrameRecordBytes <= dataEnd) $
+          H.failH "ram-push: render frame record leaves the engine data region or changed size"
+        afterWait <- linked symbols "rb_render_frame_after_wait"
+        finish <- linked symbols "rb_render_frame_finish"
+        bridge <- linked symbols "rb_render_frame_scanout_bridge"
+        delivery <- linked symbols "rb_render_frame_scanout_delivery"
+        -- `mov r4, r0` and `mov r0, r4`, the words the FujiMod presented-frame tracker checks.
+        let presentationSites = [("after_wait", afterWait, 0xe1a04000), ("finish", finish, 0xe1a00004 :: Word32)]
+        forM_ presentationSites $ \(name, address, expected) ->
+          unless (ELF.wordAt elf address == Just expected) $
+            H.failH ("ram-push: render frame " ++ name ++ " site differs from its tracked instruction")
+        B.writeFile (out ++ "/render-frame-record.json") (encodeCanonical (H.obj
+          [ ("symbol", H.s "rb_render_frame_record")
+          , ("address", H.s (hex32 recordAddress))
+          , ("bytes", H.n (fromIntegral renderFrameRecordBytes))
+          , ("layout", H.n 1)
+          , ("presentation", H.obj [(name, H.obj [("pc", H.s (hex32 address)), ("word", H.s (hex32 expected))]) | (name, address, expected) <- presentationSites])
+          , ("scanout_latch", H.obj [("bridge", H.s (hex32 bridge)), ("delivery", H.s (hex32 delivery))])
+          ]))
+        setFileMode (out ++ "/render-frame-record.json") 0o600
       pure dataEnd
     else do
       when (any ((== "__rb_menu_engine_start") . symbolName) symbols) $
@@ -1373,6 +1407,19 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
         Just layout -> propertyHookWordFor layout base hook target (readWord rc0Plain 0x01100000 address)
       pure (RamPublication address 0xe92d4ff0 word)
     else pure []
+  renderFramePublications <- if hasPublicationGroup RenderFramePublication variant
+    then do
+      target <- linked symbols "rb_render_frame_entry"
+      resume <- linked symbols "__rb_render_frame_stock_resume"
+      unless (resume == renderFrameStockResume) $
+        H.failH "ram-push: render frame stock resume differs from the step after its lock call"
+      let address = publicationAddress renderFrameHookAddress
+      word <- either H.failH pure (renderFrameHookWordFor variant base target (readWord rc0Id4 0x0061c340 address))
+      pure [RamPublication address renderFrameStockWord word]
+    else do
+      when (any ((== "rb_render_frame_entry") . symbolName) symbols) $
+        H.failH "ram-push: unselected render frame entry is linked"
+      pure []
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
       reserved = map ramAddress (legacyOrdered ++ lifecycleOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
@@ -1381,7 +1428,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications <> menuValuePublications <> renderPublications
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications <> menuValuePublications <> renderPublications <> renderFramePublications
   safeOrder <- either H.failH pure (safePublicationOrderForVariant variant (map (PublicationAddress . ramAddress) logical))
   let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger size
@@ -1467,7 +1514,14 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
         , "replacement/menu_widgets/src/tree_list.rs"
         , "replacement/menu_widgets/src/pane_drawer.rs"
         , "host/firmware/RenderStack.hs"
-        ]
+        ] ++ [path | hasPublicationGroup RenderFramePublication variant, path <-
+          [ "replacement/render_adapter/frame.rs"
+          , "replacement/render_adapter/frame.S"
+          , "replacement/render_commands/src/publisher.rs"
+          , "replacement/render_commands/src/vglib_scene.rs"
+          , "replacement/render_commands/src/stock_objects.rs"
+          , "replacement/render_commands/src/scanout_latch.rs"
+          ]]
       sourcePaths =
         [ "menu/recipe_bank_arm.S"
         , "menu/recipe_bank_probe.c"
@@ -1536,6 +1590,7 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
             [Modal75Publication, MenuEnginePublication] -> ["host/firmware/build-recipe-bank-modal-engine-ram.sh"]
             [Modal75Publication, MenuEnginePublication, MenuValuePublication] -> ["host/firmware/build-recipe-bank-modal-value-ram.sh"]
             [Modal75Publication, MenuEnginePublication, RenderPublication] -> ["host/firmware/build-recipe-bank-modal-render-ram.sh"]
+            [Modal75Publication, MenuEnginePublication, RenderPublication, RenderFramePublication] -> ["host/firmware/build-recipe-bank-modal-render-frame-ram.sh"]
             _ -> ["host/firmware/build-recipe-bank-modal-lifecycle-ram.sh"]
           ++ [path | hasPublicationGroup LifecyclePublications variant, path <-
           [ "replacement/save/src/lib.rs"

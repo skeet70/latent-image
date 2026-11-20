@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Host-only relink of an existing render bank archive at a chosen allocation base.
+# RB_RENDER_FRAME=1 relinks the modal75,menu-engine,render,render-frame variant.
 set -euo pipefail
 umask 077
 
@@ -28,7 +29,11 @@ lld_bin=$(realpath "${external}lab_lld/bin")
 llvm_bin=$(realpath "${external}lab_llvm/bin")
 coreutils_bin=$(realpath "${external}lab_coreutils/bin")
 
-variant_tag=modal75,menu-engine,render
+case "${RB_RENDER_FRAME:-0}" in
+  0) variant_tag=modal75,menu-engine,render ;;
+  1) variant_tag=modal75,menu-engine,render,render-frame ;;
+  *) printf 'RB_RENDER_FRAME must be 0 or 1\n' >&2; exit 1 ;;
+esac
 RB_PUBLICATION_GROUPS="$variant_tag" \
   RAM_PUSH_BUILDER="$PWD/bazel-bin/host/firmware/build-recipe-bank" \
   RAM_PUSH_CLANG="$clang_bin/clang" RAM_PUSH_LD_LLD="$lld_bin/ld.lld" \
@@ -54,5 +59,7 @@ jq -n --arg checker "$checker_sha" --arg variant "$variant_tag" \
   --arg archive "$archive_sha" --arg input "$input_sha" --arg report "$report_sha" \
   '{schema:1,analysis:"bank-interface-check-r3",checker_sha256:$checker,bank_variant:$variant,policy:"enforce",manifest_sha256:$manifest,runtime_sha256:$runtime,kernel_elf_sha256:$elf,archive_sha256:$archive,allowlist_input_sha256:$input,report_sha256:$report}' \
   > "$out/bank-allowlist-proof.json"
-bazel-bin/transport/render-manifest-admission-tests "$PWD/$out/ram-push-manifest.json"
+if [[ ${RB_RENDER_FRAME:-0} == 0 ]]; then
+  bazel-bin/transport/render-manifest-admission-tests "$PWD/$out/ram-push-manifest.json"
+fi
 sha256sum "$out/runtime.bin" "$out/kernel.elf" "$out/ram-push-manifest.json"

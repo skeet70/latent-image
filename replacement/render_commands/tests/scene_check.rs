@@ -1,20 +1,20 @@
-//! Renders the VGLIB stage-0 scene held in a full guest RAM dump with the owned renderer and compares it with
-//! the OSD buffer the dump's display shadow names.
+//! Renders the VGLIB stage-0 scene held in a full guest RAM dump with the owned renderer (`render_osd`) and
+//! compares it with the OSD buffer the dump's display shadow names.
 //! Usage: scene_check <ram-dump> <output-dir>
 //! Writes `owned.rgba` and `front-abgr-as-rgba.rgba` (720x480 straight RGBA, the front buffer read as A,B,G,R
-//! bytes) and `summary.json` comparing both byte orders; exits 1 when the scene does not decode or render.
+//! bytes) and `summary.json` comparing both byte orders, with each draw's alpha coverage in both renders; exits 1
+//! when the scene does not decode or render.
 
 #[path = "../src/lib.rs"]
 #[allow(dead_code, unused_imports, unused_attributes)]
 mod render_commands;
 
-use render_commands::commands::{DrawCommand, DrawList, SceneRect};
+use render_commands::commands::{DrawCommand, SceneRect};
 use render_commands::producer::CommandBuffer;
-use render_commands::raster::{AssetPack, AssetProvenance, FontRegistry, RasterResources, Surface, VectorWorkspace};
 use render_commands::resources::{DataAddress, DataRegion, ResourceMemory};
 use render_commands::stock_objects::{ObjectPool, LISTS_BASE, LIST_BYTES, POOL_BASE, POOL_BYTES};
-use render_commands::vector_raster::{CurveAccuracy, DashBudget, SampleGrid, StrokePrimitive, Vertex};
-use render_commands::vglib_scene::Scene;
+use render_commands::vector_raster::{StrokePrimitive, Vertex};
+use render_commands::vglib_scene::{render_osd, Scene};
 use render_commands::SurfaceId;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -74,6 +74,30 @@ fn compare(owned: &[u8], front: &[u8], order: FrontOrder, rect: Option<SceneRect
     difference
 }
 
+/// Pixels with nonzero alpha inside `rect` and their bounding box `[left, top, right, bottom)`, as JSON.
+fn coverage(pixel: impl Fn(usize, usize) -> [u8; 4], rect: SceneRect) -> String {
+    let left = rect.x().clamp(0, WIDTH as i32) as usize;
+    let top = rect.y().clamp(0, HEIGHT as i32) as usize;
+    let right = (rect.x() + i32::from(rect.width())).clamp(0, WIDTH as i32) as usize;
+    let bottom = (rect.y() + i32::from(rect.height())).clamp(0, HEIGHT as i32) as usize;
+    let mut count = 0usize;
+    let mut bounds: Option<[usize; 4]> = None;
+    for y in top..bottom {
+        for x in left..right {
+            if pixel(x, y)[3] == 0 { continue; }
+            count += 1;
+            bounds = Some(match bounds {
+                None => [x, y, x + 1, y + 1],
+                Some([l, t, r, b]) => [l.min(x), t.min(y), r.max(x + 1), b.max(y + 1)],
+            });
+        }
+    }
+    match bounds {
+        None => format!("{{\"pixels\": {count}, \"bbox\": null}}"),
+        Some([l, t, r, b]) => format!("{{\"pixels\": {count}, \"bbox\": [{l}, {t}, {r}, {b}]}}"),
+    }
+}
+
 fn main() {
     let arguments: Vec<String> = std::env::args().collect();
     if arguments.len() != 3 {
@@ -95,15 +119,12 @@ fn main() {
     let report = scene.lower(&mut buffer).unwrap_or_else(|error| { eprintln!("FAIL lower: {error:?}"); std::process::exit(1) });
     let list = buffer.draw_list();
 
-    let pack_bytes = *b"RCP1\0\0\0\0";
-    let pack = AssetPack::parse(&pack_bytes, AssetProvenance::PrivateExtract { source: "empty pack; scene commands carry their own pixels" }).unwrap();
-    let mut vertices = vec![Vertex::EMPTY; 1 << 16];
-    let mut strokes = vec![StrokePrimitive::EMPTY; 1 << 16];
-    let workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(1 << 12), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::Four };
-    let mut resources = RasterResources::new(&pack, FontRegistry::Coverage8, &[], Some(workspace)).unwrap();
+    let mut vertices = vec![Vertex::EMPTY; 512];
+    let mut strokes = vec![StrokePrimitive::EMPTY; 128];
     let mut owned = vec![0u8; SurfaceId::Osd.byte_len()];
-    Surface::new(SurfaceId::Osd, &mut owned).unwrap().render(DrawList::new(SurfaceId::Osd, list.commands()), &mut resources)
+    render_osd(list.commands(), &mut owned, &mut vertices, &mut strokes)
         .unwrap_or_else(|error| { eprintln!("FAIL render: {error:?}"); std::process::exit(1) });
+    for pixel in owned.chunks_exact_mut(4) { pixel.reverse(); }
 
     let front_address = (word(&image, SHADOW_OSD) & 0x3fff_ffff) as usize;
     let front = &image[front_address..front_address + WIDTH * HEIGHT * 4];
@@ -130,6 +151,8 @@ fn main() {
         for (name, order) in orders {
             write!(json, ", \"{name}\": {}", compare(&owned, front, order, Some(dest)).json()).unwrap();
         }
+        let owned_pixel = |x: usize, y: usize| -> [u8; 4] { let start = (y * WIDTH + x) * 4; owned[start..start + 4].try_into().unwrap() };
+        write!(json, ", \"coverage\": {{\"owned\": {}, \"front\": {}}}", coverage(owned_pixel, dest), coverage(|x, y| front_pixel(front, FrontOrder::Abgr, x, y), dest)).unwrap();
         json.push('}');
     }
     json.push_str("\n  ]\n}\n");

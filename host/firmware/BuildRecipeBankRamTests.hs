@@ -287,6 +287,42 @@ main = do
         [target - 4, target + 2, target + menuEngineRegionExtentFor render])
     check "render entry refuses an unselected render group"
       (isLeft (renderHookWordFor modalEngineBankVariant base renderHook target 0xe92d4ff0))
+  let frameVariant = modalRenderFrameBankVariant
+      frameAddresses = renderAddresses <> [renderFrameHookAddress]
+      frameOrder = either error id (safePublicationOrderForVariant frameVariant frameAddresses)
+      frameBase = 0x00a81be0
+      frameTarget = menuEngineRegionStartFor frameVariant frameBase
+      frameExpected = 0xea000000 + ((frameTarget - publicationAddress renderFrameHookAddress - 8) `div` 4 .&. 0x00ffffff)
+  check "render-frame identity binds 229 publications and leaves the render variant unchanged"
+    (bankVariantFromIdentity (Just "modal75,menu-engine,render,render-frame") 229 == Right frameVariant
+      && isLeft (bankVariantFromIdentity (Just "modal75,menu-engine,render,render-frame") 228)
+      && publicationCountFor render == 228 && runtimeAllocationSizeFor render == 0x3dd00)
+  check "render-frame counts extend the render engine region by 0x30000"
+    (publicationCountFor frameVariant == 229 && publicationActivationCountFor frameVariant == 98
+      && runtimeAllocationSizeFor frameVariant == 0x6dd00
+      && menuEngineRegionStartFor frameVariant 0 == 0x1dd00 && menuEngineRegionExtentFor frameVariant == 0x50000
+      && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor frameVariant <= menuEngineRegionStartFor frameVariant base - base) alignedBases)
+  check "render-frame order installs the frame hook after the three render hooks"
+    (frameOrder == order <> map PublicationIndex [223 .. 228]
+      && maybe False ((== renderFrameHookAddress) . (frameAddresses !!) . publicationIndex . NE.last) (NE.nonEmpty frameOrder)
+      && isLeft (safePublicationOrderForVariant frameVariant (renderAddresses <> [PublicationAddress 0x006d7924]))
+      && isLeft (safePublicationOrderForVariant render (take 227 renderAddresses <> [renderFrameHookAddress])))
+  check "render-frame requires precisely modal, engine and render"
+    (bankVariant [RenderFramePublication, RenderPublication, MenuEnginePublication, Modal75Publication] == Right frameVariant
+      && all (isLeft . bankVariant)
+        [[RenderFramePublication], [Modal75Publication, MenuEnginePublication, RenderFramePublication]
+        , [Modal75Publication, MenuEnginePublication, MenuValuePublication, RenderFramePublication]])
+  check "render-frame hook branches from push r4-r8,r11,lr into the engine region"
+    (renderFrameHookWordFor frameVariant frameBase frameTarget renderFrameStockWord == Right frameExpected
+      && renderFrameStockWord == 0xe92d49f0 && renderFrameStockResume == publicationAddress renderFrameHookAddress + 0x10)
+  check "render-frame hook refuses the wrong stock word, misaligned or out-of-region targets and other variants"
+    (isLeft (renderFrameHookWordFor frameVariant frameBase frameTarget 0xe92d4ff0)
+      && all (\entry -> isLeft (renderFrameHookWordFor frameVariant frameBase entry renderFrameStockWord))
+        [frameTarget - 4, frameTarget + 2, frameTarget + menuEngineRegionExtentFor frameVariant]
+      && isLeft (renderFrameHookWordFor render frameBase frameTarget renderFrameStockWord))
+  check "render hooks keep their own stock word in the render-frame variant"
+    (renderHookWordFor frameVariant frameBase (PublicationAddress 0x011662a0) frameTarget 0xe92d4ff0
+      == Right (0xea000000 + ((frameTarget - 0x011662a0 - 8) `div` 4 .&. 0x00ffffff)))
   let completeInstaller = unlines
         [ "00000000 <ram_push_install>:"
         , "  bl 0x10 <execute_operation>"
@@ -368,4 +404,7 @@ main = do
     ( not (null (staleFixedReferences 0x00be1a00 0x00bebb20
         (B.pack [0x00,0x0a,0x01,0xe3,0xbe,0x00,0x40,0xe3])))
     )
+  check "an unaligned constant window is not a stale fixed address"
+    (null (staleFixedReferences 0x00be1a00 0x00bebb20 (B.pack [0x4f,0x7e,0x92,0xbe,0x00,0x48,0x2d,0xe9]))
+      && staleFixedReferences 0x00be1a00 0x00bebb20 (B.pack [0,0,0,0,0x00,0x1a,0xbe,0x00]) == [(4,0x00be1a00)])
   putStrLn "BuildRecipeBank RAM layout: checks passed"

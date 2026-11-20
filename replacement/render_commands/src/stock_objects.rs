@@ -1,12 +1,11 @@
-//! Typed decode of the stock draw layer's resource-object pool and its lowering into draw commands.
+//! Typed decode of the stock draw layer's resource-object pool.
 //!
 //! Listing addresses are in `decode/img6.dis` (plain image at `0x01100000`) unless prefixed `I4:`
 //! (`lz/id4.dis`, image 4 at `0x0061c400`).
 
-use super::commands::{Alpha, Colour, DrawCommand, Rgba, ShapePaint, ShapePalette, ShapeSecondarySource};
-use super::producer::{CommandBuffer, ProducerError, SemanticPrerequisite};
-use super::resources::{BitmapCatalog, BitmapKind, DataAddress, PaletteOptions, Percent, ResourceError};
-use super::{PaletteIndex, PanelPoint, PanelRect, ResourceId};
+use super::commands::Rgba;
+use super::resources::{DataAddress, PaletteOptions, Percent};
+use super::{PaletteIndex, ResourceId};
 
 /// `xm1_resource_objects`: literal at `117ab60`, bank stride from `mov r5,#27136` at `11797c4`.
 pub const POOL_BASE: DataAddress = DataAddress(0x015e_7538);
@@ -19,15 +18,11 @@ pub const BANK_STRIDE: usize = SLOTS_PER_BANK * OBJECT_BYTES;
 pub const POOL_BYTES: usize = BANK_COUNT * BANK_STRIDE;
 pub const LIST_BYTES: usize = BANK_COUNT * 8;
 
-const FILL_RESOURCE: ResourceId = ResourceId(0xff00_0838);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Bank(u8);
 impl Bank {
     pub const fn new(index: u8) -> Option<Self> { if (index as usize) < BANK_COUNT { Some(Self(index)) } else { None } }
     pub const fn index(self) -> u8 { self.0 }
-    /// Banks whose objects `FUN_0117db18` retires and creates (`117db5c-117db74`, literals `117dc00/117dc04`).
-    pub const fn committed(self) -> bool { self.0 != 0 }
     const fn base(self) -> u32 { POOL_BASE.0 + self.0 as u32 * BANK_STRIDE as u32 }
 }
 
@@ -286,162 +281,6 @@ fn slot_of(bank: Bank, address: u32) -> Option<SlotIndex> {
     let offset = address.checked_sub(bank.base())? as usize;
     if offset % OBJECT_BYTES != 0 { return None; }
     SlotIndex::new(u8::try_from(offset / OBJECT_BYTES).ok()?)
-}
-
-/// Word `0x957aa0+0x2bf0`, read by the commit transform `0x1177a08` (`1177a30-1177a4c`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutputSelector {
-    /// Value 1: positions and sizes pass unchanged.
-    Identity,
-    /// Value 2: the 1920 x 1080 doubling branch (`1177a50-1177abc`).
-    Doubled,
-    /// Any other value: the per-option branch (`1177ac0-1177c40`).
-    Panel,
-}
-impl OutputSelector {
-    pub const fn from_word(value: u32) -> Self {
-        match value { 1 => Self::Identity, 2 => Self::Doubled, _ => Self::Panel }
-    }
-}
-
-/// The 3-byte component table at `0x007a1f24` that `xm1_apply_indexed_item_components` copies from (`1179c1c-1179c20`).
-#[derive(Clone, Copy)]
-pub struct ComponentTable<'a> { bytes: &'a [u8] }
-impl<'a> ComponentTable<'a> {
-    pub fn new(bytes: &'a [u8]) -> Result<Self, ProducerError> {
-        if bytes.is_empty() || bytes.len() % 3 != 0 { return Err(ProducerError::Resource(ResourceError::InvalidFormat)); }
-        Ok(Self { bytes })
-    }
-    /// Lowest index whose entry equals the RGB of `colour`.
-    pub fn index_of(self, colour: Rgba) -> Option<PaletteIndex> {
-        self.bytes.chunks_exact(3).position(|entry| entry == [colour.red, colour.green, colour.blue])
-            .map(|index| PaletteIndex(index as u32))
-    }
-}
-
-/// `Fill` colours name a palette index; the asset pack's palette records must reproduce the component table for pixel equality.
-pub struct LoweringContext<'a> {
-    pub bitmaps: &'a BitmapCatalog<'a>,
-    pub components: ComponentTable<'a>,
-    pub output: OutputSelector,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Placed { x: i32, y: i32, width: u16, height: u16 }
-
-/// `0x1178ab4`: round half away from zero with a 16-bit magnitude (`1178abc-1178b18`).
-fn round_eighths(eighths: i64) -> i32 {
-    if eighths > 0 { ((eighths + 4) / 8 & 0xffff) as i32 } else { -(((4 - eighths) / 8 & 0xffff) as i32) }
-}
-
-/// `0x1177a08` with option byte 0 on the `Panel` branch: every option bit clear (`1177ac0-1177c40`).
-fn panel_transform(x: i32, y: i32, width: u16, height: u16) -> Placed {
-    let x8 = i64::from(x) * 9;
-    let placed_x = round_eighths(x8);
-    let placed_y = round_eighths(i64::from(y) * 8);
-    let mut placed_width = ((u32::from(width) * 9 / 8) & 0xffff) as u16;
-    let mut placed_height = height;
-    let right = round_eighths((i64::from(x) + i64::from(width) + 1) * 9);
-    if right - (i32::from(placed_width) + placed_x) > 1 { placed_width = placed_width.wrapping_add(1); }
-    let bottom = round_eighths((i64::from(y) + i64::from(height) + 1) * 8);
-    if bottom - (i32::from(placed_height) + placed_y) > 1 { placed_height = placed_height.wrapping_add(1); }
-    Placed { x: placed_x, y: placed_y, width: placed_width, height: placed_height }
-}
-
-fn visible(placed: Placed) -> Option<PanelRect> {
-    let left = placed.x.max(0);
-    let top = placed.y.max(0);
-    let right = (placed.x + i32::from(placed.width)).min(super::PANEL_WIDTH as i32);
-    let bottom = (placed.y + i32::from(placed.height)).min(super::PANEL_HEIGHT as i32);
-    if left >= right || top >= bottom { return None; }
-    PanelRect::new(PanelPoint::new(left as u16, top as u16)?, (right - left) as u16, (bottom - top) as u16)
-}
-
-fn intersect(a: PanelRect, b: PanelRect) -> Option<PanelRect> {
-    let span = |rect: PanelRect| (i32::from(rect.origin().x()), i32::from(rect.origin().y()), i32::from(rect.origin().x()) + i32::from(rect.width()), i32::from(rect.origin().y()) + i32::from(rect.height()));
-    let (al, at, ar, ab) = span(a);
-    let (bl, bt, br, bb) = span(b);
-    visible(Placed { x: al.max(bl), y: at.max(bt), width: (ar.min(br) - al.max(bl)).max(0) as u16, height: (ab.min(bb) - at.max(bt)).max(0) as u16 })
-}
-
-impl StockObject {
-    fn refuse(&self, prerequisite: fn(ResourceId) -> SemanticPrerequisite) -> ProducerError {
-        ProducerError::MissingSemantic(prerequisite(self.identifier))
-    }
-
-    fn place(&self, context: &LoweringContext<'_>, x: i32, y: i32, width: u16, height: u16) -> Result<Placed, ProducerError> {
-        if self.options.secondary == 0xff { return Ok(Placed { x, y, width, height }); }
-        match context.output {
-            OutputSelector::Identity => Ok(Placed { x, y, width, height }),
-            OutputSelector::Panel if self.options.secondary == 0 => Ok(panel_transform(x, y, width, height)),
-            _ => Err(self.refuse(SemanticPrerequisite::ObjectTransform)),
-        }
-    }
-
-    /// Appends `Clip`, the object's draw and `ResetClip`, as the commit's create (`0x117d390`) would present it.
-    /// Emits nothing for objects that produce no VGLIB object. A `Capacity` error can leave this object's earlier commands appended.
-    pub fn lower<'assets>(&self, context: &LoweringContext<'_>, out: &mut CommandBuffer<'_, 'assets>) -> Result<(), ProducerError> {
-        match self.state {
-            AllocationState::Free => return Ok(()),
-            AllocationState::Matched | AllocationState::Unchanged => return Err(self.refuse(SemanticPrerequisite::ReusedObject)),
-            AllocationState::Created => {}
-        }
-        if self.content.is_none() { return Ok(()); }
-        let id = self.identifier;
-        match self.kind {
-            ObjectKind::Unset => return Ok(()),
-            ObjectKind::Text if id.0 == 0xfe00_0000 => return Err(ProducerError::MissingSemantic(SemanticPrerequisite::TextCache)),
-            ObjectKind::Text => return Err(self.refuse(SemanticPrerequisite::ObjectText)),
-            ObjectKind::Plane => return Err(self.refuse(SemanticPrerequisite::PlaneResource)),
-            ObjectKind::Bitmap if (0xfd00_0000..=0xfd00_0001).contains(&id.0) => return Err(self.refuse(SemanticPrerequisite::CustomResource)),
-            ObjectKind::Bitmap | ObjectKind::ShapeKindOne | ObjectKind::ShapeKindTwo => {}
-        }
-        let options = self.options;
-        if options.palette.0 != 0 || options.offset_y != 0 || options.packed_bounds != 0 || options.bounds != [0; 2]
-            || options.primary != 0 || options.initialized != 1 || self.scale != [Percent(100); 2] {
-            return Err(self.refuse(SemanticPrerequisite::ObjectStyling));
-        }
-        let clip = self.place(context, i32::from(self.clip.x), i32::from(self.clip.y), self.clip.width, self.clip.height)?;
-        let placed = self.place(context, i32::from(self.position.x), i32::from(self.position.y), self.extent.scaled_width, self.extent.scaled_height)?;
-        let entry = context.bitmaps.entry(id).map_err(ProducerError::Bitmap)?;
-        let expected = match entry.kind { BitmapKind::NativeRgba => ObjectKind::Bitmap, BitmapKind::ShapeKindOne => ObjectKind::ShapeKindOne, BitmapKind::ShapeKindTwo => ObjectKind::ShapeKindTwo };
-        if expected != self.kind { return Err(ProducerError::MissingSemantic(SemanticPrerequisite::BitmapKind(id))); }
-        let Some(clip) = visible(clip) else { return Ok(()) };
-        let [primary, secondary] = self.components;
-        let secondary_source = if options.style { ShapeSecondarySource::Red } else { ShapeSecondarySource::White };
-        let command = if id == FILL_RESOURCE {
-            if primary.alpha != 0 || options.style { return Err(self.refuse(SemanticPrerequisite::ObjectStyling)); }
-            let palette = context.components.index_of(secondary).ok_or(self.refuse(SemanticPrerequisite::ObjectColour))?;
-            let Some(rect) = visible(placed).and_then(|rect| intersect(rect, clip)) else { return Ok(()) };
-            DrawCommand::Fill { rect, colour: Colour { palette, alpha: Alpha(secondary.alpha) } }
-        } else {
-            if placed.width != entry.width || placed.height != entry.height { return Err(self.refuse(SemanticPrerequisite::ObjectTransform)); }
-            let origin = u16::try_from(placed.x).ok().zip(u16::try_from(placed.y).ok())
-                .and_then(|(x, y)| PanelPoint::new(x, y)).ok_or(ProducerError::Geometry)?;
-            match self.kind {
-                ObjectKind::ShapeKindOne => DrawCommand::Shape { origin, image: entry.image, alpha: Alpha::OPAQUE, paint: ShapePaint::Recolour(ShapePalette { primary, secondary, secondary_source }) },
-                ObjectKind::ShapeKindTwo => DrawCommand::Shape { origin, image: entry.image, alpha: Alpha::OPAQUE, paint: ShapePaint::Original },
-                _ => DrawCommand::Image { origin, image: entry.image, alpha: Alpha::OPAQUE },
-            }
-        };
-        out.push(DrawCommand::Clip(clip))?;
-        out.push(command)?;
-        out.push(DrawCommand::ResetClip)
-    }
-}
-
-/// Lowers every live pool object in VGLIB composite order: the traversal `I4:0x6d92d8` with selector 0xff visits
-/// groups 23 down to 0 (`I4:6d92f8-6d9338`), each in insertion order (`I4:6d8f94-6d8fa8` appends at the tail,
-/// `I4:6d909c` walks from the head). The group is packet byte `+0x14` (`I4:6dcd34`, `I4:6dceb0`, `I4:6dcf7c`), which the
-/// commit's create fills from object byte `+0x5a`, the bank (`117d49c-117d4a0`). New objects are created in list order
-/// (`117db84-117dbe8`), so a bank holding only `Created` objects composites in list order.
-/// Plane-4 draw events (`0x6dd4d4`) also add VGLIB objects; they are not part of the pool and are not lowered here.
-pub fn frame_commands<'assets>(pool: &ObjectPool<'_>, context: &LoweringContext<'_>, out: &mut CommandBuffer<'_, 'assets>) -> Result<(), ProducerError> {
-    if pool.live(Bank(0)).next().is_some() { return Err(ProducerError::MissingSemantic(SemanticPrerequisite::CompositeOrder)); }
-    for index in (1..BANK_COUNT as u8).rev() {
-        for object in pool.live(Bank(index)) { object.lower(context, out)?; }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

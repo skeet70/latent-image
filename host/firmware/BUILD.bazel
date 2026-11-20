@@ -1902,11 +1902,14 @@ filegroup(
     srcs = [
         "build-recipe-bank-modal-engine-ram.sh",
         "build-recipe-bank-modal-render-ram.sh",
+        "build-recipe-bank-modal-render-frame-ram.sh",
         "build-recipe-bank-modal-value-ram.sh",
         "build-recipe-bank-ram.sh",
         ":build-recipe-bank",
         "//menu:recipe_bank_menu_engine_allowlist_fragment.json",
         "//menu:recipe_bank_menu_value_allowlist_fragment.json",
+        "//menu:recipe_bank_render_allowlist_fragment.json",
+        "//menu:recipe_bank_render_frame_allowlist_fragment.json",
         "//menu:recipe_bank_modal_allowlist_fragment.json",
         "//menu:recipe_bank_ram_engine.ld",
         "//replacement/bank:bank-modal",
@@ -2107,6 +2110,7 @@ genrule(
 ) for tag, groups, archive in [
     ("modal75-menu-engine", "modal75,menu-engine", "//replacement/bank:bank-modal75-engine"),
     ("modal75-menu-engine-render", "modal75,menu-engine,render", "//replacement/bank:bank-modal75-engine-render"),
+    ("modal75-menu-engine-render-frame", "modal75,menu-engine,render,render-frame", "//replacement/bank:bank-modal75-engine-render-frame"),
 ]]
 
 haskell_binary(

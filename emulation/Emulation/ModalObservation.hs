@@ -318,7 +318,7 @@ scopedPublicationCounts :: [Int]
 scopedPublicationCounts = map Layout.publicationCountFor scopedBankVariants
 
 scopedBankVariants :: [Layout.BankVariant]
-scopedBankVariants = [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant, Layout.modalRenderBankVariant, Layout.modalValueBankVariant]
+scopedBankVariants = [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant, Layout.modalRenderBankVariant, Layout.modalValueBankVariant, Layout.modalRenderFrameBankVariant]
 
 guardPublicationCounts :: [Int]
 guardPublicationCounts = stockPublicationCount : scopedPublicationCounts
@@ -1195,10 +1195,14 @@ lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
   unless (lifetimeVariant source `elem` maybe [Layout.standardBankVariant] (const scopedBankVariants) scoped
     && fromIntegral (length (lifetimePublications source)) == expectedCount)
     (Left "modal lifetime bank variant or publication count differs from stock or scoped route")
-  when (lifetimeVariant source == Layout.modalRenderBankVariant) $
-    unless (all (\(Layout.PublicationAddress hook) -> any (\(PublicationBinding address old _) ->
-      watchAddressValue address == hook && old == Ram.WordValue 0xe92d4ff0) (lifetimePublications source)) Layout.renderHookAddresses)
+  let hookBound hook old = any (\(PublicationBinding address previous _) ->
+        watchAddressValue address == hook && previous == Ram.WordValue old) (lifetimePublications source)
+  when (lifetimeVariant source `elem` [Layout.modalRenderBankVariant, Layout.modalRenderFrameBankVariant]) $
+    unless (all (\(Layout.PublicationAddress hook) -> hookBound hook 0xe92d4ff0) Layout.renderHookAddresses)
       (Left "modal render lifetime lacks a required render hook")
+  when (lifetimeVariant source == Layout.modalRenderFrameBankVariant) $
+    let Layout.PublicationAddress hook = Layout.renderFrameHookAddress
+    in unless (hookBound hook Layout.renderFrameStockWord) (Left "modal render-frame lifetime lacks the frame step hook")
   forM_ scoped $ \(ModalLinked start bytes, _) ->
     unless (SourceImage start bytes `elem` lifetimeReadonly source)
       (Left "modal linked source differs from the bound runtime readonly section")

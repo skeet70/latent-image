@@ -26,6 +26,7 @@ module Emulation.RenderPairAdmission
   , bindReceipt
   , importReceipt
   , renderSourceIdentityPaths
+  , renderFrameSourceIdentityPaths
   ) where
 
 import Control.Monad (forM, unless)
@@ -271,6 +272,17 @@ renderSourceIdentityPaths =
   , "host/firmware/RenderStack.hs"
   ]
 
+-- | The sources the render-frame variant adds, in host/firmware/BuildRecipeBank.hs's order.
+renderFrameSourceIdentityPaths :: [FilePath]
+renderFrameSourceIdentityPaths =
+  [ "replacement/render_adapter/frame.rs"
+  , "replacement/render_adapter/frame.S"
+  , "replacement/render_commands/src/publisher.rs"
+  , "replacement/render_commands/src/vglib_scene.rs"
+  , "replacement/render_commands/src/stock_objects.rs"
+  , "replacement/render_commands/src/scanout_latch.rs"
+  ]
+
 checkSourceIdentity :: Expected -> IO (Either String ())
 checkSourceIdentity expected = case (expectedRole expected, expectedSourceIdentity expected) of
   (OwnedRole, Nothing) -> pure (Left "owned frozen admission needs the archive's source identity")
@@ -286,7 +298,7 @@ checkSourceIdentity expected = case (expectedRole expected, expectedSourceIdenti
           Right bindings | M.null (M.fromList bindings) -> pure (Left "source identity is empty")
           Right bindings
             | expectedRole expected == OwnedRole
-            , sort (map fst bindings) /= sort renderSourceIdentityPaths ->
+            , sort (map fst bindings) `notElem` map sort [renderSourceIdentityPaths, renderSourceIdentityPaths ++ renderFrameSourceIdentityPaths] ->
                 pure (Left "source identity does not name the renderer sources")
             | otherwise -> go (M.toList (M.fromList bindings))
         Right _ -> pure (Left "source identity is not an object")
@@ -796,14 +808,17 @@ verifyContents expected directory = do
       resultValue <- jsonFile (directory </> "e2e-result.json")
       sessionValue <- jsonFile (directory </> "emulator-session.json")
       modalValue <- jsonFile (directory </> "e2e-modal-observation.json")
+      manifestValue <- jsonFile (directory </> "relinked/ram-push-manifest.json")
       observations <- observationFiles directory
-      case (resultValue, sessionValue, modalValue, observations) of
-        (Left problem, _, _, _) -> pure (Left problem)
-        (_, Left problem, _, _) -> pure (Left problem)
-        (_, _, Left problem, _) -> pure (Left problem)
-        (_, _, _, Left problem) -> pure (Left problem)
-        (Right result, Right session, Right modal, Right indices) ->
-          case decodeReceipt expected result session modal indices of
+      let manifestVariant = manifestValue >>= J.parseEither (J.withObject "relinked manifest" (\fields -> fields J..:? "bank_variant"))
+      case (resultValue, sessionValue, modalValue, observations, manifestVariant) of
+        (Left problem, _, _, _, _) -> pure (Left problem)
+        (_, Left problem, _, _, _) -> pure (Left problem)
+        (_, _, Left problem, _, _) -> pure (Left problem)
+        (_, _, _, Left problem, _) -> pure (Left problem)
+        (_, _, _, _, Left problem) -> pure (Left ("relinked manifest: " ++ problem))
+        (Right result, Right session, Right modal, Right indices, Right relinkedVariant) ->
+          case decodeReceipt expected relinkedVariant result session modal indices of
             Left problem -> pure (Left problem)
             Right identity -> do
               bound <- OS.loadReceiptObservationValues directory result
@@ -855,8 +870,12 @@ receiptHashes directory = do
   runtime <- digestFile (directory </> "relinked/runtime.bin")
   pure (kernel, result, session, modal, watch, manifest, runtime)
 
-decodeReceipt :: Expected -> J.Value -> J.Value -> J.Value -> [Int] -> Either String ReceiptIdentity
-decodeReceipt expected result session modal indices =
+-- | The owned role's admitted lifetime vectors: the render seams, and the render seams with the frame step.
+ownedPublicationVectors :: [(T.Text, Int)]
+ownedPublicationVectors = [("modal75,menu-engine,render", 228), ("modal75,menu-engine,render,render-frame", 229)]
+
+decodeReceipt :: Expected -> Maybe T.Text -> J.Value -> J.Value -> J.Value -> [Int] -> Either String ReceiptIdentity
+decodeReceipt expected relinkedVariant result session modal indices =
   J.parseEither (\_ -> do
     (outcome, trajectoryFailure, forbidden) <- J.withObject "e2e result" (\fields ->
       (,,) <$> (fields J..: "outcome" >>= parseQualification)
@@ -899,7 +918,7 @@ decodeReceipt expected result session modal indices =
         unless (variant == ("standard" :: T.Text) && publications == 223) (fail "stock receipt publication vector differs")
       OwnedRole -> do
         unless (verified && entries > 0) (fail "owned receipt lacks verified task identity")
-        unless (variant == ("modal75,menu-engine,render" :: T.Text) && publications == 228)
+        unless ((variant, publications) `elem` ownedPublicationVectors && relinkedVariant == Just variant)
           (fail "owned receipt publication vector differs")
     pure (ReceiptIdentity
       { identityName = expectedName expected

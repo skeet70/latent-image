@@ -155,3 +155,33 @@ fn invalid_buffer_admission_returns_exclusive_storage_to_caller() {
     assert_eq!(first, &[11, 23, 23, 23]);
     assert_eq!(second, &[23, 23, 23, 23]);
 }
+
+#[test]
+fn begin_into_draws_the_named_buffer_and_refuses_it_until_free() {
+    static BUFFERS: StaticBuffers = StaticBuffers::new(0);
+    let [first, second] = BUFFERS.take();
+    let mut runtime = Publisher::new(context(10), SurfaceId::Osd, first, second).unwrap();
+    let a = runtime.begin_into(BufferIndex::Second).unwrap();
+    assert_eq!(runtime.states(), [BufferState::Free, BufferState::Drawing(a)]);
+    assert_eq!(runtime.begin_into(BufferIndex::Second), Err(PublisherError::Busy));
+    runtime.publish(a).unwrap();
+    runtime.submit(a, |_, _, _| Ok::<_, SubmissionError<()>>(())).unwrap().unwrap();
+    runtime.acknowledge(a).unwrap();
+    assert_eq!(runtime.begin_into(BufferIndex::Second), Err(PublisherError::Busy));
+    let b = runtime.begin_into(BufferIndex::First).unwrap();
+    assert!(b.sequence() > a.sequence());
+    runtime.publish(b).unwrap();
+    runtime.submit(b, |_, _, _| Ok::<_, SubmissionError<()>>(())).unwrap().unwrap();
+    runtime.acknowledge(b).unwrap();
+    assert_eq!(runtime.states(), [BufferState::Scanning(b), BufferState::Free]);
+    assert!(runtime.begin_into(BufferIndex::Second).is_ok());
+}
+
+#[test]
+fn begin_into_refuses_after_close() {
+    static BUFFERS: StaticBuffers = StaticBuffers::new(0);
+    let [first, second] = BUFFERS.take();
+    let mut runtime = Publisher::new(context(11), SurfaceId::Osd, first, second).unwrap();
+    runtime.close();
+    assert_eq!(runtime.begin_into(BufferIndex::First), Err(PublisherError::Closed));
+}

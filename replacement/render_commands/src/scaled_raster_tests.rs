@@ -288,3 +288,32 @@ fn malformed_or_unplaceable_scaled_shapes_are_typed_errors() {
     let commands = [DrawCommand::ScaledShape { dest: scene(0, 0, 2, 2), gvff: &valid, recolour: None }];
     assert_eq!(Surface::new(SurfaceId::Osd, &mut bytes).unwrap().render(DrawList::new(SurfaceId::Osd, &commands), &mut RasterResources::coverage8(&pack)), Err(RasterError::MissingVectorWorkspace));
 }
+
+fn render_scene(commands: &[DrawCommand<'_>]) -> Result<Vec<u8>, RasterError> {
+    let mut vertices = [Vertex::EMPTY; 64];
+    let mut strokes = [StrokePrimitive::EMPTY; 64];
+    let mut workspace = VectorWorkspace { vertices: &mut vertices, strokes: &mut strokes, dash_budget: DashBudget::new(64), accuracy: CurveAccuracy::new(0.25).unwrap(), samples: SampleGrid::One };
+    let mut bytes = vec![7; BYTES];
+    Surface::new(SurfaceId::Osd, &mut bytes)?.render_scene(DrawList::new(SurfaceId::Osd, commands), &mut workspace)?;
+    Ok(bytes)
+}
+
+#[test]
+fn scene_render_matches_full_render_for_clips_and_scaled_draws() {
+    let square = [0.0, 0.0, 2.0, 0.0, 2.0, -2.0, 0.0, -2.0];
+    let shape = gvff([0.0, 0.0, 2.0, -2.0], &[RED], &[Item::fill(0, NON_ZERO, SQUARE_SEGMENTS, &square)]);
+    let texels: Vec<u8> = (0..16u8).flat_map(|value| [value, 255 - value, 3, 255]).collect();
+    let commands = [
+        DrawCommand::Clip(panel_rect(1, 1, 6, 6)),
+        DrawCommand::ScaledImage { dest: scene(0, 0, 8, 8), source: rgba_source(4, 4, 16, &texels) },
+        DrawCommand::ResetClip,
+        DrawCommand::ScaledShape { dest: scene(10, 0, 4, 4), gvff: &shape, recolour: None },
+    ];
+    assert_eq!(render_scene(&commands).unwrap(), render_shapes(&commands).unwrap());
+}
+
+#[test]
+fn scene_render_refuses_commands_that_need_assets() {
+    let fill = DrawCommand::Fill { rect: panel_rect(0, 0, 2, 2), colour: Colour { palette: PaletteIndex(1), alpha: Alpha::OPAQUE } };
+    assert_eq!(render_scene(&[DrawCommand::ResetClip, fill]), Err(RasterError::UnsupportedSceneCommand));
+}

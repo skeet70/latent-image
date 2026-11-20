@@ -22,6 +22,7 @@ bankAllowlistSourcePaths variant = "menu/recipe_bank_allowlist.json" : map fragm
   fragment MenuEnginePublication = "menu/recipe_bank_menu_engine_allowlist_fragment.json"
   fragment RenderPublication = "menu/recipe_bank_render_allowlist_fragment.json"
   fragment MenuValuePublication = "menu/recipe_bank_menu_value_allowlist_fragment.json"
+  fragment RenderFramePublication = "menu/recipe_bank_render_frame_allowlist_fragment.json"
 
 composeBankAllowlist :: BankVariant -> [(FilePath, B.ByteString)] -> Either String B.ByteString
 composeBankAllowlist variant sources = do
