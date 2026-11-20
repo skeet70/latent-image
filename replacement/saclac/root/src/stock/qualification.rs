@@ -1173,7 +1173,7 @@ mod tests {
         overlay[OFF_PRESENT..OFF_PRESENT + 4].copy_from_slice(&1u32.to_le_bytes());
         overlay[OFF_LAYOUT] = 4;
         overlay[OFF_ENTRIES_POINTER..OFF_ENTRIES_POINTER + 4].copy_from_slice(&AREA_ENTRIES_POINTER.to_le_bytes());
-        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12.to_le_bytes());
+        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12u32.to_le_bytes());
         overlay[OFF_MODE..OFF_MODE + 4].copy_from_slice(&5u32.to_le_bytes());
         for (cursor, phase) in [(0u8, 0u8), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)] {
             overlay[OFF_FIRST_CURSOR] = cursor;
@@ -1202,7 +1202,7 @@ mod tests {
         // round-trips by identity.
         let mut overlay = [0u8; OVERLAY_BYTES];
         overlay[OFF_QUEUE..OFF_QUEUE + 4].copy_from_slice(&u32::from(peers::CALC.queue.number()).to_le_bytes());
-        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12.to_le_bytes());
+        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12u32.to_le_bytes());
         let word = |out: &[u8; OVERLAY_BYTES], at: usize| u32::from_le_bytes(out[at..at + 4].try_into().expect("word"));
         let mut out = [0u8; OVERLAY_BYTES];
         let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
