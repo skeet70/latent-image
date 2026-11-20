@@ -841,6 +841,7 @@ haskell_test(
 
 filegroup(
     name = "all",
+    testonly = True,
     srcs = [
         ":host-tests",
         ":saclac",

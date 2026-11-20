@@ -2605,31 +2605,180 @@
   }
   ,{
     "id": "E-SACLAC-ROOT-CYCLE-STEP-150",
-    "claim": "The stock task-43 handling of the 0x3b4b wake, run natively from each stock cycle's retained wake state with that cycle's sampled frame, reproduces the observed outputs in {{stock_outputs}} and the next retained state in {{stock_state}} of {{stock_cycles}} stock cycles, including the route service 0x64982c calls {{stock_route}}. The runner's complete coverage shows each step reads {{exposed_min}} to {{exposed_max}} captured state bytes before writing them. Among them are the stock machine-state halfwords at 0x169d4b4 of machines 0, 1, 8, 11, 12, 13, 24 and 29, which select the dispatched cell. Stock wakes hold {{stock_patterns}} distinct patterns there. All {{owned_wakes}} owned and {{wrong_wakes}} wrong-variant wakes hold zero (all zero: {{owned_zero}}, {{wrong_zero}}), and Root declares no representation from which these fields follow, so the abstraction map has no owned source for them and the owned and wrong-variant per-cycle comparisons are refused, not judged.",
-    "scope": "X-M1 1.50 DAT {{firmware_sha256}}, fixed-RTC host emulator, the ordered half-press schedule: one stock, owned ({{owned_candidate}}) and wrong-driver-store ({{wrong_candidate}}) capture with per-cycle wake, frame and completion dumps from the same image-bound census sites, and the native-case runner {{runner}} with complete per-byte coverage. This qualifies the stock step harness and identifies the missing owned representation. It does not judge Root's per-cycle outputs or next state, show that the closed-loop difference comes from sampling, or show the wrong variant failing per cycle.",
-    "notes": "The dispatcher 0xefca6c reads the row (0xefcabc) and the state (0xefcad4), selects cell row * state_counts[machine] + state and stores the negated next byte at 0xefcb78; every machine row is written before it is read. Root's typed dispatch (composition::dispatch) replaces machine 0's router and never enters the stock-layout machine bodies. Source inspection finds no stock state index declared by any of its phases, routers or sub-machines, and no counterpart for the startup values (cycles 0 and 3 hold m0 6, m11 3, m12 4; cycle 2 holds m0 6, m11 6, m12 23, m24 and m29 0); Root's raw BSS differs between every owned wake, so bytes alone neither show nor exclude a separating field. Source-inspected, not run: the other exposed stock-private bytes have owned derivations or constants proved by construction (the latch 0x16c0710 as round::window power_held, grid +0x42c from the statistics snapshot, zero grid gaps and record padding). Stock reaches 0x64982c only through the fixed-argument wrappers 0xed80a8 and 0xed80c4, whose extent the census counts as saclac caller code.",
+    "claim": "Through the declared Root-to-stock state map (qualification ELF {{map_image}}, {{map_fields}} fields, {{map_bytes}} overlay bytes, built only with --cfg saclac_qualification), the stock task-43 handling of the 0x3b4b wake, run natively from each cycle's mapped pre-state with that cycle's sampled frame, reproduces Root's posts and route-service calls in {{owned_outputs}} and Root's mapped next state at the end of its wake handling in {{owned_state}} of {{owned_cycles}} owned cycles. Run from stock's own states through the map's decode and encode, it reproduces stock's outputs in {{stock_outputs}} and next state in {{stock_state}} of {{stock_cycles}} cycles, the wake round trip being byte-identical in {{stock_identical}}. Applied successively to Root's sampled frames, carrying only its own retained writes, the stock step reproduces Root's level in {{chain_matches}} of {{chain_cycles}} cycles. The wake-publication control (descriptor index advanced by two) matches outputs in {{publication_outputs}} but fails the next state in cycles {{publication_failing}}; the wrong-driver-store control matches in {{wrong_both}} of {{wrong_cycles}} cycles, its defect lying outside the wake step.",
+    "scope": "X-M1 1.50 DAT {{firmware_sha256}}, fixed-RTC host emulator, the ordered half-press schedule: stock captures from cycle-state-4 and owned ({{owned_candidate}}), wrong-driver-store ({{wrong_candidate}}) and wake-publication ({{publication_candidate}}) captures with step-end dumps, all through the same image-bound census sites and native-case runner {{runner}}. The map's typed views are exhaustive over Root's states with no wildcard arms; its layouts are bound by the root rlib DWARF check and the production/debug symbol binding. Two Root gaps the comparison exposed were fixed first: the adjustment flag 0x016d8750 and the area-statistics publication. This judges the wake step only, not Root's other events, camera behaviour or full-system interface equality.",
+    "notes": "Stock states the map refuses (m24 4, m29 3: restart pending) did not occur. The two done bytes at 0x016be047 decode any nonzero value to busy and encode 0x01, which is why the completion round trip changes them; the step reads them only as zero tests. The wrong-driver-store defect sets command pending bytes before routing, outside what the stock wake step reads or writes, so this boundary cannot see it; the census interface comparison does. Three wakes per lane have no paired frame or completion and are refused rather than judged.",
     "camera_state_change": "none",
     "artifacts": [
-      "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json",
-      "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/inputs.sha256",
-      "private-data/scratch/SaclacRoot/runs/20261119T201631Z-cycle-step-stock/result/verdict.json"
+      "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+      "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/inputs.sha256"
     ],
     "facts": [
-      {"name": "firmware_sha256", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["firmware_sha256"]},
-      {"name": "owned_candidate", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["owned_candidate_sha256"]},
-      {"name": "wrong_candidate", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["wrong_candidate_sha256"]},
-      {"name": "runner", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["stock_step", "runner_sha256", "0"]},
-      {"name": "stock_cycles", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["stock_step", "cycles"]},
-      {"name": "stock_outputs", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["stock_step", "outputs_equal"]},
-      {"name": "stock_state", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["stock_step", "state_equal"]},
-      {"name": "stock_route", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["route_service_requests", "stock"]},
-      {"name": "exposed_min", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["stock_step", "exposed_bytes", "0"]},
-      {"name": "exposed_max", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["stock_step", "exposed_bytes", "3"]},
-      {"name": "stock_patterns", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["wake_machine_states", "stock", "patterns"], "operation": "length"},
-      {"name": "owned_wakes", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["wake_machine_states", "owned", "wakes"]},
-      {"name": "wrong_wakes", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["wake_machine_states", "wrong", "wakes"]},
-      {"name": "owned_zero", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["wake_machine_states", "owned", "all_zero"]},
-      {"name": "wrong_zero", "path": "private-data/scratch/SaclacRoot/runs/20261119T202006Z-root-cycle-step-facts/result/cycle-step-facts.json", "pointer": ["wake_machine_states", "wrong", "all_zero"]}
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "firmware_sha256"
+        ]
+      },
+      {
+        "name": "owned_candidate",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "owned_candidate_sha256"
+        ]
+      },
+      {
+        "name": "wrong_candidate",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "wrong_candidate_sha256"
+        ]
+      },
+      {
+        "name": "publication_candidate",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "publication_candidate_sha256"
+        ]
+      },
+      {
+        "name": "map_image",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "qualification",
+          "image_sha256"
+        ]
+      },
+      {
+        "name": "map_fields",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "qualification",
+          "fields"
+        ]
+      },
+      {
+        "name": "map_bytes",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "qualification",
+          "overlay_bytes"
+        ]
+      },
+      {
+        "name": "runner",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "owned",
+          "runner_sha256",
+          "0"
+        ]
+      },
+      {
+        "name": "owned_outputs",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "owned",
+          "outputs_equal"
+        ]
+      },
+      {
+        "name": "owned_state",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "owned",
+          "state_equal"
+        ]
+      },
+      {
+        "name": "owned_cycles",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "owned",
+          "cycles"
+        ]
+      },
+      {
+        "name": "stock_outputs",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "stock",
+          "outputs_equal"
+        ]
+      },
+      {
+        "name": "stock_state",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "stock",
+          "state_equal"
+        ]
+      },
+      {
+        "name": "stock_cycles",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "stock",
+          "cycles"
+        ]
+      },
+      {
+        "name": "stock_identical",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "stock",
+          "round_trip_wake_identical"
+        ]
+      },
+      {
+        "name": "chain_matches",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "chain",
+          "matches"
+        ]
+      },
+      {
+        "name": "chain_cycles",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "chain",
+          "cycles"
+        ]
+      },
+      {
+        "name": "publication_outputs",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "publication",
+          "outputs_equal"
+        ]
+      },
+      {
+        "name": "publication_failing",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "publication",
+          "differing_cycles"
+        ]
+      },
+      {
+        "name": "wrong_both",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "wrong",
+          "both_equal"
+        ]
+      },
+      {
+        "name": "wrong_cycles",
+        "path": "private-data/scratch/SaclacRoot/runs/20261120T122854Z-root-cycle-step-facts/result/cycle-step-facts.json",
+        "pointer": [
+          "wrong",
+          "cycles"
+        ]
+      }
     ]
   }
   ,{
