@@ -3,6 +3,8 @@
 -- or runs the serialized refusal controls against an admitted pair.
 module Main (main) where
 
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
 import Control.Monad (forM, unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
@@ -91,7 +93,8 @@ run elf arguments = case arguments of
     owned <- admitted "baseline owned qualify" (qualify context OwnedRole ownedObservation)
     _ <- admitted "baseline compare" (compareRoles retained owned)
     let (mutated, other) = if selected == RetainedRole then (retainedObservation, ownedObservation) else (ownedObservation, retainedObservation)
-    outcomes <- forM controlNames $ \control -> case runControl context selected mutated other control of
+    -- Forced per control: an unevaluated outcome holds its decoded mutated observation.
+    outcomes <- forM controlNames $ \control -> evaluate . force =<< case runControl context selected mutated other control of
       Left problem -> pure (object ["control" .= show control, "passed" .= False, "construction" .= problem], False)
       Right result -> do
         let passed = case controlObserved result of
