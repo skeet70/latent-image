@@ -98,7 +98,7 @@ Scope: Emulated X-M1 1.50 fixed-record boot, one staged startup boundary entry, 
 - Reload: the trigger that sets the segment-table mode word to 1 and the reload order on that path remain open. Identify its writer and run that path with partition guards and image-read observations; a forced mode-1 preservation control is separate evidence from a reachable reload.
 - Publication: the probe checks its staged branch at handoff and observes its entry only afterward. Each subsystem's own publication manifest still needs its earliest retained callers observed on that subsystem's scenarios.
 - Silicon: DMA-loaded instruction visibility, later MPU changes and card-backed heap demand remain camera final-pass measurements.
-- Card boot: on FujiMod a card-backed boot of a fixed-first-stage DAT stops at the LZ model's completion-route refusal (E-FUJIMOD-LZ-ENABLE-WINDOW-150). The owned first stage leaves interrupt routing as stock does; the completion lands in the stock kernel's transient enable clear. Card-backed fixed-first-stage routes need the decompressor model to keep a completion pending across that clear.
+- Card boot: card-backed FujiMod boots of fixed-first-stage DATs depend on the source-inferred LZ masked-completion law in `fujimod-lz-masked-completion.patch` (E-FUJIMOD-LZ-ENABLE-WINDOW-150): without it the stock kernel's transient enable clear can catch an LZ completion and the pinned model refuses. Silicon behaviour in that window is not measured.
 
 ## Lens transport
 
