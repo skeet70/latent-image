@@ -9,7 +9,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries, payloadForManifest
+  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderPayload, bankModalRenderFramePayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, payloads, payloadOfSize, payloadPublicationCount, payloadEntries, payloadForManifest
   , emulatorExperimentPayload
   , readRamPushManifest, parseRamPushManifest, readRamPushPrepublication, manifestPropertyCounts, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
@@ -268,6 +268,15 @@ bankModalRenderPayload = bankModalEnginePayload
   , payloadBankVariant = Just Layout.modalRenderBankVariant
   }
 
+-- | The render package with the owned VGLIB frame step at 0x006d7920 and its larger engine region.
+bankModalRenderFramePayload :: Payload
+bankModalRenderFramePayload = bankModalEnginePayload
+  { payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.modalRenderFrameBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalRenderFrameBankVariant
+  , payloadRelinkScript = "build-recipe-bank-modal-render-frame-ram.sh"
+  , payloadBankVariant = Just Layout.modalRenderFrameBankVariant
+  }
+
 -- | The scoped modal75 and menu-engine package with the owned value seam.
 bankModalValuePayload :: Payload
 bankModalValuePayload = bankModalEnginePayload
@@ -383,7 +392,7 @@ emulatorExperimentPayload name =
   in payload { payloadRelinkInputs = ("EXPERIMENT_ADMISSION", "emulator-only") : payloadRelinkInputs payload }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalValuePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
+payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalValuePayload, bankModalRenderFramePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
