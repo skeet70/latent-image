@@ -8,7 +8,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256Hex)
 import Replacement.ModalRuntime.QualifierPolicy
-  ( OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
+  ( OwnedArchive (..), OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
   , ownedBaseInputs, parseInvocation, qualificationOptions, roleFirmware )
 import Emulation.ParallelCases (mapBounded)
 
@@ -42,17 +42,20 @@ ownedBaseOption :: IO ()
 ownedBaseOption = do
   let stockDat = ("firmware.DAT", digest 'a')
       staged = StagedBase "time.DAT" (digest 'b')
-  expect "no option keeps the default root and the shared base"
-    (parseInvocation "default" ["execute"] == Right (Qualification "default" SharedBase, ["execute"]))
-  expect "options before the command select the root and the staged base"
-    (parseInvocation "default" ["--root", "fresh", "--owned-base", "time.DAT", sha256Hex (digest 'b'), "execute"]
-      == Right (Qualification "fresh" staged, ["execute"]))
-  forM_ [Qualification "default" SharedBase, Qualification "fresh" staged] $ \qualification ->
+      control = ControlArchive "control.a" (digest 'c')
+  expect "no option keeps the default root, the shared base and the pinned archive"
+    (parseInvocation "default" ["execute"] == Right (Qualification "default" SharedBase PinnedArchive, ["execute"]))
+  expect "options before the command select the root, the staged base and the control archive"
+    (parseInvocation "default" ["--root", "fresh", "--owned-base", "time.DAT", sha256Hex (digest 'b')
+      , "--control-archive", "control.a", sha256Hex (digest 'c'), "execute"]
+      == Right (Qualification "fresh" staged control, ["execute"]))
+  forM_ [Qualification "default" SharedBase PinnedArchive, Qualification "fresh" staged PinnedArchive, Qualification "fresh" SharedBase control] $ \qualification ->
     expect "child processes receive the same qualification"
       (parseInvocation "other" (qualificationOptions qualification ++ ["role-slotted", "oracle-open", "owned"])
         == Right (qualification, ["role-slotted", "oracle-open", "owned"]))
   expect "a malformed base digest is refused" (isLeft (parseInvocation "default" ["--owned-base", "time.DAT", "abc", "execute"]))
   expect "a base without a digest is refused" (isLeft (parseInvocation "default" ["--owned-base", "time.DAT"]))
+  expect "a control archive without a digest is refused" (isLeft (parseInvocation "default" ["--control-archive", "control.a"]))
   expect "the stock role boots the stock DAT under a staged base" (roleFirmware staged stockDat Stock == stockDat)
   expect "the owned role boots the stock DAT by default" (roleFirmware SharedBase stockDat Owned == stockDat)
   expect "the owned role boots the staged base" (roleFirmware staged stockDat Owned == ("time.DAT", digest 'b'))
