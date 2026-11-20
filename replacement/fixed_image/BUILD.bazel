@@ -1,8 +1,11 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/file_service:controls.bzl", "file_service_suffixes")
 
 package(default_visibility = ["//visibility:public"])
+
+_PUBLISHED_FIXTURES = ["admitted", "word", "outside"]
 
 exports_files(["layout.json", "probe-allowlist.json"])
 
@@ -77,8 +80,8 @@ sh_test(
     name = "interface-tests",
     size = "small",
     srcs = ["interface-test.sh"],
-    args = ["$(rootpath :check-fixed-image)", "$(rootpath probe-allowlist.json)", "$(rootpath :probe-image.elf)", "$(rootpath :probe-image.bin)"],
-    data = [":check-fixed-image", "probe-allowlist.json", ":probe-image.elf", ":probe-image.bin"],
+    args = ["$(rootpath :check-fixed-image)", "$(rootpath probe-allowlist.json)", "$(rootpath :probe-image.elf)", "$(rootpath :probe-image.bin)"] + ["$(rootpath :probe-published-%s.elf)" % fixture for fixture in _PUBLISHED_FIXTURES],
+    data = [":check-fixed-image", "probe-allowlist.json", ":probe-image.elf", ":probe-image.bin"] + [":probe-published-%s.elf" % fixture for fixture in _PUBLISHED_FIXTURES],
 )
 
 
@@ -114,6 +117,35 @@ xm1_rust_elf(
     link_script = ":probe.ld",
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
 )
+
+# The probe with a section published below the fixed image: admitted (trap and a branch to the
+# entry), a non-trap non-branch word, and a branch to 0x700100 outside fixed code.
+[xm1_rust_elf(
+    name = "probe-published-" + fixture,
+    testonly = True,
+    rust_staticlib = ":probe-rust",
+    asm_srcs = ["probe-entry.S", "published-%s.S" % fixture],
+    entry = "xm1_fixed_test_entry",
+    link_script = "published-probe.ld",
+    link_includes = [":probe.ld"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+) for fixture in _PUBLISHED_FIXTURES]
+
+# The one fixed bank: the file service (veneers over its retired extents, bodies in OWNED_FIXED)
+# and the display scanout, with the file-service controls and the scanout defects as suffixes.
+[xm1_rust_elf(
+    name = "fixed-bank-image" + suffix,
+    rust_staticlib = "//replacement/bank:bank-fixed" + suffix,
+    entry = "xm1_file_service_entry_route",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs"],
+    link_includes = [
+        ":memory-region",
+        "//replacement/display_scanout:fixed-imports.ld",
+        "//replacement/file_service:imports.ld",
+    ],
+    link_script = "fixed-bank.ld",
+    link_map = True,
+) for suffix in file_service_suffixes() + ["-register-order", "-skipped-drain"]]
 
 filegroup(
     name = "shim-catalog-data",

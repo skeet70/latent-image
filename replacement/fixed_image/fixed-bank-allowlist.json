@@ -1,0 +1,27 @@
+{
+  "schema": 2,
+  "stock_calls": [
+    {"address": "0x0064e918", "name": "scanout_irq_configure", "source": "reports/display-render-contracts/scanout.md driver_configure_boot_handle; replacement/display_scanout/display-scanout-fixed.ld"},
+    {"address": "0x0064eb20", "name": "scanout_irq_release", "source": "replacement/display_scanout/display-scanout-fixed.ld"},
+    {"address": "0x0070e748", "name": "file_service_copy_string", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x0070ec84", "name": "file_service_device_for_letter", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x007111c4", "name": "file_service_local_record", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x007111e0", "name": "file_service_local_position", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00711200", "name": "file_service_local_open", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x0071e960", "name": "file_service_cache_claim", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x0071fe2c", "name": "file_service_receive_request", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00722054", "name": "file_service_copy_bytes", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x007235d8", "name": "scanout_enter_critical", "source": "replacement/shims.md kernel-slot-table; replacement/display_scanout/display-scanout-fixed.ld"},
+    {"address": "0x007236b0", "name": "scanout_leave_critical", "source": "replacement/shims.md kernel-slot-table; replacement/display_scanout/display-scanout-fixed.ld"},
+    {"address": "0x00723cb8", "name": "file_service_current_task", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00723ce8", "name": "scanout_yield", "source": "reports/display-render-contracts/scanout.md wait-input-ready yield; replacement/display_scanout/display-scanout-fixed.ld"},
+    {"address": "0x007240c8", "name": "file_service_sleep", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00724144", "name": "file_service_wake", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00724b68", "name": "file_service_semaphore_wait", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00724c00", "name": "file_service_semaphore_signal", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x0072503c", "name": "file_service_send", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x007257a8", "name": "file_service_ticks", "source": "replacement/file_service/imports.ld"},
+    {"address": "0x00726c74", "name": "file_service_media_report", "source": "replacement/file_service/imports.ld"}
+  ],
+  "stock_regions": []
+}

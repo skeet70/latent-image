@@ -1,6 +1,7 @@
 load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("//replacement/file_service:controls.bzl", "file_service_suffixes")
 
 _RLIB_DEPS = {
     "capture": "//replacement/capture:arm",
@@ -302,20 +303,27 @@ xm1_rust_staticlib(
     visibility = ["//replacement/image5_load:__pkg__"],
 )
 
+# The one fixed-bank link unit: the file service and the display scanout. The suffixes select a
+# file-service control (`-control-NAME`) or a scanout defect (`-register-order`, `-skipped-drain`);
+# the other unit stays owned.
 [
     xm1_rust_staticlib(
-        name = "bank-display-scanout" + suffix,
+        name = "bank-fixed" + suffix,
         src = "lib.rs",
         crate_name = "bank",
-        rustc_flags = ["--cfg", "rb_display_scanout_owned"],
+        rustc_flags = ["--cfg", "rb_file_service_owned", "--cfg", "rb_display_scanout_owned"],
         rlib_deps = dict(
             _RLIB_DEPS,
             calibration_liveview = "//replacement/calibration_liveview:libcalibration_liveview",
-            xm1_display_scanout = "//replacement/display_scanout:fixed-bank-" + variant,
+            xm1_display_scanout = "//replacement/display_scanout:fixed-bank-" + scanout,
+            xm1_file_service = "//replacement/file_service:arm" + file_service,
         ),
-        visibility = ["//replacement/display_scanout:__pkg__"],
+        visibility = ["//replacement/fixed_image:__pkg__"],
     )
-    for suffix, variant in [("", "owned"), ("-register-order", "register-order"), ("-skipped-drain", "skipped-drain")]
+    for suffix, file_service, scanout in [(s, s, "owned") for s in file_service_suffixes()] + [
+        ("-register-order", "", "register-order"),
+        ("-skipped-drain", "", "skipped-drain"),
+    ]
 ]
 
 rust_source_boundary_test(

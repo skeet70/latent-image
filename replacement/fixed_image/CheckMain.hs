@@ -7,7 +7,9 @@ import Control.Monad (forM_)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
-import Data.List (sortOn)
+import Data.Bits (shiftL, shiftR, (.&.))
+import Data.Int (Int32)
+import Data.List (partition, sortOn)
 import Data.Word (Word32)
 import qualified EngineStack as S
 import qualified FujiAF.Host as H
@@ -39,10 +41,12 @@ check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget bud
   let symbol name = case [E.symbolValue value | value <- E.elfSymbols elf, E.symbolName value == name, E.symbolSection value /= E.Undefined] of
         [value] -> pure value
         _ -> H.failH ("missing or duplicate fixed symbol " ++ name)
-      allocated = sortOn E.sectionAddress (filter E.sectionAllocated (E.elfSections elf))
+      sections = sortOn E.sectionAddress (filter E.sectionAllocated (E.elfSections elf))
+      end section = toInteger (E.sectionAddress section) + toInteger (E.sectionSize section)
+      -- Sections wholly below the fixed image are publications over stock code, not body.
+      (published, allocated) = partition (\section -> end section <= toInteger imageBase) sections
       backed = filter ((== 1) . E.sectionType) allocated
       code = filter E.sectionExecutable allocated
-      end section = toInteger (E.sectionAddress section) + toInteger (E.sectionSize section)
       inside address = any (\section -> E.sectionAddress section <= address && toInteger address < end section) code
   first <- symbol "__fixed_body_start"
   lastByte <- symbol "__fixed_body_end"
@@ -63,7 +67,12 @@ check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget bud
       forM_ [0 .. toInteger (E.sectionSize section) - 1] $ \offset -> do
         let address = E.sectionAddress section + fromInteger offset
         H.ensure (E.byteAt elf address == Just (B.index body (fromIntegral (address-first)))) "body bytes differ from ELF link"
-  forM_ (zip allocated (drop 1 allocated)) $ \(left,right) ->
+  forM_ published $ \section -> do
+    H.ensure (E.sectionType section == 1 && not (E.sectionWritable section)
+      && E.sectionAddress section `mod` 4 == 0 && E.sectionSize section `mod` 4 == 0) "published section is not aligned read-only"
+    forM_ [E.sectionAddress section, E.sectionAddress section + 4 .. E.sectionAddress section + E.sectionSize section - 4] $ \address ->
+      H.ensure (maybe False (publishedWord inside address) (E.wordAt elf address)) "published word is neither a trap nor a branch into fixed code"
+  forM_ (zip sections (drop 1 sections)) $ \(left,right) ->
     H.ensure (end left <= toInteger (E.sectionAddress right)) "fixed sections overlap"
   H.ensure (all (\segment -> not (E.loadSegment segment && E.segmentWritable segment && E.segmentExecutable segment)) (E.elfSegments elf)) "fixed load segment is writable and executable"
   H.ensure (all (\value -> take 2 (E.symbolName value) /= "$t" || not (inside (E.symbolValue value))) (E.elfSymbols elf)) "fixed image contains Thumb code"
@@ -82,3 +91,13 @@ check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget bud
   H.ensure (depth <= budget) "fixed image owned stack budget exceeded"
   putStrLn ("fixed image admitted: " ++ show (A.reportInstructions report) ++ " instructions, "
     ++ show (A.reportProvenBranches report) ++ " direct transfers, " ++ show depth ++ " owned stack bytes")
+
+-- | A published word is the linker trap fill (UDF, 0xe7f000f0) or an unconditional A32 B whose
+-- target is fixed code.
+publishedWord :: (Word32 -> Bool) -> Word32 -> Word32 -> Bool
+publishedWord fixedCode address word
+  | word == 0xe7f000f0 = True
+  | word .&. 0xff000000 == 0xea000000 = fixedCode (address + 8 + offset)
+  | otherwise = False
+  where
+    offset = fromIntegral ((fromIntegral ((word .&. 0x00ffffff) `shiftL` 8) :: Int32) `shiftR` 6) :: Word32
