@@ -8,7 +8,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256Hex)
 import Replacement.ModalRuntime.QualifierPolicy
-  ( OwnedArchive (..), OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
+  ( MatrixPin (..), OwnedArchive (..), OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
   , ownedBaseInputs, parseInvocation, qualificationOptions, roleFirmware )
 import Emulation.ParallelCases (mapBounded)
 
@@ -43,19 +43,24 @@ ownedBaseOption = do
   let stockDat = ("firmware.DAT", digest 'a')
       staged = StagedBase "time.DAT" (digest 'b')
       control = ControlArchive "control.a" (digest 'c')
-  expect "no option keeps the default root, the shared base and the pinned archive"
-    (parseInvocation "default" ["execute"] == Right (Qualification "default" SharedBase PinnedArchive, ["execute"]))
-  expect "options before the command select the root, the staged base and the control archive"
+  expect "no option keeps the default root, the shared base, the pinned archive and the engine225 matrix"
+    (parseInvocation "default" ["execute"] == Right (Qualification "default" SharedBase PinnedArchive Engine225Matrix, ["execute"]))
+  expect "a staged base keeps the engine225 matrix"
+    (parseInvocation "default" ["--owned-base", "time.DAT", sha256Hex (digest 'b'), "execute"]
+      == Right (Qualification "default" staged PinnedArchive Engine225Matrix, ["execute"]))
+  expect "options before the command select the root, the staged base, the control archive and the matrix"
     (parseInvocation "default" ["--root", "fresh", "--owned-base", "time.DAT", sha256Hex (digest 'b')
-      , "--control-archive", "control.a", sha256Hex (digest 'c'), "execute"]
-      == Right (Qualification "fresh" staged control, ["execute"]))
-  forM_ [Qualification "default" SharedBase PinnedArchive, Qualification "fresh" staged PinnedArchive, Qualification "fresh" SharedBase control] $ \qualification ->
+      , "--control-archive", "control.a", sha256Hex (digest 'c'), "--matrix", "seek-moved", "execute"]
+      == Right (Qualification "fresh" staged control SeekMovedMatrix, ["execute"]))
+  forM_ [ Qualification "default" SharedBase PinnedArchive Engine225Matrix, Qualification "fresh" staged PinnedArchive Engine225Matrix
+        , Qualification "fresh" SharedBase control SeekMovedMatrix, Qualification "fresh" SharedBase PinnedArchive SeekMovedMatrix ] $ \qualification ->
     expect "child processes receive the same qualification"
       (parseInvocation "other" (qualificationOptions qualification ++ ["role-slotted", "oracle-open", "owned"])
         == Right (qualification, ["role-slotted", "oracle-open", "owned"]))
   expect "a malformed base digest is refused" (isLeft (parseInvocation "default" ["--owned-base", "time.DAT", "abc", "execute"]))
   expect "a base without a digest is refused" (isLeft (parseInvocation "default" ["--owned-base", "time.DAT"]))
   expect "a control archive without a digest is refused" (isLeft (parseInvocation "default" ["--control-archive", "control.a"]))
+  expect "an unknown matrix is refused" (isLeft (parseInvocation "default" ["--matrix", "other", "execute"]))
   expect "the stock role boots the stock DAT under a staged base" (roleFirmware staged stockDat Stock == stockDat)
   expect "the owned role boots the stock DAT by default" (roleFirmware SharedBase stockDat Owned == stockDat)
   expect "the owned role boots the staged base" (roleFirmware staged stockDat Owned == ("time.DAT", digest 'b'))
