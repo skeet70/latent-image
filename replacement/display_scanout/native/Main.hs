@@ -351,7 +351,7 @@ registerCase occupied order persistent phase selector live failure counter nullC
     registered=accepted && live==0
     source=(if selector==0 then 11 else 9)+normalized
     irqState=if registered then irqReceipt source $ word handleCell (if failure==0 then 0x7a11 else 0) insertedState else insertedState
-    after=if not nullCallback && persistent==1 && (not accepted || live/=0 || failure==0) then word 0x917edc 1 irqState else irqState
+    after=criticalCounts 1 1 $ if not nullCallback && persistent==1 && (not accepted || live/=0 || failure==0) then word 0x917edc 1 irqState else irqState
 
 isrCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
 isrCase engine status count active live releaseFailure configureFailure =
@@ -524,7 +524,7 @@ regionLayout :: Scenario -> [(String,Word32,Int)]
 regionLayout c=[(name,a,if name=="cache" then 0x420000 else n) | (name,a,n) <- regions,name/="cache" || usesCalibration c,a<0xfff00000 || paired c && operation c `notElem` [Defaults,Stage]]++[("yield-receipt",0x211000,8) | operation c==Wait]++[("critical",0x211100,8) | criticalReceipted c]
 
 criticalReceipted :: Scenario -> Bool
-criticalReceipted c=operation c `elem` [Capture,CompletionEvent,CompletionPacket,ModeCompletion,ModeCommit,AvoutRequest]
+criticalReceipted c=operation c `elem` [Capture,Register,CompletionEvent,CompletionPacket,ModeCompletion,ModeCommit,AvoutRequest]
 
 usesCalibration :: Scenario -> Bool
 usesCalibration c=paired c && (operation c `elem` [Immediate,Defaults,Stage,EngineInitialize] || (operation c==PanelDeviceConfiguration && deviceConfigurationPrograms c))

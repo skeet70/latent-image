@@ -20,4 +20,4 @@ SECTIONS {
   /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) *(.note*) *(.comment*) }
 }
 ASSERT(__fixed_bss_end <= ORIGIN(OWNED_FIXED) + LENGTH(OWNED_FIXED), "display scanout exceeds the fixed reservation")
-ASSERT(__fixed_bss_end == __fixed_body_end, "display scanout has writable statics")
+ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "display scanout has writable statics")
