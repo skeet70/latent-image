@@ -422,7 +422,7 @@ external body address = not (any (`inside` address) (body : retired))
 -- interprocedural register allocation, cannot read them after the call returns.
 clobbered :: String -> [T.Text]
 clobbered name = case name of
-  "open_async" -> ["r1", "r2", "r3"] -- 0x71c2f4, 0x71c498 (open), 0x71c654
+  "open_async" -> ["r1", "r2", "r3"] -- 0x71c478, 0x71c498 (open), 0x71c654
   "read_async" -> ["r1", "r2", "r3"] -- 0x71bec4, 0x71bf70, 0x71bed4 (read)
   "close_async" -> ["r1", "r2", "r3"] -- 0x71c248, 0x71c250, 0x71c238 (close)
   "translate" -> ["r1"] -- 0x71d50c
@@ -494,19 +494,17 @@ payloadCapacity = 0x50
 -- | Which payload bytes are defined. The stock open (0x71c2b0) and close (0x71c134) posters
 -- build the payload in an uninitialized stack frame and copy a string into it with 0x70e748:
 -- open's path field +4..+0x34 and close's name field +0xc..+0x20 are undefined after the
--- terminator, and close stores its result-slot words +0x20..+0x28 (flag 1) only when it waits.
--- Bytes at or past the payload length belong to no request.
+-- terminator. Bytes at or past the payload length belong to no request.
 payloadDefined :: Word32 -> Int -> [Word8] -> [Bool]
 payloadDefined code len bytes = map defined [0 .. length bytes - 1]
   where
-    (string, slot)
-      | code `elem` [0x2c17, 0x2c2d] = (Just (4, 0x34), Nothing)
-      | code `elem` [0x2c1a, 0x2c30] = (Just (0xc, 0x20), Just 0x20)
-      | otherwise = (Nothing, Nothing)
+    string
+      | code `elem` [0x2c17, 0x2c2d] = Just (4, 0x34)
+      | code `elem` [0x2c1a, 0x2c30] = Just (0xc, 0x20)
+      | otherwise = Nothing
     defined o
       | o >= len = False
       | Just (s, e) <- string, s <= o, o < e = notElem 0 (take (o - s) (drop s bytes))
-      | Just s <- slot, s <= o, o < s + 8 = length bytes >= s + 4 && littleEndian (take 4 (drop s bytes)) == 1
       | otherwise = True
 
 -- | The defined flags of a payload behind a 12-byte request header.
