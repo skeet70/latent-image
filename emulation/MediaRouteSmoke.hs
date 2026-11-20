@@ -1950,7 +1950,7 @@ observeConstructionState directory bridge journal = do
   createDirectoryIfMissing True (directory </> "construction")
   snapshots <- forM [ConstructorRecord, ConstructorRequest, ConstructorDriver] $ \selected -> do
     let cell = case selected of
-          ConstructorRecord -> Cell "record" 0x015b0bf8 0x65 "0x00e8fee4 retained develop job4 producer"
+          ConstructorRecord -> Cell "record" 0x015b0bf8 0x65 "0x00e8fee4 develop job4 producer"
           ConstructorRequest -> Cell "request" 0x014c56f8 0x54 "0x00d98904 static request constructor"
           ConstructorDriver -> Cell "driver" 0x014c56f0 0x210 "channel9 record/resource/request/IRQ/configuration state"
         path = "construction" </> T.unpack (cellName cell) ++ ".bin"

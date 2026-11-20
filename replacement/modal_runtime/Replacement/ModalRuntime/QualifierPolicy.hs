@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.ModalRuntime.QualifierPolicy
-  ( Role (..), OwnedBase (..), Qualification (..)
+  ( Role (..), OwnedBase (..), OwnedArchive (..), Qualification (..)
   , parseInvocation, qualificationOptions, roleFirmware, ownedBaseInputs
   , executionIdentity, installedCheckpointMatches
   ) where
@@ -17,27 +17,40 @@ data Role = Stock | Owned deriving (Eq, Show)
 -- | The DAT the owned role boots: the stock role's, or a staged DAT carrying owned fixed-range records.
 data OwnedBase = SharedBase | StagedBase FilePath Sha256 deriving (Eq)
 
+-- | The archive the owned role links: the qualifier's pinned candidate, or a control archive whose
+-- pairs must fail comparison.
+data OwnedArchive = PinnedArchive | ControlArchive FilePath Sha256 deriving (Eq)
+
 -- | Settings every child process of one qualification receives again.
 data Qualification = Qualification
   { qualificationRoot :: FilePath
   , qualificationOwnedBase :: OwnedBase
+  , qualificationArchive :: OwnedArchive
   } deriving (Eq)
 
--- | Leading @--root DIR@ and @--owned-base DAT SHA256@ options, then the command.
+-- | Leading @--root DIR@, @--owned-base DAT SHA256@ and @--control-archive ARCHIVE SHA256@
+-- options, then the command.
 parseInvocation :: FilePath -> [String] -> Either String (Qualification, [String])
-parseInvocation defaultRoot = go (Qualification defaultRoot SharedBase)
+parseInvocation defaultRoot = go (Qualification defaultRoot SharedBase PinnedArchive)
   where
     go qualification ("--root" : root : rest) = go qualification { qualificationRoot = root } rest
     go qualification ("--owned-base" : path : digest : rest) = case parseSha256Hex digest of
       Right parsed -> go qualification { qualificationOwnedBase = StagedBase path parsed } rest
       Left problem -> Left ("--owned-base digest: " ++ problem)
+    go qualification ("--control-archive" : path : digest : rest) = case parseSha256Hex digest of
+      Right parsed -> go qualification { qualificationArchive = ControlArchive path parsed } rest
+      Left problem -> Left ("--control-archive digest: " ++ problem)
     go _ (option : _) | "--" `isPrefixOf` option = Left ("unknown or incomplete option " ++ option)
     go qualification command = Right (qualification, command)
 
 qualificationOptions :: Qualification -> [String]
-qualificationOptions qualification = ["--root", qualificationRoot qualification] ++ case qualificationOwnedBase qualification of
-  SharedBase -> []
-  StagedBase path digest -> ["--owned-base", path, sha256Hex digest]
+qualificationOptions qualification = ["--root", qualificationRoot qualification]
+  ++ (case qualificationOwnedBase qualification of
+        SharedBase -> []
+        StagedBase path digest -> ["--owned-base", path, sha256Hex digest])
+  ++ (case qualificationArchive qualification of
+        PinnedArchive -> []
+        ControlArchive path digest -> ["--control-archive", path, sha256Hex digest])
 
 -- | The DAT a role boots and the digest its receipt must name, given the stock role's.
 roleFirmware :: OwnedBase -> (FilePath, Sha256) -> Role -> (FilePath, Sha256)

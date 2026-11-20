@@ -169,6 +169,36 @@
         "end": "0x012202d0",
         "sha256": "8fd653644486cfabcb4f6733463d5bc6376b78b45e6c6dcdf96227395b6ba8ba"
       }
+    },
+    {
+      "address": "0x00e8fee4",
+      "handler": "xm1_playback_jpeg_develop_job4",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00e8fee4",
+        "end": "0x00e90014",
+        "sha256": "47bb5cc27a1cd0062590dd9bf2019597b5537f698b807e3edfa8cb27980807eb"
+      }
+    },
+    {
+      "address": "0x00e8eb18",
+      "handler": "xm1_playback_jpeg_record_notification",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00e8eb18",
+        "end": "0x00e8eb38",
+        "sha256": "3e54ac9af3dc1e6630f562c6a5897c97980635773395246431befb7bfc582841"
+      }
+    },
+    {
+      "address": "0x00d989f8",
+      "handler": "xm1_playback_jpeg_clear_record_release",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d989f8",
+        "end": "0x00d98a18",
+        "sha256": "03ee1e67d5226419f039621036298d874ead30cf768356439d47fb085b63249d"
+      }
     }
   ]
 }

@@ -8,12 +8,13 @@ module Replacement.StartupArtifact.StackBounds
   , wrapperEntry, storagePrelude, releaseEntry, cleanupEntry
   , errorCallbackWord, errorCallbackSetter, errorDispatchSite, errorCallbacks
   , TraceCallback (..), traceCallbackKernels, traceCallbacks
+  , ReporterHook (..), reporterHooks, reporterHookTargets, closedWords
   , fillFlag, fillDoneCallback
   , conditionsPhrase, demandConditions, rootDepthConditions, image5DepthConditions, plainDepthConditions, cleanupConditions, heapConditions
   ) where
 
 import qualified A32
-import Control.Monad (unless)
+import Control.Monad (guard, unless)
 import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
@@ -83,12 +84,24 @@ traceCallbackKernels = [TraceCallback 0x4004f15c 0x41548 0x41598, TraceCallback 
 traceCallbacks :: [Word32]
 traceCallbacks = [0x6470fc]
 
+-- | One kernel's exception-reporter hook: the word its reporter calls when nonzero, the setter that
+-- stores it, and the call site (loader-40000.dis 0x40c6c-0x40c88 and 0x40cf8-0x40d14; loader B twins).
+data ReporterHook = ReporterHook {hookWord :: Word32, hookSetter :: Word32, hookDispatch :: Word32} deriving (Eq, Show)
+
+reporterHooks :: [ReporterHook]
+reporterHooks = [ReporterHook 0x4004f114 0x40c6c 0x40d14, ReporterHook 0x400df0d4 0xd0c6c 0xd0d14]
+
+-- | The image entry's mode-2 return, which each loader passes to its hook setter at base + 0xa6c
+-- (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:230; stock 0x69ce90-0x69ce9c).
+reporterHookTargets :: [Word32]
+reporterHookTargets = [0x69cc6c]
+
 -- | The premises each StockStack bound may use; its check fails when the walk uses another.
 demandConditions, rootDepthConditions, image5DepthConditions, plainDepthConditions, cleanupConditions, heapConditions :: [Condition]
-demandConditions = [minBound .. maxBound]
-rootDepthConditions = [minBound .. maxBound]
-image5DepthConditions = [minBound .. maxBound]
-plainDepthConditions = [minBound .. maxBound]
+demandConditions = [SlotWordsFixed, ErrorCallbackClosed, TraceCallbackClosed, NoTaskException, ContextLocksFixed]
+rootDepthConditions = [SlotWordsFixed, ErrorCallbackClosed, TraceCallbackClosed, NoTaskException, ContextLocksFixed]
+image5DepthConditions = [SlotWordsFixed, ErrorCallbackClosed, TraceCallbackClosed, NoTaskException, ContextLocksFixed]
+plainDepthConditions = [SlotWordsFixed, ErrorCallbackClosed, TraceCallbackClosed, NoTaskException, ContextLocksFixed]
 cleanupConditions = [SlotWordsFixed, ContextLocksFixed]
 heapConditions = [SlotWordsFixed, ErrorCallbackClosed, TraceCallbackClosed, NoTaskException, ContextLocksFixed]
 
@@ -104,6 +117,9 @@ conditionsPhrase conditions = case map phrase conditions of
       TraceCallbackClosed -> "the trace-callback set (S3)"
       NoTaskException -> "no task-exception routine being defined (S4)"
       ContextLocksFixed -> "fixed context lock methods called on one context (S5)"
+      LoadedWordsClosed -> "words loaded from constant addresses holding only their image values and their scanned stores' constants (S6)"
+      ReporterHookClosed -> "the exception-reporter hook set (S7)"
+      FatalReportExcluded -> "excluding the fatal report a nonzero SVC starts, after which the task does not resume (S8)"
 
 -- | The image5 producer's fill flag and the fill-done callback that sets it.
 fillFlag, fillDoneCallback :: Word32
@@ -116,13 +132,53 @@ storagePrelude = 0x725c6c
 releaseEntry = 0x726098
 cleanupEntry = 0x72612c
 
-indirectTargetsOf :: StockCode -> M.Map SlotOffset [Word32] -> Either String IndirectTargets
-indirectTargetsOf code slots = do
+-- | `cleared` are the ranges zero before any task runs.
+indirectTargetsOf :: [Segment] -> [Span] -> [(Word32, Word32)] -> M.Map SlotOffset [Word32] -> Either String IndirectTargets
+indirectTargetsOf segments carriers cleared slots = do
+  let code = stockCodeOf segments carriers
   locks <- mapM (\(kernel, initializer) -> ContextLocks kernel <$> contextLockMethods code initializer) kernelInitializers
-  pure (IndirectTargets rootTable slots callbacks locks)
+  supervisors <- mapM (supervisorEntryOf code . fst) kernelInitializers
+  pure (IndirectTargets rootTable slots callbacks locks (closedWords segments (ownedRanges carriers) cleared) supervisors False)
   where
     callbacks = M.fromList ((errorDispatchSite, CallbackSite errorCallbacks ErrorCallbackClosed)
-      : [(traceDispatch kernel, CallbackSite traceCallbacks TraceCallbackClosed) | kernel <- traceCallbackKernels])
+      : [(traceDispatch kernel, CallbackSite traceCallbacks TraceCallbackClosed) | kernel <- traceCallbackKernels]
+      ++ [(hookDispatch hook, CallbackSite reporterHookTargets ReporterHookClosed) | hook <- reporterHooks])
+
+-- | One kernel's path for an SVC with a nonzero comment (loader-40000.dis 0x40040-0x40048,
+-- 0x401b4-0x401f4 and 0x40cac-0x40d38; loader B at the same offsets). The vector installer stores the
+-- handler at vector 0x28. The handler pushes {r12, lr}, the SPSR with r12 and {r0-r11}, jumps to r0 when
+-- the comment is 0 and otherwise calls the reporter with r1 = SP. The reporter keeps r1 in r4, and at
+-- +0x80 restores SP from it, pops the handler's frame and returns from the exception.
+supervisorEntryOf :: StockCode -> CodeRange -> Either String SupervisorEntry
+supervisorEntryOf code kernel@(CodeRange base _) = do
+  install <- mapM (decodedIn code base) [0x40, 0x44, 0x48]
+  handler <- case install of
+    [ A32.DataProcessing (A32.Cond 14) A32.MOV False r3 _ (A32.Immediate 0x28)
+      , A32.Load (A32.Cond 14) A32.Word False r4 rn (A32.OffsetImmediate literal) A32.OffsetOnly
+      , A32.Store (A32.Cond 14) A32.Word r4' r3' (A32.OffsetRegister True r6 A32.LSL 0) A32.OffsetOnly ]
+      | r3 == A32.Reg 3 && r4 == A32.Reg 4 && rn == A32.pc && r4' == r4 && r3' == r3 && r6 == A32.Reg 6 ->
+          wordAt (base + 0x44 + 8 + fromIntegral literal)
+    _ -> Left "the vector installer does not store the SVC handler at vector 0x28 at +0x40"
+  entryWords <- mapM (wordAt . (handler +)) [0, 4 .. 0x30]
+  unless (entryWords == [ 0xe92d5000, 0xe14fe000, 0xe92d5000, 0xe31e0020, 0xe59de00c, 0x115ee0b2, 0x13ceecff
+                        , 0x051ee004, 0x03cee4ff, 0xe33e0000, 0x1a000000, 0xe12fff10, 0xe92d0fff ])
+    (Left "the SVC handler does not push its frame and branch on the comment as modeled")
+  reporter <- case A32.decode (handler + 0x34) <$> codeWord code (handler + 0x34) of
+    Just (A32.Load (A32.Cond 14) A32.Word False r2 rn (A32.OffsetImmediate literal) A32.OffsetOnly)
+      | r2 == A32.Reg 2 && rn == A32.pc -> wordAt (handler + 0x34 + 8 + fromIntegral literal)
+    _ -> Left "the SVC handler does not load its reporter at +0x34"
+  callWords <- mapM (wordAt . (handler +)) [0x38, 0x3c, 0x40]
+  unless (callWords == [0xe3a00002, 0xe1a0100d, 0xe12fff32]) (Left "the SVC handler does not call its reporter with r1 = SP at +0x40")
+  let frame = sum [amount | (address, word) <- zip [handler, handler + 4 ..] entryWords, Reserve amount <- [classify Strict address word]]
+  keep <- wordAt (reporter + 0xc)
+  body <- mapM (\address -> (,) address <$> wordAt address) [reporter + 0x10, reporter + 0x14 .. reporter + 0x7c]
+  restore <- mapM (wordAt . (reporter +)) [0x80, 0x84, 0x88, 0x8c]
+  unless (keep == 0xe1a04001 && all (\(address, word) -> A32.Reg 4 `notElem` writes address word) body
+          && restore == [0xe1a0d004, 0xe8bd5fff, 0xe8bd5000, 0xe1b0f00e] && frame == 64)
+    (Left "the SVC reporter does not restore SP from the handler's frame at +0x80")
+  pure (SupervisorEntry kernel frame reporter (reporter + 0x80))
+  where
+    wordAt address = maybe (Left ("no code at " ++ show address)) Right (codeWord code address)
 
 -- | The kernels' context switch (loader-40000.dis:3446-3503 and the loader-B twin): SP loads from the
 -- incoming task's control block at 0x436e4, or moves to the idle stack at 0x436f4; 0x4364c saves the
@@ -230,12 +286,80 @@ addressFormations segments owned selected = concatMap scan segments
 -- unconditional one, while the base register holds a known value. A register offset counts when the
 -- path sets it to a constant; one it does not is a computed pointer, outside the scan.
 storesReaching :: [Segment] -> [(Word32, Word32)] -> Word32 -> [Word32]
-storesReaching segments owned target = S.toList (S.fromList (concatMap scan segments))
+storesReaching segments owned target =
+  S.toList (S.fromList (map fst (storesFrom segments owned target [formation | formation@(_, _, value) <- baseFormations segments owned, near target value])))
+
+-- | The values a word can hold when every store `storesReaching` finds writes the whole word with a
+-- constant, or with an argument register of a setter whose every caller, in stock or owned code, passes
+-- a constant: its image value (0 inside a range cleared before any task runs) and those constants. A
+-- word outside the segments and the cleared ranges, or one a store writes otherwise, is open.
+closedWords :: [Segment] -> [(Word32, Word32)] -> [(Word32, Word32)] -> Word32 -> Maybe [Word32]
+closedWords segments owned cleared = \word -> do
+  let target = physical word
+  initial <- case segmentWordAt segments target of
+    Just value -> Just value
+    Nothing | any (\(low, high) -> low <= target && target < high) cleared -> Just 0
+            | otherwise -> Nothing
+  stored <- concat <$> mapM storedValues (storesFrom segments owned target (nearby target))
+  pure (S.toList (S.fromList (initial : stored)))
   where
-    near value = physical value <= physical target + 4095 && physical value + 4095 >= physical target
+    index = M.fromListWith (++) [(physical value, [formation]) | formation@(_, _, value) <- baseFormations segments owned]
+    nearby target = concat (M.elems (M.takeWhileAntitone (<= target + 4095)
+      (M.dropWhileAntitone (\value -> value + 4095 < target) index)))
+    entered = S.fromList (map snd (branchSites segments [] (const True)))
+    instructionAt site = (\word -> (word, A32.decode site word)) <$> segmentWordAt segments site
+    storedValues (site, stored) = case stored of
+      StoredConstant value -> Just [value]
+      StoredRegister register -> setterArguments site register
+      StoredUnknown -> Nothing
+    -- The store is reached only on the straight line from a function entry that no code falls into,
+    -- whose address no code forms and that leaves the register as its callers set it. Owned code
+    -- before the entry does not fall into it: each owned piece's admission ends its paths inside its carrier.
+    setterArguments site register = do
+      guard (register `elem` [A32.Reg n | n <- [0 .. 3]] && not (S.member site entered))
+      entry <- entryBefore register (site - 4) (16 :: Int)
+      let callers = map fst (branchSites segments [] (== entry))
+          fallsFrom = not (inOwned owned (entry - 4)) && fallsInto segments entry
+      guard (not (null callers) && not fallsFrom && null (addressFormations segments [] (== entry)))
+      mapM (\caller -> argumentAt register (caller - 4) (16 :: Int)) callers
+    entryBefore register at budget = do
+      guard (budget > 0)
+      (word, instruction) <- instructionAt at
+      guard (register `notElem` writes at word && not (transfersAway instruction) && not (isBranchInstruction instruction))
+      if S.member at entered then Just at else entryBefore register (at - 4) (budget - 1)
+    -- The constant the nearest earlier unconditional write gives the register, with no branch target
+    -- between that write and the call.
+    argumentAt register at budget = do
+      guard (budget > 0 && not (S.member (at + 4) entered))
+      (word, instruction) <- instructionAt at
+      guard (not (transfersAway instruction) && not (isBranchInstruction instruction))
+      case instruction of
+        A32.MoveWide (A32.Cond 14) rd value | rd == register -> Just value
+        A32.DataProcessing (A32.Cond 14) A32.MOV _ rd _ (A32.Immediate value) | rd == register -> Just value
+        A32.MoveTop (A32.Cond 14) rd high | rd == register -> (\low -> (high `shiftL` 16) .|. (low .&. 0xffff)) <$> argumentAt register (at - 4) (budget - 1)
+        _ | register `elem` writes at word -> Nothing
+          | otherwise -> argumentAt register (at - 4) (budget - 1)
+
+-- | @b@ or @bl@.
+isBranchInstruction :: A32.Instruction -> Bool
+isBranchInstruction instruction = case instruction of
+  A32.Branch {} -> True
+  _ -> False
+
+-- | What a store found by `storesFrom` writes to the whole target word.
+data Stored = StoredConstant Word32 | StoredRegister A32.Reg | StoredUnknown deriving (Eq, Show)
+
+near :: Word32 -> Word32 -> Bool
+near target value = physical value <= physical target + 4095 && physical value + 4095 >= physical target
+
+-- | Each @movt@ completing a @movw/movt@ pair and each pc-relative literal load outside owned code:
+-- (site, register, value).
+baseFormations :: [Segment] -> [(Word32, Word32)] -> [(Word32, A32.Reg, Word32)]
+baseFormations segments owned =
+  [ (site, rd, value) | segment <- segments, (site, word) <- segmentWords segment, not (inOwned owned site)
+  , (rd, value) <- formed site (A32.decode site word) ]
+  where
     wordAt = segmentWordAt segments
-    scan segment = concat [ forward rd value (site + 4) | (site, word) <- segmentWords segment, not (inOwned owned site)
-                          , (rd, value) <- formed site (A32.decode site word), near value ]
     formed site instruction = case instruction of
       A32.MoveTop _ rd high -> [ (rd, (high `shiftL` 16) .|. low) | low <- take 1 (movwBefore rd site) ]
       A32.Load _ A32.Word False rd rn (A32.OffsetImmediate offset) A32.OffsetOnly | rn == A32.pc ->
@@ -243,6 +367,13 @@ storesReaching segments owned target = S.toList (S.fromList (concatMap scan segm
       _ -> []
     movwBefore rd site = [ low | back <- [1 .. 16 :: Word32], Just w <- [wordAt (site - 4 * back)]
                          , A32.MoveWide _ rd' low <- [A32.decode (site - 4 * back) w], rd' == rd ]
+
+-- | The stores that may write any byte of the target word on a path from one of the formations, each
+-- with what it writes to the whole word.
+storesFrom :: [Segment] -> [(Word32, Word32)] -> Word32 -> [(Word32, A32.Reg, Word32)] -> [(Word32, Stored)]
+storesFrom segments owned target formations = concat [forward rd value (site + 4) | (site, rd, value) <- formations]
+  where
+    wordAt = segmentWordAt segments
     forward rd value start = go S.empty [(start, value, M.empty, 40 :: Int)]
       where
         go _ [] = []
@@ -257,7 +388,7 @@ storesReaching segments owned target = S.toList (S.fromList (concatMap scan segm
                     overwritten = unconditional && rd `elem` writes site word && base' == Just base
                     known' = constantsAfter known site word unconditional instruction
                     successors = [(next, b, known', budget - 1) | not overwritten, Just b <- [base'], next <- following site unconditional instruction]
-                 in [site | storesThrough rd base known word instruction] ++ go visited' (successors ++ rest)
+                 in [(site, stored) | Just stored <- [storesThrough rd base known word instruction]] ++ go visited' (successors ++ rest)
           where visited' = S.insert (site, base, known) visited
     -- Registers the path set to constants.
     constantsAfter known site word unconditional instruction = case instruction of
@@ -266,24 +397,32 @@ storesReaching segments owned target = S.toList (S.fromList (concatMap scan segm
       A32.DataProcessing (A32.Cond 14) A32.MOV _ rd _ (A32.Immediate constant) -> M.insert rd constant cleared
       _ -> cleared
       where cleared = foldr M.delete known (writes site word)
+    -- Nothing when the instruction cannot write the word; otherwise what it stores to the whole word.
     storesThrough rd base known word instruction = case instruction of
-      A32.Store _ width _ rn offset indexing | rn == rd -> case offset of
-        A32.OffsetImmediate bytes -> overlaps (if indexing == A32.PostIndexed then base else base + fromIntegral bytes) (widthBytes width)
+      A32.Store _ width rt rn offset indexing | rn == rd -> case offset of
+        A32.OffsetImmediate bytes -> storedAt (if indexing == A32.PostIndexed then base else base + fromIntegral bytes) width rt
         A32.OffsetRegister add index A32.LSL amount | Just constant <- M.lookup index known ->
           let moved = (if add then (+) else (-)) base (constant `shiftL` amount)
-           in overlaps (if indexing == A32.PostIndexed then base else moved) (widthBytes width)
-        A32.OffsetRegister {} -> False
+           in storedAt (if indexing == A32.PostIndexed then base else moved) width rt
+        A32.OffsetRegister {} -> Nothing
       A32.StoreMultiple _ rn mode _ regs | rn == rd ->
         let count = 4 * fromIntegral (length regs)
-         in overlaps (case mode of
+         in unknownIf (overlaps (case mode of
               A32.IncrementAfter -> base
               A32.IncrementBefore -> base + 4
               A32.DecrementAfter -> base + 4 - count
-              A32.DecrementBefore -> base - count) (toInteger count)
+              A32.DecrementBefore -> base - count) (toInteger count))
       -- @strex@/@strexd@ and @swp@/@swpb@ through the base.
       A32.Rejected _ | (word `shiftR` 16) .&. 0xf == registerNumber rd
-                     , word .&. 0x0f900ff0 == 0x01800f90 || word .&. 0x0fb00ff0 == 0x01000090 -> overlaps base 8
-      _ -> False
+                     , word .&. 0x0f900ff0 == 0x01800f90 || word .&. 0x0fb00ff0 == 0x01000090 -> unknownIf (overlaps base 8)
+      _ -> Nothing
+      where
+        storedAt address width rt
+          | not (overlaps address (widthBytes width)) = Nothing
+          | width == A32.Word && physical address == physical target =
+              Just (if rt == rd then StoredConstant base else maybe (StoredRegister rt) StoredConstant (M.lookup rt known))
+          | otherwise = Just StoredUnknown
+    unknownIf hit = if hit then Just StoredUnknown else Nothing
     overlaps address size =
       let start = toInteger (physical address); word = toInteger (physical target)
        in start < word + 4 && word < start + size

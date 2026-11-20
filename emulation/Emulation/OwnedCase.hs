@@ -10,6 +10,7 @@ module Emulation.OwnedCase
   , Permission (..)
   , CaseRegion (..)
   , mkRegion
+  , withUncachedAlias
   , CaseSpec (..)
   , IgnoredMemory (..)
   , IgnoredReason (..)
@@ -45,7 +46,7 @@ module Emulation.OwnedCase
 
 import Control.Exception (IOException, evaluate, try)
 import Control.Monad (foldM, forM_, unless, void, when)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (Bool), object, (.=))
 import qualified Data.ByteString as B
 import Data.Bits (shiftR, (.&.))
 import Data.IORef (modifyIORef', newIORef, readIORef)
@@ -54,7 +55,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), MemoryProfile (..), Region (..), artifactCount, batchStatusLabel, loadCase, profileSizeBytes, runBatch, runCase)
+import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), MemoryProfile (..), Region (..), RegionViews (..), artifactCount, batchStatusLabel, loadCase, profileSizeBytes, regionViewsOf, runBatch, runCase)
 import Emulation.NativeObservation
   ( GuestAddress (..)
   , KernelObservation (..)
@@ -80,7 +81,7 @@ import Emulation.NativeObservation
   )
 import qualified Emulation.NativeEvidence as E
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
-import FujiAF.Host (get, str)
+import FujiAF.Host (get, set, str)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import System.Directory (createDirectoryIfMissing)
@@ -183,6 +184,14 @@ mkRegion ident base size permission bytes =
         }
     )
     permission
+
+-- | Also maps the region at its bit-30 uncached alias; the case is then schema version 2.
+withUncachedAlias :: CaseRegion -> CaseRegion
+withUncachedAlias (CaseRegion region permission) =
+  CaseRegion region {description = set "uncached_alias" (Bool True) (description region)} permission
+
+aliased :: CaseRegion -> Bool
+aliased (CaseRegion region _) = regionViewsOf region == UncachedAliasView
 
 data IgnoredReason = PrivateFrame | CallerOutput deriving (Eq, Show)
 
@@ -353,8 +362,8 @@ initializersFor profile spec = Initializers (map fst built) (M.fromList (concatM
        in (InitialArtifact ident bytes (DigestHex (sha256Hex (sha256 bytes))), slices)
 
 regionJson :: Initializers -> CaseRegion -> Value
-regionJson (Initializers _ slices) (CaseRegion region permission) =
-  object
+regionJson (Initializers _ slices) caseRegion'@(CaseRegion region permission) =
+  object $
     [ "id" .= regionName (regionIdOf region)
     , "address" .= hexAddress (GuestAddress (fromIntegral (baseAddress region)))
     , "size" .= regionSize region
@@ -369,6 +378,7 @@ regionJson (Initializers _ slices) (CaseRegion region permission) =
               ]
         )
     ]
+    ++ ["uncached_alias" .= True | aliased caseRegion']
 
 artifactJson :: (InitialArtifact -> FilePath) -> InitialArtifact -> Value
 artifactJson file artifact@(InitialArtifact (InitializerId ident) bytes (DigestHex digest)) =
@@ -382,7 +392,7 @@ artifactJson file artifact@(InitialArtifact (InitializerId ident) bytes (DigestH
 caseValue :: MemoryProfile -> (InitialArtifact -> FilePath) -> Initializers -> CaseSpec -> Value
 caseValue profile file initializers@(Initializers artifacts _) spec =
   object $
-    [ "schema_version" .= (1 :: Int)
+    [ "schema_version" .= (if any aliased (caseRegions spec) then 2 else 1 :: Int)
     , "id" .= caseId spec
     , "origin" .= ("synthetic" :: String)
     , "provenance" .= caseProvenance spec

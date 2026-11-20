@@ -170,8 +170,19 @@ validateIgnoredMemory c regions=do
   pure spans
 
 data Region = Region {description::Value,baseAddress::Integer,regionSize::Integer,regionBytes::B.ByteString} deriving Show
+-- Whether an admitted region is also visible at @base .|. uncachedAlias@, over the same bytes and permission.
+data RegionViews = PlainView | UncachedAliasView deriving (Eq,Show)
+regionViewsOf :: Region -> RegionViews
+regionViewsOf r=if get(description r)"uncached_alias"==Bool True then UncachedAliasView else PlainView
+uncachedAlias, aliasPage :: Integer
+uncachedAlias=0x40000000
+aliasPage=4096
+regionSpans :: Region -> [(Integer,Integer)]
+regionSpans r=(baseAddress r,regionSize r):[(baseAddress r+uncachedAlias,regionSize r)|regionViewsOf r==UncachedAliasView]
+viewsDisjoint :: Region -> Region -> Bool
+viewsDisjoint x y=and[a+n<=c || c+m<=a|(a,n)<-regionSpans x,(c,m)<-regionSpans y]
 regionAt :: [Region] -> Integer -> Integer -> Char -> Bool
-regionAt rs base size permission=any(\r->baseAddress r<=base && base+size<=baseAddress r+regionSize r && permission `elem` str(get(description r)"permissions"))rs
+regionAt rs base size permission=any(\r->permission `elem` str(get(description r)"permissions") && any(\(low,extent)->low<=base && base+size<=low+extent)(regionSpans r))rs
 newtype ArtifactDigest = ArtifactDigest String deriving (Eq,Ord,Show)
 data Artifact = Artifact {artifactDigest::ArtifactDigest,artifactBytes::B.ByteString}
 -- A slice's offset and length are in bytes; the region's remainder is zero.
@@ -207,7 +218,7 @@ loadCaseWith reader input = do
      optional=[key|key<-["cp14_identity","kernel","memory_profile"],key `elem` keys c]
      ignored=["ignored_memory"|"ignored_memory" `elem` keys c]
  fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional++ignored)) "case"
- void(integer(get c "schema_version")1 1 "schema version")
+ version<-integer(get c "schema_version")1 2 "schema version"
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
  ensure(validId(get c "id")) "invalid case id"
  ensure(not(null(str(get c "provenance")))) "provenance required"
@@ -246,14 +257,17 @@ loadCaseWith reader input = do
  regionsInput<-arrayCheck(get c "regions")1 regionCount "regions limit"
  placed<-foldM(\done item->do
    let prior=map fst done
-   fields item "id address size permissions initial" "region"
+   let aliased="uncached_alias" `elem` keys item
+   fields item ("id address size permissions initial"++(if aliased then " uncached_alias" else "")) "region"
    ensure(validId(get item "id") && all(\r->get(description r)"id"/=get item "id")prior) "region id invalid/duplicate"
    base<-address(get item "address"); size<-integer(get item "size")1(fromIntegral sizeBytes) "region size"
    ensure(base+size<=4294967296) "region address overflow"
    ensure(get item "permissions" `elem` map s ["r","rw","rx","device"]) "permissions must be r/rw/rx/device"
    ensure(get item "permissions"/=s "device" || (isKernel profile && size==4 && base `elem` bankWords)) "a device region is one interrupt-controller bank word of a kernel case"
-   ensure(get item "permissions"/=s "rx" || base+size<=0x7ffffffc) "executable region must end by 0x7ffffffc: PMSAv7 default map is execute-never from 0x80000000"
-   ensure(all(\r->base+size<=baseAddress r || baseAddress r+regionSize r<=base)prior) "logical regions overlap"
+   when aliased$ensure(version==2 && get item "uncached_alias"==b True && get item "permissions"/=s "device" && base `mod` aliasPage==0 && size `mod` aliasPage==0 && base+size<=uncachedAlias) "an uncached alias needs schema version 2 and a non-device, page-aligned region below 0x40000000"
+   let placedRegion=Region item base size B.empty
+   ensure(get item "permissions"/=s "rx" || all(\(low,extent)->low+extent<=0x7ffffffc)(regionSpans placedRegion)) "executable region must end by 0x7ffffffc: PMSAv7 default map is execute-never from 0x80000000"
+   ensure(all(viewsDisjoint placedRegion)prior) "logical regions overlap"
    let initialBytes=get item "initial"
    (bytes,source)<-if initialBytes==obj[("zero",b True)] then pure(B.replicate(fromInteger size)0,ZeroSource) else do
      fields initialBytes "artifact offset length" "initial"
@@ -354,7 +368,7 @@ loadCaseWith reader input = do
   }
 -- A wire region row up to its initial bytes.
 regionHead :: Region -> String
-regionHead r=unwords[hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";"device"->"10";_->"5"]
+regionHead r=unwords([hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";"device"->"10";_->"5"]++["u"|regionViewsOf r==UncachedAliasView])
 -- The entry profile a case's CPSR names.
 data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identity) (Maybe KernelEntry) deriving (Eq,Show)
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)

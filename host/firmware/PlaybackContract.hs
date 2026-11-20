@@ -1,6 +1,6 @@
 module PlaybackContract
   ( PlaybackEntry (..), SourceSha256 (..), playbackContract, playbackEntries
-  , preparationEntries, jpegEntries, consumerEntries, transactionEntries, consumerPlaybackEntries, lifecycleEntries, PinnedBody (..), jpegInternalBodies
+  , preparationEntries, jpegEntries, consumerEntries, transactionEntries, consumerPlaybackEntries, lifecycleEntries, developEntries, PinnedBody (..), jpegInternalBodies
   , JpegDeviceService (..), jpegDeviceServices, jpegDeviceContract
   ) where
 
@@ -13,10 +13,11 @@ data PlaybackEntry
   | PlaybackJpegCompleteSecond | PlaybackJpegInitialize | PlaybackJpegResetState
   | PlaybackJpegRestartRequest | PlaybackJpegCancelTimer | PlaybackJpegPreservePrefix
   | PlaybackJpegFinishRequest | PlaybackJpegCancelRequest | PlaybackJpegSubmit
+  | PlaybackJpegDevelopJob4 | PlaybackJpegRecordNotification | PlaybackJpegClearRecordRelease
   deriving (Eq, Ord, Show)
 newtype SourceSha256 = SourceSha256 String deriving (Eq, Show)
 
-preparationEntries, jpegEntries, consumerEntries, transactionEntries, consumerPlaybackEntries, lifecycleEntries, playbackEntries :: [PlaybackEntry]
+preparationEntries, jpegEntries, consumerEntries, transactionEntries, consumerPlaybackEntries, lifecycleEntries, developEntries, playbackEntries :: [PlaybackEntry]
 preparationEntries = [PlaybackSource, PlaybackMode]
 jpegEntries = [PlaybackJpegAcquire, PlaybackJpegRestart, PlaybackJpegRelease, PlaybackJpegInterrupt]
 consumerEntries = [PlaybackJpegBuildRequest, PlaybackJpegCompleteFirst]
@@ -26,7 +27,8 @@ lifecycleEntries =
   [ PlaybackJpegCompleteSecond, PlaybackJpegInitialize, PlaybackJpegResetState
   , PlaybackJpegRestartRequest, PlaybackJpegCancelTimer, PlaybackJpegPreservePrefix
   , PlaybackJpegFinishRequest, PlaybackJpegCancelRequest, PlaybackJpegSubmit ]
-playbackEntries = consumerPlaybackEntries ++ lifecycleEntries
+developEntries = [PlaybackJpegDevelopJob4, PlaybackJpegRecordNotification, PlaybackJpegClearRecordRelease]
+playbackEntries = consumerPlaybackEntries ++ lifecycleEntries ++ developEntries
 
 playbackContract :: PlaybackEntry -> (Word32, Word32, SourceSha256, String)
 playbackContract PlaybackSource =
@@ -63,6 +65,12 @@ playbackContract PlaybackJpegCancelRequest =
   (0x0122026c, 0x01220294, SourceSha256 "f4f1aa064a51f3c5bfb7f3e9441d5823bdb74b1a27ad5a0253fc79427c2bfef1", "xm1_playback_jpeg_cancel_request")
 playbackContract PlaybackJpegSubmit =
   (0x01220294, 0x012202d0, SourceSha256 "8fd653644486cfabcb4f6733463d5bc6376b78b45e6c6dcdf96227395b6ba8ba", "xm1_playback_jpeg_submit")
+playbackContract PlaybackJpegDevelopJob4 =
+  (0x00e8fee4, 0x00e90014, SourceSha256 "47bb5cc27a1cd0062590dd9bf2019597b5537f698b807e3edfa8cb27980807eb", "xm1_playback_jpeg_develop_job4")
+playbackContract PlaybackJpegRecordNotification =
+  (0x00e8eb18, 0x00e8eb38, SourceSha256 "3e54ac9af3dc1e6630f562c6a5897c97980635773395246431befb7bfc582841", "xm1_playback_jpeg_record_notification")
+playbackContract PlaybackJpegClearRecordRelease =
+  (0x00d989f8, 0x00d98a18, SourceSha256 "03ee1e67d5226419f039621036298d874ead30cf768356439d47fb085b63249d", "xm1_playback_jpeg_clear_record_release")
 
 data PinnedBody = PinnedBody
   { bodyStart :: Word32

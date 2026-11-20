@@ -28,18 +28,18 @@ impl CompletionCallbacks for Callbacks {
         assert_eq!(state.runtime.pending, CommitPending(0));
         self.prepared += 1;
     }
-    fn call(&mut self, id: CallbackId, slot: CompletionSlot, _engine: Engine, state: &mut EngineState) {
+    fn call(&mut self, id: CallbackId, slot: CompletionSlot, _engine: Engine, runtime: &mut RuntimeState) {
         let callbacks = match slot.list {
-            CompletionList::First => &state.runtime.completion_callbacks,
-            CompletionList::Second => &state.runtime.secondary_callbacks,
+            CompletionList::First => &runtime.completion_callbacks,
+            CompletionList::Second => &runtime.secondary_callbacks,
         };
         assert_eq!(callbacks[slot.index()], None);
         self.seen.push(id.0);
         if self.mutate && id == CallbackId(1) {
-            state.runtime.completion_callbacks[0] = Some(CallbackId(5));
-            state.runtime.completion_callbacks[2] = Some(CallbackId(3));
-            state.runtime.secondary_callbacks[0] = Some(CallbackId(4));
-            state.runtime.completion_callbacks[1] = None;
+            runtime.completion_callbacks[0] = Some(CallbackId(5));
+            runtime.completion_callbacks[2] = Some(CallbackId(3));
+            runtime.secondary_callbacks[0] = Some(CallbackId(4));
+            runtime.completion_callbacks[1] = None;
         }
     }
 }

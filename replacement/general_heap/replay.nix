@@ -10,7 +10,7 @@ let
     path = ../../emulation/fujimod-xm1/src;
     name = "admitted-heap-tape-source";
     filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path)
-      [ "heap_state.rs" "heap_replay_state.rs" ];
+      [ "heap_state.rs" "heap_replay_state.rs" "heap_abi_scenario.rs" ];
   };
   workspace = pkgs.runCommand "heap-bridge-replay-workspace" { } ''
     mkdir -p "$out/replacement" "$out/emulation/fujimod-xm1"

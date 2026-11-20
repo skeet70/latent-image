@@ -35,15 +35,20 @@ mod owned_primitives {
 use owned_primitives::*;
 struct Device { immediate:Option<Engine>,force_clear:Option<Engine> }
 impl Device {fn plain()->Self{Self{immediate:None,force_clear:None}}}
+#[inline(always)]
 fn register_address(register:Register)->usize{let base=match register.bank{Bank::Scanout=>0xfff6b000,Bank::Timing=>0xfff6a000,Bank::Formatter=>0xfff69000};base+register.engine.index()*0x3000+usize::from(register.offset)}
 impl Hardware for Device {
+    #[inline(always)]
     fn read(&mut self,register:Register)->u32{unsafe{stock::word(register_address(register))}}
+    #[inline(always)]
     fn write(&mut self,register:Register,value:u32){unsafe{if register.bank==Bank::Timing{if self.immediate==Some(register.engine)&&register.offset==0x34{stock::put_word(stock::timing_base(register.engine)+0x50,value);}if self.force_clear==Some(register.engine)&&register.offset==0{stock::put_word(stock::timing_base(register.engine)+0x14,0);}}stock::put_word(register_address(register),value);}}
     fn enter_critical(&mut self)->u32{unsafe{scanout_enter_critical()}}
     fn leave_critical(&mut self,token:u32){unsafe{scanout_leave_critical(token);}}
     fn yield_zero(&mut self){unsafe{scanout_yield(0);}}
 }
-fn handler_address(handler:scheduler::Handler)->u32{match handler{scheduler::Handler::TimingZero=>xm1_scanout_isr_zero as *const () as u32,scheduler::Handler::TimingOne=>xm1_scanout_isr_one as *const () as u32}}
+/// The fixed-bank image publishes a branch to each export at its stock entry; its registrations name those entries.
+fn registered(export:*const (),stock:u32)->u32{if cfg!(feature="fixed_bank"){stock}else{export as u32}}
+fn handler_address(handler:scheduler::Handler)->u32{match handler{scheduler::Handler::TimingZero=>registered(xm1_scanout_isr_zero as *const (),0x6c70e4),scheduler::Handler::TimingOne=>registered(xm1_scanout_isr_one as *const (),0x6c6eb0)}}
 impl scheduler::Irq for Device {
     fn configure(&mut self,source:scheduler::IrqSource,handler:scheduler::Handler)->Result<scheduler::Handle,scheduler::IrqError>{let mut handle=0;let result=unsafe{scanout_irq_configure(source as u32,handler_address(handler),&mut handle)};if result==0{Ok(scheduler::Handle(handle))}else{Err(scheduler::IrqError(result))}}
     fn release(&mut self,handle:scheduler::Handle)->Result<(),scheduler::IrqError>{let result=unsafe{scanout_irq_release(handle.0)};if result==0{Ok(())}else{Err(scheduler::IrqError(result))}}
@@ -81,7 +86,10 @@ impl scheduler::RegistrationObserver for RegistrationOutput {
 struct Completion;
 impl commit::CompletionCallbacks for Completion {
     fn prepared(&mut self,engine:Engine,state:&EngineState){unsafe{publish::prepared(engine,state);}}
-    fn call(&mut self,callback:commit::CallbackId,slot:commit::CompletionSlot,engine:Engine,state:&mut EngineState){unsafe{publish::clear_completion(engine,slot);let call:unsafe extern "C" fn()=core::mem::transmute(callback.0 as usize);call();state.runtime=stock::load_runtime(engine);}}
+    fn call(&mut self,callback:commit::CallbackId,slot:commit::CompletionSlot,engine:Engine,runtime:&mut commit::RuntimeState){
+        if cfg!(feature="defect_skipped_drain")&&slot.list==commit::CompletionList::Second{return;}
+        unsafe{publish::clear_completion(engine,slot);let call:unsafe extern "C" fn()=core::mem::transmute(callback.0 as usize);call();*runtime=stock::load_runtime(engine);}
+    }
 }
 struct Registration;
 impl commit::Registration for Registration {
@@ -89,8 +97,8 @@ impl commit::Registration for Registration {
         publish::captured(engine,state);
         let output=(stock::runtime_base(engine)+0x14) as *mut u32;
         let result=match engine{
-            Engine::Zero=>{let request=scheduler::RegistrationRequest{callback:scheduler::CallbackId::new(xm1_scanout_commit_zero as *const () as u32),retention:scheduler::Retention::PersistentActive,order:scheduler::Order(1),phase:scheduler::Phase::Zero};let mut handle=scheduler::Handle(0);let mut observer=RegistrationOutput{packet:core::ptr::null_mut(),output};scheduler::Scheduler::new(StockScheduler).register_source_observed(request,&mut handle,selected_handler,&mut Device::plain(),&mut observer).map_or_else(|error|error.stock_code(),|()|0)}
-            Engine::One=>scanout_irq_configure(14,xm1_scanout_commit_one_completion as *const () as u32,output),
+            Engine::Zero=>{let request=scheduler::RegistrationRequest{callback:scheduler::CallbackId::new(registered(xm1_scanout_commit_zero as *const (),0x6cb0c4)),retention:scheduler::Retention::PersistentActive,order:scheduler::Order(1),phase:scheduler::Phase::Zero};let mut handle=scheduler::Handle(0);let mut observer=RegistrationOutput{packet:core::ptr::null_mut(),output};scheduler::Scheduler::new(StockScheduler).register_source_observed(request,&mut handle,selected_handler,&mut Device::plain(),&mut observer).map_or_else(|error|error.stock_code(),|()|0)}
+            Engine::One=>scanout_irq_configure(14,registered(xm1_scanout_commit_one as *const (),0x6cb0d8),output),
         };
         state.runtime=stock::load_runtime(engine);result
     }}
@@ -115,12 +123,31 @@ pub unsafe extern "C" fn xm1_scanout_group_options(e:u32,g:u32,packet:*const u32
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_blank(e:u32,packet:*const u8)->i32{status((||{let engine=engine(e)?;if stock::byte(stock::runtime_base(engine)+0x54)==0{return Err(Error::Uninitialized);}shadow::blank(&mut stock::StockShadow(engine),shadow::Blanking{selector:read_volatile(packet),color:[read_volatile(packet.add(1)),read_volatile(packet.add(2)),read_volatile(packet.add(3))]})})())}
 #[no_mangle]
-pub unsafe extern "C" fn xm1_scanout_commit(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut state=if stock::word(stock::runtime_base(engine)+12)==1{stock::load_engine(engine)}else{let mut state=EngineState::zero();state.runtime=stock::load_runtime(engine);state};let options=commit::CommitOptions{alternate_masks:stock::byte(0x916610)!=0,reverse_vertical:stock::byte(0x916611)!=0};if state.runtime.pending.0==1{stock::put_word(stock::runtime_base(engine)+12,0);}commit::commit(engine,&mut state,options,&mut Device::plain(),&mut Completion);0}
+pub unsafe extern "C" fn xm1_scanout_commit(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut runtime=if stock::word(stock::runtime_base(engine)+12)==1{apply_pending(engine)}else{stock::load_runtime(engine)};commit::drain(engine,&mut runtime,&mut Completion);0}
+/// The pending branch in its own frame, so completion callbacks run without the saved and input images on the stack.
+#[inline(never)]
+unsafe fn apply_pending(engine:Engine)->commit::RuntimeState{let mut state=EngineState::zero();stock::load_engine(engine,&mut state);let options=commit::CommitOptions{alternate_masks:stock::byte(0x916610)!=0,reverse_vertical:stock::byte(0x916611)!=0};stock::put_word(stock::runtime_base(engine)+12,0);commit::apply(engine,&mut state,options,&mut CommitDevice::new(),&mut Completion);state.runtime}
+/// The `defect_register_order` control emits the first two scanout writes of a commit in reverse order.
+#[cfg(feature="defect_register_order")]
+struct CommitDevice{inner:Device,held:Option<(Register,u32)>,swapped:bool}
+#[cfg(feature="defect_register_order")]
+impl CommitDevice{fn new()->Self{Self{inner:Device::plain(),held:None,swapped:false}}}
+#[cfg(feature="defect_register_order")]
+impl Hardware for CommitDevice{
+    fn read(&mut self,register:Register)->u32{self.inner.read(register)}
+    fn write(&mut self,register:Register,value:u32){if self.swapped{self.inner.write(register,value);}else if let Some((first,held))=self.held.take(){self.inner.write(register,value);self.inner.write(first,held);self.swapped=true;}else{self.held=Some((register,value));}}
+    fn enter_critical(&mut self)->u32{self.inner.enter_critical()}
+    fn leave_critical(&mut self,token:u32){self.inner.leave_critical(token)}
+    fn yield_zero(&mut self){self.inner.yield_zero()}
+}
+#[cfg(not(feature="defect_register_order"))]
+type CommitDevice=Device;
+#[cfg(not(feature="defect_register_order"))]
+impl Device{fn new()->Self{Self::plain()}}
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_commit_zero()->i32{xm1_scanout_commit(0)}
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_commit_one()->i32{xm1_scanout_commit(1)}
-extern "C" fn xm1_scanout_commit_one_completion(){let _=unsafe{xm1_scanout_commit(1)};}
 #[no_mangle]
 pub unsafe extern "C" fn xm1_scanout_capture(e:u32,packet:*const u32)->i32{
     let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let configuration=commit::CaptureConfiguration{mode:commit::CaptureMode(read_volatile(packet)),selector:commit::ConfigurationSelector(read_volatile(packet.add(1))),auxiliary:commit::ConfigurationAuxiliary(read_volatile(packet.add(2)))};let mut state=EngineState::zero();state.runtime=stock::load_runtime(engine);let first=state.runtime.capture_count==0;

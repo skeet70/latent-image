@@ -156,6 +156,8 @@ main = do
         , ("an open of a type-5 node whose row children open is owned", classOf 0 0 (stage 1 8 0) == Right (OwnedEvent Open))
         , ("an open of a type-7 node with a package-child row falls back", classOf 0 0 (stage 1 7 0) == Right (FallbackEvent FramedTarget))
         , ("an open with id 0x13 is owned", classOf 0 0 (stage 1 3 0x13) == Right (OwnedEvent Open))
+        , ("an open with seek id 0x17 is owned", classOf 0 0 (stage 1 3 0x17) == Right (OwnedEvent Open))
+        , ("an open with seek id 0x18 falls back", classOf 0 0 (stage 1 3 0x18) == Right (FallbackEvent SeekingId))
         , ("a push past the rows is rejected", classOf 0x1000 2 (stage 0xe 3 0x1d) == Right (OwnedEvent Rejected))
         , ("a pop without a parent is rejected", classOf 0x500 0 (stage 0xf 5 0x1d) == Right (OwnedEvent Rejected))
         , ("a seeking push falls back", classOf 0x1000 0 (stage 0xe 3 0x17) == Right (FallbackEvent SeekingId))
