@@ -2930,29 +2930,25 @@ newtype S1FrameBytes = S1FrameBytes B.ByteString deriving (Eq, Show)
 newtype S1QueueSlot = S1QueueSlot Word16 deriving (Eq, Show)
 newtype S1StackOffset = S1StackOffset Integer
 newtype S1ControllerState = S1ControllerState Word16 deriving (Eq, Show)
-data S1Continuation = S1MinusOne | S1Two | S1FiveD | S1FiveE | S1D9 deriving (Eq, Show)
 
 data S1Witness = S1Witness
   { s1ProducerIdentity :: (TraceCore,LogicalTaskId)
   , s1ConsumerIdentity :: (TraceCore,LogicalTaskId)
-  , s1EnteredFrame :: S1FrameBytes
   , s1ReplayedFrame :: S1FrameBytes
   , s1ConsumedFrame :: S1FrameBytes
-  , s1DispatchContinuation :: S1Continuation
   , s1ControllerState :: S1ControllerState
   } deriving (Eq, Show)
 
 data LocatedS1 = LocatedS1 Int Int S1Witness
 data S1Point = S1Point { s1PointIndex :: Int, s1PointHit :: Hit }
 newtype S1Sites = S1Sites (M.Map Storage.LifecycleSite [S1Point])
+-- | An S1 press frame copied from the retained frame into its queue slot inside enqueue `0xd34d68`,
+-- whichever action called it.
 data S1Producer = S1Producer
-  { s1ProducerCall :: StorageCall
-  , s1ProducerCopy :: S1Point
+  { s1ProducerCopy :: S1Point
   , s1ProducerCopied :: S1Point
   , s1ProducerSlot :: S1QueueSlot
-  , s1ProducerEntered :: S1FrameBytes
   , s1ProducerReplayed :: S1FrameBytes
-  , s1ProducerContinuation :: S1Continuation
   }
 data S1Application = S1Application S1Point S1ControllerState
 data S1Consumer = S1Consumer StorageCall S1Point S1QueueSlot S1FrameBytes [S1Application]
@@ -3027,78 +3023,26 @@ s1NextExecution hits root (from,to) = case
     point:_ -> Just point
     [] -> Nothing
 
-s1Continuation :: Word32 -> Maybe S1Continuation
-s1Continuation value = case value of
-  0xffffffff -> Just S1MinusOne
-  2 -> Just S1Two
-  0x5d -> Just S1FiveD
-  0x5e -> Just S1FiveE
-  0xd9 -> Just S1D9
-  _ -> Nothing
-
-s1ContinuationWord :: S1Continuation -> Word32
-s1ContinuationWord continuation = case continuation of
-  S1MinusOne -> 0xffffffff
-  S1Two -> 2
-  S1FiveD -> 0x5d
-  S1FiveE -> 0x5e
-  S1D9 -> 0xd9
-
-s1ReadProducer :: V.Vector Hit -> S1Sites -> StorageCall -> Either Refusal (Maybe S1Producer)
-s1ReadProducer hits sites call = do
-  let first=boundaryEntry call
-      final=boundaryReturn call
-      range=(boundaryEntryIndex call+1,boundaryReturnIndex call)
-      inner site=s1One sites first range site (S1StackOffset (-16))
-      copying site=s1One sites first range site (S1StackOffset (-64))
-  entered <- s1SingleFrame first
-  if not (s1IsPress entered) then pure Nothing else do
-    _ <- s1Actor first
-    s1Require (sameExecution first final && physicalAddress (hitSp first) == physicalAddress (hitSp final)
-      && physicalAddress (hitLr first) == 0xbfb0cc) "action 161 lacks its source callback return"
-    guardCall <- inner Storage.S1GuardCall
-    guardResult <- inner Storage.S1GuardResult
-    s1Arguments [0x53] (s1PointHit guardCall)
-    s1Ordered [guardCall,guardResult]
-    guarded <- s1Argument 0 (s1PointHit guardResult)
-    if guarded /= 0 then pure Nothing else do
-      request <- inner Storage.S1RequestCall
-      dispatch <- inner Storage.S1DispatchCall
-      dispatched <- inner Storage.S1DispatchResult
-      s1Arguments [2,0x1d] (s1PointHit request)
-      s1Ordered [guardResult,request,dispatch,dispatched]
-      result <- s1Argument 0 (s1PointHit dispatched)
-      case s1Continuation result of
-        Nothing -> pure Nothing
-        Just continuation -> do
-          flagCall <- inner Storage.S1FlagCall
-          flagReturn <- inner Storage.S1FlagReturn
-          replayCall <- inner Storage.S1ReplayCall
-          copy <- copying Storage.S1FrameCopyCall
-          copied <- copying Storage.S1FrameCopyReturn
-          replayed <- inner Storage.S1ReplayReturn
-          returning <- inner Storage.S1ActionReturnInstruction
-          s1Ordered [dispatched,flagCall,flagReturn,replayCall,copy,copied,replayed,returning]
-          s1Arguments [1] (s1PointHit flagCall)
-          s1Require (case hitMemory (s1PointHit flagReturn) of [bytes] -> B.length bytes == 4 && word32At bytes 0 == 1; _ -> False)
-            "flag setter did not publish one"
-          s1Arguments [0] (s1PointHit replayCall)
-          (frame,slot) <- case hitMemory (s1PointHit copy) of
-            [bytes,tailBytes] -> (,) <$> s1Frame bytes <*> s1QueueIndex tailBytes
-            _ -> Left (StorageShape "S1 replay lacks its complete source frame and queue-tail read")
-          destination <- s1Argument 0 (s1PointHit copy)
-          source <- s1Argument 1 (s1PointHit copy)
-          count <- s1Argument 2 (s1PointHit copy)
-          s1Require (physicalAddress destination == s1SlotAddress slot && physicalAddress source == 0x944580 && count == 0x50)
-            "replay does not copy the complete source frame into its selected slot"
-          advanced <- s1Argument 0 (s1PointHit copied)
-          s1Require (physicalAddress advanced == s1SlotAddress slot+0x50) "replay copy lacks the retained callee's advanced destination return"
-          s1Arguments [s1ContinuationWord continuation] (s1PointHit returning)
-          s1Arguments [s1ContinuationWord continuation] final
-          s1Require (case s1NextExecution hits first (s1PointIndex returning+1,boundaryReturnIndex call+1) of
-            Just next -> s1PointIndex next == boundaryReturnIndex call
-            Nothing -> False) "shared callback return is not the action 161 continuation"
-          pure (Just (S1Producer call copy copied slot entered frame continuation))
+s1ReadProducer :: V.Vector Hit -> Int -> S1Point -> Either Refusal (Maybe S1Producer)
+s1ReadProducer hits limit copy = do
+  let hit=s1PointHit copy
+  (frame,slot) <- case hitMemory hit of
+    [bytes,tailBytes] -> (,) <$> s1Frame bytes <*> s1QueueIndex tailBytes
+    _ -> Left (StorageShape "S1 enqueue lacks its complete source frame and queue-tail read")
+  if not (s1IsPress frame) then pure Nothing else do
+    _ <- s1Actor hit
+    destination <- s1Argument 0 hit
+    source <- s1Argument 1 hit
+    count <- s1Argument 2 hit
+    s1Require (physicalAddress destination == s1SlotAddress slot && physicalAddress source == 0x944580 && count == 0x50)
+      "enqueue does not copy the complete source frame into its selected slot"
+    copied <- case s1NextExecution hits hit (s1PointIndex copy+1,limit) of
+      Just point | storageSite (s1PointHit point) == Just Storage.S1FrameCopyReturn
+        && physicalAddress (hitSp (s1PointHit point)) == physicalAddress (hitSp hit) -> Right point
+      _ -> Left (StorageShape "S1 enqueue copy lacks its direct return")
+    advanced <- s1Argument 0 (s1PointHit copied)
+    s1Require (physicalAddress advanced == s1SlotAddress slot+0x50) "enqueue copy lacks the retained callee's advanced destination return"
+    pure (Just (S1Producer copy copied slot frame))
 
 s1ReadApplications :: S1Sites -> Hit -> (Int,Int) -> S1FrameBytes -> Either Refusal [S1Application]
 s1ReadApplications sites consumer (from,to) frame = fmap concat . forM entries $ \entry -> do
@@ -3210,8 +3154,7 @@ s1Witnesses hits (from,to) = do
       insert table index hit=case storageSite hit of
         Just site -> M.insertWith (++) site [S1Point (from+index) hit] table
         Nothing -> table
-  producerCalls <- pairedStorageCalls Storage.S1ActionEntry Storage.S1ActionReturned hits (from,to)
-  producerResults <- mapM (s1ReadProducer hits sites) producerCalls
+  producerResults <- mapM (s1ReadProducer hits to) (s1Points sites Storage.S1FrameCopyCall)
   consumerCalls <- pairedStorageCalls Storage.S1DequeueEntry Storage.S1DequeueWrapperReturn hits (from,to)
   consumerResults <- mapM (s1ReadConsumer hits sites to) consumerCalls
   let producers=[producer | Just producer <- producerResults]
@@ -3224,22 +3167,20 @@ s1Witnesses hits (from,to) = do
     case matches of
       [] -> pure []
       [producer] -> do
-        producerIdentity <- s1Actor (boundaryEntry (s1ProducerCall producer))
+        producerIdentity <- s1Actor (s1PointHit (s1ProducerCopy producer))
         consumerIdentity <- s1Actor (boundaryEntry call)
-        pure [LocatedS1 (boundaryEntryIndex (s1ProducerCall producer))
-          (max (boundaryReturnIndex (s1ProducerCall producer)) (s1PointIndex dispatched))
-          (S1Witness producerIdentity consumerIdentity (s1ProducerEntered producer) (s1ProducerReplayed producer)
-            frame (s1ProducerContinuation producer) state) | S1Application dispatched state <- applications]
+        pure [LocatedS1 (s1PointIndex (s1ProducerCopy producer))
+          (max (s1PointIndex (s1ProducerCopied producer)) (s1PointIndex dispatched))
+          (S1Witness producerIdentity consumerIdentity (s1ProducerReplayed producer) frame state)
+          | S1Application dispatched state <- applications]
       _ -> Left (StorageShape "S1 consumed queue slot has ambiguous producer lineage")
 
 s1WitnessValue :: S1Witness -> Value
 s1WitnessValue witness = object
   [ "producer" .= taskIdentityValue (s1ProducerIdentity witness)
   , "consumer" .= taskIdentityValue (s1ConsumerIdentity witness)
-  , "entered_frame" .= frameValue (s1EnteredFrame witness)
   , "replayed_frame" .= frameValue (s1ReplayedFrame witness)
   , "consumed_frame" .= frameValue (s1ConsumedFrame witness)
-  , "continuation" .= s1ContinuationWord (s1DispatchContinuation witness)
   , "m74_state" .= (case s1ControllerState witness of S1ControllerState state -> state)
   ]
  where frameValue (S1FrameBytes bytes) = C.unpack (hexEncode bytes)
