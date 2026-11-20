@@ -643,26 +643,6 @@
       "expected_sha256": "dc1b5385f1b32e1efde85c276bc8253caee6fa62e76b10a6817676dacbd3b0a3"
     },
     {
-      "id": "//replacement/display_scanout:display-scanout-fixed-image",
-      "elf": "replacement/display_scanout/display-scanout-fixed-image.elf",
-      "units": [
-        "display_scanout"
-      ],
-      "classification": "production",
-      "contracts": [
-        "replacement/display_scanout/display-scanout-fixed.ld"
-      ],
-      "required_exports": [],
-      "allowed_imports": [
-        "scanout_enter_critical",
-        "scanout_irq_configure",
-        "scanout_irq_release",
-        "scanout_leave_critical",
-        "scanout_yield"
-      ],
-      "expected_sha256": "e9a69a50c2b01c6cff3a7bca1d15459cea112b3067e36d8ac086778ed05f4c6c"
-    },
-    {
       "id": "//replacement/display_scanout:display-scanout-panel",
       "elf": "replacement/display_scanout/display-scanout-panel.elf",
       "units": [
@@ -736,6 +716,45 @@
         "xm1_vector_table_start"
       ],
       "expected_sha256": "0f1ea73c310bbb8844f713eaa7e355b28efbd0310702b6a8014633e10594de83"
+    },
+    {
+      "id": "//replacement/fixed_image:fixed-bank-image",
+      "elf": "replacement/fixed_image/fixed-bank-image.elf",
+      "units": [
+        "display_scanout",
+        "file_service"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/display_scanout/fixed-imports.ld",
+        "replacement/file_service/imports.ld",
+        "replacement/fixed_image/fixed-bank.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "file_service_cache_claim",
+        "file_service_copy_bytes",
+        "file_service_copy_string",
+        "file_service_current_task",
+        "file_service_device_for_letter",
+        "file_service_local_open",
+        "file_service_local_position",
+        "file_service_local_record",
+        "file_service_media_report",
+        "file_service_receive_request",
+        "file_service_semaphore_signal",
+        "file_service_semaphore_wait",
+        "file_service_send",
+        "file_service_sleep",
+        "file_service_ticks",
+        "file_service_wake",
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield"
+      ],
+      "expected_sha256": "aeaa476c7746d4b21c4999644caa092ed8ad5af170701c23af1245fd2809c795"
     },
     {
       "id": "//replacement/fixed_image:probe-image",

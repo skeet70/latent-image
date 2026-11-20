@@ -103,7 +103,7 @@
           "retained_targets": []
         },
         {
-          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "export",
           "symbols": [
             "xm1_scanout_blank",
@@ -119,7 +119,7 @@
             "xm1_scanout_range_packet",
             "xm1_scanout_scheduler_register"
           ],
-          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "contract": "replacement/display_scanout/fixed-imports.ld",
           "requirement": "The twelve exports the published stock entry branches reach in the owned fixed range. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
           "retained_targets": []
         }
@@ -188,7 +188,7 @@
           "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
         },
         {
-          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "retained-import",
           "symbols": [
             "scanout_enter_critical",
@@ -197,7 +197,7 @@
             "scanout_leave_critical",
             "scanout_yield"
           ],
-          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
         }
       ],
@@ -235,12 +235,12 @@
           "requirement": "S8 stock per-frame scheduler (`FUN_006c7318` registration). retained VGLIB one-shots and live-view clients. no retained client registers, or the owned driver serves the same request contract"
         },
         {
-          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "export",
           "symbols": [
             "xm1_scanout_scheduler_register"
           ],
-          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "contract": "replacement/display_scanout/fixed-imports.ld",
           "requirement": "Retained clients register through the published branch at 0x6c7318 into the owned scheduler. S8 removal still needs every retained client's request contract or its migration."
         }
       ],
@@ -323,7 +323,7 @@
       "state": "required",
       "evidence": [
         {
-          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "export",
           "symbols": [
             "xm1_scanout_blank",
@@ -343,7 +343,7 @@
           "requirement": "`artifact publish` writes one `b` per stock entry to these exports; the scanout pair admits fetches of the retired bodies only at those twelve words."
         },
         {
-          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "image": "//replacement/fixed_image:fixed-bank-image",
           "kind": "publication",
           "symbols": [
             "__fixed_body_end",
@@ -351,7 +351,7 @@
             "__fixed_bss_end",
             "__fixed_bss_start"
           ],
-          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "contract": "replacement/fixed_image/fixed-bank.ld",
           "requirement": "The fixed-record stager and `check-fixed-image` read these layout labels from this link; BSS end equals body end."
         }
       ],
