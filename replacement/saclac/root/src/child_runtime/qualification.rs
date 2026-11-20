@@ -1,7 +1,7 @@
 //! Qualification view of the child runtime (issue 117, X-M1 1.50).
 //!
-//! The measurement child is behind a `RefCell`; the read is `try_borrow_unguarded` so it
-//! neither takes nor observes the borrow flag. A live borrow refuses the view.
+//! The children are behind `RefCell`s; the reads are `try_borrow` (read-only, non-panicking),
+//! so a live mutable borrow refuses the view.
 
 use super::ChildRuntime;
 use xm1_focus_measurement_round::live::qualification::View as MeasurementView;
@@ -20,13 +20,15 @@ pub struct View {
 pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X>(
     children: &ChildRuntime<'s, M, R, E, P, I, T, S, X>,
 ) -> View {
-    // SAFETY: read-only view of a cell the caller owns; no borrow flag is taken.
-    let measurement = unsafe { children.measurement.try_borrow_unguarded() }
+    let measurement = children
+        .measurement
+        .try_borrow()
         .ok()
-        .map(crate::measurement_runtime::qualification::view);
-    // SAFETY: as above.
-    let lens_live = unsafe { children.lens.try_borrow_unguarded() }
+        .map(|measurement| crate::measurement_runtime::qualification::view(&measurement));
+    let lens_live = children
+        .lens
+        .try_borrow()
         .ok()
-        .map(xm1_saclac_lens_drive::children::qualification::live_state);
+        .map(|lens| xm1_saclac_lens_drive::children::qualification::live_state(&lens));
     View { measurement, lens_live }
 }

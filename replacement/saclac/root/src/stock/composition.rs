@@ -177,5 +177,4 @@ pub fn dispatch(event: u32, parameters: &[u8], marker: &'static u32) -> i32 {
 }
 
 #[cfg(saclac_qualification)]
-#[allow(unsafe_code)]
 pub mod qualification;

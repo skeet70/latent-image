@@ -88,5 +88,4 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries,
 }
 
 #[cfg(saclac_qualification)]
-#[allow(unsafe_code)]
 pub mod qualification;

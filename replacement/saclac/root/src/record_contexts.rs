@@ -76,5 +76,4 @@ pub(crate) fn apply_trigger<M: Machine + Clone, R: Memory, E: StockEntries, P>(s
 }
 
 #[cfg(saclac_qualification)]
-#[allow(unsafe_code)]
 pub mod qualification;

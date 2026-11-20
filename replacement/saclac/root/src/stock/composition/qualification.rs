@@ -12,9 +12,6 @@
 //! the view reads is mutably borrowed. `*gap` carries `field_index << 16 | detail`.
 
 use core::ptr;
-use crate::stock::qualification::{
-    encode_overlay, roundtrip_overlay, Refusal, FIELD_COUNT, QUALIFICATION_FIELDS,
-};
 
 pub use crate::stock::qualification::*;
 

@@ -2,8 +2,9 @@
 //!
 //! `composition::qualification` reads this view through the declared layout of the qualified
 //! build and projects it onto the stock machine-state halfwords and the other exposed fields.
-//! Every `RefCell` read is `try_borrow_unguarded`: the view is read-only and takes no borrow
-//! flag. A cell that is mutably borrowed refuses the view instead of observing a panic.
+//! The `RefCell` reads are `try_borrow`: read-only and non-panicking, so a mutably borrowed
+//! cell refuses the view instead of observing a panic. (`try_borrow_unguarded` would need
+//! `unsafe`, which the modules this file lives under forbid.)
 
 use super::Runtime;
 use crate::acquisition::qualification as acquisition;
@@ -34,16 +35,11 @@ pub struct View {
 pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A, D>(
     runtime: &Runtime<'s, M, R, E, P, I, T, S, X, A, D>,
 ) -> Option<View> {
-    // SAFETY: read-only views of cells the caller owns; no borrow flag is taken.
-    let root = unsafe { runtime.root.try_borrow_unguarded() }.ok()?;
-    // SAFETY: as above.
-    let live = unsafe { runtime.live.try_borrow_unguarded() }.ok()?;
-    // SAFETY: as above.
-    let live_view = unsafe { runtime.profiles.view.try_borrow_unguarded() }.ok()?;
-    // SAFETY: as above.
-    let held = unsafe { runtime.contexts.try_borrow_unguarded() }.ok()?;
-    // SAFETY: as above.
-    let services = unsafe { runtime.services.try_borrow_unguarded() }.ok()?;
+    let root = runtime.root.try_borrow().ok()?;
+    let live = runtime.live.try_borrow().ok()?;
+    let live_view = runtime.profiles.view.try_borrow().ok()?;
+    let held = runtime.contexts.try_borrow().ok()?;
+    let services = runtime.services.try_borrow().ok()?;
     let children = child::view(&runtime.children);
     Some(View {
         root: xm1_saclac_controllers::root::qualification::view(&root),
