@@ -240,6 +240,10 @@ implement!(live_profile::Layers {
     fn replies(&mut self) -> &mut Self { self }
     fn lens(&mut self) -> &mut Self { self }
     fn mirror_sources(&mut self) -> &mut Self { self }
+    fn adjustment_pending(&mut self) -> live_profile::AdjustmentPending { self.services.borrow().adjustment_pending() }
+    fn set_adjustment_pending(&mut self, pending: live_profile::AdjustmentPending) {
+        self.services.borrow_mut().set_adjustment_pending(pending);
+    }
 });
 implement!(live_statistics_profile::Layers {
     type Profile = Self; type Shared = Self; type Geometry = Self; type Adjustment = Self;

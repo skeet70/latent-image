@@ -92,6 +92,9 @@ pub trait Layers {
     fn replies(&mut self) -> &mut Self::Replies;
     fn lens(&mut self) -> &mut Self::Lens;
     fn mirror_sources(&mut self) -> &mut Self::Sources;
+    /// The adjustment block's pending flag, which the round reads.
+    fn adjustment_pending(&mut self) -> AdjustmentPending;
+    fn set_adjustment_pending(&mut self, pending: AdjustmentPending);
 }
 
 /// The words of the suspension block and the one the suspend marks.
@@ -104,6 +107,23 @@ const REJECTED: CompletionStatus = CompletionStatus(21);
 const SELECTION_REJECTED: CompletionStatus = CompletionStatus(-96);
 /// The status the live view answers Command09 with, whatever its outcome.
 const CAPTURE_ANSWERED: CompletionStatus = CompletionStatus(15);
+
+/// The adjustment block's pending flag at `0x016d8750` (block offset 0x48). Stock sets it
+/// to 1 at the end of the capture command's preparation (`FUN_00f308d4` case 9, `0xf30bfc`)
+/// and to 0 in the release command's (`case 10`, `0xf30c08`); `FUN_00f33094` skips the
+/// capture-buffer detach while it is 1 (`id5.dis:846183`). The block's `+0x4c` latch the
+/// same function reads is `GeometryFlag::Alternate`: set on a Command02 whose scene kind is
+/// 57 (`0xf309d8`) and cleared by the capture command (`0xf30bf0`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AdjustmentPending {
+    #[default]
+    Clear,
+    Pending,
+}
+
+impl AdjustmentPending {
+    pub const fn is_pending(self) -> bool { matches!(self, Self::Pending) }
+}
 
 /// The leaf state the live view's operations keep between entries.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -157,8 +177,14 @@ impl LiveProfile {
                 }
                 layers.geometry().set(GeometryFlag::Alternate, false);
                 layers.geometry().set(GeometryFlag::Capture, true);
+                // 0xf30bf8: the capture command leaves the block's +0x48 flag set.
+                layers.set_adjustment_pending(AdjustmentPending::Pending);
             }
-            Some((K::Command0a, _)) => layers.geometry().set(GeometryFlag::Capture, false),
+            Some((K::Command0a, _)) => {
+                layers.geometry().set(GeometryFlag::Capture, false);
+                // 0xf30c04: the release command clears the block's +0x48 flag.
+                layers.set_adjustment_pending(AdjustmentPending::Clear);
+            }
             Some((K::HalfRelease, _)) => {
                 layers.configuration().claim_selection();
                 reset_inactive_view(record, layers);

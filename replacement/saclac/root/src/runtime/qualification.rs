@@ -13,6 +13,7 @@ use crate::record_contexts::qualification::{self as contexts, ContextsView};
 use xm1_focus_measurement_round::acquisition::qualification::StageView;
 use xm1_focus_measurement_round::live::qualification::View as MeasurementView;
 use xm1_saclac_controllers::live::qualification::StateView as LiveStateView;
+use xm1_saclac_controllers::live_profile::AdjustmentPending;
 use xm1_saclac_controllers::live_view::qualification::StateView as LiveViewControllerView;
 use xm1_saclac_controllers::root::qualification::ModeView;
 use xm1_saclac_interface::calc::AcquisitionGrid;
@@ -36,6 +37,9 @@ pub struct View {
     /// `stock::acquisition::timing` accessor; it is the frame-period selector Root's
     /// `effects.frame_interval` uses.
     pub timing: u32,
+    /// The adjustment block's `+0x48` flag at `0x016d8750`, typed as
+    /// `live_profile::AdjustmentPending` in `Services`.
+    pub adjustment_pending: AdjustmentPending,
 }
 
 /// The view of `runtime`, or `None` when a cell it reads is mutably borrowed.
@@ -49,6 +53,7 @@ pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A
     let services = runtime.services.try_borrow().ok()?;
     let children = child::view(&runtime.children);
     let timing = crate::stock::acquisition::timing(&services.machine).0;
+    let adjustment_pending = services.adjustment_pending();
     Some(View {
         root: xm1_saclac_controllers::root::qualification::view(&root),
         live: xm1_saclac_controllers::live::qualification::view(&live),
@@ -59,5 +64,6 @@ pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A
         live_grid: acquisition::live_grid(&services.acquisition),
         s1_acquisition: children.s1_acquisition,
         timing,
+        adjustment_pending,
     })
 }

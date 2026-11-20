@@ -54,6 +54,9 @@ pub trait Environment {
     fn cadence(&mut self, work: Work, mode: Mode) -> Cadence;
     fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect);
     fn fault(&mut self);
+    /// The adjustment block's pending flag at `0x016d8750`; `0xf33094` skips the capture-buffer
+    /// detach while it is set.
+    fn adjustment_pending(&mut self) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,7 +302,11 @@ impl Round {
         self.selected = Selection::ALL.shared(available, permitted);
         self.planner.release(Slot::First);
         self.planner.release(Slot::Second);
-        env.record_effect(record, RecordEffect::ResetSelection);
+        // 0xf33094 sets the mask and clears the pair statuses, then skips the capture-buffer
+        // detach while the adjustment block's +0x48 flag is set.
+        if !env.adjustment_pending() {
+            env.record_effect(record, RecordEffect::ResetSelection);
+        }
     }
 
     fn finish_selection_clear(&mut self, record: RecordHandle, env: &mut impl Environment) {

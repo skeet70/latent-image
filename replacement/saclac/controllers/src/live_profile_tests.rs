@@ -46,6 +46,7 @@ struct Fake {
     record_mode_disabled: bool,
     record_mode_available: bool,
     values: ConfigurationValues,
+    adjustment_pending: AdjustmentPending,
     seen: Vec<Seen>,
 }
 
@@ -204,6 +205,8 @@ impl Layers for Fake {
     fn replies(&mut self) -> &mut Self { self }
     fn lens(&mut self) -> &mut Self { self }
     fn mirror_sources(&mut self) -> &mut Self { self }
+    fn adjustment_pending(&mut self) -> AdjustmentPending { self.adjustment_pending }
+    fn set_adjustment_pending(&mut self, pending: AdjustmentPending) { self.adjustment_pending = pending; }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16a0_0490) }

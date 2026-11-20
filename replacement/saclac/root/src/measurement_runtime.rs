@@ -372,6 +372,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + 
             }
         }
     }
+    fn adjustment_pending(&mut self) -> bool { self.services.borrow().adjustment_pending().is_pending() }
 }
 
 #[cfg(saclac_qualification)]

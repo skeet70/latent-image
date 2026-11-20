@@ -50,6 +50,7 @@ impl Effects for Fake {
         self.extra.traffic.push(Traffic::Search(name));
         status
     }
+    fn adjustment_pending(&mut self) -> bool { false }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16c0000) }

@@ -16,11 +16,12 @@ struct Env {
     answers: Vec<(Lane, Kind, LaneStatus)>,
     available: Option<Selection>,
     alternate: bool,
+    adjustment_pending: bool,
 }
 
 impl Env {
     fn offering(available: Option<Selection>) -> Self {
-        Self { traffic: Vec::new(), answers: Vec::new(), available, alternate: false }
+        Self { traffic: Vec::new(), answers: Vec::new(), available, alternate: false, adjustment_pending: false }
     }
     fn answer(&mut self, lane: Lane, kind: Kind, status: LaneStatus) { self.answers.push((lane, kind, status)); }
     fn take(&mut self) -> Vec<Traffic> { core::mem::take(&mut self.traffic) }
@@ -59,6 +60,7 @@ impl Environment for Env {
     fn cadence(&mut self, _: Work, _: Mode) -> Cadence { Cadence { first: true, second: true, third: true, fourth: true } }
     fn record_effect(&mut self, _: RecordHandle, effect: RecordEffect) { self.traffic.push(Traffic::Effect(effect)); }
     fn fault(&mut self) { self.traffic.push(Traffic::Fault); }
+    fn adjustment_pending(&mut self) -> bool { self.adjustment_pending }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16c0000) }

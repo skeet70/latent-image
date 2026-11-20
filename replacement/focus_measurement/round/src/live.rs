@@ -22,6 +22,10 @@ pub trait Effects: RecordPorts + image::Ports + window::Ports + auxiliary::Ports
 
     /// The contrast search lane consumes the history after this event's record effects.
     fn search(&mut self, signal: LaneSignal<'_>, record: RecordHandle, history: &MeasurementHistory) -> LaneStatus;
+
+    /// The adjustment block's pending flag at `0x016d8750`, which the round's selection reset
+    /// reads as `0xf33094` does.
+    fn adjustment_pending(&mut self) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -245,6 +249,7 @@ impl<E: Effects> Environment for Lanes<'_, E> {
     fn cadence(&mut self, work: Work, mode: Mode) -> Cadence { self.effects.cadence(work, mode) }
     fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect) { record::apply(effect, record, &mut *self.history, &mut *self.effects) }
     fn fault(&mut self) { self.effects.fault() }
+    fn adjustment_pending(&mut self) -> bool { self.effects.adjustment_pending() }
 }
 
 #[cfg(saclac_qualification)]

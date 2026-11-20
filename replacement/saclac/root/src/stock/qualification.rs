@@ -49,6 +49,7 @@ use xm1_focus_measurement_round::jobs::qualification::JobView;
 use xm1_focus_measurement_round::lanes::{Lane, Lanes};
 use xm1_focus_measurement_round::round::qualification::{FanView, PhaseView, PlannerModeView, PlannerPhaseView};
 use xm1_saclac_controllers::live::qualification::StateView as LiveView;
+use xm1_saclac_controllers::live_profile::AdjustmentPending;
 use xm1_saclac_controllers::live_view::qualification::StateView as LiveViewControllerView;
 use xm1_saclac_controllers::root::qualification::ModeView;
 use xm1_saclac_interface::stock::peers;
@@ -94,17 +95,15 @@ pub const FIELD_ADJUSTMENT_00: usize = 22;
 /// (Root's `frame_interval` returns `None` for a kind outside 2/3/5); the captured wakes hold
 /// 12, which is Root's timing word in all 57 dumps.
 pub const FIELD_CLASSIFICATION: usize = 23;
-/// The adjustment block's word at `0x016d8750` (block offset 0x48). Its setter `0xfa7ff8`
-/// has only two call sites, both in `FUN_00f308d4` (`0xf30bfc` sets 1, `0xf30c08` sets 0;
-/// `id5.dis:843828-843831`). The 1 branch is entered after `0xfa8058` reads the block's `+0x4c`
-/// latch (`id5.dis:843788`), which the same function sets to 1 at `0xf309d8` and clears at
-/// `0xf30bf0`; the `0x758340` read at `0xf30b5c` writes `0x16be020`, not this flag. The flag's
-/// readers include `FUN_00f33094` (the measurement controller's row function), which returns
-/// early while it is 1 (`id5.dis:846183`), and `FUN_00f30f64` (`id5.dis:844141`). All 57 dumps
-/// hold 0. Root reads the record's shared words `AT_0140`/`AT_0144`/`AT_0148` and `AT_0890`
-/// through ProfileRecords (`controller_records.rs:51-53,56,156-158`; `shot_capture_data.rs:144`),
-/// but the flag is set from the block's `+0x4c` latch and the function path, which Root does
-/// not hold, so it is not a pure function of the retained record words.
+/// The adjustment block's word at `0x016d8750` (block offset 0x48), Root's
+/// `live_profile::AdjustmentPending` in `Services`. Its setter `0xfa7ff8` has only two call
+/// sites, both in `FUN_00f308d4` (`0xf30bfc` sets 1, `0xf30c08` sets 0;
+/// `id5.dis:843828-843831`): case 9 (capture) sets Pending, case 10 (release) clears it. The
+/// 1 branch follows `0xfa8058` reading the block's `+0x4c` latch (`id5.dis:843788`), which
+/// Root types as `GeometryFlag::Alternate` (set at `0xf309d8`, cleared at `0xf30bf0`); the
+/// `0x758340` read at `0xf30b5c` writes `0x16be020`, not this flag. Readers include
+/// `FUN_00f33094` (returns early while 1, `id5.dis:846183`) and `FUN_00f30f64`
+/// (`id5.dis:844141`). All 57 dumps hold 0 (Clear).
 pub const FIELD_ADJUSTMENT_48: usize = 24;
 /// The adjustment block's word at `0x016d8760` (block offset 0x58). `FUN_00ef9930` sets it to
 /// 1 (`id5.dis:787434`) from the record/reccont module (`0xe20c4c`, `0xe219c8`, `0xe39050`),
@@ -453,6 +452,24 @@ pub fn encode_cursor(cursor: usize) -> Result<u8, u32> {
 /// Decodes a planner cursor byte.
 pub const fn decode_cursor(byte: u8) -> usize { byte as usize }
 
+/// The stock word of the adjustment block's `+0x48` flag: `Clear -> 0`, `Pending -> 1`
+/// (`0xf30c08` clears, `0xf30bfc` sets).
+pub const fn encode_adjustment_pending(view: AdjustmentPending) -> u32 {
+    match view {
+        AdjustmentPending::Clear => 0,
+        AdjustmentPending::Pending => 1,
+    }
+}
+
+/// Decodes the stock flag word; only 0 and 1 have a typed counterpart.
+pub fn decode_adjustment_pending(word: u32) -> Result<AdjustmentPending, u32> {
+    match word {
+        0 => Ok(AdjustmentPending::Clear),
+        1 => Ok(AdjustmentPending::Pending),
+        _ => Err(1),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The selection-adjustment mask: Root's category-pair decision to the stock bits.
 
@@ -789,14 +806,14 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
     // The calc peer queue id.
     unsafe { put_u32(out, OFF_QUEUE, u32::from(peers::CALC.queue.number())) };
     // The adjustment block: +0x00 and +0x58 are constants, +0x40 is Root's own timing word
-    // (the frame-period selector `frame_interval` reads), and +0x48 has no retained Root
-    // counterpart (gap G12).
+    // (the frame-period selector `frame_interval` reads), and +0x48 is Root's typed
+    // `AdjustmentPending`.
     unsafe {
         put_u32(out, OFF_ADJUSTMENT_00, 0);
         put_u32(out, OFF_CLASSIFICATION, view.timing);
+        put_u32(out, OFF_ADJUSTMENT_48, encode_adjustment_pending(view.adjustment_pending));
         put_u32(out, OFF_ADJUSTMENT_58, 0);
     }
-    refusal.note(FIELD_ADJUSTMENT_48, 5);
     // The planner's cursors, mode and phase.
     match view.measurement {
         Some(measurement) => {
@@ -896,7 +913,11 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
     unsafe { put_u32(out, OFF_CLASSIFICATION, selector) };
     let handoff = unsafe { get_u32(stock, OFF_ADJUSTMENT_58) };
     if handoff != 0 { refusal.note(FIELD_ADJUSTMENT_58, 2); } else { unsafe { put_u32(out, OFF_ADJUSTMENT_58, 0) } }
-    refusal.note(FIELD_ADJUSTMENT_48, 2);
+    let pending = unsafe { get_u32(stock, OFF_ADJUSTMENT_48) };
+    match decode_adjustment_pending(pending) {
+        Ok(view) => unsafe { put_u32(out, OFF_ADJUSTMENT_48, encode_adjustment_pending(view)) },
+        Err(detail) => { refusal.note(FIELD_ADJUSTMENT_48, detail); }
+    }
 
     // The planner's cursors are byte domains; the mode and phase have typed counterparts.
     let first = unsafe { ptr::read(stock.add(OFF_FIRST_CURSOR)) };
@@ -1122,12 +1143,9 @@ mod tests {
             overlay[OFF_PHASE] = phase;
             let mut out = [0u8; OVERLAY_BYTES];
             let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
-            // The adjustment block's untyped word is the declared gap; nothing else refuses.
-            assert_eq!(code, 2, "cursor {cursor} phase {phase}");
-            assert_eq!(gap, Some(gap_word(FIELD_ADJUSTMENT_48, 2)), "cursor {cursor} phase {phase}");
-            // Every non-gap field round-trips to itself.
+            // Every field is accepted; the measured overlay round-trips with no gap.
+            assert_eq!((code, gap), (0, None), "cursor {cursor} phase {phase}");
             for (field, entry) in QUALIFICATION_FIELDS.iter().enumerate() {
-                if matches!(field, FIELD_ADJUSTMENT_48) { continue; }
                 let (address, length) = (entry[0], entry[1]);
                 let _ = address;
                 let at = overlay_offset(field);
@@ -1139,21 +1157,37 @@ mod tests {
 
     #[test]
     fn the_adjustment_constants_are_their_declared_values() {
-        // +0x00 and +0x58 are 0; +0x48 is the declared gap. +0x40 is Root's timing word and
-        // round-trips by identity.
+        // +0x00 and +0x58 are 0, +0x40 is Root's timing word and +0x48 the typed
+        // AdjustmentPending; all round-trip.
         let mut overlay = [0u8; OVERLAY_BYTES];
         overlay[OFF_QUEUE..OFF_QUEUE + 4].copy_from_slice(&u32::from(peers::CALC.queue.number()).to_le_bytes());
         overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12u32.to_le_bytes());
         let word = |out: &[u8; OVERLAY_BYTES], at: usize| u32::from_le_bytes(out[at..at + 4].try_into().expect("word"));
         let mut out = [0u8; OVERLAY_BYTES];
         let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
-        assert_eq!((code, gap), (2, Some(gap_word(FIELD_ADJUSTMENT_48, 2))));
-        assert_eq!((word(&out, OFF_ADJUSTMENT_00), word(&out, OFF_CLASSIFICATION), word(&out, OFF_ADJUSTMENT_58)), (0, 12, 0));
+        assert_eq!((code, gap), (0, None));
+        assert_eq!((word(&out, OFF_ADJUSTMENT_00), word(&out, OFF_CLASSIFICATION), word(&out, OFF_ADJUSTMENT_48), word(&out, OFF_ADJUSTMENT_58)), (0, 12, 0, 0));
         overlay[OFF_ADJUSTMENT_00] = 1;
         assert_eq!(unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) }.1, Some(gap_word(FIELD_ADJUSTMENT_00, 2)));
         overlay[OFF_ADJUSTMENT_00] = 0;
         overlay[OFF_ADJUSTMENT_58] = 1;
         assert_eq!(unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) }.1, Some(gap_word(FIELD_ADJUSTMENT_58, 2)));
+        overlay[OFF_ADJUSTMENT_58] = 0;
+        overlay[OFF_ADJUSTMENT_48..OFF_ADJUSTMENT_48 + 4].copy_from_slice(&1u32.to_le_bytes());
+        let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
+        assert_eq!((code, gap), (0, None));
+        assert_eq!(word(&out, OFF_ADJUSTMENT_48), 1);
+        overlay[OFF_ADJUSTMENT_48..OFF_ADJUSTMENT_48 + 4].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) }.1, Some(gap_word(FIELD_ADJUSTMENT_48, 1)));
+    }
+
+    #[test]
+    fn the_adjustment_pending_flag_maps_to_its_typed_values() {
+        for (view, word) in [(AdjustmentPending::Clear, 0u32), (AdjustmentPending::Pending, 1)] {
+            assert_eq!(encode_adjustment_pending(view), word);
+            assert_eq!(decode_adjustment_pending(word), Ok(view));
+        }
+        for word in [2, 3, u32::MAX] { assert_eq!(decode_adjustment_pending(word), Err(1), "flag {word}"); }
     }
 
     /// The overlay offset of a field index, from the offsets the codec uses.
