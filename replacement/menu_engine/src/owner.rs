@@ -478,10 +478,16 @@ impl Rules for PushMoveUpAsDown {
     const PUSH_MOVE_UP: bool = false;
 }
 
+/// The seek loop steps once before its first comparison.
+struct SeekStepsFirst;
+impl Rules for SeekStepsFirst {
+    const SEEK_TESTS_FIRST: bool = false;
+}
+
 /// Each control and the cases it must fail; an empty list asks for any case.
 #[test]
 fn owner_controls_fail() {
-    let controls: [(&str, Vec<&str>, &[&str]); 25] = [
+    let controls: [(&str, Vec<&str>, &[&str]); 26] = [
         ("no-wrap", control::<NoWrap>("no-wrap"), &["fixed-wrap"]),
         ("inverted-skip", control::<InvertedSkip>("inverted-skip"), &[]),
         ("no-initial-row", control::<NoInitialRow>("no-initial-row"), &["fn"]),
@@ -500,6 +506,7 @@ fn owner_controls_fail() {
             &["frame-seek-down", "frame-seek-up", "frame-pop-down", "frame-pop-up", "frame-push-probe", "frame-push-up-probe"],
         ),
         ("no-seek-step", control::<NoSeekStep>("no-seek-step"), &["frame-seek-step"]),
+        ("seek-steps-first", control::<SeekStepsFirst>("seek-steps-first"), &["open-seek-2", "frame-seek-down", "frame-seek-up"]),
         ("query-fixed", control::<QueryFixed>("query-fixed"), &["frame-fixed-open"]),
         ("no-property-write", control::<NoPropertyWrite>("no-property-write"), &["close-property"]),
         (
