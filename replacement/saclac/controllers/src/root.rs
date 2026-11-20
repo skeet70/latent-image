@@ -447,3 +447,6 @@ fn live_completion(input: Input<'_>) -> bool {
         C::Lens33 | C::Lens34 | C::Image43 | C::Lens3d | C::Image44 | C::Statistics82 |
         C::Lens37 | C::Statistics77 | C::Calculation8b | C::Image47 | C::Image66 | C::Lens39))
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

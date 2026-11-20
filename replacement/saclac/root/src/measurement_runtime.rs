@@ -373,3 +373,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: ImageProcessor + Calc + 
         }
     }
 }
+
+#[cfg(saclac_qualification)]
+#[allow(unsafe_code)]
+pub mod qualification;

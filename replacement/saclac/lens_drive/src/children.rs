@@ -90,3 +90,6 @@ const fn child_outcome(outcome: Outcome) -> ChildOutcome {
         Outcome::Fault => ChildOutcome::Fault,
     }
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

@@ -1404,3 +1404,6 @@ impl Controller {
 
 #[derive(Clone, Copy)]
 enum Halted { Statistics, Measurement }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

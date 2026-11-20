@@ -62,3 +62,6 @@ pub struct ControlDistanceLimit(pub i32);
 pub fn control_distance_limit(machine: &impl xm1_saclac_shared::stock::Machine) -> ControlDistanceLimit {
     ControlDistanceLimit(machine.enter(0x100_5700, &[]) as i32)
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

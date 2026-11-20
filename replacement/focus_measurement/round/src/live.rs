@@ -246,3 +246,6 @@ impl<E: Effects> Environment for Lanes<'_, E> {
     fn record_effect(&mut self, record: RecordHandle, effect: RecordEffect) { record::apply(effect, record, &mut *self.history, &mut *self.effects) }
     fn fault(&mut self) { self.effects.fault() }
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

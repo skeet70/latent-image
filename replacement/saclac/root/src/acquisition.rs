@@ -147,3 +147,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P: Calc + Calc1> xm1_saclac
     }
 }
 
+#[cfg(saclac_qualification)]
+#[allow(unsafe_code)]
+pub mod qualification;
+

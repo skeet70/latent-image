@@ -86,3 +86,7 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries,
     S: StateMemory, X: ExternalPorts + BindRecord> Children for &ChildRuntime<'_, M, R, E, P, I, T, S, X> {
     fn handle(&mut self, request: ChildRequest<'_>) -> ChildOutcome { self.dispatch(request) }
 }
+
+#[cfg(saclac_qualification)]
+#[allow(unsafe_code)]
+pub mod qualification;

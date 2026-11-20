@@ -295,3 +295,6 @@ fn corrected_reply(status: Status, words: DriveWords, ports: &mut impl Ports) ->
 fn recorded_reply(status: Status, words: DriveWords, ports: &mut impl Ports) -> DriveReply {
     DriveReply { status, value: ports.live_result(), fourth: words.fourth, detail: DriveDetail::Lens(ports.probes()) }
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

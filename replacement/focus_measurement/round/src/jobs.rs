@@ -86,3 +86,6 @@ impl CalculationJob {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidTransition;
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

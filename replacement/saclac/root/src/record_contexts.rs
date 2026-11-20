@@ -74,3 +74,7 @@ pub(crate) fn apply_trigger<M: Machine + Clone, R: Memory, E: StockEntries, P>(s
     let _ = records.write_with(handle, &record::group_00::AT_0160_12, || frame::<12>(&*machine, word(bytes, 156)));
     let _ = records.write_with(handle, &record::group_00::AT_2118, || frame::<40>(&*machine, word(bytes, 160)));
 }
+
+#[cfg(saclac_qualification)]
+#[allow(unsafe_code)]
+pub mod qualification;

@@ -472,3 +472,6 @@ fn outcome(status: LaneStatus) -> ChildOutcome {
         LaneStatus::Idle => ChildOutcome::Measurement(MeasurementOutcome::Round(RetainedRoundStatus::Status0c)),
     }
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;
