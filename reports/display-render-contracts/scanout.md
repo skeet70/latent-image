@@ -306,7 +306,7 @@ scanout-pair qualify STOCK_DIR OWNED_DIR REGISTER_ORDER_DIR SKIPPED_DRAIN_DIR RE
 
 ### Pair result
 
-On fixed ELF `fbcf9d95` the pair is `equal` and qualified (E-DISPLAY-SCANOUT-FIXED-PAIR-150). All 25 checkpoints are equal over 2127 compared calls (1996 interrupt, 131 task). Both roles make 1233 commits with 383 pending images and 35 drained callbacks, and break no law. Unattributed writes and cross-context order are identical. The deepest owned entry's sp is 176 bytes below its paired stock entry's. The register-order control is refused on register-sequence at all 383 pending commits with equal checkpoints; the skipped-drain control is refused on drain 1231 times and its checkpoints differ.
+On fixed ELF `e9a69a50` the pair is `equal` and qualified (E-DISPLAY-SCANOUT-FIXED-PAIR-150). All 25 checkpoints are equal over 2127 compared calls (1996 interrupt, 131 task). Both roles make 1233 commits with 383 pending images and 35 drained callbacks, and break no law. Unattributed writes and cross-context order are identical. The deepest owned entry's sp is 176 bytes below its paired stock entry's. The register-order control is refused on register-sequence at all 383 pending commits with equal checkpoints; the skipped-drain control is refused on drain 1231 times and its checkpoints differ.
 
 The owned driver is slower. `commit_one` takes 3365 instructions per call against stock's 1300, and the owned body executes 4.42M fetches where stock's carriers execute 0.81M; the whole route differs by 2.8M of 618M instructions. At 5019 instructions per call an earlier build slipped VGLIB's publication by one frame at interrupt call 1551 and was refused, so commit cost is a correctness margin, not only a speed figure.
 
