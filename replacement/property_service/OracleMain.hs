@@ -3,9 +3,10 @@
 
 -- | Compares canonical public entries with the current linked body.
 -- Native-only observations do not admit DAT retirement.
-module OracleMain (main, ExecutionMode (..), FrozenRun, FrozenBatchName (..), BatchExecution (..), executionMode, loadFrozenRun, observeBatch, consumeReport, finishFrozenRun, ResearchMode (..), researchMode, checkCompactBudget, parseCompactAllocationGeometry) where
+module OracleMain (main, ExecutionMode (..), FrozenRun, FrozenBatchName (..), BatchExecution (..), executionMode, loadFrozenRun, observeBatch, consumeReport, finishFrozenRun, ResearchMode (..), researchMode, checkCompactBudget, parseCompactAllocationGeometry, stockCaseRow) where
 
 import qualified ArmElf as ELF
+import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON, Value (..), eitherDecodeStrict', object, withObject, (.=))
@@ -590,6 +591,24 @@ controlHolds :: Control -> Int -> Bool
 controlHolds control failed = case controlKind control of
   MustFail -> failed > 0
   MustPass -> failed == 0
+
+-- | A case's results row: its stock entry, the stock evidence its report at @path@ shows inside
+-- that entry's extent, and its pass-2 differences. The row is in normal form, so it holds nothing of the parsed report.
+stockCaseRow :: FilePath -> CaseLabel -> Word32 -> [Difference] -> IO Value
+stockCaseRow path label entryAddress differences = do
+  let extent = fromMaybe 4 (lookup entryAddress [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions])
+  stockEvidence <- evidenceAt path entryAddress extent
+  evaluate (force (object
+    [ "id" .= caseLabelText label
+    , "entry" .= hex entryAddress
+    , "extent" .= extent
+    , "stock_trace_instructions" .= evidenceTrace stockEvidence
+    , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
+    , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
+    , "stock_instructions" .= evidenceInstructions stockEvidence
+    , "stock_status" .= evidenceStatus stockEvidence
+    , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
+    ]))
 
 main :: IO ()
 main = do
@@ -1278,27 +1297,12 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
 
   -- Per-case stock evidence for the shared judge: the entry each case entered and
   -- the instructions the runner reports inside that entry's extent.
-  let entryExtents = [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions]
-      extentOf entry = fromMaybe 4 (lookup entry entryExtents)
   caseRows <- forM (zip3 [0 :: Int ..] runCases verdicts) $ \(ordinal, rc, (_, differences)) -> do
     let label = runLabel rc
         spec = stockSpec contract (fxOf rc) image4 properties label stockFunctions (runCase rc)
         N.GuestAddress entry = caseEntry spec
-        entryAddress = fromIntegral entry :: Word32
-        extent = extentOf entryAddress
         path = batchDirectory out "stock" (ordinal `div` batchLimit) </> (caseLabelText label ++ ".native-result.json")
-    stockEvidence <- evidenceAt path entryAddress extent
-    pure (object
-      [ "id" .= caseLabelText label
-      , "entry" .= hex entryAddress
-      , "extent" .= extent
-      , "stock_trace_instructions" .= evidenceTrace stockEvidence
-      , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
-      , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
-      , "stock_instructions" .= evidenceInstructions stockEvidence
-      , "stock_status" .= evidenceStatus stockEvidence
-      , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
-      ])
+    stockCaseRow path label (fromIntegral entry) differences
 
   -- Results.
   runnerSha <- sha256Hex <$> (canonicalizePath runner >>= sha256File)
