@@ -302,6 +302,13 @@ pub fn decode_mask(mask: u8) -> Result<Lanes, u32> {
     Ok(lanes)
 }
 
+/// The pair done byte's only distinction in the wake step is zero/nonzero (see the field
+/// table); the encoder writes one canonical nonzero value for a busy slot.
+pub const fn stage_byte(busy: bool) -> u8 { if busy { 0x01 } else { 0 } }
+
+/// Whether a pair done byte says the slot is busy/done.
+pub const fn stage_busy(byte: u8) -> bool { byte != 0 }
+
 // ---------------------------------------------------------------------------
 // Decoders: a stock index to a view, refusing indices with no typed counterpart.
 
@@ -555,16 +562,10 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
     // `Planner::busy`, which the step reads only as zero/nonzero.
     match view.measurement {
         Some(measurement) => {
-            unsafe { ptr::write(out.add(OFF_MASK), encode_mask(measurement.selected)) };
-            if measurement.first_busy {
-                refusal.note(FIELD_STAGE_FIRST, 1);
-            } else {
-                unsafe { ptr::write(out.add(OFF_STAGE_FIRST), 0) };
-            }
-            if measurement.second_busy {
-                refusal.note(FIELD_STAGE_SECOND, 1);
-            } else {
-                unsafe { ptr::write(out.add(OFF_STAGE_SECOND), 0) };
+            unsafe {
+                ptr::write(out.add(OFF_MASK), encode_mask(measurement.selected));
+                ptr::write(out.add(OFF_STAGE_FIRST), stage_byte(measurement.first_busy));
+                ptr::write(out.add(OFF_STAGE_SECOND), stage_byte(measurement.second_busy));
             }
         }
         None => {
@@ -636,15 +637,11 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
         }
         Err(detail) => { refusal.note(FIELD_MASK, detail); code = 2; }
     }
-    // The pair done bytes are zero at the wake; a nonzero byte is a status Root does not
-    // retain.
-    for (field, off) in [(FIELD_STAGE_FIRST, OFF_STAGE_FIRST), (FIELD_STAGE_SECOND, OFF_STAGE_SECOND)] {
-        if unsafe { ptr::read(stock.add(off)) } != 0 {
-            refusal.note(field, 1);
-            code = 2;
-        } else {
-            unsafe { ptr::write(out.add(off), 0) };
-        }
+    // The pair done bytes are a zero test in the wake step; a nonzero byte decodes to the
+    // busy/done slot and re-encodes to the canonical nonzero value (non-identical by design).
+    for (_, off) in [(FIELD_STAGE_FIRST, OFF_STAGE_FIRST), (FIELD_STAGE_SECOND, OFF_STAGE_SECOND)] {
+        let byte = unsafe { ptr::read(stock.add(off)) };
+        unsafe { ptr::write(out.add(off), stage_byte(stage_busy(byte))) };
     }
     // The grid's exposed ranges are the typed grid's own bytes; the copy already carries
     // them.
@@ -725,6 +722,17 @@ mod tests {
         for view in PHASES { assert!((encode_m13(view)) < 6); }
         const JOBS: [JobView; 4] = [JobView::Disabled, JobView::Ready, JobView::Running, JobView::Stopping];
         for view in JOBS { assert!((encode_m24(view)) < 5); assert!((encode_m29(view)) < 4); }
+    }
+
+    #[test]
+    fn the_pair_done_bytes_are_a_zero_test() {
+        assert_eq!(stage_byte(false), 0);
+        assert_eq!(stage_byte(true), 0x01);
+        assert!(!stage_busy(0));
+        assert!(stage_busy(0x20));
+        assert!(stage_busy(0x01));
+        assert_eq!(stage_byte(stage_busy(0x20)), 0x01);
+        assert_eq!(stage_byte(stage_busy(0x01)), 0x01);
     }
 
     #[test]
