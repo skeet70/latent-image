@@ -41,7 +41,10 @@
 //! them. The 2760-byte area-statistics entries at `0x1ffee718` are not a field: the step
 //! writes them before reading them in every captured cycle (0 exposed bytes), only stock
 //! saclac consumes the copy, and Root retains no counterpart; as stock-private scratch
-//! outside the fields they leave the abstract comparison.
+//! outside the fields they leave the abstract comparison. Fields 22-25 (the shared profile
+//! state at `0x91904c` and the descriptor at `0x9190f0`) are in the table but refuse on
+//! encode: Root's `ProfileRecords` reads those exact stock buffers, and the owned lane's
+//! bytes are the captured stock state, not Root-filled (gap G14).
 
 use core::ptr;
 use xm1_focus_measurement_round::acquisition::qualification::StageView;
@@ -70,15 +73,24 @@ pub const FIELD_GRID_TAIL: usize = 13;
 pub const FIELD_RECORD_HOLE0: usize = 14;
 pub const FIELD_LATCH: usize = 20;
 pub const FIELD_QUEUE: usize = 21;
-/// The 132-byte shared profile state at `0x0091904c` (`ProfileRecords`' `FOCUS_RESULT`, read by
-/// `0x00756734`: 132 bytes copied from `0x0091904c`).
+/// The 132-byte shared profile state at `0x0091904c` (`ProfileRecords`' `FOCUS_RESULT`).
+/// Root's view reads exactly `0x91904c` (`profile_records/src/stock/mod.rs:20,60`;
+/// `view.rs:166`; reads `shot_preparation_records.rs:35`, `acquisition_ports.rs:291`,
+/// `controller_records.rs:82,188`, `shot_capture_data.rs:287`) and also writes it
+/// (`shot_preparation_records.rs:37`, `shot_capture_data.rs:288`,
+/// `controller_records.rs:190`), but the owned lane's wake bytes are the captured stock
+/// state, not Root-filled: `0x919098` is 0 in all 30 owned wakes and 0/232 in stock. The
+/// map refuses the field (gap G14); it does not copy the block.
 pub const FIELD_FOCUS_RESULT: usize = 22;
-/// `AreaStatistics.present` at `0x009190f0` (descriptor word 0).
+/// `AreaStatistics.present` at `0x009190f0` (descriptor word 0). Root reads it at
+/// `0x9190f0` (`shot_preparation_records.rs:52`; `stock/mod.rs:20,60`) and never writes it;
+/// only stock's `0x756814` and `FUN_00f32654` fill the descriptor. Root reads memory it does
+/// not fill, so the field refuses (gap G14).
 pub const FIELD_PRESENT: usize = 23;
-/// `AreaStatistics.layout` at `0x009190f4` (descriptor byte 4).
+/// `AreaStatistics.layout` at `0x009190f4` (descriptor byte 4); as `FIELD_PRESENT`.
 pub const FIELD_LAYOUT: usize = 24;
 /// The entries pointer at `0x009190f8` (descriptor word 2), the uncached alias
-/// `0x5ffee718` of `0x1ffee718`.
+/// `0x5ffee718` of `0x1ffee718`; as `FIELD_PRESENT`.
 pub const FIELD_ENTRIES_POINTER: usize = 25;
 /// The descriptor's word 3 at `0x009190fc`; no reader uses it and stock leaves it zero.
 pub const FIELD_DESCRIPTOR_WORD3: usize = 26;
@@ -804,16 +816,19 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
     }
     // The calc peer queue id.
     unsafe { put_u32(out, OFF_QUEUE, u32::from(peers::CALC.queue.number())) };
-    // The 132-byte shared profile state (`FOCUS_RESULT`) and the statistics descriptor
-    // (`AREA_STATISTICS`), both read from Root's `ProfileRecords` shared block.
-    unsafe {
-        ptr::copy_nonoverlapping(view.focus_result.as_ptr(), out.add(OFF_FOCUS_RESULT), 132);
-        let present = u32::from_le_bytes(view.area_statistics[0..4].try_into().expect("descriptor presence"));
-        put_u32(out, OFF_PRESENT, present);
-        ptr::write(out.add(OFF_LAYOUT), view.area_statistics[4]);
-        put_u32(out, OFF_ENTRIES_POINTER, entries_pointer(present));
-        put_u32(out, OFF_DESCRIPTOR_WORD3, 0);
-    }
+    // Fields 22-25 are the shared profile state and the statistics descriptor. Root's
+    // `ProfileRecords` reads them at 0x91904c/0x9190f0 (`stock/mod.rs:20,60`; `view.rs:166`;
+    // reads `shot_preparation_records.rs:35,52`, `acquisition_ports.rs:291`,
+    // `controller_records.rs:82,188`, `shot_capture_data.rs:287`), but only stock fills the
+    // descriptor (`0x756814`, `FUN_00f32654`) and the owned lane's focus-result bytes are the
+    // captured stock state, not Root-filled (0x919098 is 0 in all owned wakes, 0/232 in
+    // stock). Root reads memory it does not fill at the wake, so the fields refuse (gap G14).
+    refusal.note(FIELD_FOCUS_RESULT, 5);
+    refusal.note(FIELD_PRESENT, 5);
+    refusal.note(FIELD_LAYOUT, 5);
+    refusal.note(FIELD_ENTRIES_POINTER, 5);
+    // The descriptor's word 3 is never read and is 0 in all 57 dumps: a stock constant.
+    unsafe { put_u32(out, OFF_DESCRIPTOR_WORD3, 0) };
     // The adjustment block: +0x00 and +0x58 are constants, +0x40 is Root's own timing word
     // (the frame-period selector `frame_interval` reads), and +0x48 has no retained Root
     // counterpart (gap G12).
