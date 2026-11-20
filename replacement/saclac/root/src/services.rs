@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use xm1_saclac_calc::adjust::configuration::ControllerFlag;
 use xm1_saclac_controllers::live_profile::AdjustmentPending;
 use xm1_saclac_profile_records::field::{RecordField, RecordRead, SharedField, SharedRead, Value};
 use xm1_saclac_profile_records::{Memory, ProfileRecords, StockEntries};
@@ -27,9 +28,6 @@ pub struct Services<M, R, E, P> {
     pub(crate) pipeline: crate::shot_platform::PipelineState,
     /// Router-owned publication read synchronously by Shot while the S1 router is borrowed.
     pub(crate) s1_waiting: xm1_saclac_controllers::s1::Waiting,
-    /// The adjustment block's `+0x48` flag (`0x016d8750`): the live view sets it on the
-    /// capture command and clears it on the release command; the measurement round reads it.
-    adjustment_pending: AdjustmentPending,
 }
 
 impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
@@ -47,17 +45,19 @@ impl<M: Machine + Clone, R: Memory, E: StockEntries, P> Services<M, R, E, P> {
             round_callbacks: None,
             pipeline: crate::shot_platform::PipelineState::default(),
             s1_waiting: xm1_saclac_controllers::s1::Waiting::default(),
-            adjustment_pending: AdjustmentPending::Clear,
         }
     }
 
     pub fn records(&self) -> &ProfileRecords<R> { &self.records }
 
-    /// The adjustment block's `+0x48` flag (`0x016d8750`), which the live view writes and the
-    /// measurement round reads.
-    pub fn adjustment_pending(&self) -> AdjustmentPending { self.adjustment_pending }
-
-    pub fn set_adjustment_pending(&mut self, pending: AdjustmentPending) { self.adjustment_pending = pending; }
+    /// The adjustment block's `+0x48` flag (`0x016d8750`): `0xfa8018` reads what `0xfa7ff8`
+    /// writes, Root's `ControllerFlag::First`, which the live view sets through
+    /// `GeometryFlag::Capture` on the capture command (`0xf30bfc`) and clears on the release
+    /// command (`0xf30c08`). The measurement round reads it, and the qualification overlay
+    /// encodes it as 0/1.
+    pub fn adjustment_pending(&self) -> AdjustmentPending {
+        if self.search.configuration.controller_flag(ControllerFlag::First) { AdjustmentPending::Pending } else { AdjustmentPending::Clear }
+    }
 
     /// A scoped borrow of the same records, peers and planner state used by acquisition.
     pub fn search_bindings(&mut self) -> xm1_saclac_search_bindings::Bindings<'_, M, R, E, P> {

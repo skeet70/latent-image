@@ -315,6 +315,32 @@ fn each_live_start_publishes_its_exposure_and_initial_levels_before_requests() {
 }
 
 #[test]
+fn a_restore_takes_shared_0738_as_its_kind_only_under_the_adjustment_flag() {
+    // FUN_00f33ef4 builds the exposure request's kind from shared +0x734 (0x7580ec,
+    // `RecordView::kind`) and replaces it with shared +0x738 (0x758134,
+    // `RecordView::kind_override`) only when the measurement selection is 1, the adjustment
+    // block's +0x48 flag is 1 (0xfa8018) and the start mode is 1 or 2 (`id5.dis:847210-847218`;
+    // decomp tu_00f2e67c.c:1728-1730).
+    use crate::acquisition::ports::{RecordView, Start};
+    let kind = |controllers: u32, selection: ProfileSelection, window_status: u32| {
+        let mut measurement = Measurement::new();
+        let mut fake = fake(ACQUISITION);
+        fake.acquisition.view = RecordView {
+            start: Start::Restore, selection, kind: window_status, kind_override: 0x99, ..RecordView::default()
+        };
+        fake.adjustment.controllers = RetainedWord(controllers);
+        assert_eq!(measurement.handle(control(MeasurementControl::Initialize), &mut fake), ChildOutcome::Complete);
+        fake.acquisition.program_queries.first().expect("the restore selects a program").kind
+    };
+    assert_eq!(kind(1, ProfileSelection::Record, 1), 0x99);
+    assert_eq!(kind(1, ProfileSelection::Record, 2), 0x99);
+    // The flag, the selection and the start mode each gate the replacement on their own.
+    assert_eq!(kind(0, ProfileSelection::Record, 2), 2);
+    assert_eq!(kind(1, ProfileSelection::Record, 3), 3);
+    assert_eq!(kind(1, ProfileSelection::Other(0), 2), 2);
+}
+
+#[test]
 fn live_round_fourth_tick_selects_publishes_and_then_starts_a_new_primary() {
     use crate::acquisition::ports::*;
     use crate::acquisition_fixtures as fixture;

@@ -46,7 +46,6 @@ struct Fake {
     record_mode_disabled: bool,
     record_mode_available: bool,
     values: ConfigurationValues,
-    adjustment_pending: AdjustmentPending,
     seen: Vec<Seen>,
 }
 
@@ -205,8 +204,6 @@ impl Layers for Fake {
     fn replies(&mut self) -> &mut Self { self }
     fn lens(&mut self) -> &mut Self { self }
     fn mirror_sources(&mut self) -> &mut Self { self }
-    fn adjustment_pending(&mut self) -> AdjustmentPending { self.adjustment_pending }
-    fn set_adjustment_pending(&mut self, pending: AdjustmentPending) { self.adjustment_pending = pending; }
 }
 
 fn record() -> RecordHandle { stock::record_handle_from_a2(0x16a0_0490) }
@@ -360,6 +357,23 @@ fn primary_preparation_asks_for_the_live_sequence_when_its_fourth_word_is_zero()
     let preparation = live.prepare(Some(entered(&command(K::Command02, &[0, 0, 0, 2, 0]))), record(), &mut fake);
     assert!(!preparation.sequence);
     assert!(!fake.take().contains(&Seen::ResetSelection));
+}
+
+#[test]
+fn the_capture_command_sets_the_adjustment_flag_and_the_release_clears_it() {
+    // 0xfa7ff8's only two call sites: the capture command (FUN_00f308d4 case 9) sets the
+    // adjustment block's +0x48 flag at 0xf30bfc and the release command (case 10) clears it
+    // at 0xf30c08 (`id5.dis:843828-843831`). Root's `GeometryFlag::Capture` is that flag.
+    let mut fake = Fake::default();
+    let mut live = LiveProfile::new();
+    live.prepare(Some(entered(&command(K::Command09, &[]))), record(), &mut fake);
+    let seen = fake.take();
+    assert_eq!(seen.iter().filter(|seen| matches!(seen, Seen::Flag(GeometryFlag::Capture, _))).count(), 1);
+    assert!(seen.contains(&Seen::Flag(GeometryFlag::Capture, true)));
+    assert!(seen.contains(&Seen::Flag(GeometryFlag::Alternate, false)));
+
+    live.prepare(Some(entered(&command(K::Command0a, &[]))), record(), &mut fake);
+    assert_eq!(fake.take(), vec![Seen::Flag(GeometryFlag::Capture, false)]);
 }
 
 #[test]

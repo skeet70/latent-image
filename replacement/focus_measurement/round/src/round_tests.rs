@@ -110,6 +110,21 @@ fn initialization_enables_the_offered_lanes_in_order_and_refuses_a_second_start(
 }
 
 #[test]
+fn a_pending_adjustment_skips_the_capture_buffer_detach() {
+    // 0xf33094 writes the mask and clears the pair statuses, then returns before 0x756b74
+    // (the shared group-20 +0x154 CAPTURE_BUFFER detach) while 0x016d8750 is 1
+    // (`id5.dis:846183`). Root's detach is `RecordEffect::ResetSelection`.
+    let mut round = Round::new();
+    let mut env = Env::offering(Some(ACQUISITION));
+    env.adjustment_pending = true;
+    assert_eq!(round.handle(control(MeasurementControl::Initialize), &mut env), ChildOutcome::Complete);
+    let traffic = env.take();
+    assert!(!traffic.contains(&Traffic::Effect(RecordEffect::ResetSelection)));
+    assert!(traffic.contains(&Traffic::Effect(RecordEffect::ClearSelection)));
+    assert!(traffic.contains(&Traffic::Signal(Lane::Acquisition, Kind::Enable)));
+}
+
+#[test]
 fn a_record_without_selection_initializes_every_lane_and_stays_idle() {
     let mut round = Round::new();
     let mut env = Env::offering(None);

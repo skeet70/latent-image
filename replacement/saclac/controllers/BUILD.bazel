@@ -34,7 +34,7 @@ xm1_rust_host_test(
     name = "host-tests",
     src = "src/lib.rs",
     crate_name = "xm1_saclac_controllers_tests",
-    data = _SOURCES,
+    data = glob(["src/**/*.rs"], exclude = ["src/lib.rs"]),
     rlib_deps = {
         "xm1_saclac_interface": "//replacement/saclac_interface:host",
         "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:host",
