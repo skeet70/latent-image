@@ -69,7 +69,7 @@ def frame_sites: if frame_enabled then [
   ["006c9cf4", "frame-item-configuration", {"lr": true}],
   ["006d80f0", "frame-display-registration"],
   ["006d7f30", "frame-display-post"]
-] + (if frame_record != null then [["runtime:rb_render_frame_scanout_bridge", "frame-display-registration"]] else [] end) else [] end;
+] + (if frame_record != null then [["runtime:rb_render_frame_scanout_bridge", "frame-owned-display-registration"]] else [] end) else [] end;
 def frame_capture_reads: if frame_enabled then
   [["frame-display-record", "0095a69c", 20]]
   + (if frame_record != null then [["frame-record", (frame_record | hex8), 120]] else [] end)

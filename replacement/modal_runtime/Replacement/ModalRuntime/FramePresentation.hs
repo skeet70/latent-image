@@ -214,6 +214,9 @@ frameSteps role declared observation = do
       Just _ -> let (r0, r1, r2, r3) = hitRegisters hit
         in (, steps) <$> inside core open (\current -> current { openConfigurations = openConfigurations current ++ [ItemConfiguration r0 r1 r2 r3] })
     "frame-display-registration" -> (, steps) <$> anyCore open (\current -> current { openRegistrations = openRegistrations current + 1 })
+    "frame-owned-display-registration"
+      | role == OwnedFrames -> (, steps) <$> anyCore open (\current -> current { openRegistrations = openRegistrations current + 1 })
+      | otherwise -> Left "stock role reached rb_render_frame_scanout_bridge"
     "frame-display-post" -> (, steps) <$> anyCore open (\current -> current { openPosts = openPosts current + 1 })
     "frame-wait-return" -> let (r0, _, _, _) = hitRegisters hit
       in (, steps) <$> inside core open (\current -> current { openWaits = openWaits current ++ [r0] })

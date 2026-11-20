@@ -131,6 +131,10 @@ main = do
         (fmap (checkRoleFrames OwnedFrames . pure) (ownedPhase (owned 7 0 3 ++ owned 8 1 4) idle) == Right (Right ()))
     , check "owned and stock roles presenting the same frames compare equal"
         (fmap (\o -> comparePresentation stockValid [o]) (ownedPhase (owned 7 0 3 ++ owned 8 1 4) idle) == Right (Right ()))
+    , check "owned frames registered through rb_render_frame_scanout_bridge satisfy the owned laws"
+        (fmap (checkRoleFrames OwnedFrames . pure) (ownedPhase (bridged (owned 7 0 3 ++ owned 8 1 4)) idle) == Right (Right ()))
+    , check "a stock role reaching rb_render_frame_scanout_bridge refuses"
+        (isLeft (stockPhase (bridged twoFrames)))
     , check "an owned sequence advancing by two refuses"
         (refusesRole OwnedFrames (ownedPhase (publishedStep 0 (Just (let (b, a) = ownedRecords 7 0 3 in (b, a { lastOwned = 9, sequences = (0, 9) })))) idle))
     , check "an owned published buffer left Drawing refuses"
@@ -157,6 +161,7 @@ main = do
   putStrLn ("frame presentation tests passed: " ++ show (length results))
  where
   owned ownedSequence front frames = publishedStep front (Just (ownedRecords ownedSequence front frames))
+  bridged = map (\h -> if hitSite h == OtherSite "frame-display-registration" then h { hitSite = OtherSite "frame-owned-display-registration" } else h)
   stockReads = [declaredRead 0x008e21f8 1, declaredRead 0x008e2158 8, declaredRead (objectZero + 0x1c) 4, declaredRead (objectOne + 0x1c) 4, declaredRead 0x0096bc10 4]
   refusesRole role phase = case phase of
     Right built -> isLeft (checkRoleFrames role [built])
