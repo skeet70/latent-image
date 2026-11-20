@@ -59,7 +59,7 @@ Scope: Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and o
 
 ## Menu engine cutover
 
-`menu-engine-qualify-bounded` runs the engine-only stock/owned matrix ([design](../reports/owned-menu-engine-design.md#engine-only-cutover-qualification)). `--matrix seek-moved` selects the increment-7 archive and its 68 pairs; the default keeps the engine225 pins.
+`menu-engine-qualify-bounded` runs the engine-only stock/owned matrix ([design](../reports/owned-menu-engine-design.md#engine-only-cutover-qualification)): the increment-7 archive and its 68 pairs, for the menu cutover and for the time-services `--owned-base` qualification alike.
 
 <!-- evidence-record E-MENU-ENGINE-CUTOVER-150 -->
 

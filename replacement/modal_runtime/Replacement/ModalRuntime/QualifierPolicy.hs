@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.ModalRuntime.QualifierPolicy
-  ( Role (..), OwnedBase (..), OwnedArchive (..), MatrixPin (..), Qualification (..)
+  ( Role (..), OwnedBase (..), OwnedArchive (..), Qualification (..)
   , parseInvocation, qualificationOptions, roleFirmware, ownedBaseInputs
   , executionIdentity, installedCheckpointMatches
   ) where
@@ -21,22 +21,17 @@ data OwnedBase = SharedBase | StagedBase FilePath Sha256 deriving (Eq)
 -- pairs must fail comparison.
 data OwnedArchive = PinnedArchive | ControlArchive FilePath Sha256 deriving (Eq)
 
--- | The pinned archive, trajectory inventory and pairs: the engine225 matrix, or the matrix that adds
--- the moved open-seek route and links the engine owning kind 1 seek 0x17.
-data MatrixPin = Engine225Matrix | SeekMovedMatrix deriving (Eq, Show)
-
 -- | Settings every child process of one qualification receives again.
 data Qualification = Qualification
   { qualificationRoot :: FilePath
   , qualificationOwnedBase :: OwnedBase
   , qualificationArchive :: OwnedArchive
-  , qualificationMatrix :: MatrixPin
   } deriving (Eq)
 
--- | Leading @--root DIR@, @--owned-base DAT SHA256@, @--control-archive ARCHIVE SHA256@ and
--- @--matrix seek-moved@ options, then the command.
+-- | Leading @--root DIR@, @--owned-base DAT SHA256@ and @--control-archive ARCHIVE SHA256@
+-- options, then the command.
 parseInvocation :: FilePath -> [String] -> Either String (Qualification, [String])
-parseInvocation defaultRoot = go (Qualification defaultRoot SharedBase PinnedArchive Engine225Matrix)
+parseInvocation defaultRoot = go (Qualification defaultRoot SharedBase PinnedArchive)
   where
     go qualification ("--root" : root : rest) = go qualification { qualificationRoot = root } rest
     go qualification ("--owned-base" : path : digest : rest) = case parseSha256Hex digest of
@@ -45,7 +40,6 @@ parseInvocation defaultRoot = go (Qualification defaultRoot SharedBase PinnedArc
     go qualification ("--control-archive" : path : digest : rest) = case parseSha256Hex digest of
       Right parsed -> go qualification { qualificationArchive = ControlArchive path parsed } rest
       Left problem -> Left ("--control-archive digest: " ++ problem)
-    go qualification ("--matrix" : "seek-moved" : rest) = go qualification { qualificationMatrix = SeekMovedMatrix } rest
     go _ (option : _) | "--" `isPrefixOf` option = Left ("unknown or incomplete option " ++ option)
     go qualification command = Right (qualification, command)
 
@@ -57,9 +51,6 @@ qualificationOptions qualification = ["--root", qualificationRoot qualification]
   ++ (case qualificationArchive qualification of
         PinnedArchive -> []
         ControlArchive path digest -> ["--control-archive", path, sha256Hex digest])
-  ++ (case qualificationMatrix qualification of
-        Engine225Matrix -> []
-        SeekMovedMatrix -> ["--matrix", "seek-moved"])
 
 -- | The DAT a role boots and the digest its receipt must name, given the stock role's.
 roleFirmware :: OwnedBase -> (FilePath, Sha256) -> Role -> (FilePath, Sha256)

@@ -10,7 +10,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Char (isDigit)
-import Data.List (insert, isInfixOf, isPrefixOf, isSuffixOf, nub, sort, stripPrefix, tails)
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub, sort, stripPrefix, tails)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), admissionGrant, grantPurpose, insideSlot, reexecInSlot, slotPolicyFromEnvironment)
 import qualified Emulation.HostAdmission as Admission
@@ -20,7 +20,7 @@ import GHC.Clock (getMonotonicTimeNSec)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.ModalRuntime.QualifierPolicy
-  ( MatrixPin (..), OwnedArchive (..), OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
+  ( OwnedArchive (..), OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
   , ownedBaseInputs, parseInvocation, qualificationOptions, roleFirmware )
 import Emulation.ParallelCases (mapBounded)
 import Replacement.ModalRuntime.MemoryCounters (oomEvents, oomKills, peakBytes, readCounter)
@@ -111,7 +111,6 @@ data RoleIdentity = RoleIdentity
   { roleSource :: CommitId
   , roleCase :: CaseId
   , roleRole :: Role
-  , roleTrajectoryPath :: FilePath
   , roleTrajectory :: Sha256
   , roleInputs :: InputIdentity
   , roleTools :: ToolIdentity
@@ -234,8 +233,8 @@ gateCase = CaseId "oracle-framed-push"
 gateRole :: Role
 gateRole = Stock
 
-engine225Pairs :: [CaseId]
-engine225Pairs =
+pairs :: [CaseId]
+pairs =
   [ CaseId "oracle-close", CaseId "oracle-close-property", CaseId "oracle-fixed-wrap", CaseId "oracle-fn", CaseId "oracle-fn-auto-open"
   , CaseId "oracle-fn-down", CaseId "oracle-frame-fixed-open", CaseId "oracle-frame-pop-down", CaseId "oracle-frame-pop-up"
   , CaseId "oracle-frame-push-probe", CaseId "oracle-frame-push-up-probe", CaseId "oracle-frame-seek-down"
@@ -244,7 +243,7 @@ engine225Pairs =
   , CaseId "oracle-framed-pop-group41", CaseId "oracle-framed-push", CaseId "oracle-group-down", CaseId "oracle-group-down-wrap"
   , CaseId "oracle-group-left", CaseId "oracle-group-left-wrap", CaseId "oracle-group-right", CaseId "oracle-group-right-wrap"
   , CaseId "oracle-group-up", CaseId "oracle-group-up-wrap", CaseId "oracle-nowrap", CaseId "oracle-nowrap-edge"
-  , CaseId "oracle-open", CaseId "oracle-open-seek", CaseId "oracle-pop", CaseId "oracle-pop-deep", CaseId "oracle-pop-remember"
+  , CaseId "oracle-open", CaseId "oracle-open-seek", CaseId "oracle-open-seek-moved", CaseId "oracle-pop", CaseId "oracle-pop-deep", CaseId "oracle-pop-remember"
   , CaseId "oracle-pop-remember-off", CaseId "oracle-push", CaseId "oracle-push-classifier", CaseId "oracle-push-remember-off"
   , CaseId "oracle-push-restored", CaseId "oracle-push-same-parent", CaseId "oracle-reopen", CaseId "oracle-scroll"
   , CaseId "oracle-scroll-down", CaseId "oracle-scroll-up", CaseId "oracle-step-rows", CaseId "oracle-step-rows-wrap", CaseId "oracle-wrap"
@@ -253,45 +252,17 @@ engine225Pairs =
   , CaseId "picker-314", CaseId "picker-320", CaseId "picker-36", CaseId "picker-450", CaseId "picker-488"
   ]
 
-data PinnedInputs = PinnedInputs
-  { pinPairs :: [CaseId]
-  , pinTrajectoryRoot :: FilePath
-  , pinTrajectories :: Sha256
-  , pinArchivePath :: FilePath
-  , pinArchive :: Sha256
-  }
-
-matrixPins :: MatrixPin -> PinnedInputs
-matrixPins Engine225Matrix = PinnedInputs
-  { pinPairs = engine225Pairs
-  , pinTrajectoryRoot = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/trajectories"
-  , pinTrajectories = sha "fd9cd0f07092e2af7468c20ae83af4d08b7cc58b75654281d944f36c8d7a19d7"
-  , pinArchivePath = inputsRoot </> "engine.a"
-  , pinArchive = sha "6fab2c4279be4a4bf4f584389b8bbbca9bc17a2e60ecbc123ba7bb06e9fb11dd"
-  }
-matrixPins SeekMovedMatrix = PinnedInputs
-  { pinPairs = insert (CaseId "oracle-open-seek-moved") engine225Pairs
-  , pinTrajectoryRoot = "private-data/scratch/MenuEngineSteps/inputs/trajectories"
-  , pinTrajectories = sha "aee608db82f49d574730210f66f1bdc7a84cd6b00d61ff7347b0260cca6b37ad"
-  , pinArchivePath = "private-data/scratch/MenuEngineSteps/inputs/engine.a"
-  , pinArchive = sha "0eb8673c593e5210d6cb405990fd3eb19bebe994671fa602ff65c320a82e6150"
-  }
-
-pins :: Qualification -> PinnedInputs
-pins = matrixPins . qualificationMatrix
-
-pairs :: Qualification -> [CaseId]
-pairs = pinPairs . pins
-
 sha :: String -> Sha256
 sha = either error id . parseSha256Hex
 
-expectedRunDocument, expectedFirmware, expectedAdjustment :: Sha256
+expectedRunDocument, expectedTrajectories, expectedFirmware, expectedAdjustment :: Sha256
 expectedRunDocument = sha "2184474fa40c2f8ad86e963ceb0898c5776ec597332805ee1365748de4df04e8"
+expectedTrajectories = sha "aee608db82f49d574730210f66f1bdc7a84cd6b00d61ff7347b0260cca6b37ad"
 expectedFirmware = sha "acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8"
 expectedAdjustment = sha "baf475358f1b8ec5b619fd4891cd32a1c8225c0d9341e60318031106a4354aa0"
 
-expectedRetired, expectedTables, expectedPlan, expectedClock, expectedRom :: Sha256
+expectedArchive, expectedRetired, expectedTables, expectedPlan, expectedClock, expectedRom :: Sha256
+expectedArchive = sha "0eb8673c593e5210d6cb405990fd3eb19bebe994671fa602ff65c320a82e6150"
 expectedRetired = sha "5b289e1796ff1653abd1d9e50169c71d4e63bb61d65677d36345b442993172f6"
 expectedTables = sha "7fa536b6f4ab72205be57f407ce7224fa0bbc397aca2061ad2fac3e14ba2021d"
 expectedPlan = sha "b7ee628a84ad930e309bccf74bf69ec8065f22c12ec5b5b059db842bf7bba05a"
@@ -310,16 +281,18 @@ binRoot q = qualRoot q </> "bin"
 checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
 
-runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
+trajectoryRoot, runDocument, inputsRoot, archivePath, tablesPath, planPath, clockPath :: FilePath
+trajectoryRoot = "private-data/scratch/MenuEngineSteps/inputs/trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
 inputsRoot = "private-data/scratch/QualifierSpeed/inputs"
+archivePath = "private-data/scratch/MenuEngineSteps/inputs/engine.a"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
 planPath = inputsRoot </> "bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
 
 ownedArchive :: Qualification -> (FilePath, Sha256)
 ownedArchive q = case qualificationArchive q of
-  PinnedArchive -> (pinArchivePath (pins q), pinArchive (pins q))
+  PinnedArchive -> (archivePath, expectedArchive)
   ControlArchive path digest -> (path, digest)
 
 main :: IO ()
@@ -338,10 +311,10 @@ main = do
     ["recheck"] -> qualifying (recheckMode q)
     ["headroom"] -> qualifying (executeMode q HeadroomOnly)
     ["measure"] -> qualifying (measureMode q)
-    "control" : names@(_ : _) | not pinned, all ((`elem` pairs q) . CaseId) names -> controlMode q (map CaseId names)
+    "control" : names@(_ : _) | not pinned, all ((`elem` pairs) . CaseId) names -> controlMode q (map CaseId names)
     ["install-producer"] -> slottedMode q ["install-producer"] installCase Owned (qualRoot q </> "install-producer")
-    ["role-slotted", name, role] | CaseId name `elem` pairs q, Just parsed <- parseRole role -> roleMode q (CaseId name) parsed
-    _ -> failH "usage: menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] [--matrix seek-moved] plan [headroom]|execute|headroom|measure|recheck\n       menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] [--matrix seek-moved] --control-archive ARCHIVE SHA256 control PAIR..."
+    ["role-slotted", name, role] | CaseId name `elem` pairs, Just parsed <- parseRole role -> roleMode q (CaseId name) parsed
+    _ -> failH "usage: menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] plan [headroom]|execute|headroom|measure|recheck\n       menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] --control-archive ARCHIVE SHA256 control PAIR..."
 
 -- | Runs each pair with the control archive in the owned role; every pair comparison must fail.
 controlMode :: Qualification -> [CaseId] -> IO ()
@@ -549,7 +522,7 @@ requireCleanSource = do
 inputIdentity :: Qualification -> InputIdentity
 inputIdentity q = InputIdentity
   { inputRunDocument = expectedRunDocument
-  , inputTrajectories = pinTrajectories (pins q)
+  , inputTrajectories = expectedTrajectories
   , inputFirmware = expectedFirmware
   , inputAdjustment = expectedAdjustment
   , inputArchive = snd (ownedArchive q)
@@ -558,7 +531,7 @@ inputIdentity q = InputIdentity
   , inputTables = expectedTables
   , inputPlan = expectedPlan
   , inputClock = expectedClock
-  , inputPairs = length (pairs q)
+  , inputPairs = length pairs
   , inputOwnedBase = qualificationOwnedBase q
   }
 
@@ -612,19 +585,18 @@ verifyInputs q = do
   case qualificationOwnedBase q of
     SharedBase -> pure ()
     StagedBase path digest -> requireDigest "owned base firmware" path digest
-  let PinnedInputs { pinPairs = required, pinTrajectoryRoot = root, pinTrajectories = expected } = pins q
-  files <- sort . filter (".json" `isSuffixOf`) <$> listDirectory root
-  unless (length files == 2 * length required) (failH ("expected " ++ show (2 * length required) ++ " trajectories, found " ++ show (length files)))
+  files <- sort . filter (".json" `isSuffixOf`) <$> listDirectory trajectoryRoot
+  unless (length files == 2 * length pairs) (failH ("expected " ++ show (2 * length pairs) ++ " trajectories, found " ++ show (length files)))
   let names = sort . nub $ map pairName files
-  unless (names == sort required) (failH ("trajectory pair names differ from the required " ++ show (length required)))
-  forM_ required $ \name -> forM_ [Stock, Owned] $ \role ->
-    unless (trajectoryPath q name role `elem` map (root </>) files)
+  unless (names == sort pairs) (failH ("trajectory pair names differ from the required " ++ show (length pairs)))
+  forM_ pairs $ \name -> forM_ [Stock, Owned] $ \role ->
+    unless (trajectoryPath name role `elem` map (trajectoryRoot </>) files)
       (failH ("pair " ++ caseText name ++ " lacks its " ++ roleText role ++ " trajectory"))
   rows <- forM files $ \file -> do
-    digest <- sha256File (root </> file)
+    digest <- sha256File (trajectoryRoot </> file)
     pure (object ["file" .= file, "sha256" .= sha256Hex digest])
   let manifest = sha256 (encodeCanonical (toJSON rows))
-  unless (manifest == expected)
+  unless (manifest == expectedTrajectories)
     (failH ("trajectory inventory " ++ sha256Hex manifest ++ " differs"))
  where
   pairName file =
@@ -885,14 +857,14 @@ runMatrix q _source _inputs = do
     Left failure -> writeFailurePacket q "blocked" failure >> failH "observed installation role failed"
     Right _ -> pure ()
   outcomes <- mapBounded slots (uncurry (runRole q))
-    [(name, role) | name <- pairs q, role <- [Stock, Owned], (name, role) /= (installCase, Owned)]
+    [(name, role) | name <- pairs, role <- [Stock, Owned], (name, role) /= (installCase, Owned)]
   forM_ (installed : outcomes) $ \outcome -> case matrixGate outcome of
     Stop failure -> do
       writeFailurePacket q "blocked" failure
       failH "matrix role failed"
     Continue Reused -> modifyIORef' reused (+ 1)
     Continue Executed -> modifyIORef' executed (+ 1)
-  forM_ (pairs q) $ \name -> do
+  forM_ pairs $ \name -> do
     complete <- roleComplete q name Stock
     completeOwned <- roleComplete q name Owned
     unless (complete && completeOwned) $ do
@@ -1162,7 +1134,7 @@ runViewer q name role directory logPath = do
                , "--fujimod-run-document", progress
                , "--firmware", fst (firmwareFor q role)
                , "--installed-nand", inputsRoot </> "adjustment.nand"
-               , "--trajectories", trajectoryPath q name role
+               , "--trajectories", trajectoryPath name role
                , "--output", directory </> "runtime"
                , "--receipt-output", directory </> "receipt" ]
   owner <- getProcessID
@@ -1223,8 +1195,8 @@ recheckMode q = do
   verifyInputs q
   source <- verifySource
   buildCheckers q
-  forM_ (pairs q) $ \name -> forM_ [Stock, Owned] (admitRole q name)
-  checks <- forM (pairs q) $ \name -> do
+  forM_ pairs $ \name -> forM_ [Stock, Owned] (admitRole q name)
+  checks <- forM pairs $ \name -> do
     outcome <- runPairCheckCurrent q name
     case outcome of
       Left failure -> do
@@ -1312,7 +1284,7 @@ publishRecheck q source checks = do
   settingsHash <- sha256File (checkerRoot </> "emulation/modal-settings-compare")
   renderHash <- sha256File (checkerRoot </> "emulation/render-compare")
   let roles = [ object ["name" .= caseText name, "role" .= roleText role, "outcome" .= ("complete" :: String), "directory" .= roleDirectory q name role]
-              | name <- pairs q, role <- [Stock, Owned] ]
+              | name <- pairs, role <- [Stock, Owned] ]
       pairsJson = [ object ["name" .= caseText name, "directory" .= directory, "pass" .= True] | (name, directory) <- checks ]
       producerValue = object
         [ "viewer" .= sha256Hex (toolViewer producer)
@@ -1333,8 +1305,8 @@ publishRecheck q source checks = do
         , "producer" .= producerValue
         , "checker" .= checkerValue
         , "execution" .= object
-            [ "required_pairs" .= length (pairs q)
-            , "required_roles" .= (2 * length (pairs q))
+            [ "required_pairs" .= length pairs
+            , "required_roles" .= (2 * length pairs)
             , "admitted_roles" .= length roles
             , "executed_roles" .= (0 :: Int)
             , "comparisons" .= length checks
@@ -1363,7 +1335,7 @@ publishRecheck q source checks = do
 
 publish :: Qualification -> Matrix -> SourceProvenance -> InputIdentity -> IO ()
 publish q matrix source inputs = do
-  roles <- fmap concat $ forM (pairs q) $ \name -> forM [Stock, Owned] $ \role -> do
+  roles <- fmap concat $ forM pairs $ \name -> forM [Stock, Owned] $ \role -> do
     complete <- roleComplete q name role
     failed <- roleTerminalFailure q name role
     completion <- decodeFile (roleDirectory q name role </> "completion.json")
@@ -1387,7 +1359,7 @@ publish q matrix source inputs = do
       partialRoles = length [() | value <- roles, str (get value "outcome") == "partial"]
       passedPairs = length [() | value <- checks, get value "pass" == Bool True]
       failedPairs = length checks - passedPairs
-      requiredPairs = length (pairs q)
+      requiredPairs = length pairs
       allCompared = length checks == requiredPairs
   gateValue <- decodeFile (qualRoot q </> "gate.json")
   tools <- toolIdentity q
@@ -1469,7 +1441,7 @@ failedCase roles checks =
 roleIdentity :: Qualification -> CaseId -> Role -> IO RoleIdentity
 roleIdentity q name role = do
   source <- verifySource
-  trajectoryDigest <- sha256File (trajectoryPath q name role)
+  trajectoryDigest <- sha256File (trajectoryPath name role)
   tools <- toolIdentity q
   checkpoint <- case role of
     Stock -> pure Nothing
@@ -1487,7 +1459,6 @@ roleIdentity q name role = do
     { roleSource = sourceHead source
     , roleCase = name
     , roleRole = role
-    , roleTrajectoryPath = trajectoryPath q name role
     , roleTrajectory = trajectoryDigest
     , roleInputs = inputIdentity q
     , roleTools = tools
@@ -1501,7 +1472,7 @@ roleJson identity = object
   , "role" .= roleText (roleRole identity)
   , "source_head" .= commitText (roleSource identity)
   , "trajectory" .= object
-      [ "path" .= roleTrajectoryPath identity
+      [ "path" .= trajectoryPath (roleCase identity) (roleRole identity)
       , "sha256" .= sha256Hex (roleTrajectory identity)
       ]
   , "inputs" .= inputJson (roleInputs identity)
@@ -1554,8 +1525,8 @@ toolJson tools = object
 roleDirectory :: Qualification -> CaseId -> Role -> FilePath
 roleDirectory q name role = qualRoot q </> "runs" </> caseText name </> roleText role
 
-trajectoryPath :: Qualification -> CaseId -> Role -> FilePath
-trajectoryPath q name role = pinTrajectoryRoot (pins q) </> (caseText name ++ "." ++ roleText role ++ ".json")
+trajectoryPath :: CaseId -> Role -> FilePath
+trajectoryPath name role = trajectoryRoot </> (caseText name ++ "." ++ roleText role ++ ".json")
 
 archiveStale :: Qualification -> FilePath -> String -> IO ()
 archiveStale q directory label = do
