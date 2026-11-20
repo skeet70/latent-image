@@ -101,6 +101,27 @@
           "contract": "replacement/display_scanout/display-scanout-panel.ld",
           "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
           "retained_targets": []
+        },
+        {
+          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_scanout_blank",
+            "xm1_scanout_capture",
+            "xm1_scanout_commit",
+            "xm1_scanout_commit_one",
+            "xm1_scanout_commit_zero",
+            "xm1_scanout_group_options",
+            "xm1_scanout_isr_one",
+            "xm1_scanout_isr_zero",
+            "xm1_scanout_item_configuration",
+            "xm1_scanout_range_enabled",
+            "xm1_scanout_range_packet",
+            "xm1_scanout_scheduler_register"
+          ],
+          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "requirement": "The twelve exports the published stock entry branches reach in the owned fixed range. Caller closure, direct owned API migration and same-image comparison remain unestablished.",
+          "retained_targets": []
         }
       ],
       "predicates": {
@@ -165,6 +186,19 @@
           ],
           "contract": "replacement/display_scanout/display-scanout-panel.ld",
           "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
+        },
+        {
+          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "kind": "retained-import",
+          "symbols": [
+            "scanout_enter_critical",
+            "scanout_irq_configure",
+            "scanout_irq_release",
+            "scanout_leave_critical",
+            "scanout_yield"
+          ],
+          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
         }
       ],
       "predicates": {
@@ -199,6 +233,15 @@
           ],
           "contract": "replacement/display_scanout/display-scanout.ld",
           "requirement": "S8 stock per-frame scheduler (`FUN_006c7318` registration). retained VGLIB one-shots and live-view clients. no retained client registers, or the owned driver serves the same request contract"
+        },
+        {
+          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_scanout_scheduler_register"
+          ],
+          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "requirement": "Retained clients register through the published branch at 0x6c7318 into the owned scheduler. S8 removal still needs every retained client's request contract or its migration."
         }
       ],
       "predicates": {
@@ -262,6 +305,54 @@
           ],
           "contract": "replacement/display_scanout/display-scanout.ld",
           "requirement": "`display-scanout.ld` and `display-scanout-panel.ld` placements, plus the `scanout_*` critical/IRQ/yield externs. stock display callers and the retained IRQ/queue services. the display entry is called directly and the IRQ/queue services are owned"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "display_scanout-06",
+      "shim": "Twelve A32 branches published at the stock entries `0x6c6eb0`, `0x6c70e4`, `0x6c7318`, `0x6c926c`, `0x6c9cf4`, `0x6c9d44`, `0x6c9e7c`, `0x6c9f70`, `0x6ca3e0`, `0x6cb0c4`, `0x6cb0d8`, `0x6cb8b4` into the fixed-bank exports",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "retained display callers, the interrupt dispatcher and registered callback words that name stock entry addresses",
+      "owned": "partly",
+      "removal": "every caller and registered callback word names the owned export, and the fixed bank is composed by Root's bank root",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_scanout_blank",
+            "xm1_scanout_capture",
+            "xm1_scanout_commit",
+            "xm1_scanout_commit_one",
+            "xm1_scanout_commit_zero",
+            "xm1_scanout_group_options",
+            "xm1_scanout_isr_one",
+            "xm1_scanout_isr_zero",
+            "xm1_scanout_item_configuration",
+            "xm1_scanout_range_enabled",
+            "xm1_scanout_range_packet",
+            "xm1_scanout_scheduler_register"
+          ],
+          "contract": "replacement/display_scanout/Replacement/DisplayScanout/Artifact.hs",
+          "requirement": "`artifact publish` writes one `b` per stock entry to these exports; the scanout pair admits fetches of the retired bodies only at those twelve words."
+        },
+        {
+          "image": "//replacement/display_scanout:display-scanout-fixed-image",
+          "kind": "publication",
+          "symbols": [
+            "__fixed_body_end",
+            "__fixed_body_start",
+            "__fixed_bss_end",
+            "__fixed_bss_start"
+          ],
+          "contract": "replacement/display_scanout/display-scanout-fixed.ld",
+          "requirement": "The fixed-record stager and `check-fixed-image` read these layout labels from this link; BSS end equals body end."
         }
       ],
       "predicates": {

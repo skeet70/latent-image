@@ -351,7 +351,7 @@ registerCase occupied order persistent phase selector live failure counter nullC
     registered=accepted && live==0
     source=(if selector==0 then 11 else 9)+normalized
     irqState=if registered then irqReceipt source $ word handleCell (if failure==0 then 0x7a11 else 0) insertedState else insertedState
-    after=if not nullCallback && persistent==1 && (not accepted || live/=0 || failure==0) then word 0x917edc 1 irqState else irqState
+    after=criticalCounts 1 1 $ if not nullCallback && persistent==1 && (not accepted || live/=0 || failure==0) then word 0x917edc 1 irqState else irqState
 
 isrCase :: Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Word32 -> Scenario
 isrCase engine status count active live releaseFailure configureFailure =
@@ -452,11 +452,13 @@ captureCase e first changed failure = scenario (key (if first then "capture-rese
     resetDone=if first then changes [(0x210300,1),(0x210304,e)] captured else captured
     registered=if not first then resetDone else if e==1 then word (r+0x14) (if failure==0 then 0x7a11 else 0) $ irqReceipt 14 resetDone else word (r+0x14) 1 $ word 0x917ed4 (if failure==0 then 0x7a11 else 0) $ word 0x917ed8 2 $ word 0x917edc (if failure==0 then 1 else 0) $ slot 0x917ee4 0 [1,1,0x6cb0c4,0] $ irqReceipt 11 resetDone
     rc=if first && e==1 then failure else 0
-    after=if first || changed then byte (r+0x54) (if first then 1 else 2) registered else registered
+    after=(if first && e==0 then criticalCounts 1 1 else id) $ if first || changed then byte (r+0x54) (if first then 1 else 2) registered else registered
 
-services :: [(Word32,B.ByteString)]
-services =
-  [(0x7235d8,assemble (mov 12 0x211100++[0xe59c3000,0xe2833001,0xe58c3000]++mov 0 0x13++[0xe12fff1e])),(0x7236b0,assemble (mov 12 0x211104++[0xe59c3000,0xe2833001,0xe58c3000,0xe12fff1e])),(0x42574,assemble [0xe3a00013,0xe12fff1e]),(0x4257c,assemble [0xe12fff1e]),(0x723ce8,assemble (mov 12 0x211000++[0xe59c3000,0xe2833001,0xe58c3000,0xe58c0004,0xe12fff1e]))
+-- Cases that map the "critical" region count 0x7235d8/0x7236b0 calls there; others get plain boundaries.
+services :: Scenario -> [(Word32,B.ByteString)]
+services c =
+  (if criticalReceipted c then [(0x7235d8,assemble (mov 12 0x211100++[0xe59c3000,0xe2833001,0xe58c3000]++mov 0 0x13++[0xe12fff1e])),(0x7236b0,assemble (mov 12 0x211104++[0xe59c3000,0xe2833001,0xe58c3000,0xe12fff1e]))] else [(0x7235d8,assemble (mov 0 0x13++[0xe12fff1e])),(0x7236b0,assemble [0xe12fff1e])])
+  ++[(0x42574,assemble [0xe3a00013,0xe12fff1e]),(0x4257c,assemble [0xe12fff1e]),(0x723ce8,assemble (mov 12 0x211000++[0xe59c3000,0xe2833001,0xe58c3000,0xe58c0004,0xe12fff1e]))
   ,(0x69f8fc,assemble (mov 12 0x4000000++[0xe7dc0000,0xe12fff1e]))
   ,(0x64e918,assemble (mov 12 0x210100++[0xe59c3000,0xe2833001,0xe58c3000,0xe78c0103,0xe58c1304]++mov 12 0x210f00++[0xe59c3004,0xe5823000,0xe59c0000,0xe12fff1e]))
   ,(0x64eb20,assemble (mov 12 0x210200++[0xe59c3000,0xe2833001,0xe58c3000,0xe78c0103]++mov 12 0x210f08++[0xe59c0000,0xe12fff1e]))]
@@ -515,11 +517,14 @@ makeSpec role entry code functions c = CaseSpec
   , caseIgnoredMemory=[],caseCp14Identity=Nothing,caseKernel=Just (KernelCase (InstructionLimit (if held c then 4096 else 200000)) Nothing Nothing Nothing Nothing [] []) }
   where
     abi=[(r,0xa5000000+fromIntegral (fromEnum r)) | r <- [R4,R5,R6,R7,R8,R9,R10,R11]]
-    boundaries=[service | service@(a,_) <- services,role/="owned" || a/=0x69f8fc]
+    boundaries=[service | service@(a,_) <- services c,role/="owned" || a/=0x69f8fc]
       ++[(0x4d978,divideBoundary) | operation c==ModeScale]
 
 regionLayout :: Scenario -> [(String,Word32,Int)]
-regionLayout c=[(name,a,if name=="cache" then 0x420000 else n) | (name,a,n) <- regions,name/="cache" || usesCalibration c,a<0xfff00000 || paired c && operation c `notElem` [Defaults,Stage]]++[("yield-receipt",0x211000,8) | operation c==Wait]++[("critical",0x211100,8) | operation c `elem` [CompletionEvent,CompletionPacket,ModeCompletion,ModeCommit,AvoutRequest]]
+regionLayout c=[(name,a,if name=="cache" then 0x420000 else n) | (name,a,n) <- regions,name/="cache" || usesCalibration c,a<0xfff00000 || paired c && operation c `notElem` [Defaults,Stage]]++[("yield-receipt",0x211000,8) | operation c==Wait]++[("critical",0x211100,8) | criticalReceipted c]
+
+criticalReceipted :: Scenario -> Bool
+criticalReceipted c=operation c `elem` [Capture,Register,CompletionEvent,CompletionPacket,ModeCompletion,ModeCommit,AvoutRequest]
 
 usesCalibration :: Scenario -> Bool
 usesCalibration c=paired c && (operation c `elem` [Immediate,Defaults,Stage,EngineInitialize] || (operation c==PanelDeviceConfiguration && deviceConfigurationPrograms c))

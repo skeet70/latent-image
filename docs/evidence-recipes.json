@@ -4383,5 +4383,231 @@
         ]
       }
     ]
+  },
+  {
+    "id": "E-DISPLAY-SCANOUT-FIXED-PAIR-150",
+    "claim": "On the fixed-bank display scanout image (ELF {{elf}}), the natural no-card stock/owned route pair is {{verdict}} (qualified {{qualified}}): {{checkpoints}} route checkpoints equal ({{checkpoints_equal}}) over {{compared_calls}} compared calls ({{interrupt_calls}} interrupt, {{task_calls}} task). Both roles make {{commits}} commits with {{pending}} pending images and {{drained}} drained callbacks; unattributed writes are equal ({{unattributed}}). The deepest owned entry's sp is {{stack_excess}} bytes below its paired stock entry's. Owned commit_one executes {{owned_commit_instructions}} instructions over {{commit_calls}} calls against stock's {{stock_commit_instructions}}, and the owned body {{owned_body}} fetches against stock's carrier {{stock_carrier}}. The register-order control is refused on register-sequence ({{register_order_detected}}) and the skipped-drain control on drain ({{skipped_drain_detected}}). Fixed admission gives commit_one {{commit_one_stack}} owned stack bytes on a {{stack_budget}}-byte budget.",
+    "scope": "Emulated X-M1 1.50 on FujiMod: one natural no-card boot-to-menus route, the owned role replaying the stock role's route ticks, candidate DAT {{firmware_sha256}} and contract {{contract}}. Twelve stock entries are published; the route reaches capture, commit_one, isr_one, scheduler_register and the four shadow setters.",
+    "notes": "commit, commit_zero, isr_zero and blank are published but not reached on the route. The native suite covers engine 0 on the standalone build only; registering the literal 0x6cb0c4 and installing the isr_zero handler at 0x6c70e4 in the fixed-bank image are exercised by neither run. Both roles share one device model, so L1-L5 are not grounded. Admission counts owned direct calls only: on the core-0 IRQ stack (2044 bytes below entry sp 0x70001ffc) commit_one leaves 212 bytes and the ISR running commit_zero at most 92; drained callbacks, stock primitives and nested interrupts are unmeasured. When the crate joins Root's bank root as an rlib, the standalone fixed link script and bank-display-scanout staticlibs are removed. No camera run.",
+    "artifacts": [
+      "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+      "private-data/scratch/DisplayScanout/runs/20261120T041715Z-scanout-fixed-admission/result/commit_one.json",
+      "private-data/scratch/DisplayScanout/runs/20261120T041738Z-scanout-role-stock/result/receipt.json",
+      "private-data/scratch/DisplayScanout/runs/20261120T041813Z-scanout-role-owned/result/receipt.json",
+      "private-data/scratch/DisplayScanout/runs/20261120T041901Z-scanout-role-register-order/result/receipt.json",
+      "private-data/scratch/DisplayScanout/runs/20261120T041953Z-scanout-role-skipped-drain/result/receipt.json",
+      "private-data/scratch/DisplayScanout/runs/20261120T041716Z-scanout-stage/result/staging-owned.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "update_sha256"
+        ]
+      },
+      {
+        "name": "verdict",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "verdict"
+        ]
+      },
+      {
+        "name": "qualified",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "qualified"
+        ]
+      },
+      {
+        "name": "checkpoints",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "checkpoints"
+        ]
+      },
+      {
+        "name": "checkpoints_equal",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "checkpoints_equal"
+        ]
+      },
+      {
+        "name": "compared_calls",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "compared_calls"
+        ]
+      },
+      {
+        "name": "interrupt_calls",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "interrupt_calls"
+        ]
+      },
+      {
+        "name": "task_calls",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "task_calls"
+        ]
+      },
+      {
+        "name": "commits",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "commits"
+        ]
+      },
+      {
+        "name": "pending",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "pending_commits"
+        ]
+      },
+      {
+        "name": "drained",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "drained_callbacks"
+        ]
+      },
+      {
+        "name": "unattributed",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "unattributed_writes_equal"
+        ]
+      },
+      {
+        "name": "stack_excess",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "stack_excess_bytes"
+        ]
+      },
+      {
+        "name": "owned_commit_instructions",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "instruction_spans",
+          "commit-one",
+          "1"
+        ]
+      },
+      {
+        "name": "commit_calls",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "instruction_spans",
+          "commit-one",
+          "0"
+        ]
+      },
+      {
+        "name": "stock_commit_instructions",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "stock",
+          "instruction_spans",
+          "commit-one",
+          "1"
+        ]
+      },
+      {
+        "name": "owned_body",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "body_fetches"
+        ]
+      },
+      {
+        "name": "stock_carrier",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "stock",
+          "carrier_fetches"
+        ]
+      },
+      {
+        "name": "register_order_detected",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "controls",
+          "register-order",
+          "detected"
+        ]
+      },
+      {
+        "name": "skipped_drain_detected",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "controls",
+          "skipped-drain",
+          "detected"
+        ]
+      },
+      {
+        "name": "contract",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T042038Z-scanout-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "contract_sha256"
+        ]
+      },
+      {
+        "name": "elf",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T041715Z-scanout-fixed-admission/result/commit_one.json",
+        "pointer": [
+          "elf_sha256"
+        ]
+      },
+      {
+        "name": "commit_one_stack",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T041715Z-scanout-fixed-admission/result/commit_one.json",
+        "pointer": [
+          "owned_stack_bytes"
+        ]
+      },
+      {
+        "name": "stack_budget",
+        "path": "private-data/scratch/DisplayScanout/runs/20261120T041715Z-scanout-fixed-admission/result/commit_one.json",
+        "pointer": [
+          "owned_stack_budget"
+        ]
+      }
+    ]
   }
 ]

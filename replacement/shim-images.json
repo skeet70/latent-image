@@ -640,7 +640,27 @@
         "scanout_leave_critical",
         "scanout_yield"
       ],
-      "expected_sha256": "5abfbddfb8a22a27294f5acb9970cdb3a7ddf692fe775878c00e8f7f1ffb78d9"
+      "expected_sha256": "dc1b5385f1b32e1efde85c276bc8253caee6fa62e76b10a6817676dacbd3b0a3"
+    },
+    {
+      "id": "//replacement/display_scanout:display-scanout-fixed-image",
+      "elf": "replacement/display_scanout/display-scanout-fixed-image.elf",
+      "units": [
+        "display_scanout"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/display_scanout/display-scanout-fixed.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "scanout_enter_critical",
+        "scanout_irq_configure",
+        "scanout_irq_release",
+        "scanout_leave_critical",
+        "scanout_yield"
+      ],
+      "expected_sha256": "e9a69a50c2b01c6cff3a7bca1d15459cea112b3067e36d8ac086778ed05f4c6c"
     },
     {
       "id": "//replacement/display_scanout:display-scanout-panel",
@@ -664,7 +684,7 @@
         "xm1_power_restore_irq",
         "xm1_power_save_irq"
       ],
-      "expected_sha256": "fbdda5d596c775c09e86a3e284602790c4eae7d9c1708d44c4523875eaf2a207"
+      "expected_sha256": "c1eb5279f4368705c7ece35fd28709ea6e292eacea3bcab55aec3ec99d35ea45"
     },
     {
       "id": "//replacement/first_stage:first-stage-fixed-image",

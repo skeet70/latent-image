@@ -55,8 +55,9 @@ pub unsafe fn load_runtime(engine:Engine)->RuntimeState {
     for index in 0..6 {let first=word(r+0x24+index*4);let second=word(r+0x3c+index*4);state.completion_callbacks[index]=if first==0{None}else{Some(CallbackId(first))};state.secondary_callbacks[index]=if second==0{None}else{Some(CallbackId(second))};}
     state
 }
-pub unsafe fn load_engine(engine:Engine)->EngineState {
-    let mut state=EngineState::zero();let s=saved_base(engine);let i=input_base(engine);state.runtime=load_runtime(engine);
+/// Loads the stock runtime, saved and input records into a zeroed `state` in place.
+pub unsafe fn load_engine(engine:Engine,state:&mut EngineState) {
+    let s=saved_base(engine);let i=input_base(engine);state.runtime=load_runtime(engine);
     let saved=&mut state.saved;
     saved.control=RegisterWord(word(s));saved.geometry_control=RegisterWord(word(s+4));saved.format=RegisterWord(word(s+8));saved.timing=RegisterWord(word(s+0xc));saved.extent=RegisterWord(word(s+0x10));saved.sync=RegisterWord(word(s+0x14));saved.engine_one_control=RegisterWord(word(s+0x18));
     saved.window_start=RegisterWord(word(s+0x1c));saved.window_end=RegisterWord(word(s+0x20));saved.output_start=RegisterWord(word(s+0x24));saved.output_end=RegisterWord(word(s+0x28));saved.horizontal_scale=RegisterWord(word(s+0x2c));saved.vertical_scale=RegisterWord(word(s+0x30));saved.origin=RegisterWord(word(s+0x34));saved.crop_start=RegisterWord(word(s+0x38));saved.crop_end=RegisterWord(word(s+0x3c));saved.crop_step=RegisterWord(word(s+0x40));saved.auxiliary_start=RegisterWord(word(s+0x44));saved.auxiliary_end=RegisterWord(word(s+0x48));saved.auxiliary_step=RegisterWord(word(s+0x4c));saved.output_control=RegisterWord(word(s+0x50));saved.plane_control=RegisterWord(word(s+0x54));saved.auxiliary_control=RegisterWord(word(s+0x58));
@@ -71,7 +72,6 @@ pub unsafe fn load_engine(engine:Engine)->EngineState {
     input.vertical_offset=CoordinateOffset(word(i+0x34));input.horizontal_offset=CoordinateOffset(word(i+0x38));input.geometry_control=RegisterWord(word(i+0x3c));input.rectangle_mask=RegisterWord(word(i+0x40));
     for index in 0..2 {input.two_rectangles[index].horizontal=RegisterWord(word(i+0x44+index*8));input.two_rectangles[index].vertical=RegisterWord(word(i+0x48+index*8));input.two_reverse[index]=byte(i+0x54+index);load_record(i+0xb4+index*0x20,&mut input.two_records[index]);}
     for index in 0..10 {input.ten_rectangles[index].horizontal=RegisterWord(word(i+0x58+index*8));input.ten_rectangles[index].vertical=RegisterWord(word(i+0x5c+index*8));input.ten_reverse[index]=byte(i+0xa8+index);load_record(i+0xf4+index*0x20,&mut input.ten_records[index]);}
-    state
 }
 unsafe fn load_record(base:usize,record:&mut RectangleInput) {for index in 0..4 {record.coordinates[index]=FloatBits(word(base+index*4));}record.extent.width=half(base+0x10) as i16;record.extent.height=half(base+0x12) as i16;record.level=FloatBits(word(base+0x14));record.color=ColorWord(word(base+0x18));record.opacity=Opacity(byte(base+0x1c));record.reverse=byte(base+0x1d);}
 
