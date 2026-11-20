@@ -37,6 +37,10 @@ pub struct View {
     /// The 12-byte statistics descriptor at `0x009190f0` (`AREA_STATISTICS`, read by
     /// `0x007567ec`): presence, layout, entries pointer, word 3.
     pub area_statistics: [u8; 12],
+    /// The pipeline snapshot counter at `0x016f672c`, read through Root's own
+    /// `stock::acquisition::timing` accessor; it is the frame-period selector Root's
+    /// `effects.frame_interval` uses.
+    pub timing: u32,
 }
 
 /// The view of `runtime`, or `None` when a cell it reads is mutably borrowed.
@@ -53,6 +57,7 @@ pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A
     // block; `NO_HANDLE` names no record.
     let focus_result = services.records.read_shared(crate::services::NO_HANDLE, &shared_fields::group_14::FOCUS_RESULT).unwrap_or([0; 132]);
     let area_statistics = services.records.read_shared(crate::services::NO_HANDLE, &shared_fields::group_16::AREA_STATISTICS).unwrap_or([0; 12]);
+    let timing = crate::stock::acquisition::timing(&services.machine).0;
     Some(View {
         root: xm1_saclac_controllers::root::qualification::view(&root),
         live: xm1_saclac_controllers::live::qualification::view(&live),
@@ -64,5 +69,6 @@ pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A
         s1_acquisition: children.s1_acquisition,
         focus_result,
         area_statistics,
+        timing,
     })
 }

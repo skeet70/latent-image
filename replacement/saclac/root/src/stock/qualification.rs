@@ -93,30 +93,30 @@ pub const FIELD_ADJUSTMENT_00: usize = 27;
 /// The policy word at `0x016d8748` (block offset 0x40). Its only in-step read is
 /// `s54y_select_policy` (`0xfa992c`) at `0xfa99f4` (`id5.dis:967091`), which passes it to
 /// `FUN_00fa95a8` (`0xfa95a8` -> `z_read_profile_period`, `0x1005f60`) and compares the
-/// period with property `0x4bd8` to select modes 4/5 (`tu_00fa9588.c:441-448`). Root's
-/// `planned_mode` reads the same source: `effects.frame_interval(timing)` is
-/// `root/src/stock/acquisition.rs:454-473`, documented as "the frame period projected by
-/// 0x1005f60", and its kind table is `0xef6dec + timing*20`, the same table
+/// period with property `0x4bd8` to select modes 4/5 (`tu_00fa9588.c:441-448`). The word is
+/// the frame-period selector, and Root's own `effects.frame_interval(timing)` reads the same
+/// source: `root/src/stock/acquisition.rs:454-473` documents it as the frame period projected
+/// by `0x1005f60` and reads the kind table `0xef6dec + timing*20`, the same table
 /// `z_read_profile_period` reads at `0xef6dec + selector*20` (`0xef5448`,
-/// `id5.dis:1031324-1031420`); `effects.frame_rate_threshold()` reads property `0x4bd8`
-/// (`round_services.rs:30`; `round/src/stock.rs:80`). The captured `timing()` word at
-/// `0x016f672c` is 12 in all 57 dumps, so Root's code reads the period at the selector the
-/// stock word names. The selector is therefore the counterpart: encode 12, decode requires
-/// 12. Its writers are the exposure-info initialisers
-/// `s54_initialize_fixed/auxiliary/continuous_exposure_info` (`0xf33a18`/`0xf33ef4`/
-/// `0xf34710`) and `FUN_00f35d14`, each copying the exposure-info struct's `+0x14`
-/// (`id5.dis:846983,847458,847873,849398`); all 57 dumps hold 12.
+/// `id5.dis:1031324-1031420`); `frame_rate_threshold()` reads property `0x4bd8`
+/// (`round_services.rs:30`; `round/src/stock.rs:80`). The selector counterpart is Root's
+/// `timing` word at `0x016f672c`, read through `stock::acquisition::timing` (the same accessor
+/// `effects.frame_interval` is given): encode that word, and decode maps the stock selector
+/// back to it. The selector values the kind table admits are the domain of Root's timing
+/// (Root's `frame_interval` returns `None` for a kind outside 2/3/5); the captured wakes hold
+/// 12, which is Root's timing word in all 57 dumps.
 pub const FIELD_CLASSIFICATION: usize = 28;
-/// The frame-period selector `z_read_profile_period` is called with.
-pub const FRAME_PERIOD_SELECTOR: u32 = 12;
-/// The adjustment block's word at `0x016d8750` (block offset 0x48). `FUN_00f308d4` sets it to
-/// 1 or 0 beside its writes of the shared round words `AT_0140`/`AT_0144`/`AT_0148`
-/// (`0x756a0c`/`0x756a54`/`0x756a9c`; `id5.dis:843828-843831`): 1 on the branch where
-/// `0x758340` returns 1, 0 on the other. `FUN_00f33094` (the measurement controller's row
-/// function) returns early while it is 1 (`id5.dis:846183`), and `FUN_00f30f64` and others
-/// read it. All 57 dumps hold 0. Root has no retained word for this condition: `Round.selected`
-/// is the category-pair decision and the flag's branch reads the shared `0x758340`/`+0x4c`
-/// words, which Root does not keep as a word.
+/// The adjustment block's word at `0x016d8750` (block offset 0x48). Its setter `0xfa7ff8`
+/// has only two call sites, both in `FUN_00f308d4` (`0xf30bfc` sets 1, `0xf30c08` sets 0;
+/// `id5.dis:843828-843831`). The 1 branch is entered after `0xfa8058` reads the block's `+0x4c`
+/// latch (`id5.dis:843788`), which the same function sets to 1 at `0xf309d8` and clears at
+/// `0xf30bf0`; the `0x758340` read at `0xf30b5c` writes `0x16be020`, not this flag. The flag's
+/// readers include `FUN_00f33094` (the measurement controller's row function), which returns
+/// early while it is 1 (`id5.dis:846183`), and `FUN_00f30f64` (`id5.dis:844141`). All 57 dumps
+/// hold 0. Root reads the record's shared words `AT_0140`/`AT_0144`/`AT_0148` and `AT_0890`
+/// through ProfileRecords (`controller_records.rs:51-53,56,156-158`; `shot_capture_data.rs:144`),
+/// but the flag is set from the block's `+0x4c` latch and the function path, which Root does
+/// not hold, so it is not a pure function of the retained record words.
 pub const FIELD_ADJUSTMENT_48: usize = 29;
 /// The adjustment block's word at `0x016d8760` (block offset 0x58). `FUN_00ef9930` sets it to
 /// 1 (`id5.dis:787434`) from the record/reccont module (`0xe20c4c`, `0xe219c8`, `0xe39050`),
@@ -814,12 +814,12 @@ pub unsafe fn encode_overlay(view: &RuntimeView, out: *mut u8, refusal: &mut Ref
         put_u32(out, OFF_ENTRIES_POINTER, entries_pointer(present));
         put_u32(out, OFF_DESCRIPTOR_WORD3, 0);
     }
-    // The adjustment block: +0x00 and +0x58 are constants of the stock artifact / the
-    // in-dispatch handoff, +0x40 is the frame-period selector Root's own code reads (12), and
-    // +0x48 has no retained Root counterpart (gap G12).
+    // The adjustment block: +0x00 and +0x58 are constants, +0x40 is Root's own timing word
+    // (the frame-period selector `frame_interval` reads), and +0x48 has no retained Root
+    // counterpart (gap G12).
     unsafe {
         put_u32(out, OFF_ADJUSTMENT_00, 0);
-        put_u32(out, OFF_CLASSIFICATION, FRAME_PERIOD_SELECTOR);
+        put_u32(out, OFF_CLASSIFICATION, view.timing);
         put_u32(out, OFF_ADJUSTMENT_58, 0);
     }
     refusal.note(FIELD_ADJUSTMENT_48, 5);
@@ -937,7 +937,7 @@ pub unsafe fn roundtrip_overlay(stock: *const u8, out: *mut u8) -> (u32, Option<
     let constant = unsafe { get_u32(stock, OFF_ADJUSTMENT_00) };
     if constant != 0 { refusal.note(FIELD_ADJUSTMENT_00, 2); } else { unsafe { put_u32(out, OFF_ADJUSTMENT_00, 0) } }
     let selector = unsafe { get_u32(stock, OFF_CLASSIFICATION) };
-    if selector != FRAME_PERIOD_SELECTOR { refusal.note(FIELD_CLASSIFICATION, 2); } else { unsafe { put_u32(out, OFF_CLASSIFICATION, FRAME_PERIOD_SELECTOR) } }
+    unsafe { put_u32(out, OFF_CLASSIFICATION, selector) };
     let handoff = unsafe { get_u32(stock, OFF_ADJUSTMENT_58) };
     if handoff != 0 { refusal.note(FIELD_ADJUSTMENT_58, 2); } else { unsafe { put_u32(out, OFF_ADJUSTMENT_58, 0) } }
     refusal.note(FIELD_ADJUSTMENT_48, 2);
@@ -1173,7 +1173,7 @@ mod tests {
         overlay[OFF_PRESENT..OFF_PRESENT + 4].copy_from_slice(&1u32.to_le_bytes());
         overlay[OFF_LAYOUT] = 4;
         overlay[OFF_ENTRIES_POINTER..OFF_ENTRIES_POINTER + 4].copy_from_slice(&AREA_ENTRIES_POINTER.to_le_bytes());
-        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&FRAME_PERIOD_SELECTOR.to_le_bytes());
+        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12.to_le_bytes());
         overlay[OFF_MODE..OFF_MODE + 4].copy_from_slice(&5u32.to_le_bytes());
         for (cursor, phase) in [(0u8, 0u8), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)] {
             overlay[OFF_FIRST_CURSOR] = cursor;
@@ -1198,22 +1198,19 @@ mod tests {
 
     #[test]
     fn the_adjustment_constants_are_their_declared_values() {
-        // +0x00 and +0x58 are 0, +0x40 is the frame-period selector 12; any other value
-        // refuses. +0x48 is the remaining declared gap.
+        // +0x00 and +0x58 are 0; +0x48 is the declared gap. +0x40 is Root's timing word and
+        // round-trips by identity.
         let mut overlay = [0u8; OVERLAY_BYTES];
         overlay[OFF_QUEUE..OFF_QUEUE + 4].copy_from_slice(&u32::from(peers::CALC.queue.number()).to_le_bytes());
-        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&FRAME_PERIOD_SELECTOR.to_le_bytes());
+        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&12.to_le_bytes());
         let word = |out: &[u8; OVERLAY_BYTES], at: usize| u32::from_le_bytes(out[at..at + 4].try_into().expect("word"));
         let mut out = [0u8; OVERLAY_BYTES];
         let (code, gap) = unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) };
         assert_eq!((code, gap), (2, Some(gap_word(FIELD_ADJUSTMENT_48, 2))));
-        assert_eq!((word(&out, OFF_ADJUSTMENT_00), word(&out, OFF_CLASSIFICATION), word(&out, OFF_ADJUSTMENT_58)), (0, FRAME_PERIOD_SELECTOR, 0));
+        assert_eq!((word(&out, OFF_ADJUSTMENT_00), word(&out, OFF_CLASSIFICATION), word(&out, OFF_ADJUSTMENT_58)), (0, 12, 0));
         overlay[OFF_ADJUSTMENT_00] = 1;
         assert_eq!(unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) }.1, Some(gap_word(FIELD_ADJUSTMENT_00, 2)));
         overlay[OFF_ADJUSTMENT_00] = 0;
-        overlay[OFF_CLASSIFICATION] = 0;
-        assert_eq!(unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) }.1, Some(gap_word(FIELD_CLASSIFICATION, 2)));
-        overlay[OFF_CLASSIFICATION..OFF_CLASSIFICATION + 4].copy_from_slice(&FRAME_PERIOD_SELECTOR.to_le_bytes());
         overlay[OFF_ADJUSTMENT_58] = 1;
         assert_eq!(unsafe { roundtrip_overlay(overlay.as_ptr(), out.as_mut_ptr()) }.1, Some(gap_word(FIELD_ADJUSTMENT_58, 2)));
     }
