@@ -6,8 +6,11 @@
 //! two exported entries that read `OWNER`/`READY`.
 //!
 //! `XM1_SACLAC_QUALIFICATION_FIELDS` lists `(stock address, byte length)` in overlay order;
-//! `XM1_SACLAC_QUALIFICATION_FIELD_COUNT` is its length. `encode` writes the overlay from
-//! Root's state at `owner`; `roundtrip` decodes a stock overlay and encodes it back. Refusal
+//! `XM1_SACLAC_QUALIFICATION_FIELD_COUNT` is its length. `XM1_SACLAC_QUALIFICATION_OWNER_SIZE`
+//! and `XM1_SACLAC_QUALIFICATION_READY_SIZE` are the qualified build's `size_of::<Owner>()`
+//! and `size_of::<bool>()`; the harness refuses a lane whose symbol sizes differ.
+//! `encode` writes the overlay from Root's state at `owner` and returns 1 without writing
+//! when `READY` is false; `roundtrip` decodes a stock overlay and encodes it back. Refusal
 //! codes: `1` Root not ready, `2` no typed counterpart, `3` encoder refused, `4` a `RefCell`
 //! the view reads is mutably borrowed. `*gap` carries `field_index << 16 | detail`.
 
@@ -23,6 +26,18 @@ pub static XM1_SACLAC_QUALIFICATION_FIELDS: [[u32; 2]; FIELD_COUNT] = QUALIFICAT
 /// The number of entries in `XM1_SACLAC_QUALIFICATION_FIELDS`.
 #[no_mangle]
 pub static XM1_SACLAC_QUALIFICATION_FIELD_COUNT: u32 = FIELD_COUNT as u32;
+
+/// The qualified production build's `OWNER` size; the harness refuses a lane whose `OWNER`
+/// symbol size differs.
+#[used]
+#[no_mangle]
+pub static XM1_SACLAC_QUALIFICATION_OWNER_SIZE: u32 = core::mem::size_of::<super::Owner>() as u32;
+
+/// The qualified production build's `READY` size; the harness refuses a lane whose `READY`
+/// symbol size differs.
+#[used]
+#[no_mangle]
+pub static XM1_SACLAC_QUALIFICATION_READY_SIZE: u32 = core::mem::size_of::<bool>() as u32;
 
 unsafe fn write_gap(gap: *mut u32, field: usize, detail: u32) {
     if !gap.is_null() { unsafe { ptr::write_unaligned(gap, (field as u32) << 16 | detail) }; }
