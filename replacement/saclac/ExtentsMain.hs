@@ -15,7 +15,7 @@ import qualified Data.ByteString.Lazy as L
 import Data.Word (Word32)
 import FujiAF.Host (failH)
 import Replacement.Saclac.Artifact (Admitted, admit)
-import Replacement.Saclac.Placement (bindOwnedEntries, bindOwnedPosts, insertWatchRanges, renderLinkerScript)
+import Replacement.Saclac.Placement (bindOwnedEntries, bindOwnedPosts, insertWatchRanges, renderLinkerScript, renderLinkerScriptDebug)
 import System.Environment (getArgs)
 
 main :: IO ()
@@ -23,6 +23,7 @@ main = do
   arguments <- getArgs
   case arguments of
     ["linker-script"] -> putStr renderLinkerScript
+    ["linker-script-debug"] -> putStr renderLinkerScriptDebug
     "census-sites" : inputPath : fieldsPath : outputPath : images@(_ : _) | length images `mod` 5 == 0 -> do
       value <- either failH pure . J.eitherDecode =<< L.readFile inputPath
       identities <- either failH pure . (J.parseEither declaredIdentities =<<) . J.eitherDecode =<< L.readFile fieldsPath

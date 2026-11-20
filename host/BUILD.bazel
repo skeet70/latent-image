@@ -24,6 +24,7 @@ haskell_toolchain_library(
         "//matching:__pkg__",
         "//replacement/media_permit:__pkg__",
         "//replacement/modal_runtime:__pkg__",
+        "//replacement/saclac:__pkg__",
         "//transport:__pkg__",
     ],
 )

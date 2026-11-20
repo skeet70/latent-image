@@ -21,6 +21,12 @@ xm1_rust_host_rlib(
     crate_name = "xm1_saclac_search_bindings",
     data = _SOURCES,
     rlib_deps = _HOST_DEPS,
+    qualification = True,
+    qualification_deps = [
+        "//replacement/focus_measurement/round:host",
+        "//replacement/saclac/controllers:host",
+        "//replacement/saclac/focus_search:host",
+    ],
 )
 
 xm1_rust_host_test(
@@ -52,4 +58,10 @@ xm1_rust_rlib(
         "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
         "xm1_saclac_shared": "//replacement/saclac/shared:shared",
     },
+    qualification = True,
+    qualification_deps = [
+        "//replacement/focus_measurement/round:round",
+        "//replacement/saclac/controllers:controllers",
+        "//replacement/saclac/focus_search:focus-search",
+    ],
 )

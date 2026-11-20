@@ -409,7 +409,7 @@ def _lab_dependencies_impl(_ctx):
         ("lab_bash", "bash", ["bin/bash"]),
         ("lab_clang", "clang", ["bin/clang"]),
         ("lab_lld", "lld", ["bin/ld.lld"]),
-        ("lab_llvm", "llvm", ["bin/llvm-objcopy", "bin/llvm-nm", "bin/llvm-objdump", "bin/llvm-readelf"]),
+        ("lab_llvm", "llvm", ["bin/llvm-objcopy", "bin/llvm-nm", "bin/llvm-objdump", "bin/llvm-readelf", "bin/llvm-dwarfdump"]),
         ("lab_coreutils", "coreutils", ["bin/sha256sum", "bin/sort"]),
     ]:
         nixpkgs_package(

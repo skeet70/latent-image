@@ -1,5 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_debuginfo_cmd", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 load(":storage_controls.bzl", "BANK_STORAGE_CONTROLS", "PROPERTY_STORAGE_CONTROLS", "PROPERTY_STORAGE_VARIANTS", _CUSTOM_ORACLE_DEFECTS = "CUSTOM_ORACLE_DEFECTS", _CUSTOM_VARIANTS = "CUSTOM_STORAGE_VARIANTS")
 load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 
@@ -26,7 +26,7 @@ _CORE_DEFECTS = [
         name = "property-core" + ("-" + defect.replace("_", "-") if defect else ""),
         srcs = ["src/lib.rs", "//replacement/kernel:arm"] + _RUST_DATA,
         outs = [(defect + "/" if defect else "") + "libxm1_settings_storage_core.rlib"],
-        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property " + ("--cfg " + defect + " " if defect else "") + "--extern xm1_kernel=$(location //replacement/kernel:arm) $(location src/lib.rs) -o $@",
+        cmd = xm1_rust_debuginfo_cmd("$(location @lab_xm1_rust//:bin/rustc) --crate-name=xm1_settings_storage_core --edition=2021 --crate-type=rlib " + _ARM_FLAGS + " --cfg settings_storage_library --cfg settings_storage_firmware --cfg settings_storage_property " + ("--cfg " + defect + " " if defect else "") + "--extern xm1_kernel=$(location //replacement/kernel:arm) $(location src/lib.rs) -o $@"),
         tools = ["@lab_xm1_rust//:bin/rustc"],
     )
     for defect in [""] + _CORE_DEFECTS
@@ -61,7 +61,7 @@ xm1_rust_rlib(
             "//replacement/record_store:src/lifecycle.rs",
         ] + (["//replacement/record_store:src/guest.rs"] if variant == "guest" else []),
         outs = [variant + "/librecord_store.rlib"],
-        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=record_store --edition=2021 --crate-type=rlib " + (_ARM_FLAGS + " --cfg 'feature=\"guest\"' " if variant == "guest" else "") + "$(location //replacement/record_store:src/lib.rs) -o $@",
+        cmd = xm1_rust_debuginfo_cmd("$(location @lab_xm1_rust//:bin/rustc) --crate-name=record_store --edition=2021 --crate-type=rlib " + (_ARM_FLAGS + " --cfg 'feature=\"guest\"' " if variant == "guest" else "") + "$(location //replacement/record_store:src/lib.rs) -o $@") if variant == "guest" else "$(location @lab_xm1_rust//:bin/rustc) --crate-name=record_store --edition=2021 --crate-type=rlib $(location //replacement/record_store:src/lib.rs) -o $@",
         tools = ["@lab_xm1_rust//:bin/rustc"],
     )
     for variant in ["host", "guest"]
@@ -83,7 +83,7 @@ genrule(
         name = "area3-validator-" + variant + "-rlib",
         srcs = ["//replacement/validator:validator.rs"],
         outs = [variant + "/libarea3_validator.rlib"],
-        cmd = "$(location @lab_xm1_rust//:bin/rustc) --crate-name=area3_validator --edition=2021 --crate-type=rlib " + (_ARM_FLAGS + " " if variant == "arm" else "") + "$(location //replacement/validator:validator.rs) -o $@",
+        cmd = xm1_rust_debuginfo_cmd("$(location @lab_xm1_rust//:bin/rustc) --crate-name=area3_validator --edition=2021 --crate-type=rlib " + (_ARM_FLAGS + " " if variant == "arm" else "") + "$(location //replacement/validator:validator.rs) -o $@") if variant == "arm" else "$(location @lab_xm1_rust//:bin/rustc) --crate-name=area3_validator --edition=2021 --crate-type=rlib $(location //replacement/validator:validator.rs) -o $@",
         tools = ["@lab_xm1_rust//:bin/rustc"],
     )
     for variant in ["host", "arm"]

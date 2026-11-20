@@ -1,6 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_debuginfo_cmd", "xm1_rust_elf")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -61,7 +61,7 @@ genrule(
     srcs = _SERVICES_SOURCE + _SERVICES_ARM_DEPS,
     tools = [_RUSTC],
     outs = ["arm/libxm1_power_services.rlib"],
-    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_services --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _SERVICES_ARM_EXTERNS + " $(location src/services.rs) -o $@",
+    cmd = xm1_rust_debuginfo_cmd("$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_services --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _SERVICES_ARM_EXTERNS + " $(location src/services.rs) -o $@"),
 )
 
 genrule(
@@ -94,7 +94,7 @@ genrule(
     srcs = _RUST_SOURCE + _ARM_DEPS,
     tools = [_RUSTC],
     outs = ["arm/libxm1_power_lifecycle.rlib"],
-    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_lifecycle --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _ARM_EXTERNS + " $(location src/lib.rs) -o $@",
+    cmd = xm1_rust_debuginfo_cmd("$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_lifecycle --crate-type=rlib" + _ARM_FLAGS + " --cfg power_native" + _ARM_EXTERNS + " $(location src/lib.rs) -o $@"),
 )
 
 genrule(
@@ -102,7 +102,7 @@ genrule(
     srcs = ["Root.rs", ":arm-core"] + _ARM_DEPS,
     tools = [_RUSTC],
     outs = ["libxm1_power_lifecycle.a"],
-    cmd = "$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_cpu_root --crate-type=staticlib" + _ARM_FLAGS + " --extern xm1_power_lifecycle=$(location :arm-core)" + _ARM_EXTERNS + " $(location Root.rs) -o $@",
+    cmd = xm1_rust_debuginfo_cmd("$(location " + _RUSTC + ") --edition=2021 --crate-name=xm1_power_cpu_root --crate-type=staticlib" + _ARM_FLAGS + " --extern xm1_power_lifecycle=$(location :arm-core)" + _ARM_EXTERNS + " $(location Root.rs) -o $@"),
 )
 
 genrule(

@@ -46,6 +46,26 @@ _ARM_SEARCH_DEPS = [
     "//replacement/rtos_own_first:libxm1_rtos_own_first",
 ]
 
+# The cfg-enabled crates: their qualification variants carry the declared
+# Root-state views and must be used consistently by every dependent.
+_QUALIFICATION_CFG_DEPS = [
+    "//replacement/focus_measurement/round:round",
+    "//replacement/saclac/controllers:controllers",
+    "//replacement/saclac/focus_search:focus-search",
+    "//replacement/saclac/lens_drive:lens-drive",
+    "//replacement/saclac/root/search_bindings:bindings",
+    "//replacement/shot_sequence:shot-sequence",
+]
+
+_QUALIFICATION_SEARCH_DEPS = [
+    "//replacement/focus_measurement/round:round-qualification",
+    "//replacement/saclac/controllers:controllers-qualification",
+    "//replacement/saclac/focus_search:focus-search-qualification",
+    "//replacement/saclac/lens_drive:lens-drive-qualification",
+    "//replacement/saclac/root/search_bindings:bindings-qualification",
+    "//replacement/shot_sequence:shot-sequence-qualification",
+] + [dep for dep in _ARM_SEARCH_DEPS if dep not in _QUALIFICATION_CFG_DEPS]
+
 
 # The unit's rlib: the engine and machine 0's router, joined into the owned image later.
 xm1_rust_rlib(
@@ -111,6 +131,31 @@ xm1_rust_elf(
     entry = "xm1_saclac_driver_entry",
     link_script = ":saclac.ld",
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+)
+
+# The same production graph with a link script that keeps DWARF. Build it with
+# `--define=xm1_rust_debuginfo=2 --platform_suffix=xm1-debuginfo`; its .bin and
+# .symbols are the production bytes while its ELF carries the layout evidence.
+xm1_rust_elf(
+    name = "saclac-image-debug",
+    rust_staticlib = ":saclac-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_dispatch_entry",
+    link_script = ":saclac-debug.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+    testonly = True,
+    tags = ["qualification"],
+)
+
+xm1_rust_elf(
+    name = "saclac-image-wrong-driver-store-debug",
+    rust_staticlib = ":saclac-rust-wrong-driver-store",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_saclac_driver_entry",
+    link_script = ":saclac-debug.ld",
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
+    testonly = True,
+    tags = ["qualification"],
 )
 
 # The playback control: the cyclic wake 0x3b4b is not routed after 110 dispatches.
@@ -187,6 +232,13 @@ genrule(
     name = "saclac-linker-script",
     outs = ["saclac.ld"],
     cmd = "$(location :saclac-extents) linker-script > $@",
+    tools = [":saclac-extents"],
+)
+
+genrule(
+    name = "saclac-linker-script-debug",
+    outs = ["saclac-debug.ld"],
+    cmd = "$(location :saclac-extents) linker-script-debug > $@",
     tools = [":saclac-extents"],
 )
 
@@ -437,7 +489,10 @@ haskell_binary(
 
 haskell_library(
     name = "cycle-step",
-    srcs = ["Replacement/Saclac/CycleStep.hs"],
+    srcs = [
+        "Replacement/Saclac/CycleStep.hs",
+        "Replacement/Saclac/StateMap.hs",
+    ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -491,6 +546,191 @@ haskell_test(
         ":cycle-step",
         "//host:base",
         "//host:bytestring",
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Root stock-encoding qualification (issue 117). None of these targets is a
+# dependency of a production artifact: every one is test-only.
+
+xm1_rust_staticlib(
+    name = "saclac-qualification-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_saclac",
+    rustc_flags = ["-C", "jump-tables=no", "--cfg", "saclac_qualification"],
+    data = _SOURCES,
+    rlib_deps = dict(_ARM_DEPS, xm1_saclac_root = "//replacement/saclac/root:root-qualification"),
+    rlib_search_deps = _QUALIFICATION_SEARCH_DEPS,
+    dependency_archives = ["//replacement/vendor_protocol:arm/wireless-crypto-deps.tar"],
+    debuginfo_override = "2",
+    testonly = True,
+    tags = ["qualification"],
+)
+
+xm1_rust_elf(
+    name = "saclac-qualification",
+    rust_staticlib = ":saclac-qualification-rust",
+    link_script = ":saclac-qualification.ld",
+    entry = "xm1_saclac_qualification_encode",
+    extra_ldflags = [
+        "-Wl,--gc-sections",
+        "-Wl,--undefined=xm1_saclac_qualification_encode",
+        "-Wl,--undefined=xm1_saclac_qualification_roundtrip",
+        "-Wl,--undefined=XM1_SACLAC_QUALIFICATION_FIELDS",
+        "-Wl,--undefined=XM1_SACLAC_QUALIFICATION_FIELD_COUNT",
+    ],
+    testonly = True,
+    tags = ["qualification"],
+)
+
+haskell_library(
+    name = "qualification-layout",
+    srcs = ["Replacement/Saclac/QualificationLayout.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:containers",
+        "//host:process",
+    ],
+)
+
+haskell_binary(
+    name = "qualification-layout-check",
+    srcs = ["QualificationLayoutMain.hs"],
+    main_file = "QualificationLayoutMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification-layout",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+[
+    xm1_rust_staticlib(
+        name = "control-" + control,
+        src = "qualification-controls/" + control + "/composition.rs",
+        crate_name = "xm1_qualification_control_" + control.replace("-", "_"),
+        debuginfo_override = "2",
+        testonly = True,
+        tags = ["qualification"],
+    )
+    for control in [
+        "identical-a",
+        "identical-b",
+        "field-order",
+        "variant-base",
+        "variant-set",
+        "missing-root",
+    ]
+]
+
+haskell_test(
+    name = "qualification-layout-check-tests",
+    size = "small",
+    srcs = ["QualificationLayoutTests.hs"],
+    main_file = "QualificationLayoutTests.hs",
+    args = [
+        "$(rootpath @lab_llvm//:bin/llvm-dwarfdump)",
+        "$(rootpath :control-identical-a.a)",
+        "$(rootpath :control-identical-b.a)",
+        "$(rootpath :control-field-order.a)",
+        "$(rootpath :control-variant-base.a)",
+        "$(rootpath :control-variant-set.a)",
+        "$(rootpath :control-missing-root.a)",
+    ],
+    data = [
+        "@lab_llvm//:bin/llvm-dwarfdump",
+        ":control-identical-a.a",
+        ":control-identical-b.a",
+        ":control-field-order.a",
+        ":control-variant-base.a",
+        ":control-variant-set.a",
+        ":control-missing-root.a",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification-layout",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+# Run with `--define=xm1_rust_debuginfo=2 --platform_suffix=xm1-debuginfo`:
+# without the define the production ELF has no DWARF and the check correctly
+# refuses it, so these stay out of `bazel test //...`.
+haskell_test(
+    name = "qualification-layout-production",
+    size = "small",
+    srcs = ["QualificationLayoutProductionTests.hs"],
+    main_file = "QualificationLayoutProductionTests.hs",
+    args = [
+        "$(rootpath @lab_llvm//:bin/llvm-dwarfdump)",
+        "$(rootpath :saclac-image-debug.elf)",
+        "$(rootpath :saclac-qualification.elf)",
+    ],
+    data = [
+        "@lab_llvm//:bin/llvm-dwarfdump",
+        ":saclac-image-debug.elf",
+        ":saclac-qualification.elf",
+    ],
+    tags = ["manual", "qualification"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification-layout",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "qualification-layout-wrong",
+    size = "small",
+    srcs = ["QualificationLayoutProductionTests.hs"],
+    main_file = "QualificationLayoutProductionTests.hs",
+    args = [
+        "$(rootpath @lab_llvm//:bin/llvm-dwarfdump)",
+        "$(rootpath :saclac-image-wrong-driver-store-debug.elf)",
+        "$(rootpath :saclac-qualification.elf)",
+    ],
+    data = [
+        "@lab_llvm//:bin/llvm-dwarfdump",
+        ":saclac-image-wrong-driver-store-debug.elf",
+        ":saclac-qualification.elf",
+    ],
+    tags = ["manual", "qualification"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification-layout",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "qualification-production-digests",
+    size = "small",
+    srcs = ["QualificationDigestsTests.hs"],
+    main_file = "QualificationDigestsTests.hs",
+    args = [
+        "$(rootpath :saclac-image.elf)",
+        "$(rootpath :saclac-image.symbols)",
+        "$(rootpath :saclac-image-wrong-driver-store.symbols)",
+    ],
+    data = [
+        ":saclac-image.elf",
+        ":saclac-image.symbols",
+        ":saclac-image-wrong-driver-store.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:host-support",
     ],
 )
 

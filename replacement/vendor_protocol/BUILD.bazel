@@ -1,4 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_debuginfo_cmd")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -115,7 +116,7 @@ genrule(
     name = "settings-core-arm",
     srcs = _SETTINGS_SOURCES + [_ARM_RECORD, _ARM_VALIDATOR],
     outs = ["arm/libxm1_settings_storage_core.rlib"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_settings_storage_core -C metadata=vendor --cfg settings_storage_library" + _ARM_FLAGS + " --extern record_store=$(location " + _ARM_RECORD + ") --extern area3_validator=$(location " + _ARM_VALIDATOR + ") $(location //replacement/settings_storage:src/lib.rs) -o $@",
+    cmd = xm1_rust_debuginfo_cmd("$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_settings_storage_core -C metadata=vendor --cfg settings_storage_library" + _ARM_FLAGS + " --extern record_store=$(location " + _ARM_RECORD + ") --extern area3_validator=$(location " + _ARM_VALIDATOR + ") $(location //replacement/settings_storage:src/lib.rs) -o $@"),
     tools = ["@lab_xm1_rust//:bin/rustc"],
 )
 
@@ -127,7 +128,7 @@ genrule(
     name = "core-arm",
     srcs = ["lib.rs"] + _CORE_SOURCES + _ARM_DEPS + _IRQ_SOURCES + _SCHEDULER_SOURCES,
     outs = ["arm/libxm1_vendor_protocol.rlib"],
-    cmd = _UNPACK_CRYPTO["arm"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol --cfg 'feature=\"stage\"' --cfg 'feature=\"bound-locks\"'" + _ARM_FLAGS + _ARM_EXTERNS + _ARM_LINK_PATHS + " $(location lib.rs) -o $@",
+    cmd = xm1_rust_debuginfo_cmd(_UNPACK_CRYPTO["arm"] + "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --crate-type=rlib --crate-name=xm1_vendor_protocol --cfg 'feature=\"stage\"' --cfg 'feature=\"bound-locks\"'" + _ARM_FLAGS + _ARM_EXTERNS + _ARM_LINK_PATHS + " $(location lib.rs) -o $@"),
     tools = ["@lab_xm1_rust//:bin/rustc", "@lab_gnutar//:bin/tar"],
 )
 

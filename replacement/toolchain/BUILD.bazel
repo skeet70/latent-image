@@ -2,6 +2,11 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_test")
 
 package(default_visibility = ["//visibility:public"])
 
+config_setting(
+    name = "xm1_rust_debuginfo_2",
+    values = {"define": "xm1_rust_debuginfo=2"},
+)
+
 exports_files([
     "README.md",
     "rust.bzl",

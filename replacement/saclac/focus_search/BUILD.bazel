@@ -21,6 +21,8 @@ xm1_rust_rlib(
         "xm1_saclac_interface": "//replacement/saclac_interface:saclac-interface",
         "xm1_saclac_profile_geometry": "//replacement/saclac/profile_geometry:profile_geometry",
     },
+    qualification = True,
+    qualification_deps = ["//replacement/saclac/controllers:controllers"],
 )
 
 xm1_rust_host_rlib(
@@ -29,6 +31,8 @@ xm1_rust_host_rlib(
     crate_name = "xm1_saclac_focus_search",
     data = _SOURCES,
     rlib_deps = _HOST_DEPS,
+    qualification = True,
+    qualification_deps = ["//replacement/saclac/controllers:host"],
 )
 
 xm1_rust_host_test(

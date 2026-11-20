@@ -9,7 +9,7 @@ _OBJCOPY = "@lab_llvm//:bin/llvm-objcopy"
 _NM = "@lab_llvm//:bin/llvm-nm"
 _OBJDUMP = "@lab_llvm//:bin/llvm-objdump"
 
-_TARGET_FLAGS = [
+_TARGET_FLAGS_HEAD = [
     "--target=armv7r-none-eabi",
     "-C",
     "panic=abort",
@@ -19,8 +19,12 @@ _TARGET_FLAGS = [
     "target-cpu=cortex-r4f",
     "-C",
     "codegen-units=1",
-    "-C",
-    "debuginfo=0",
+]
+
+# The debuginfo level sits between codegen-units and jump-tables in the
+# production command line; keep that position so an unset define is byte-for-byte
+# the same action.
+_TARGET_FLAGS_TAIL = [
     # Keep switch edges explicit for the native CFG/stack admission proof.
     "-C",
     "jump-tables=no",
@@ -28,6 +32,41 @@ _TARGET_FLAGS = [
 
 def _strict_align_flags(strict_align):
     return ["-C", "target-feature=" + ("+strict-align" if strict_align else "-strict-align")]
+
+# Production actions keep `-C debuginfo=0`. A build with
+# `--define=xm1_rust_debuginfo=2` selects `-C debuginfo=2` instead, so the
+# production graph can be inspected with DWARF without changing its loadable bytes.
+_DEBUGINFO_SETTING = "//replacement/toolchain:xm1_rust_debuginfo_2"
+
+def _debuginfo_flags(debuginfo):
+    return ["-C", "debuginfo=" + debuginfo]
+
+def _debuginfo_cmd(make_cmd):
+    """Returns `make_cmd(debuginfo)` as a configurable command string."""
+    return select({
+        _DEBUGINFO_SETTING: make_cmd("2"),
+        "//conditions:default": make_cmd("0"),
+    })
+
+def xm1_rust_debuginfo_cmd(cmd):
+    """Adds DWARF only when `--define=xm1_rust_debuginfo=2` is set.
+
+    Hand-written rustc genrules use this so their production command line is
+    unchanged when the define is unset.
+    """
+    return select({
+        _DEBUGINFO_SETTING: cmd + " -C debuginfo=2",
+        "//conditions:default": cmd,
+    })
+
+def _qualification_out(out):
+    if out.endswith(".rlib"):
+        return out[:-5] + "-qualification.rlib"
+    return out + "-qualification"
+
+def _qualification_label(label):
+    return label + "-qualification"
+
 
 _C_FLAGS = [
     "--target=armv7r-none-eabi",
@@ -71,43 +110,51 @@ def xm1_rust_staticlib(
         testonly = False,
         visibility = None,
         rlib_search_deps = [],
-        dependency_archives = []):
+        dependency_archives = [],
+        debuginfo_override = None,
+        tags = []):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
 
     `data` stages additional module files at their package paths; `mod` names in
     the crate root resolve against them. `env` sets compile-time variables for
     `include!` and `env!`.
     Search-only rlibs and dependency archives use the same scoped setup as `xm1_rust_rlib`.
+    `debuginfo_override` pins the debuginfo level instead of following the
+    `--define=xm1_rust_debuginfo=2` selection.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
-    cmd = " ".join(
-        ["%s=%s" % (variable, value) for variable, value in env.items()] + [
-            "$(location %s)" % _RUSTC,
-            "--crate-name=%s" % crate_name,
-            "--edition=%s" % edition,
-            "--crate-type=staticlib",
-            "-C",
-            "opt-level=%s" % opt_level,
-        ] + _TARGET_FLAGS + _strict_align_flags(strict_align) + rustc_flags + [
-            "--extern=%s=$(location %s)" % (crate, label)
-            for crate, label in rlib_deps.items()
-        ] + [
-            "-Ldependency=$$(dirname $(location %s))" % label
-            for label in rlib_deps.values()
-        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
-            "$(location %s)" % src,
-            "-o",
-            "$@",
-        ],
-    )
+
+    def make_cmd(debuginfo):
+        return _rlib_archive_setup(dependency_archives) + " ".join(
+            ["%s=%s" % (variable, value) for variable, value in env.items()] + [
+                "$(location %s)" % _RUSTC,
+                "--crate-name=%s" % crate_name,
+                "--edition=%s" % edition,
+                "--crate-type=staticlib",
+                "-C",
+                "opt-level=%s" % opt_level,
+            ] + _TARGET_FLAGS_HEAD + _debuginfo_flags(debuginfo) + _TARGET_FLAGS_TAIL + _strict_align_flags(strict_align) + rustc_flags + [
+                "--extern=%s=$(location %s)" % (crate, label)
+                for crate, label in rlib_deps.items()
+            ] + [
+                "-Ldependency=$$(dirname $(location %s))" % label
+                for label in rlib_deps.values()
+            ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
+                "$(location %s)" % src,
+                "-o",
+                "$@",
+            ],
+        )
+
     native.genrule(
         name = name,
         srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = [name + ".a"],
-        cmd = _rlib_archive_setup(dependency_archives) + cmd,
+        cmd = make_cmd(debuginfo_override) if debuginfo_override != None else _debuginfo_cmd(make_cmd),
         message = "Cross-compiling %s for armv7r-none-eabi" % crate_name,
         testonly = testonly,
+        tags = tags,
         tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
         visibility = visibility,
     )
@@ -237,7 +284,12 @@ def xm1_rust_rlib(
         tags = [],
         visibility = None,
         rlib_search_deps = [],
-        dependency_archives = []):
+        dependency_archives = [],
+        debuginfo_override = None,
+        qualification = False,
+        qualification_deps = [],
+        qualification_rustc_flags = [],
+        qualification_tags = []):
     """Compiles one no_std crate root to an rlib for armv7r-none-eabi.
 
     The rlib carries no panic handler unless its root declares one, so a final
@@ -245,36 +297,111 @@ def xm1_rust_rlib(
     `include!` and `env!`.
     `rlib_search_deps` stages dependency rlibs without extern bindings.
     `dependency_archives` supplies dependency files unpacked into a scoped temporary directory.
+    `debuginfo_override` pins the debuginfo level instead of following the
+    `--define=xm1_rust_debuginfo=2` selection.
+    `qualification` adds a test-only `<name>-qualification` rlib compiled with
+    `--cfg saclac_qualification -C debuginfo=2`; labels named in
+    `qualification_deps` are rewritten to their qualification targets.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
     if out == None:
         out = name + ".rlib"
-    cmd = " ".join(
-        ["%s=%s" % (variable, value) for variable, value in env.items()] + [
-            "$(location %s)" % _RUSTC,
-            "--crate-name=%s" % crate_name,
-            "--edition=%s" % edition,
-            "--crate-type=rlib",
-            "-C",
-            "opt-level=%s" % opt_level,
-        ] + _TARGET_FLAGS + _strict_align_flags(strict_align) + rustc_flags + [
-            "--extern=%s=$(location %s)" % (crate, label)
-            for crate, label in rlib_deps.items()
-        ] + [
-            "-Ldependency=$$(dirname $(location %s))" % label
-            for label in rlib_deps.values()
-        ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
-            "$(location %s)" % src,
-            "-o",
-            "$@",
-        ],
+
+    _xm1_rust_rlib(
+        name = name,
+        src = src,
+        crate_name = crate_name,
+        edition = edition,
+        opt_level = opt_level,
+        rustc_flags = rustc_flags,
+        data = data,
+        rlib_deps = rlib_deps,
+        env = env,
+        out = out,
+        strict_align = strict_align,
+        testonly = testonly,
+        tags = tags,
+        visibility = visibility,
+        rlib_search_deps = rlib_search_deps,
+        dependency_archives = dependency_archives,
+        debuginfo_override = debuginfo_override,
     )
+
+    if qualification:
+        qualified = {
+            crate: (_qualification_label(label) if label in qualification_deps else label)
+            for crate, label in rlib_deps.items()
+        }
+        qualified_search = [
+            (_qualification_label(label) if label in qualification_deps else label)
+            for label in rlib_search_deps
+        ]
+        _xm1_rust_rlib(
+            name = name + "-qualification",
+            src = src,
+            crate_name = crate_name,
+            edition = edition,
+            opt_level = opt_level,
+            rustc_flags = rustc_flags + ["--cfg", "saclac_qualification"] + qualification_rustc_flags,
+            data = data,
+            rlib_deps = qualified,
+            env = env,
+            out = _qualification_out(out),
+            strict_align = strict_align,
+            testonly = True,
+            tags = tags + qualification_tags,
+            visibility = visibility,
+            rlib_search_deps = qualified_search,
+            dependency_archives = dependency_archives,
+            debuginfo_override = "2",
+        )
+
+def _xm1_rust_rlib(
+        name,
+        src,
+        crate_name,
+        edition,
+        opt_level,
+        rustc_flags,
+        data,
+        rlib_deps,
+        env,
+        out,
+        strict_align,
+        testonly,
+        tags,
+        visibility,
+        rlib_search_deps,
+        dependency_archives,
+        debuginfo_override):
+    def make_cmd(debuginfo):
+        return _rlib_archive_setup(dependency_archives) + " ".join(
+            ["%s=%s" % (variable, value) for variable, value in env.items()] + [
+                "$(location %s)" % _RUSTC,
+                "--crate-name=%s" % crate_name,
+                "--edition=%s" % edition,
+                "--crate-type=rlib",
+                "-C",
+                "opt-level=%s" % opt_level,
+            ] + _TARGET_FLAGS_HEAD + _debuginfo_flags(debuginfo) + _TARGET_FLAGS_TAIL + _strict_align_flags(strict_align) + rustc_flags + [
+                "--extern=%s=$(location %s)" % (crate, label)
+                for crate, label in rlib_deps.items()
+            ] + [
+                "-Ldependency=$$(dirname $(location %s))" % label
+                for label in rlib_deps.values()
+            ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + [
+                "$(location %s)" % src,
+                "-o",
+                "$@",
+            ],
+        )
+
     native.genrule(
         name = name,
         srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
         outs = [out],
-        cmd = _rlib_archive_setup(dependency_archives) + cmd,
+        cmd = make_cmd(debuginfo_override) if debuginfo_override != None else _debuginfo_cmd(make_cmd),
         message = "Cross-compiling %s as an rlib" % crate_name,
         testonly = testonly,
         tags = tags,
@@ -282,16 +409,61 @@ def xm1_rust_rlib(
         visibility = visibility,
     )
 
-def xm1_rust_host_rlib(name, src, crate_name, data = [], rlib_deps = {}, testonly = False, visibility = None, rlib_search_deps = [], dependency_archives = []):
-    """Compiles a host rlib; search-only rlibs and dependency archives add no extern bindings."""
+def xm1_rust_host_rlib(
+        name,
+        src,
+        crate_name,
+        data = [],
+        rlib_deps = {},
+        testonly = False,
+        visibility = None,
+        rlib_search_deps = [],
+        dependency_archives = [],
+        rustc_flags = [],
+        out = None,
+        qualification = False,
+        qualification_deps = []):
+    """Compiles a host rlib; search-only rlibs and dependency archives add no extern bindings.
+
+    `qualification` adds a test-only `<name>-qualification` host rlib compiled
+    with `--cfg saclac_qualification`; labels named in `qualification_deps` are
+    rewritten to their host qualification targets.
+    """
+    if out == None:
+        out = "lib" + crate_name + ".rlib"
+    _xm1_rust_host_rlib(name, src, crate_name, data, rlib_deps, testonly, visibility, rlib_search_deps, dependency_archives, rustc_flags, out)
+    if qualification:
+        qualified = {
+            crate: (_qualification_label(label) if label in qualification_deps else label)
+            for crate, label in rlib_deps.items()
+        }
+        qualified_search = [
+            (_qualification_label(label) if label in qualification_deps else label)
+            for label in rlib_search_deps
+        ]
+        _xm1_rust_host_rlib(
+            name + "-qualification",
+            src,
+            crate_name,
+            data,
+            qualified,
+            True,
+            visibility,
+            qualified_search,
+            dependency_archives,
+            rustc_flags + ["--cfg", "saclac_qualification"],
+            _qualification_out(out),
+        )
+
+def _xm1_rust_host_rlib(name, src, crate_name, data, rlib_deps, testonly, visibility, rlib_search_deps, dependency_archives, rustc_flags, out):
     native.genrule(
         name = name,
         srcs = [src] + data + rlib_deps.values() + rlib_search_deps + dependency_archives,
-        outs = ["lib" + crate_name + ".rlib"],
+        outs = [out],
         cmd = _rlib_archive_setup(dependency_archives) + " ".join([
             "$(location %s)" % _RUSTC,
             "--edition=2021 --crate-type=rlib --crate-name=" + crate_name,
-        ] + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
+        ] + rustc_flags + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
             "-Ldependency=$$(dirname $(location %s))" % label for label in rlib_deps.values()
         ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + ["$(location %s) -o $@" % src]),
         tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),
@@ -299,7 +471,7 @@ def xm1_rust_host_rlib(name, src, crate_name, data = [], rlib_deps = {}, testonl
         visibility = visibility,
     )
 
-def xm1_rust_host_test(name, src, crate_name, data = [], rlib_deps = {}, size = "small", visibility = None, rlib_search_deps = [], dependency_archives = []):
+def xm1_rust_host_test(name, src, crate_name, data = [], rlib_deps = {}, size = "small", visibility = None, rlib_search_deps = [], dependency_archives = [], rustc_flags = []):
     """Builds and runs host tests with optional search-only rlibs and scoped dependency archives."""
     binary = name + "-binary"
     native.genrule(
@@ -309,7 +481,7 @@ def xm1_rust_host_test(name, src, crate_name, data = [], rlib_deps = {}, size = 
         cmd = _rlib_archive_setup(dependency_archives) + " ".join([
             "$(location %s)" % _RUSTC,
             "--edition=2021 --test --crate-name=" + crate_name,
-        ] + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
+        ] + rustc_flags + ["--extern=%s=$(location %s)" % (crate, label) for crate, label in rlib_deps.items()] + [
             "-Ldependency=$$(dirname $(location %s))" % label for label in rlib_deps.values()
         ] + _rlib_search_flags(rlib_search_deps, dependency_archives) + ["$(location %s) -o $@" % src]),
         tools = [_RUSTC] + (["@lab_gnutar//:bin/tar"] if dependency_archives else []),

@@ -4,6 +4,7 @@
 -- list in "Replacement.Saclac.Artifact".
 module Replacement.Saclac.Placement
   ( renderLinkerScript
+  , renderLinkerScriptDebug
   , watchRanges
   , insertWatchRanges
   , bindOwnedPosts
@@ -40,7 +41,13 @@ sectionOf 1 = "router"
 sectionOf _ = "driver"
 
 renderLinkerScript :: String
-renderLinkerScript = case (entries, extents) of
+renderLinkerScript = renderLinkerScriptFor False
+
+renderLinkerScriptDebug :: String
+renderLinkerScriptDebug = renderLinkerScriptFor True
+
+renderLinkerScriptFor :: Bool -> String
+renderLinkerScriptFor debug = case (entries, extents) of
   (firstEntry : _, _ : _) -> unlines $
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
@@ -83,7 +90,7 @@ renderLinkerScript = case (entries, extents) of
          , "    *(.ARM.attributes)"
          , "    *(.note*)"
          , "    *(.comment)"
-         , "    *(.debug*)"
+         , (if debug then "" else "    *(.debug*)")
          , "    *(.llvm_addrsig)"
          , "  }"
          , "}"
