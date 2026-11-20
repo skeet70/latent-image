@@ -19,7 +19,7 @@
 //! | 12 | 25 | 46 | `controllers::live_view::StateView` (25 of 26, `Restoring` shares 24) |
 //! | 13 | 6 | 15 | `round::PhaseView` (5 of 6) |
 //! | 24 | 5 | 7 | `round::acquisition::StageView` (4 of 5), the S1 child's while `ModeView` is `S1`/`SuspendingForS1`, the live measurement's otherwise |
-//! | 29 | 4 | 5 | auxiliary `round::JobView` (bijection) |
+//! | 29 | 4 | 5 | window `round::JobView` (bijection) |
 //!
 //! The rows are the machines' event-row maps for code 0x4b
 //! (`power_lifecycle::record_task43::event_row`). At those rows machines 1, 8, 24 and 29
@@ -357,8 +357,30 @@ pub fn encode_stage(view: StageView) -> u16 {
     }
 }
 
-/// Machine 29: the auxiliary calculation job, one variant per stock state.
-pub fn encode_m29(view: JobView) -> u16 {
+/// Machine 29: the window calculation job, one variant per stock state. The calc 0x3c0c
+/// request is issued by the measurement's `Window` work (`window.rs:84`) through
+/// `round_services.rs:80-82` with completion 0x8d, and its job state is
+/// `Measurement.window` (`live.rs:38-39,57-58`); the measurement child is shared by both
+/// branches, while the S1 acquisition child posts only calc1 0x3d00/0x3d01, so both
+/// `Root::Mode` branches read the same window job view.
+pub fn encode_m29(mode: ModeView, live: JobView, s1: JobView) -> u16 {
+    match mode {
+        ModeView::S1 => encode_job(s1),
+        ModeView::SuspendingForS1 => encode_job(s1),
+        ModeView::Stopped => encode_job(live),
+        ModeView::Started => encode_job(live),
+        ModeView::LensStarting => encode_job(live),
+        ModeView::LensStopping => encode_job(live),
+        ModeView::Live => encode_job(live),
+        ModeView::PendingDuringLensStart => encode_job(live),
+        ModeView::PendingParameters => encode_job(live),
+        ModeView::PendingAutofocus => encode_job(live),
+        ModeView::PendingLensOperation => encode_job(live),
+    }
+}
+
+/// The calculation job's stock index.
+pub fn encode_job(view: JobView) -> u16 {
     match view {
         JobView::Disabled => 0,
         JobView::Ready => 1,
@@ -636,7 +658,7 @@ pub fn encode_machine(machine: u32, view: &RuntimeView) -> Result<u16, u32> {
             _ => Err(4),
         },
         29 => match view.measurement {
-            Some(measurement) => Ok(encode_m29(measurement.auxiliary)),
+            Some(measurement) => Ok(encode_m29(view.root, measurement.window, measurement.window)),
             None => Err(4),
         },
         _ => Err(1),
@@ -668,7 +690,7 @@ pub fn reencode_machine(machine: u32, state: u16) -> Result<u16, u32> {
         12 => decode_m12(state).map(encode_m12),
         13 => decode_m13(state).map(encode_m13),
         24 => decode_m24(state).map(encode_stage),
-        29 => decode_m29(state).map(encode_m29),
+        29 => decode_m29(state).map(encode_job),
         _ => Err(1),
     }
 }
@@ -963,7 +985,10 @@ mod tests {
         const STAGES: [StageView; 6] = [StageView::Disabled, StageView::Ready, StageView::Primary, StageView::Secondary, StageView::StoppingPrimary, StageView::StoppingSecondary];
         for view in STAGES { assert!((encode_stage(view)) < 5); }
         const JOBS: [JobView; 4] = [JobView::Disabled, JobView::Ready, JobView::Running, JobView::Stopping];
-        for view in JOBS { assert!((encode_m29(view)) < 4); }
+        for view in JOBS {
+            assert!((encode_job(view)) < 4);
+            for mode in MODES { assert_eq!(encode_m29(mode, view, view), encode_job(view), "{mode:?} {view:?}"); }
+        }
     }
 
     #[test]
