@@ -73,7 +73,22 @@ main = do
         , ("a stock callee adds nothing", depthOf (root ++ callee) functions "callee" == Right 20)
         , ("recursion reports its reason and entry", depthOf [push4lr, bl base base, pop4pc] [("loop", base, 12)] "loop" == Left (Recursion base))
         , ("a variable reservation reports its reason and site", depthOf [push4lr, 0xe04dd000, pop4pc] [("alloca", base, 12)] "alloca" == Left (InstructionRefused (base + 4) W.VariableReservation))
-        , ("VFP stack writes refuse", depthOf [0xed2d8b04, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.FloatingPoint))
+        , ("vpush reserves its double registers", depthOf [0xed2d8b04, 0xecbd8b04, 0xe12fff1e] [("root", base, 12)] "root" == Right 16)
+        , ("vpush reserves its single registers", depthOf [0xed2d8a02, 0xecbd8a02, 0xe12fff1e] [("root", base, 12)] "root" == Right 8)
+        , ("VFP loads, stores and arithmetic on the frame are neutral",
+            depthOf [push4lr, 0xed8d8b02, 0xed9d8b02, 0xee300a20, pop4pc] [("root", base, 20)] "root" == Right 8)
+        , ("a VFP compare and flag transfer are neutral", depthOf [0xeeb50a40, 0xeef1fa10, 0xe12fff1e] [("root", base, 12)] "root" == Right 0)
+        , ("vstmia sp! refuses", depthOf [0xecad8b02, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.UnaccountedSpWrite))
+        , ("vldmdb sp! refuses", depthOf [0xed3d8b02, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.UnaccountedSpWrite))
+        , ("a VFP move into sp refuses", depthOf [0xee10da10, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.UnaccountedSpWrite))
+        , ("a doubleword VFP move into sp refuses", depthOf [0xec5d0b10, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.UnaccountedSpWrite))
+        , ("an odd-count doubleword vpush refuses", depthOf [0xed2d8b03, 0xe12fff1e] [("root", base, 8)] "root" == Left (InstructionRefused base W.FloatingPoint))
+        , ("an SP realignment around a call reserves its slack",
+            depthOf ([push4lr, 0xe1a0400d, 0xe3cdd007, bl (base + 12) (base + 24), 0xe1a0d004, pop4pc] ++ callee) [("veneer", base, 24), ("callee", base + 24, 12)] "veneer" == Right 32)
+        , ("an SP restore from a register written otherwise refuses",
+            depthOf [push4lr, 0xe1a0400d, 0xe2844004, 0xe1a0d004, pop4pc] [("moved", base, 20)] "moved" == Left (InstructionRefused (base + 12) W.UnaccountedSpWrite))
+        , ("an SP mask that is not a power-of-two realignment refuses",
+            depthOf [push4lr, 0xe3cdd006, pop4pc] [("masked", base, 12)] "masked" == Left (InstructionRefused (base + 4) W.UnaccountedSpWrite))
         , ("indirect owned callees are outside the reported direct depth", depthOf [push4lr, 0xe12fff30, pop4pc, sub16, 0xe12fff1e] [("root", base, 12), ("callback", base + 12, 8)] "root" == Right 8)
         , ("a restore of sp from r11 is accepted", depthOf [push4lr, sub16, 0xe1a0d00b, pop4pc] [("restore", base, 16)] "restore" == Right 24)
         , ("a register move into sp refuses", isLeft (depthOf [push4lr, 0xe1a0d000, pop4pc] [("moved", base, 12)] "moved"))

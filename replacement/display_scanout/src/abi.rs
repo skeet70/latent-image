@@ -112,17 +112,20 @@ fn engine(value:u32)->Result<Engine,Error>{Engine::parse(value).ok_or(Error::Inv
 fn group(value:u32)->Result<shadow::Group,Error>{shadow::Group::parse(value).ok_or(Error::InvalidArgument)}
 fn status(value:Result<(),Error>)->i32{value.map_or_else(Error::stock,|()|0)}
 fn request(callback:u32,retention:u32,order:u32,phase:u32)->scheduler::RegistrationRequest{scheduler::RegistrationRequest{callback:scheduler::CallbackId::new(callback),retention:scheduler::Retention::from_stock(retention),order:scheduler::Order(order),phase:scheduler::Phase::from_stock(phase)}}
-#[no_mangle]
+// A bank links the fixed-bank build beside the library build that power services carry: the
+// fixed-bank build exports the twelve entries published at stock addresses, the library build
+// the rest, so each symbol has one definition.
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_item_configuration(e:u32,g:u32,item:u32,value:u32)->i32{status((||{let mut state=stock::StockShadow(engine(e)?);let group=group(g)?;let item=shadow::Item::parse(item).ok_or(Error::InvalidArgument)?;shadow::item_configuration(&mut state,group,item,shadow::ItemConfiguration(value));Ok(())})())}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_range_packet(e:u32,g:u32,item:u32,packet:*const u8)->i32{status((||{let mut state=stock::StockShadow(engine(e)?);let group=group(g)?;let item=shadow::Item::parse(item).ok_or(Error::InvalidArgument)?;let half=|offset|u16::from_le_bytes([read_volatile(packet.add(offset)),read_volatile(packet.add(offset+1))]);let parsed=shadow::RangePacket{first:half(0),second:half(2),first_dimension:half(4),padding_limit:half(6),second_dimension:half(8),opacity:read_volatile(packet.add(10))};shadow::range_packet(&mut state,group,item,parsed);Ok(())})())}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_range_enabled(e:u32,g:u32,item:u32,value:u32)->i32{status((||{let engine=engine(e)?;if stock::byte(stock::runtime_base(engine)+0x54)==0{return Err(Error::Uninitialized);}let group=group(g)?;let item=shadow::ItemSelection::parse(item).ok_or(Error::InvalidArgument)?;let storage=if stock::byte(0x916610)==0{shadow::MaskStorage::Saved}else{shadow::MaskStorage::Alternate};shadow::range_enabled(&mut stock::StockShadow(engine),group,item,storage,value==1)})())}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_group_options(e:u32,g:u32,packet:*const u32)->i32{status((||{let mut state=stock::StockShadow(engine(e)?);let group=group(g)?;let options=shadow::GroupOptions{control:read_volatile(packet),format:if group==shadow::Group::Second{read_volatile(packet.add(1))}else{0},origin:read_volatile(packet.add(2)),first_selector:read_volatile(packet.add(3)),second_selector:read_volatile(packet.add(4))};shadow::group_options(&mut state,group,options);Ok(())})())}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_blank(e:u32,packet:*const u8)->i32{status((||{let engine=engine(e)?;if stock::byte(stock::runtime_base(engine)+0x54)==0{return Err(Error::Uninitialized);}shadow::blank(&mut stock::StockShadow(engine),shadow::Blanking{selector:read_volatile(packet),color:[read_volatile(packet.add(1)),read_volatile(packet.add(2)),read_volatile(packet.add(3))]})})())}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_commit(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut runtime=if stock::word(stock::runtime_base(engine)+12)==1{apply_pending(engine)}else{stock::load_runtime(engine)};commit::drain(engine,&mut runtime,&mut Completion);0}
 /// The pending branch in its own frame, so completion callbacks run without the saved and input images on the stack.
 #[inline(never)]
@@ -144,11 +147,11 @@ impl Hardware for CommitDevice{
 type CommitDevice=Device;
 #[cfg(not(feature="defect_register_order"))]
 impl Device{fn new()->Self{Self::plain()}}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_commit_zero()->i32{xm1_scanout_commit(0)}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_commit_one()->i32{xm1_scanout_commit(1)}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_capture(e:u32,packet:*const u32)->i32{
     let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let configuration=commit::CaptureConfiguration{mode:commit::CaptureMode(read_volatile(packet)),selector:commit::ConfigurationSelector(read_volatile(packet.add(1))),auxiliary:commit::ConfigurationAuxiliary(read_volatile(packet.add(2)))};let mut state=EngineState::zero();state.runtime=stock::load_runtime(engine);let first=state.runtime.capture_count==0;
     let same=!first&&state.runtime.mode==configuration.mode&&state.runtime.selector==configuration.selector&&state.runtime.auxiliary==configuration.auxiliary;
@@ -156,27 +159,27 @@ pub unsafe extern "C" fn xm1_scanout_capture(e:u32,packet:*const u32)->i32{
     let result=commit::capture(engine,&mut state,configuration,&mut Device::plain(),&mut Registration);
     if !same{if !first{publish::runtime_configuration(engine,&state.runtime);}stock::put_byte(stock::runtime_base(engine)+0x54,state.runtime.capture_count);}result
 }
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_scheduler_register(packet:*mut u32,output:*mut u32)->i32{
     let request=request(read_volatile(packet),read_volatile(packet.add(1)),read_volatile(packet.add(2)),read_volatile(packet.add(3)));let mut handle=scheduler::Handle(0);let mut observer=RegistrationOutput{packet,output};scheduler::Scheduler::new(StockScheduler).register_source_observed(request,&mut handle,selected_handler,&mut Device::plain(),&mut observer).map_or_else(|error|error.stock_code(),|()|0)
 }
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub extern "C" fn xm1_scanout_isr_zero(){scheduler::Scheduler::new(StockScheduler).dispatch(scheduler::Handler::TimingZero,&mut Device::plain(),&mut Invoke);}
-#[no_mangle]
+#[cfg_attr(not(feature = "library"), no_mangle)]
 pub extern "C" fn xm1_scanout_isr_one(){scheduler::Scheduler::new(StockScheduler).dispatch(scheduler::Handler::TimingOne,&mut Device::plain(),&mut Invoke);}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_reset(e:u32)->i32{match engine(e){Ok(engine)=>{timing::reset(engine,&mut Device::plain());0},Err(error)=>error.stock()}}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_wait(e:u32)->i32{match engine(e){Ok(engine)=>{timing::wait_input_ready(engine,&mut Device::plain());0},Err(error)=>error.stock()}}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_timing_flush(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut state=stock::load_timing(engine);if state.pending.0!=0{stock::put_word(stock::timing_base(engine)+0x10,0);}timing::flush(engine,&mut state,&mut Device{immediate:None,force_clear:Some(engine)}) as i32}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_timing_defaults(e:u32,output:*mut u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut value=read_volatile(output);timing::acquire_defaults(timing::DefaultSelection(stock::byte(stock::timing_base(engine)+0x1c)),&mut value,&mut CalibrationInput);write_volatile(output,value);0}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_timing_immediate(e:u32,packet:*const u8)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut state=stock::load_timing(engine);let selection=timing::DefaultSelection(read_volatile(packet.add(4)));stock::put_byte(stock::timing_base(engine)+0x1c,selection.0);let packet=timing::ImmediatePacket{interval:u16::from_le_bytes([read_volatile(packet),read_volatile(packet.add(1))]),selector:read_volatile(packet.add(2)),flag:read_volatile(packet.add(3)),selection};timing::immediate(engine,&mut state,packet,&mut CalibrationInput,&mut Device{immediate:Some(engine),force_clear:None}) as i32}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_timing_stage(e:u32,packet:*mut u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let(Some(mode),Some(route),Some(rate))=(timing::TimingMode::parse(read_volatile(packet)),timing::TimingRoute::parse(read_volatile(packet.add(1))),timing::TimingRate::parse(read_volatile(packet.add(2))))else{return -30;};let mut configuration=timing::TimingConfiguration{mode,route,rate};let mut states=[timing::TimingState::zero(),timing::TimingState::zero()];states[engine.index()]=stock::load_timing(engine);stock::put_word(stock::timing_base(Engine::Zero),engine.index() as u32);stock::put_word(stock::timing_base(Engine::One),engine.index() as u32);stock::put_word(stock::timing_base(engine)+0x10,0);stock::put_word(stock::timing_base(engine)+4,mode.raw());stock::put_word(stock::timing_base(engine)+8,route.raw());stock::put_word(stock::timing_base(engine)+12,rate.raw());if matches!(rate.raw(),0|3){write_volatile(packet.add(2),2);}timing::stage(engine,&mut states,&mut configuration,&mut CalibrationInput);stock::store_staged_timing(engine,&states[engine.index()]);0}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_formatter_flush(e:u32)->i32{let engine=match engine(e){Ok(engine)=>engine,Err(error)=>return error.stock()};let mut state=stock::load_formatter(engine);if state.pending.0!=0{stock::put_word(stock::formatter_base(engine)+0x34,0);}timing::formatter_flush(engine,&mut state,&mut Device::plain());0}
-#[no_mangle]
+#[cfg_attr(not(feature = "fixed_bank"), no_mangle)]
 pub unsafe extern "C" fn xm1_scanout_formatter_strobe(e:u32)->i32{match engine(e){Ok(engine)=>{timing::formatter_strobe(engine,&mut Device::plain());0},Err(error)=>error.stock()}}

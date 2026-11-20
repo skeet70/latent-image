@@ -88,7 +88,7 @@ haskell_test(
     size = "small",
     srcs = ["ArtifactTests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [":display-scanout-artifact", "//host:base", "//host:bytestring"],
+    deps = [":display-scanout-artifact", "//host:base", "//host:bytestring", "//replacement/fixed_image:contract"],
 )
 
 genrule(

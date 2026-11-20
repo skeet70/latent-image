@@ -8,6 +8,7 @@ import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (showHex)
 import Replacement.DisplayScanout.Artifact
+import Replacement.FixedImage.Layout (headerBytes, imageBase)
 
 check :: String -> Bool -> IO ()
 check label condition = unless condition (fail label)
@@ -16,11 +17,15 @@ row :: Word32 -> Char -> String -> String
 row address kind name = pad (showHex address "") ++ " 00000010 " ++ [kind] ++ " " ++ name
   where pad text = replicate (8 - length text) '0' ++ text
 
+origin, bodyEnd :: Word32
+origin = imageBase + headerBytes
+bodyEnd = origin + 0x2fe0
+
 exports :: [(String, Word32)]
-exports = zip [name | Entry name _ <- entries] [0xba0100, 0xba0200 ..]
+exports = zip [name | Entry name _ <- entries] [origin + 0xe0, origin + 0x1e0 ..]
 
 symbols :: [String] -> B.ByteString
-symbols extra = C.pack (unlines ([row address 'T' name | (name, address) <- exports] ++ [row 0xba0020 'T' "__fixed_body_start", row 0xba3000 'T' "__fixed_body_end"] ++ extra))
+symbols extra = C.pack (unlines ([row address 'T' name | (name, address) <- exports] ++ [row origin 'T' "__fixed_body_start", row bodyEnd 'T' "__fixed_body_end"] ++ extra))
 
 image4 :: B.ByteString
 image4 = B.pack [fromIntegral (offset `shiftR` 2) | offset <- [0 .. 0x282800 - 1 :: Int]]
@@ -60,8 +65,8 @@ main = do
   check "an export outside the fixed range is refused" (refusal (ExportOutsideFixed "xm1_scanout_commit")
     (publicationsFor image4 (replacing "xm1_scanout_commit" [row 0x02000000 'T' "xm1_scanout_commit"])))
   check "a data symbol named as an export is refused" (refusal (MissingExport "xm1_scanout_isr_one")
-    (publicationsFor image4 (replacing "xm1_scanout_isr_one" [row 0xba0100 'D' "xm1_scanout_isr_one"])))
+    (publicationsFor image4 (replacing "xm1_scanout_isr_one" [row (origin + 0xe0) 'D' "xm1_scanout_isr_one"])))
   check "a body that does not start at the fixed origin is refused" (refusal BodyBoundsRejected
-    (bodyBounds (C.pack (unlines [row 0xba0040 'T' "__fixed_body_start", row 0xba3000 'T' "__fixed_body_end"]))))
+    (bodyBounds (C.pack (unlines [row (origin + 0x20) 'T' "__fixed_body_start", row bodyEnd 'T' "__fixed_body_end"]))))
   check "a non-canonical image 4 is refused" (refusal SourceMismatch (canonicalPublications image4 (symbols [])))
   check "a malformed symbol row is refused" (either (const True) (const False) (publicationsFor image4 (symbols ["garbage"])))

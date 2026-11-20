@@ -62,7 +62,8 @@ xm1_rust_rlib(
 # Compositions link exactly one configuration. The stock-wrapper timeout is the
 # Root startup caller policy (`timeout::STARTUP_CLASS_HANG_BOUND`) except in the
 # retention controls, which link an explicit test timeout; drains are
-# qualification choices. The owner library has no timeout or drain default.
+# qualification choices. The owner library has no timeout or drain default. The
+# Root bank links the fujimod configuration.
 _OWNERS = {
     "native": (":arm", ["//replacement/application_nand:arm"]),
     "root": (":arm-root", ["//replacement/power_lifecycle:services-arm"] + _POWER_SERVICES_SEARCH),
@@ -78,7 +79,7 @@ _OWNERS = {
         rlib_search_deps = _OWNERS[composition][1],
         rustc_flags = ["--cfg", "loading_qualification_" + variant],
         env = {"XM1_LOADING_TEST_TIMEOUT_MS": test_timeout} if test_timeout else {},
-        testonly = True,
+        testonly = (variant, composition) != ("fujimod", "root"),
     )
     for variant, composition, test_timeout in [
         ("fujimod", "root", None),
@@ -89,7 +90,7 @@ _OWNERS = {
 ]
 
 # Native-qualification harness only; installed composition is the Root bank
-# (`//replacement/saclac:saclac-image-loading-*`).
+# (`//replacement/saclac:saclac-image`).
 genrule(
     name = "runtime-fixed-script",
     srcs = ["runtime.ld"],

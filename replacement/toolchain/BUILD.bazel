@@ -1,5 +1,3 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_test")
-
 package(default_visibility = ["//visibility:public"])
 
 config_setting(
@@ -20,20 +18,4 @@ filegroup(
         "@lab_xm1_rust//:share/xm1-rust/build-facts.txt",
         "@lab_xm1_rust//:share/xm1-rust/target-spec.json",
     ],
-)
-
-haskell_library(
-    name = "stack-proof",
-    srcs = ["Replacement/Toolchain/Stack.hs"],
-    src_strip_prefix = ".",
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = ["//host:base", "//host:bytestring", "//host:containers", "//host:first-stage", "//host/firmware:bank-allowlist"],
-)
-
-haskell_test(
-    name = "stack-proof-tests",
-    srcs = ["StackTests.hs"],
-    main_file = "StackTests.hs",
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [":stack-proof", "//host:base", "//host:bytestring", "//host:containers", "//host:first-stage", "//host:host-support", "//host:update-container", "//host/firmware:bank-allowlist"],
 )

@@ -525,6 +525,7 @@ haskell_test(
         "//host:first-stage",
         "//host:update-container",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/fixed_image:contract",
     ],
 )
 

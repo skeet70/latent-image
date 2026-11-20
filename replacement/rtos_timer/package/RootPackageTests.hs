@@ -12,6 +12,7 @@ import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.RtosOwnFirst.Regions as R
 import qualified Replacement.RtosPlatform.Aggregate as Aggregate
 import qualified Replacement.RtosPlatform.Artifact as Platform
+import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.RtosPlatform.Union as Union
 import Replacement.RtosTimer.RootPackage
 import qualified Replacement.StartupArtifact.Compose as Startup
@@ -20,6 +21,7 @@ import qualified Replacement.StartupArtifact.Manifest as Manifest
 import qualified Replacement.StartupArtifact.Targets as Targets
 import qualified Replacement.StartupArtifact.Types as T
 import System.Exit (die)
+import Text.Printf (printf)
 
 main :: IO ()
 main = do
@@ -34,7 +36,8 @@ main = do
         <> B.concat (replicate 6 (U.putWord32 0xe1a00000)) <> B.replicate (0x100 - 0x30) 0
       symbolsA = "00040430 00000004 T veneer_a\n00040440 00000020 T body_a\n"
       symbolsB = "000d0430 00000004 T veneer_b\n000d0440 00000020 T body_b\n"
-      bankSymbols = "00a9fa20 00000000 T __fixed_body_start\n00a9fa40 00000000 T __fixed_body_end\n"
+      bodyStart = Fixed.imageBase + Fixed.headerBytes
+      bankSymbols = printf "%08x 00000000 T __fixed_body_start\n%08x 00000000 T __fixed_body_end\n" bodyStart (bodyStart + 0x20) :: String
       linked = Platform.Linked binary (C.pack symbolsA) "" [(0x40460,8)] binary (C.pack symbolsB) "" [(0xd0460,8)] (C.pack bankSymbols)
       piece kind = T.Piece kind Set.empty [] [] [] []
         (T.Catalog [] [] (T.EnumeratedWrites [] (T.Premised (T.Premise "synthetic fixture"))) []) T.NoFacts

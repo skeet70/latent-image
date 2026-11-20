@@ -3,8 +3,7 @@
 -- | The linker script and the census watch ranges, from the one declared extent
 -- list in "Replacement.Saclac.Artifact".
 module Replacement.Saclac.Placement
-  ( Units (..)
-  , renderLinkerScript
+  ( renderLinkerScript
   , renderLinkerScriptDebug
   , renderAllowlist
   , watchRanges
@@ -45,32 +44,25 @@ sectionOf 0 = "dispatch"
 sectionOf 1 = "router"
 sectionOf _ = "driver"
 
--- | Whether the link carries the file service and the display scanout beside Root and the
--- flag/mailbox family.
-data Units = BankUnits | RootFamilyOnly
-  deriving (Eq, Show)
-
 -- | The bank script. The carrier union names the fixed-bank family bodies the link keeps and
 -- the loader entries they call, as @<entry symbol>_<domain>@ at the stock entry address.
-renderLinkerScript :: Units -> Agg.CarrierUnion -> String
+renderLinkerScript :: Agg.CarrierUnion -> String
 renderLinkerScript = renderLinkerScriptFor False
 
-renderLinkerScriptDebug :: Units -> Agg.CarrierUnion -> String
+renderLinkerScriptDebug :: Agg.CarrierUnion -> String
 renderLinkerScriptDebug = renderLinkerScriptFor True
 
-renderLinkerScriptFor :: Bool -> Units -> Agg.CarrierUnion -> String
-renderLinkerScriptFor debug units union = case (entries, extents) of
+renderLinkerScriptFor :: Bool -> Agg.CarrierUnion -> String
+renderLinkerScriptFor debug union = case (entries, extents) of
   (firstEntry : _, _ : _) -> unlines $
     [ "ENTRY(" ++ entryVeneer firstEntry ++ ")"
     , ""
     , "/* Generated from Replacement.Saclac.Artifact.extents. */"
     , "EXTERN(XM1_KERNEL_BOUNDARY XM1_SACLAC_TASK_STACK XM1_SACLAC_CONSTRUCTOR_STACK xm1_saclac_create_task XM1_DECODER_STATE xm1_decoder_init xm1_decoder_feed xm1_decoder_progress xm1_decoder_complete xm1_decoder_finish)"
-    , "/* Present only when the bank links the task60 loading owner. */"
     , "EXTERN(" ++ unwords (map snd loadingEntries) ++ ")"
     ]
-      ++ withUnits
-         ( ("EXTERN(" ++ unwords [name | Scanout.Entry name _ <- Scanout.entries] ++ ")")
-         : [retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";" | external <- unitImports] )
+      ++ ("EXTERN(" ++ unwords [name | Scanout.Entry name _ <- Scanout.entries] ++ ")")
+         : [retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";" | external <- unitImports]
       ++ [ retainedName external ++ " = " ++ hexAddress (retainedAddress external) ++ ";"
          | external <- retainedExternals ++ retainedData,
            any (`isPrefixOf` retainedName external) ["xm1_kernel_", "xm1_decoder_", "__saclac_runtime_"]
@@ -87,7 +79,7 @@ renderLinkerScriptFor debug units union = case (entries, extents) of
          ]
       ++ [ "MEMORY {"
     ]
-      ++ [ "  " ++ Fixed.linkerMemory ] ++ withUnits [ "  INCLUDE retired-memory.ld" ]
+      ++ [ "  " ++ Fixed.linkerMemory, "  INCLUDE retired-memory.ld" ]
       ++ [ "  " ++ regionName index ++ " (rx) : ORIGIN = " ++ hexAddress (extentLow extent)
              ++ ", LENGTH = " ++ hexAddress (fromIntegral (extentBytes extent))
          | (index, extent) <- zip [0 :: Int ..] extents
@@ -97,7 +89,7 @@ renderLinkerScriptFor debug units union = case (entries, extents) of
          , "SECTIONS"
          , "{"
          ]
-      ++ withUnits [ "  INCLUDE retired.ld" ]
+      ++ [ "  INCLUDE retired.ld" ]
       ++ concat
         [ [ "  ." ++ sectionOf index ++ " : {"
           , "    KEEP(*(.text." ++ entryVeneer entry ++ "))"
@@ -138,7 +130,6 @@ renderLinkerScriptFor debug units union = case (entries, extents) of
   _ -> ""
   where
     domainUnion = [("a", Agg.carrierEntriesA union), ("b", Agg.carrierEntriesB union)]
-    withUnits lines' = if units == BankUnits then lines' else []
 
 -- | The bank's check-fixed-image allowlist: every retained entry and data region its joint
 -- admission accepts, so both admissions judge one declared set.

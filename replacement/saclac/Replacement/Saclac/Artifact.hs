@@ -26,9 +26,7 @@ module Replacement.Saclac.Artifact
   , PlacementError (..)
   , WalkReason (..)
   , Admitted (..)
-  , StackBudget
-  , stackBudget
-  , checkStackArtifact
+  , bankStackEntries
   , admit
   , wordAt
   , ownedSpans
@@ -51,7 +49,7 @@ import Data.Bifunctor (first)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Bits ((.&.), (.|.))
-import Data.List (sortOn)
+import Data.List (isPrefixOf, nub, sortOn)
 import Data.Maybe (catMaybes, mapMaybe)
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -65,7 +63,6 @@ import qualified Replacement.DisplayScanout.Artifact as Scanout
 import qualified Replacement.RtosPlatform.Aggregate as Agg
 import qualified Replacement.FixedImage.Layout as Fixed
 import qualified Replacement.FixedImage.Record as Fixed
-import qualified Replacement.Toolchain.Stack as Stack
 import qualified StackWalk as W
 import qualified FujiAF.UpdateContainer as U
 
@@ -110,9 +107,7 @@ decoderEntries =
   , (0x6ae3f4, "xm1_decoder_finish")
   ]
 
--- | The stock task60 constructor, request and cancel wrappers. They are
--- published only when the linked bank carries the loading owner; a partial
--- owner is refused.
+-- | The stock task60 constructor, request and cancel wrappers.
 loadingEntries :: [(Word32, String)]
 loadingEntries =
   [ (0x73ac74, "xm1_loading_startup")
@@ -281,9 +276,6 @@ data WalkReason
   | BranchToDataWord
   | FallThroughIntoDataWord
   | FallThroughOutsideOwned
-  | FrameNotDerivable
-  | RecursiveCall Word32
-  | StackBudgetExceeded Int
   deriving (Eq, Show)
 
 data PlacementError
@@ -300,7 +292,6 @@ data PlacementError
   | EntryBranchMismatch String Word32 Word32
   | WalkRefused Word32 WalkReason
   | ExtentImageMismatch Word32 Int
-  | DecoderVeneerInvalid String
   | FillDiffers Word32
   | OwnedArrayMissing String
   | TableLengthMismatch String Int Word32 Word32
@@ -533,108 +524,37 @@ symbolKinds bytes =
 
 -- | Task43 receives the linked stack contract before its retained creation call.
 -- The retained reserve is separate from owned demand, not a callee-depth proof.
-ownedStackBudget :: Int
-ownedStackBudget = fromIntegral taskStackBytes - 4096
+ownedStackBudget :: Word32
+ownedStackBudget = taskStackBytes - 4096
 
-type StackBudget = Stack.StackBytes
+-- | Owned stack bytes a scanout or file-service entry may use.
+unitStackBudget :: Word32
+unitStackBudget = 2048
 
-stackBudget :: Int -> Maybe StackBudget
-stackBudget bytes = if bytes > 0 then Stack.stackBytes bytes else Nothing
-
-checkStackArtifact :: StackBudget -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError ()
-checkStackArtifact budget bin symbolsBytes disasm sectionsBytes = do
-  symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
-  sections <- parseSections sectionsBytes
-  instructions <- instructionAddresses disasm
-  require (any (\section -> sectionAllocated section && sectionBytes section > 0) sections) SectionsRejected
-  let artifact = Admitted B.empty bin symbolsBytes disasm sectionsBytes sections symbols []
-      begin = binBase artifact
-  forM_ (S.toList instructions) $ \address ->
-    require (address >= begin && toInteger address + 4 <= toInteger begin + toInteger (B.length bin))
-      (ExtentImageMismatch address 4)
-  checkStack budget artifact instructions
-
-checkStack :: StackBudget -> Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStack budget admitted instructions = do
-  generic <- stackAdmitted admitted
-  first stackFailure (Stack.check budget (stackImage generic instructions))
-
-decoderIrqVeneers :: [String]
-decoderIrqVeneers = ["xm1_decoder_progress", "xm1_decoder_complete"]
-
-stackAdmitted :: Admitted -> Either PlacementError Admitted
-stackAdmitted admitted
-  | all missing results = Right admitted
-  | otherwise = do
-      veneers <- forM results $ \(name, result) ->
-        first (const (DecoderVeneerInvalid name)) result
-      forM_ veneers $ \veneer -> do
-        let name = F.symbolName veneer
-            address = F.symbolAddress veneer
-            validWords =
-              [ wordAt admitted address
-              , wordAt admitted (address + 4)
-              , wordAt admitted (address + 8)
-              , wordAt admitted (address + 16)
-              , wordAt admitted (address + 20)
-              ] == [0xe92d4010, 0xe1a0400d, 0xe3cdd007, 0xe1a0d004, 0xe8bd8010]
-            validCall = case A.decode (address + 12) (wordAt admitted (address + 12)) of
-              A.Branch (A.Cond 14) True target -> extentContains fixedExtent target
-              _ -> False
-        require (F.symbolSize veneer == 24 && validWords && validCall) (DecoderVeneerInvalid name)
-      let addresses = map F.symbolAddress veneers
-      pure admitted { admittedSymbols = filter ((`notElem` addresses) . F.symbolAddress) (admittedSymbols admitted) }
+-- | Every published bank entry and task body with the owned stack bytes check-fixed-image allows
+-- it. Root's task entries and every other published Root or family entry take task43's owned
+-- budget; the constructor and the loading task take their stock-created stacks' owned budgets.
+bankStackEntries :: Agg.CarrierUnion -> Admitted -> Either PlacementError [(String, Word32)]
+bankStackEntries union admitted = do
+  fileService <- forM [veneer | veneer <- symbols, "xm1_file_service_entry_" `isPrefixOf` F.symbolName veneer] $ \veneer -> do
+    let at = F.symbolAddress veneer
+    case A.decode at (wordAt admitted at) of
+      A.Branch (A.Cond 14) False target
+        | [body] <- nub [F.symbolName symbol | symbol <- symbols, F.symbolAddress symbol == target, F.symbolSize symbol > 0] ->
+            Right (body, unitStackBudget)
+      _ -> Left (EntryNotOwned (F.symbolName veneer) at)
+  pure $
+    [(entryBody entry, ownedStackBudget) | entry <- entries]
+    ++ [(name, ownedStackBudget) | (_, name) <- decoderEntries ++ loadingEntries]
+    ++ [ (Agg.carrierEntrySymbol entry, ownedStackBudget)
+       | entry <- Agg.carrierEntriesA union ++ Agg.carrierEntriesB union, Agg.carrierEntryBody entry == Agg.BankBody ]
+    ++ [("xm1_saclac_create_task", fromIntegral constructorOwnedStackBudget), ("xm1_loading_task", fromIntegral loadingTaskStackBytes)]
+    ++ [(name, unitStackBudget) | Scanout.Entry name _ <- Scanout.entries]
+    ++ fileService
   where
-    results = [(name, F.lookupSymbol (admittedSymbols admitted) name) | name <- decoderIrqVeneers]
-    missing (_, Left _) = True
-    missing _ = False
+    symbols = admittedSymbols admitted
 
-checkStackEntry :: StackBudget -> Word32 -> Admitted -> S.Set Word32 -> Either PlacementError ()
-checkStackEntry budget entry admitted instructions = do
-  generic <- stackAdmitted admitted
-  first stackFailure (Stack.checkEntry budget (Stack.Guest entry) (stackImage generic instructions))
-
--- | The walked image starts at the fixed body, so retained stock addresses between published
--- image-4 sections and the body stay outside it.
-stackImage :: Admitted -> S.Set Word32 -> Stack.Image
-stackImage admitted instructions =
-  Stack.Image (Stack.Guest low) (B.drop (fromIntegral (low - binBase admitted)) (admittedBin admitted))
-    (admittedSymbols admitted) (S.map Stack.Guest (S.filter (>= low) instructions))
-  where
-    low = max (binBase admitted) (extentLow fixedExtent)
-
-stackFailure :: Stack.Failure -> PlacementError
-stackFailure problem = case problem of
-  Stack.OutsideImage (Stack.Guest address) -> ExtentImageMismatch address 4
-  Stack.InvalidFunction (Stack.Guest address) -> WalkRefused address FrameNotDerivable
-  Stack.FrameNotDerivable (Stack.Guest address) -> WalkRefused address FrameNotDerivable
-  Stack.RecursiveCall (Stack.Guest address) (Stack.Guest target) -> WalkRefused address (RecursiveCall target)
-  Stack.BudgetExceeded (Stack.Guest address) bytes -> WalkRefused address (StackBudgetExceeded (Stack.stackByteCount bytes))
--- | Whether the linked bank carries the task60 loading owner: all wrapper
--- bodies or none.
-loadingOwner :: [F.Symbol] -> Either PlacementError Bool
-loadingOwner symbols = case [name | (_, name) <- loadingEntries, Left _ <- [F.lookupSymbol symbols name]] of
-  [] -> Right True
-  missing | length missing == length loadingEntries -> Right False
-  (name : _) -> Left (EntryMissing name)
-
--- | The image-4 veneers the linked bank publishes.
-image4Entries :: Admitted -> Either PlacementError [(Word32, String)]
-image4Entries admitted = do
-  loading <- loadingOwner (admittedSymbols admitted)
-  pure (decoderEntries ++ if loading then loadingEntries else [])
-
--- | The receiver task's owned demand fits its stock-created stack.
-checkLoadingTask :: Admitted -> S.Set Word32 -> Either PlacementError ()
-checkLoadingTask admitted instructions = do
-  loading <- loadingOwner (admittedSymbols admitted)
-  when loading $ do
-    task <- either (const (Left (EntryMissing "xm1_loading_task"))) Right
-      (F.lookupSymbol (admittedSymbols admitted) "xm1_loading_task")
-    budget <- maybe (Left SectionsRejected) Right (stackBudget loadingTaskStackBytes)
-    checkStackEntry budget (F.symbolAddress task) admitted instructions
-
--- | Admit layout, direct control-flow targets and the owned stack budget.
+-- | Admit layout and direct control-flow targets.
 admit :: Agg.CarrierUnion -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either PlacementError Admitted
 admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
   symbols <- either (const (Left SymbolsRejected)) Right (F.parseSymbols symbolsBytes)
@@ -706,16 +626,13 @@ admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
       (TableLengthMismatch "SACLAC_SECOND_COUNTS" index (machineSecondWords lengths) (wordOf OwnedSecondCounts))
     require (wordOf OwnedRowCounts == machineRowCount lengths)
       (TableLengthMismatch "SACLAC_ROW_COUNTS" index (machineRowCount lengths) (wordOf OwnedRowCounts))
-  checkTaskStackContract admitted instructions
-  budget <- maybe (Left SectionsRejected) Right (stackBudget ownedStackBudget)
-  checkStack budget admitted instructions
-  checkLoadingTask admitted instructions
+  checkTaskStackContract admitted
   checkReferences (loaderEntryAddresses union) elfBytes admitted
   checkControl (loaderEntryAddresses union) admitted instructions dataWords
   pure admitted
 
-checkTaskStackContract :: Admitted -> S.Set Word32 -> Either PlacementError ()
-checkTaskStackContract admitted instructions = do
+checkTaskStackContract :: Admitted -> Either PlacementError ()
+checkTaskStackContract admitted = do
   metadata <- either (const (Left TaskStackContractInvalid)) Right
     (F.lookupSymbol (admittedSymbols admitted) "XM1_SACLAC_TASK_STACK")
   constructor <- either (const (Left TaskStackContractInvalid)) Right
@@ -744,8 +661,6 @@ checkTaskStackContract admitted instructions = do
     && allocatedReadOnly (F.symbolAddress body) (F.symbolSize body)
     && any (\(address, kind) -> address == F.symbolAddress body && kind `elem` ["T", "t"])
        (symbolKinds (admittedSymbolsBytes admitted))) TaskStackContractInvalid
-  budget <- maybe (Left TaskStackContractInvalid) Right (stackBudget constructorOwnedStackBudget)
-  checkStackEntry budget (F.symbolAddress body) admitted instructions
 
 taskCreateBranch :: Admitted -> Either PlacementError Word32
 taskCreateBranch admitted = do
@@ -878,8 +793,7 @@ decoderPublications image4 admitted = do
   H.ensure (B.length image4 == 0x282800
     && digest image4 == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
     "canonical image4 differs"
-  published <- either (H.failH . show) pure (image4Entries admitted)
-  forM published $ \(address, name) -> do
+  forM (decoderEntries ++ loadingEntries) $ \(address, name) -> do
     target <- either H.failH pure (F.symbolAddress <$> F.lookupSymbol (admittedSymbols admitted) name)
     H.ensure (target `mod` 4 == 0 && extentContains fixedExtent target) ("image4 entry leaves fixed body: " ++ name)
     let delta = toInteger target - toInteger address - 8
@@ -973,7 +887,7 @@ contractValue imagePath datPath staged = object
   , "trap_word" .= trapWord
   , "entries" .= [object ["address" .= entryAddress entry, "veneer" .= entryVeneer entry, "body" .= entryBody entry] | entry <- entries]
   , "decoder_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- decoderEntries]
-  , "loading_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- either (const []) (filter (`elem` loadingEntries)) (image4Entries admitted)]
+  , "loading_entries" .= [object ["address" .= address, "symbol" .= name] | (address, name) <- loadingEntries]
   , "retained_externals" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedExternals]
   , "retained_data" .= [object ["name" .= retainedName word, "address" .= retainedAddress word] | word <- retainedData]
   , "owned_bytes" .= sum [sectionBytes section | section <- admittedSections admitted, sectionAllocated section]

@@ -96,6 +96,7 @@ haskell_test(
         "//host:bytestring",
         "//host:containers",
         "//host:update-container",
+        "//replacement/fixed_image:contract",
         "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/rtos_platform:aggregate",
         "//replacement/rtos_platform:platform-artifact",

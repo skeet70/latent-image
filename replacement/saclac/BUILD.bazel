@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_test", "xm1_rust_rlib", "xm1_rust_staticlib")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load(":bank.bzl", "BANK_VARIANTS")
 
 package(default_visibility = ["//visibility:public"])
@@ -18,6 +19,8 @@ _ARM_DEPS = {
     "xm1_rtos_objects_bank_b": "//replacement/rtos_objects:objects-bank-b",
     "xm1_file_service": "//replacement/file_service:arm",
     "xm1_display_scanout": "//replacement/display_scanout:fixed-bank-owned",
+    "xm1_executable_loading": "//replacement/executable_loading:arm-root",
+    "xm1_loading_policy": "//replacement/executable_loading:policy-fujimod-root",
 }
 
 # The scripts the generated bank script INCLUDEs: the file service's retired extents.
@@ -113,10 +116,9 @@ xm1_rust_rlib(
         rust_staticlib = ":saclac-rust" + suffix,
         asm_srcs = ["entry.S"],
         entry = variant.entry,
-        link_script = ":saclac.ld" if variant.units else ":saclac-root-family.ld",
-        link_includes = _BANK_LINK_INCLUDES if variant.units else [],
+        link_script = ":saclac.ld",
+        link_includes = _BANK_LINK_INCLUDES,
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--emit-relocs", "-Wl,--error-limit=0"],
-        link_map = variant.link_map,
         testonly = variant.testonly,
     )
     for suffix, variant in BANK_VARIANTS.items()
@@ -204,14 +206,6 @@ genrule(
     tools = [":saclac-extents"],
 )
 
-genrule(
-    name = "saclac-linker-script-root-family",
-    srcs = ["//replacement/rtos_platform:carriers.json"],
-    outs = ["saclac-root-family.ld"],
-    cmd = "$(location :saclac-extents) linker-script-root-family $(location //replacement/rtos_platform:carriers.json) > $@",
-    tools = [":saclac-extents"],
-)
-
 # check-fixed-image's allowlist for the bank, from the joint admission's declarations.
 genrule(
     name = "bank-allowlist",
@@ -219,6 +213,29 @@ genrule(
     outs = ["bank-allowlist.json"],
     cmd = "$(location :saclac-extents) allowlist $(location //replacement/rtos_platform:carriers.json) $@",
     tools = [":saclac-extents"],
+)
+
+_BANK_STACK_IMAGE = [":saclac-image.elf", ":saclac-image.bin", ":saclac-image.symbols", ":saclac-image.disasm", ":saclac-image-sections"]
+
+# check-fixed-image owns the owned stack depth of every published bank entry and task body.
+sh_test(
+    name = "bank-stack-tests",
+    size = "medium",
+    srcs = ["bank-stack-test.sh"],
+    args = [
+        "$(rootpath :saclac-extents)",
+        "$(rootpath //replacement/fixed_image:check-fixed-image)",
+        "$(rootpath //replacement/file_service:file-service-stage)",
+        "$(rootpath :bank-allowlist)",
+        "$(rootpath //replacement/rtos_platform:carriers.json)",
+    ] + ["$(rootpath %s)" % label for label in _BANK_STACK_IMAGE],
+    data = [
+        ":bank-allowlist",
+        ":saclac-extents",
+        "//replacement/file_service:file-service-stage",
+        "//replacement/fixed_image:check-fixed-image",
+        "//replacement/rtos_platform:carriers.json",
+    ] + _BANK_STACK_IMAGE,
 )
 
 # One owned post, owned callback and client call entry per compared Root image variant, bound from
@@ -290,7 +307,6 @@ haskell_library(
         "//replacement/display_scanout:display-scanout-artifact",
         "//replacement/fixed_image:contract",
         "//replacement/rtos_platform:aggregate",
-        "//replacement/toolchain:stack-proof",
     ],
 )
 

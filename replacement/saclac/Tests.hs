@@ -109,9 +109,6 @@ main = do
       marker <- F.symbolAddress <$> symbol symbols "XM1_REQUIRES_LENS_SAFETY_CONTRACT"
       refused "missing lens safety flag" SafetyMarkerInvalid
         (admit (patch base bin marker 0) symbols disasm sections)
-      progress <- F.symbolAddress <$> symbol symbols "xm1_decoder_progress"
-      refused "decoder IRQ veneer loses its bounded alignment restore" (DecoderVeneerInvalid "xm1_decoder_progress")
-        (admit (patch base bin (progress + 8) 0xe1a00000) symbols disasm sections)
       constructorStack <- F.symbolAddress <$> symbol symbols "XM1_SACLAC_CONSTRUCTOR_STACK"
       refused "constructor stack budget differs" TaskStackContractInvalid
         (admit (patch base bin (constructorStack + 40) 0) symbols disasm sections)
@@ -139,8 +136,8 @@ main = do
         Left (WalkRefused _ (BranchTargetNotAllowed target)) | target `elem` loaderEntries -> pure ()
         other -> H.failH ("saclac-placement: a bank call into an undeclared loader entry was not refused: " ++ either show (const "admitted") other)
       boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed dataReferences
-      stackTests
-      putStrLn ("saclac-placement: fixed body " ++ show (B.length body) ++ " bytes; veneers, layout, publications and stack controls passed")
+      stackEntryTests carriers admitted
+      putStrLn ("saclac-placement: fixed body " ++ show (B.length body) ++ " bytes; veneers, layout, publications and stack manifest passed")
     _ -> H.failH "usage: saclac-placement-tests LINKED_ELF LINKED_BIN SYMBOLS DISASM SECTIONS CARRIERS"
 
 boundaryReferenceTests :: Agg.CarrierUnion -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
@@ -196,19 +193,21 @@ boundaryReferenceTests carriers elf bin symbols disasm sections admitted parsed 
         _ -> H.failH "fixture requires one relocation at its data-reference site"
     _ -> H.failH "fixture requires allocated BSS, __power_cpu_end and a data relocation"
 
-stackTests :: IO ()
-stackTests = do
-  small <- maybe (H.failH "invalid fixture stack budget") pure (stackBudget 4)
-  fitting <- maybe (H.failH "invalid fixture stack budget") pure (stackBudget 8)
-  let base = 0xba0020
-      symbols = "00ba0020 0000000c T fixture\n"
-      sections = "[ 1] .text PROGBITS 00ba0020 000000 00000c 00 AX 0 0 4\n"
-      disasm = "  ba0020:\tpush {r11, lr}\n  ba0024:\tmov r0, r0\n  ba0028:\tpop {r11, pc}\n"
-      body = B.concat (map U.putWord32 [0xe92d4800, 0xe1a00000, 0xe8bd8800])
-      run budget bytes = checkStackArtifact budget bytes symbols disasm sections
-  either (H.failH . show) pure (run fitting body)
-  refused "frame exceeds caller budget" (WalkRefused base (StackBudgetExceeded 8)) (run small body)
-  refused "direct recursion" (WalkRefused (base + 4) (RecursiveCall base))
-    (run fitting (patch base body (base + 4) (branch (base + 4) base .|. (1 `shiftL` 24))))
-  refused "unrecognized frame" (WalkRefused base FrameNotDerivable)
-    (run fitting (patch base body base 0x192d4800))
+stackEntryTests :: Agg.CarrierUnion -> Admitted -> IO ()
+stackEntryTests carriers admitted = do
+  manifest <- either (H.failH . show) pure (bankStackEntries carriers admitted)
+  let budget name = lookup name manifest
+      names = map fst manifest
+  check "each bank entry is named once" (all (\name -> length (filter (== name) names) == 1) names)
+  check "Root's task entries take task43's owned budget"
+    (all (\name -> budget name == Just 61440) ["xm1_saclac_dispatch", "xm1_saclac_router", "xm1_saclac_driver"])
+  check "the constructor and the loading task take their stock-created stacks' owned budgets"
+    (budget "xm1_saclac_create_task" == Just 2688 && budget "xm1_loading_task" == Just 0xc00)
+  check "the scanout entries take the unit budget" (budget "xm1_scanout_capture" == Just 2048 && budget "xm1_scanout_commit_one" == Just 2048)
+  check "a file-service veneer names its body" (budget "xm1_file_service_open_intercept" == Just 2048 && budget "xm1_file_service_entry_intercept" == Nothing)
+  check "every file-service veneer contributes its body"
+    (length [name | (name, 2048) <- manifest, take 17 name == "xm1_file_service_"] == length [s | s <- admittedSymbols admitted, take 23 (F.symbolName s) == "xm1_file_service_entry_"])
+  intercept <- either H.failH pure (F.lookupSymbol (admittedSymbols admitted) "xm1_file_service_entry_intercept")
+  let unbranched = admitted { admittedBin = patch (minimum [sectionLow s | s <- admittedSections admitted, sectionAllocated s, sectionBytes s > 0]) (admittedBin admitted) (F.symbolAddress intercept) 0xe1a00000 }
+  refused "a file-service veneer that is not a branch" (EntryNotOwned "xm1_file_service_entry_intercept" (F.symbolAddress intercept))
+    (bankStackEntries carriers unbranched)

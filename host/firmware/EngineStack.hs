@@ -11,6 +11,7 @@ module EngineStack
 import qualified A32
 import qualified ArmElf as ELF
 import Control.Monad (foldM, unless, when)
+import Data.Bits ((.&.))
 import Data.List (find)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -67,11 +68,30 @@ stackDepth elf inRuntime root = do
         Nothing -> find (\function -> functionStart function <= target && target < functionEnd function) functions
       code function = [(address, word) | address <- [functionStart function, functionStart function + 4 .. functionEnd function - 4]
         , not (isData address), Just word <- [ELF.wordAt elf address]]
-      frame function = foldM (\depth (address, word) -> case W.classify W.Permissive address word of
+      frame function = foldM (\depth (address, word) -> case effect function address word of
           W.Reserve amount -> pure (depth + toInteger amount)
           W.Refuse reason | reason `elem` [W.VariableReservation, W.UnaccountedSpWrite, W.FloatingPoint] ->
             Left (InstructionRefused address reason)
           _ -> pure depth) 0 (code function)
+      -- An SP realignment `bic sp, sp, #(2^k - 1)` drops SP by at most 2^k - 4 bytes from a
+      -- word-aligned SP. `mov sp, rN` restores SP when every write of rN in the function is
+      -- `mov rN, sp` or a load multiple that also loads PC.
+      effect function address word = case A32.decode address word of
+        A32.DataProcessing (A32.Cond 14) A32.BIC False rd rn (A32.Immediate mask)
+          | rd == A32.sp && rn == A32.sp && mask >= 3 && mask .&. (mask + 1) == 0 -> W.Reserve (mask - 3)
+        A32.DataProcessing (A32.Cond 14) A32.MOV False rd _ (A32.ShiftedImmediate source A32.LSL 0)
+          | rd == A32.sp && savedSp function source -> W.Neutral
+        _ -> W.classify W.Permissive address word
+      savedSp function register = register `notElem` [A32.sp, A32.pc] && any snapshot writers && all (\w -> snapshot w || returns w) writers
+        where
+          writers = [(address, word) | (address, word) <- code function, register `elem` W.writes address word]
+          snapshot (address, word) = case A32.decode address word of
+            A32.DataProcessing (A32.Cond 14) A32.MOV False rd _ (A32.ShiftedImmediate source A32.LSL 0) ->
+              rd == register && source == A32.sp
+            _ -> False
+          returns (address, word) = case A32.decode address word of
+            A32.LoadMultiple _ _ _ _ registers -> A32.pc `elem` registers
+            _ -> False
       callees function =
         [ (address, target)
         | (address, word) <- code function

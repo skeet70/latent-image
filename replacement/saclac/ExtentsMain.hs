@@ -15,8 +15,8 @@ import qualified Data.ByteString.Lazy as L
 import Data.Word (Word32)
 import FujiAF.Host (failH)
 import Replacement.RtosPlatform.Aggregate (CarrierUnion, parseCarrierUnion)
-import Replacement.Saclac.Artifact (Admitted, admit)
-import Replacement.Saclac.Placement (Units (..), bindOwnedEntries, bindOwnedPosts, insertWatchRanges, renderAllowlist, renderLinkerScript, renderLinkerScriptDebug)
+import Replacement.Saclac.Artifact (Admitted, admit, bankStackEntries)
+import Replacement.Saclac.Placement (bindOwnedEntries, bindOwnedPosts, insertWatchRanges, renderAllowlist, renderLinkerScript, renderLinkerScriptDebug)
 import System.Environment (getArgs)
 
 main :: IO ()
@@ -25,16 +25,18 @@ main = do
   case arguments of
     ["linker-script", carriersPath] -> do
       union <- readCarriers carriersPath
-      putStr (renderLinkerScript BankUnits union)
-    ["linker-script-root-family", carriersPath] -> do
-      union <- readCarriers carriersPath
-      putStr (renderLinkerScript RootFamilyOnly union)
+      putStr (renderLinkerScript union)
     ["linker-script-debug", carriersPath] -> do
       union <- readCarriers carriersPath
-      putStr (renderLinkerScriptDebug BankUnits union)
+      putStr (renderLinkerScriptDebug union)
     ["allowlist", carriersPath, outputPath] -> do
       union <- readCarriers carriersPath
       L.writeFile outputPath (J.encode (renderAllowlist union))
+    "stack-entries" : carriersPath : image@[_, _, _, _, _] -> do
+      union <- readCarriers carriersPath
+      admitted <- admitImage union image
+      manifest <- either (failH . show) pure (bankStackEntries union admitted)
+      mapM_ (\(name, budget) -> putStrLn (name ++ " " ++ show budget)) manifest
     "census-sites" : inputPath : fieldsPath : outputPath : carriersPath : images@(_ : _) | length images `mod` 5 == 0 -> do
       union <- readCarriers carriersPath
       value <- either failH pure . J.eitherDecode =<< L.readFile inputPath
@@ -42,7 +44,7 @@ main = do
       admitted <- mapM (admitImage union) (groups images)
       updated <- either failH pure (insertWatchRanges value >>= bindOwnedPosts admitted >>= bindOwnedEntries identities admitted)
       L.writeFile outputPath (J.encode updated)
-    _ -> failH "usage: saclac-extents linker-script CARRIERS | linker-script-root-family CARRIERS | linker-script-debug CARRIERS | allowlist CARRIERS OUTPUT | census-sites INPUT FIELDS OUTPUT CARRIERS (ELF BIN SYMBOLS DISASM SECTIONS)..."
+    _ -> failH "usage: saclac-extents linker-script CARRIERS | linker-script-debug CARRIERS | allowlist CARRIERS OUTPUT | stack-entries CARRIERS ELF BIN SYMBOLS DISASM SECTIONS | census-sites INPUT FIELDS OUTPUT CARRIERS (ELF BIN SYMBOLS DISASM SECTIONS)..."
 
 readCarriers :: FilePath -> IO CarrierUnion
 readCarriers path = either failH pure . parseCarrierUnion =<< B.readFile path

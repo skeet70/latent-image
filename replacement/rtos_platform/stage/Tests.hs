@@ -15,6 +15,7 @@ import Numeric (showHex)
 import Fixtures (fixtureDat, patternBytes)
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
+import qualified Replacement.FixedImage.Layout as Fixed
 import Replacement.RtosOwnFirst.Regions (Domain (..), Extent (..), GuestAddress (..), extentEnd, extentStart)
 import Replacement.RtosPlatform.Artifact
 import Replacement.RtosPlatform.Bank
@@ -33,13 +34,23 @@ synthetic = Union 0xe7f000f0 domainA domainB []
 linkedFor :: Union -> Linked
 linkedFor _ = Linked (bin (GuestAddress 0x40430)) (symbols (GuestAddress 0x40430) "veneer_a" "body_a") "" [(0x40460, 8)] (bin (GuestAddress 0xd0430)) (symbols (GuestAddress 0xd0430) "veneer_b" "body_b") "" [(0xd0460, 8)] bankSymbolsText
 
+-- | The record's first body byte.
+bodyStart, familyA, familyB, bodyEnd :: Word32
+bodyStart = Fixed.imageBase + Fixed.headerBytes
+familyA = bodyStart
+familyB = bodyStart + 0x10
+bodyEnd = bodyStart + 0x40
+
+symbolRow :: Word32 -> Word32 -> String -> B.ByteString
+symbolRow at size name = C.pack (hex at ++ " " ++ hex size ++ " T " ++ name)
+
 -- | A 0x40-byte fixed body holding one family body per domain.
 bankSymbolsText :: B.ByteString
 bankSymbolsText = C.unlines
-  [ "00a9fa20 00000000 T __fixed_body_start"
-  , "00a9fa20 00000010 T family_a"
-  , "00a9fa30 00000010 T family_b"
-  , "00a9fa60 00000000 T __fixed_body_end"
+  [ symbolRow bodyStart 0 "__fixed_body_start"
+  , symbolRow familyA 0x10 "family_a"
+  , symbolRow familyB 0x10 "family_b"
+  , symbolRow bodyEnd 0 "__fixed_body_end"
   ]
 
 branchWord :: Word32 -> Word32 -> Word32
@@ -310,42 +321,42 @@ main = do
     Just err -> check ("an owned external on an entry address: " ++ err) False
   bank <- either (fail . show) pure (parseBank bankSymbolsText)
   let veneer domain at target = Veneer domain (GuestAddress at) (branchWord at target)
-      bothDomains = [veneer DomainA 0x40430 0xa9fa20, veneer DomainB 0xd0430 0xa9fa30]
+      bothDomains = [veneer DomainA 0x40430 familyA, veneer DomainB 0xd0430 familyB]
   check "veneers into each domain's own bank body are admitted"
-    (fmap (map admittedTarget) (admitVeneers bankUnion bank bothDomains) == Right [0xa9fa20, 0xa9fa30])
+    (fmap (map admittedTarget) (admitVeneers bankUnion bank bothDomains) == Right [familyA, familyB])
   expectLeft "a veneer whose target lies outside the admitted bank refuses"
     (\e -> case e of VeneerOutsideBank DomainA _ 0x40500 -> True; _ -> False)
-    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0x40500, veneer DomainB 0xd0430 0xa9fa30])
+    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0x40500, veneer DomainB 0xd0430 familyB])
   expectLeft "a veneer targeting the other domain's bank body refuses"
-    (\e -> case e of VeneerWrongDomain DomainA _ 0xa9fa30 -> True; _ -> False)
-    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0xa9fa30, veneer DomainB 0xd0430 0xa9fa30])
+    (\e -> case e of VeneerWrongDomain DomainA _ target -> target == familyB; _ -> False)
+    (admitVeneers bankUnion bank [veneer DomainA 0x40430 familyB, veneer DomainB 0xd0430 familyB])
   expectLeft "a bank body without its veneer refuses"
     (\e -> case e of BankBodyWithoutVeneer DomainA _ -> True; _ -> False)
-    (admitVeneers bankUnion bank [veneer DomainB 0xd0430 0xa9fa30])
+    (admitVeneers bankUnion bank [veneer DomainB 0xd0430 familyB])
   expectLeft "a loader word that is not a branch refuses as a veneer"
     (\e -> case e of VeneerNotBranch DomainB _ 0xe7f000f0 -> True; _ -> False)
-    (admitVeneers bankUnion bank [veneer DomainA 0x40430 0xa9fa20, Veneer DomainB (GuestAddress 0xd0430) 0xe7f000f0])
+    (admitVeneers bankUnion bank [veneer DomainA 0x40430 familyA, Veneer DomainB (GuestAddress 0xd0430) 0xe7f000f0])
   expectLeft "a veneer at an address that is no bank entry refuses"
     (\e -> case e of VeneerUndeclared _ -> True; _ -> False)
-    (admitVeneers bankUnion bank (veneer DomainA 0x40434 0xa9fa20 : bothDomains))
+    (admitVeneers bankUnion bank (veneer DomainA 0x40434 familyA : bothDomains))
   expectLeft "a body outside the record's first body byte refuses"
-    (\e -> case e of BankBoundsInvalid 0xa9fa24 _ -> True; _ -> False)
-    (parseBank (C.unlines ["00a9fa24 00000000 T __fixed_body_start", "00a9fa60 00000000 T __fixed_body_end"]))
-  case withLink bankUnion (bankLinked 0xa9fa20 0xa9fa30) of
+    (\e -> case e of BankBoundsInvalid start _ -> start == bodyStart + 4; _ -> False)
+    (parseBank (C.unlines [symbolRow (bodyStart + 4) 0 "__fixed_body_start", symbolRow bodyEnd 0 "__fixed_body_end"]))
+  case withLink bankUnion (bankLinked familyA familyB) of
     Left err -> check ("bank-entry platform admission: " ++ show err) False
     Right (source, _, staged) -> do
       let held :: Domain -> Word32 -> Word32
           held domain at = U.word32At (sourceLoaders source M.! domain) (fromIntegral (at - (if domain == DomainA then 0x40000 else 0xd0000)))
       check "the platform stage leaves bank-entry words for the fixed-image stager"
-        (stagedBankEntries staged == [BankEntryRow (GuestAddress 0x40430) (held DomainA 0x40430) (branchWord 0x40430 0xa9fa20), BankEntryRow (GuestAddress 0xd0430) (held DomainB 0xd0430) (branchWord 0xd0430 0xa9fa30)])
+        (stagedBankEntries staged == [BankEntryRow (GuestAddress 0x40430) (held DomainA 0x40430) (branchWord 0x40430 familyA), BankEntryRow (GuestAddress 0xd0430) (held DomainB 0xd0430) (branchWord 0xd0430 familyB)])
       check "the staged loader keeps the source word at the bank entry"
         (U.word32At (stagedLoader staged DomainA) 0x430 == held DomainA 0x40430)
   expectLeft "a linked veneer out of the bank refuses platform admission"
     (\e -> case e of BankRejected (VeneerOutsideBank DomainB _ _) -> True; _ -> False)
-    (withLink bankUnion (bankLinked 0xa9fa20 0xbf1a00))
+    (withLink bankUnion (bankLinked familyA Fixed.imageLimit))
   expectLeft "a linked veneer into the other domain's body refuses platform admission"
-    (\e -> case e of BankRejected (VeneerWrongDomain DomainB _ 0xa9fa20) -> True; _ -> False)
-    (withLink bankUnion (bankLinked 0xa9fa20 0xa9fa20))
+    (\e -> case e of BankRejected (VeneerWrongDomain DomainB _ target) -> target == familyA; _ -> False)
+    (withLink bankUnion (bankLinked familyA familyA))
   check "bank entry bodies parse"
     (case parseUnion (encodeUnion bankUnion) of
       Right parsed -> map entryBody (mapEntries (unionA parsed)) == [Aggregate.BankBody]

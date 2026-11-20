@@ -13,6 +13,10 @@ if "$checker" "$allowlist" "$elf" "$body" xm1_fixed_test_entry 0 "$TEST_TMPDIR/s
   echo 'insufficient owned stack budget admitted' >&2
   exit 1
 fi
+if "$checker" "$allowlist" "$elf" "$body" xm1_fixed_test_entry 48 xm1_fixed_test_entry 0 "$TEST_TMPDIR/one-short.json"; then
+  echo 'one entry over its owned stack budget admitted among several' >&2
+  exit 1
+fi
 { printf '\000'; dd if="$body" bs=1 skip=1 status=none; } > "$TEST_TMPDIR/changed.bin"
 if "$checker" "$allowlist" "$elf" "$TEST_TMPDIR/changed.bin" xm1_fixed_test_entry 48 "$TEST_TMPDIR/changed.json"; then
   echo 'body from a different link admitted' >&2

@@ -3,8 +3,9 @@ module Main where
 
 import qualified ArmElf as E
 import qualified BankAllowlist as A
-import Control.Monad (forM_)
+import Control.Monad (forM, forM_, unless)
 import Data.Aeson (encode, object, (.=))
+import qualified Data.Aeson.Key as K
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.Bits (shiftL, shiftR, (.&.))
@@ -25,15 +26,18 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    [allowlistPath, elfPath, bodyPath, entryName, budgetText, output] -> do
-      budget <- case readMaybe budgetText :: Maybe Integer of
-        Just value | value >= 0 && value <= toInteger (maxBound :: Word32) -> pure (OwnedStackBudget (fromInteger value))
-        _ -> H.failH "invalid owned stack budget"
-      check allowlistPath elfPath bodyPath (EntryName entryName) budget output
-    _ -> H.failH "usage: check-fixed-image ALLOWLIST ELF BODY ENTRY OWNED_STACK_BYTES OUTPUT_JSON"
+    allowlistPath : elfPath : bodyPath : rest@(_ : _ : _ : _) | odd (length rest) -> do
+      entries <- forM (pairs (init rest)) $ \(entryName, budgetText) -> case readMaybe budgetText :: Maybe Integer of
+        Just value | value >= 0 && value <= toInteger (maxBound :: Word32) -> pure (EntryName entryName, OwnedStackBudget (fromInteger value))
+        _ -> H.failH ("invalid owned stack budget for " ++ entryName)
+      check allowlistPath elfPath bodyPath entries (last rest)
+    _ -> H.failH "usage: check-fixed-image ALLOWLIST ELF BODY ENTRY OWNED_STACK_BYTES [ENTRY OWNED_STACK_BYTES ...] OUTPUT_JSON"
+  where
+    pairs (name : budget : more) = (name, budget) : pairs more
+    pairs _ = []
 
-check :: FilePath -> FilePath -> FilePath -> EntryName -> OwnedStackBudget -> FilePath -> IO ()
-check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget budget) output = do
+check :: FilePath -> FilePath -> FilePath -> [(EntryName, OwnedStackBudget)] -> FilePath -> IO ()
+check allowlistPath elfPath bodyPath entries output = do
   allowlist <- H.readRegularWith (pure ()) False 0x100000 allowlistPath >>= either H.failH pure . A.parseAllowlist
   elfBytes <- H.readRegularWith (pure ()) False 0x2000000 elfPath
   elf <- either H.failH pure (E.parseElf elfBytes)
@@ -80,17 +84,22 @@ check allowlistPath elfPath bodyPath (EntryName entryName) (OwnedStackBudget bud
     (A.AddressRange (imageBase+headerBytes) imageLimit)
     [A.AddressRange (E.sectionAddress section) (fromInteger (end section)) | section <- code]
     (map E.sectionName allocated) []))
-  depth <- either (H.failH . show) pure (S.stackDepth elf inside entryName)
+  depths <- forM entries $ \(EntryName entryName, OwnedStackBudget budget) ->
+    either (\refusal -> H.failH (entryName ++ ": " ++ show refusal)) (\depth -> pure (entryName, depth, budget))
+      (S.stackDepth elf inside entryName)
   bodyDigest <- H.sha256 body
   elfDigest <- H.sha256 elfBytes
   B.writeFile output (L.toStrict (encode (object
-    ["interface" .= A.reportValue report, "owned_stack_bytes" .= depth, "owned_stack_budget" .= budget
+    ["interface" .= A.reportValue report
+    ,"entries" .= object [K.fromString name .= object ["owned_stack_bytes" .= depth, "owned_stack_budget" .= budget] | (name, depth, budget) <- depths]
     ,"body_sha256" .= bodyDigest, "elf_sha256" .= elfDigest])))
   mapM_ (putStrLn . A.renderFinding) (A.violations report)
   H.ensure (null (A.violations report)) "fixed image interface admission failed"
-  H.ensure (depth <= budget) "fixed image owned stack budget exceeded"
+  forM_ depths $ \(name, depth, budget) -> putStrLn (name ++ ": " ++ show depth ++ " of " ++ show budget ++ " owned stack bytes")
+  let exceeded = [name | (name, depth, budget) <- depths, depth > budget]
+  unless (null exceeded) (H.failH ("fixed image owned stack budget exceeded: " ++ unwords exceeded))
   putStrLn ("fixed image admitted: " ++ show (A.reportInstructions report) ++ " instructions, "
-    ++ show (A.reportProvenBranches report) ++ " direct transfers, " ++ show depth ++ " owned stack bytes")
+    ++ show (A.reportProvenBranches report) ++ " direct transfers, " ++ show (length depths) ++ " entries")
 
 -- | A published word is the linker trap fill (UDF, 0xe7f000f0) or an unconditional A32 B whose
 -- target is fixed code.

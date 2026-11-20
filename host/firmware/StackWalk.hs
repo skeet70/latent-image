@@ -16,8 +16,8 @@ import Data.Bits (shiftR, testBit, (.&.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 
--- | `Permissive` is EngineStack's handling: VFP refuses, `UndefinedEncoding` ends the path,
--- every other rejected word and every conditional SP adjustment continues as written.
+-- | `Permissive` is EngineStack's handling: VFP multiples on SP reserve or release their bytes,
+-- other VFP words are stack-neutral unless they write SP or PC, `UndefinedEncoding` ends the path,
 -- `Strict` continues only through the stack-neutral classes, refuses every other rejected
 -- word, and refuses SP adjustments that only some paths make.
 data Strictness = Permissive | Strict deriving (Eq, Show)
@@ -162,7 +162,7 @@ classify strictness address word = case A32.decode address word of
     | strictness == Strict && rt == A32.pc && base == A32.pc -> JumpTable cond index
   A32.Load _ _ _ rt _ _ _ | rt == A32.pc -> Refuse LoadedBranch
   A32.Rejected (A32.Coprocessor coprocessor) | coprocessor `elem` [10, 11] ->
-    if strictness == Strict then strictVfp else Refuse FloatingPoint
+    if strictness == Strict then strictVfp else permissiveVfp
   A32.Rejected A32.UndefinedEncoding -> if strictness == Strict then Refuse UnadmittedEncoding else Stop
   A32.Rejected reason | strictness == Strict -> strictRejected reason
   A32.LoadMultiple cond base A32.IncrementAfter True regs
@@ -195,6 +195,45 @@ classify strictness address word = case A32.decode address word of
     | field 31 28 == 14, word .&. 0x0fbf0f00 == 0x0d2d0b00, Just bytes <- vfpStackBytes = Reserve (4 * bytes)
     | field 31 28 == 14, word .&. 0x0fbf0f00 == 0x0cbd0b00, Just bytes <- vfpStackBytes = Release (4 * bytes)
     | vfpStatusTransfer || vfpDataProcessing || vfpCoreTransfer || vfpLoad = Neutral
+    | otherwise = Refuse FloatingPoint
+  -- Extension-register transfers: cond 110P UDWL Rn Vd 101x imm8. P=U=W=0 with D=1 is a 64-bit
+  -- core transfer, P=1 with W=0 is VLDR/VSTR, P=0 with U=1 and P=1 with U=0, W=1 transfer imm8
+  -- words; the other encodings are undefined.
+  vfpExtensionTransfer = word .&. 0x0e000e00 == 0x0c000a00
+  vfpMultipleBytes
+    | testBit word 8 = if even count && count > 0 && field 22 22 * 16 + field 15 12 + count `div` 2 <= 32 then Just (4 * count) else Nothing
+    | otherwise = if count > 0 && field 15 12 * 2 + field 22 22 + count <= 32 then Just (4 * count) else Nothing
+    where count = field 7 0
+  coreDestination rt
+    | rt == 13 = Refuse UnaccountedSpWrite
+    | rt == 15 = Refuse FloatingPoint
+    | otherwise = Neutral
+  vfpMultiple writeback = case vfpMultipleBytes of
+    Nothing -> Refuse FloatingPoint
+    Just bytes
+      | not writeback || field 19 16 /= 13 -> Neutral
+      | testBit word 24 && not (testBit word 20) -> Reserve bytes
+      | not (testBit word 24) && testBit word 20 -> Release bytes
+      | otherwise -> Refuse UnaccountedSpWrite
+  permissiveVfp
+    | field 31 28 == 15 = Refuse FloatingPoint
+    | vfpExtensionTransfer = case (testBit word 24, testBit word 23, testBit word 21) of
+        (False, False, False)
+          | testBit word 22 && testBit word 20 -> case coreDestination (field 15 12) of
+              Neutral -> coreDestination (field 19 16)
+              refusal -> refusal
+          | testBit word 22 -> Neutral
+          | otherwise -> Refuse FloatingPoint
+        (False, False, True) -> Refuse FloatingPoint
+        (False, True, writeback) -> vfpMultiple writeback
+        (True, _, False) -> Neutral
+        (True, False, True) -> vfpMultiple True
+        (True, True, True) -> Refuse FloatingPoint
+    | word .&. 0x0f000e10 == 0x0e000a10 =
+        if not (testBit word 20) then Neutral
+        else if word .&. 0x0fffffff == 0x0ef1fa10 then Neutral
+        else coreDestination (field 15 12)
+    | vfpDataProcessing = Neutral
     | otherwise = Refuse FloatingPoint
   -- MCR/MRC to coprocessor 14 or 15 with a register other than SP: a register transfer with no memory access.
   systemTransfer = word .&. 0x0f000010 == 0x0e000010 && field 11 8 `elem` [14, 15] && field 15 12 /= 13

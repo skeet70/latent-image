@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Changed-path runs for the task60 loading owner: native harness, then the
-# Root bank (saclac-image-loading-*) staged with the platform loaders it calls
-# and observed from reset.
+# Root bank (saclac-image and its retention control) staged with the platform
+# loaders it calls and observed from reset.
 # Run from the worktree root under run-output exec:
 #   loading-runtime-runs.sh CANONICAL_DAT CANONICAL_IMAGE4 CANONICAL_IMAGE5 BOOT_ROM STOCK_LOADER_A STOCK_LOADER_B
 set -euo pipefail
@@ -26,15 +26,15 @@ CARRIERS=replacement/rtos_platform/carriers.json
   --expect-slot-sha256 b943e4e7e666bc5c17a87e1aab76ca0811171ed00de5b4d7350857f9aa832dce
 
 stage() {
-  local policy=$1 scope=$2 timeout_ms=$3 out=$XM1_RUN_WORK/$1 image=$S/saclac-image-loading-$1
+  local policy=$1 suffix=$2 scope=$3 timeout_ms=$4 out=$XM1_RUN_WORK/$1 image=$S/saclac-image$2
   mkdir -p "$out/artifact"
   "$S/stage-saclac" "$B/lz/lz-encode" "$B/host/firmware/rebuild-update" "$B/lz/fflzd" "$DAT" "$ID5" "$ID4" \
     "$image.elf" "$image.bin" "$image.symbols" "$image.disasm" "$image.sections" "$CARRIERS" "$XM1_RUN_WORK" \
     "$out/image5.bin" "$out/entry.DAT" "$out/saclac-contract.json" "$out/artifact/runtime.bin" "$out/publications.json"
   cp "$image.symbols" "$out/artifact/runtime.symbols"
   "$P/stage-platform" stage "$CARRIERS" \
-    "$P/platform-a-loading-$1.bin" "$P/platform-a-loading-$1.symbols" "$P/platform-a-loading-$1.disasm" "$P/placement-a-loading-$1.json" \
-    "$P/platform-b-loading-$1.bin" "$P/platform-b-loading-$1.symbols" "$P/platform-b-loading-$1.disasm" "$P/placement-b-loading-$1.json" \
+    "$P/platform-a$suffix.bin" "$P/platform-a$suffix.symbols" "$P/platform-a$suffix.disasm" "$P/placement-a$suffix.json" \
+    "$P/platform-b$suffix.bin" "$P/platform-b$suffix.symbols" "$P/platform-b$suffix.disasm" "$P/placement-b$suffix.json" \
     "$image.symbols" "$XM1_RUN_WORK/first-stage.DAT" "$STOCK_LOADER_A" "$STOCK_LOADER_B" "$out/platform"
   "$B/replacement/fixed_image/stage-fixed-image" "$B/lz/lz-encode" "$B/host/firmware/rebuild-update" "$B/lz/fflzd" \
     "$out/platform/candidate.DAT" "$out/artifact/runtime.bin" "$image.symbols" "$out/publications.json" \
@@ -60,8 +60,8 @@ observe() {
 }
 
 # Success links the Root startup caller policy (30000 ms); retention links its explicit 22 ms test input.
-stage fujimod fujimod-3d90035d 30000
-stage retention synthetic-retention-control 22
+stage fujimod "" fujimod-3d90035d 30000
+stage retention -retention-control synthetic-retention-control 22
 fail=0
 observe fujimod || fail=1
 observe retention || fail=1
