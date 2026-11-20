@@ -2,7 +2,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_host_rlib", "xm1_rust_host_te
 
 package(default_visibility = ["//visibility:public"])
 
-_SOURCES = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/replies.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"]) + glob(["src/*/qualification.rs"])
+_SOURCES = ["src/jobs.rs", "src/acquisition.rs", "src/children.rs", "src/lanes.rs", "src/history.rs", "src/round.rs", "src/image.rs", "src/live.rs", "src/stock.rs", "src/planner.rs", "src/profile.rs", "src/record.rs", "src/replies.rs", "src/pipeline.rs", "src/window.rs", "src/auxiliary.rs", "src/source.rs"] + glob(["src/acquisition/*.rs"]) + glob(["src/*/qualification.rs"], exclude = ["src/acquisition/qualification.rs"])
 
 xm1_rust_rlib(
     name = "round",
