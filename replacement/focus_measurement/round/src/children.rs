@@ -63,3 +63,6 @@ impl S1Acquisition {
         }
     }
 }
+
+#[cfg(saclac_qualification)]
+pub mod qualification;

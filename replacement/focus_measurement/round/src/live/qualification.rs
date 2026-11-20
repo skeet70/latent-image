@@ -8,7 +8,7 @@ use super::Measurement;
 use crate::acquisition::qualification::StageView;
 use crate::jobs::qualification::{self as jobs, JobView};
 use crate::lanes::Lanes;
-use crate::round::qualification::{self as round, FanView, PhaseView};
+use crate::round::qualification::{self as round, FanView, PhaseView, PlannerView};
 use crate::window::qualification as window;
 
 /// The typed state the stock measurement machines read.
@@ -24,6 +24,7 @@ pub struct View {
     pub window: JobView,
     pub source: JobView,
     pub power_held: bool,
+    pub planner: PlannerView,
 }
 
 /// The view of the state `measurement` holds.
@@ -39,5 +40,6 @@ pub fn view(measurement: &Measurement) -> View {
         window: jobs::view(&measurement.window),
         source: jobs::view(&measurement.source),
         power_held: window::power_held(&measurement.window_work),
+        planner: round::planner(&measurement.round),
     }
 }

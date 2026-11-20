@@ -10,13 +10,14 @@ use super::Runtime;
 use crate::acquisition::qualification as acquisition;
 use crate::child_runtime::qualification as child;
 use crate::record_contexts::qualification::{self as contexts, ContextsView};
+use xm1_focus_measurement_round::acquisition::qualification::StageView;
 use xm1_focus_measurement_round::live::qualification::View as MeasurementView;
 use xm1_saclac_controllers::live::qualification::StateView as LiveStateView;
 use xm1_saclac_controllers::live_view::qualification::StateView as LiveViewControllerView;
 use xm1_saclac_controllers::root::qualification::ModeView;
 use xm1_saclac_interface::calc::AcquisitionGrid;
 use xm1_saclac_lens_drive::live::qualification::StateView as LensView;
-use xm1_saclac_profile_records::{Memory, StockEntries};
+use xm1_saclac_profile_records::{stock::shared as shared_fields, Memory, StockEntries};
 use xm1_saclac_shared::stock::Machine;
 
 /// The root state the qualification map reads.
@@ -29,6 +30,13 @@ pub struct View {
     pub measurement: Option<MeasurementView>,
     pub lens_live: Option<LensView>,
     pub live_grid: AcquisitionGrid,
+    /// The S1 acquisition child's stage (machine 24 on the S1 branch).
+    pub s1_acquisition: Option<StageView>,
+    /// The 132-byte shared profile state at `0x0091904c` (`FOCUS_RESULT`, read by `0x00756734`).
+    pub focus_result: [u8; 132],
+    /// The 12-byte statistics descriptor at `0x009190f0` (`AREA_STATISTICS`, read by
+    /// `0x007567ec`): presence, layout, entries pointer, word 3.
+    pub area_statistics: [u8; 12],
 }
 
 /// The view of `runtime`, or `None` when a cell it reads is mutably borrowed.
@@ -41,6 +49,10 @@ pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A
     let held = runtime.contexts.try_borrow().ok()?;
     let services = runtime.services.try_borrow().ok()?;
     let children = child::view(&runtime.children);
+    // The shared fields are read openly (`SharedRead::Open`), so any handle selects the same
+    // block; `NO_HANDLE` names no record.
+    let focus_result = services.records.read_shared(crate::services::NO_HANDLE, &shared_fields::group_14::FOCUS_RESULT).unwrap_or([0; 132]);
+    let area_statistics = services.records.read_shared(crate::services::NO_HANDLE, &shared_fields::group_16::AREA_STATISTICS).unwrap_or([0; 12]);
     Some(View {
         root: xm1_saclac_controllers::root::qualification::view(&root),
         live: xm1_saclac_controllers::live::qualification::view(&live),
@@ -49,5 +61,8 @@ pub fn view<'s, M: Machine + Clone, R: Memory, E: StockEntries, P, I, T, S, X, A
         measurement: children.measurement,
         lens_live: children.lens_live,
         live_grid: acquisition::live_grid(&services.acquisition),
+        s1_acquisition: children.s1_acquisition,
+        focus_result,
+        area_statistics,
     })
 }

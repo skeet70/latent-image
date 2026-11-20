@@ -6,7 +6,8 @@
 
 use super::{Fan, Phase, Round};
 use crate::lanes::Lanes;
-use crate::planner::Slot;
+use crate::planner::{qualification as planner_view, Slot};
+pub use crate::planner::qualification::{ModeView as PlannerModeView, PhaseView as PlannerPhaseView, View as PlannerView};
 
 /// One variant per `Phase` value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,6 +16,12 @@ pub enum PhaseView { Dormant, Idle, Armed, Running, Stopping }
 /// One variant per `Fan` value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FanView { Ready, Draining, Stopping }
+
+/// The view of the planner `round` holds; the planner's own module matches `Mode` and `Phase`
+/// exhaustively.
+pub fn planner(round: &Round) -> PlannerView {
+    planner_view::view(&round.planner)
+}
 
 /// The view of the phase `round` holds.
 pub fn phase(round: &Round) -> PhaseView {
