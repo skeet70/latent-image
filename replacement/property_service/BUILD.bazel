@@ -30,6 +30,7 @@ _ORACLE_DRIVER_DEPS = [
     "//host:aeson",
     "//host:base",
     "//host:bytestring",
+    "//host:deepseq",
     "//host:containers",
     "//host:directory",
     "//host:filepath",

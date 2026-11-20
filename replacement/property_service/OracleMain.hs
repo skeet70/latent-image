@@ -3,9 +3,10 @@
 
 -- | Compares canonical public entries with the current linked body.
 -- Native-only observations do not admit DAT retirement.
-module OracleMain (main, ExecutionMode (..), FrozenRun, FrozenBatchName (..), BatchExecution (..), executionMode, loadFrozenRun, observeBatch, consumeReport, finishFrozenRun, ResearchMode (..), researchMode, checkCompactBudget, parseCompactAllocationGeometry) where
+module OracleMain (main, ExecutionMode (..), FrozenRun, FrozenBatchName (..), BatchExecution (..), executionMode, loadFrozenRun, observeBatch, consumeReport, finishFrozenRun, ResearchMode (..), researchMode, checkCompactBudget, parseCompactAllocationGeometry, stockCaseRow) where
 
 import qualified ArmElf as ELF
+import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON, Value (..), eitherDecodeStrict', object, withObject, (.=))
@@ -591,6 +592,24 @@ controlHolds control failed = case controlKind control of
   MustFail -> failed > 0
   MustPass -> failed == 0
 
+-- | A case's results row: its stock entry, the stock evidence its report at @path@ shows inside
+-- that entry's extent, and its pass-2 differences. The row is in normal form, so it holds nothing of the parsed report.
+stockCaseRow :: FilePath -> CaseLabel -> Word32 -> [Difference] -> IO Value
+stockCaseRow path label entryAddress differences = do
+  let extent = fromMaybe 4 (lookup entryAddress [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions])
+  stockEvidence <- evidenceAt path entryAddress extent
+  evaluate (force (object
+    [ "id" .= caseLabelText label
+    , "entry" .= hex entryAddress
+    , "extent" .= extent
+    , "stock_trace_instructions" .= evidenceTrace stockEvidence
+    , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
+    , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
+    , "stock_instructions" .= evidenceInstructions stockEvidence
+    , "stock_status" .= evidenceStatus stockEvidence
+    , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
+    ]))
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -836,12 +855,14 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
           patches <- slotPatch "c-selector-3" identifier arm arm {slotDefault = SlotStock (Stock61d65c Profile3)}
           Right (Control "c-selector-3" MustFail (PatchedCandidate patches) (acrossVariants identifier defaultOperations) ("0x61d65c selector 2 -> 3 for " ++ propertyHex identifier))
         [] -> Left "c-selector-3: no slot field calls 0x61d65c with selector 2"
-      gateByteControl = case [(identifier, arm, gateOffset) | (identifier, OwnedField arm@(FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gateOffset)))) <- armsWhere gated] of
-        (identifier, arm, gateOffset) : _ -> do
-          patches <- specialPatches "c-gate-byte" identifier (HookedField arm) (HookedField arm {fieldHook = ConfigGatedResave (ConfigOffset (gateOffset + 1))})
-          Right (Control "c-gate-byte" MustFail (PatchedCandidate patches) (acrossVariants identifier [o | o@(Set {}) <- operations])
-            ("gate byte " ++ hex (configBase + fromIntegral gateOffset) ++ " -> " ++ hex (configBase + fromIntegral gateOffset + 1) ++ " for " ++ propertyHex identifier))
-        [] -> Left "c-gate-byte: no gated field"
+      -- The owned setter reads the gate through its configuration service's literal address, not through the
+      -- SPECIALS hook offset, so the control moves that literal.
+      gateReadControl = case [(identifier, configBase + fromIntegral gateOffset) | (identifier, OwnedField (FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gateOffset)))) <- armsWhere gated] of
+        (identifier, gateAddress) : _ -> case [address | address <- [carrierStart, carrierStart + 4 .. carrierEnd - 4], candidateWord address == gateAddress] of
+          [site] -> Right (Control "c-gate-read" MustFail (PatchedCandidate [Patch site gateAddress (gateAddress + 1)]) (acrossVariants identifier [o | o@(Set {}) <- operations])
+            ("gate read " ++ hex gateAddress ++ " -> " ++ hex (gateAddress + 1) ++ " at the owned literal " ++ hex site ++ " for " ++ propertyHex identifier))
+          sites -> Left ("c-gate-read: the owned carrier holds " ++ show (length sites) ++ " literals of gate " ++ hex gateAddress)
+        [] -> Left "c-gate-read: no gated field"
       mirrorControl name chosen note = case [(identifier, arm) | (identifier, OwnedSlotField arm@(SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)] of
         (identifier, arm) : _ -> do
           index <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no slot index")) Right (slotIndexOf identifier)
@@ -899,7 +920,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             "defect build: the configuration default's store saves first"
         , defectControl "c-gate-inverted" "invert_gate" [RunCase variant (OracleCase identifier o) | (identifier, _) <- armsWhere gated, variant <- allVariants, o@(Set {}) <- operations]
             "defect build: the gated resave runs when the gate byte is not 0"
-        , gateByteControl
+        , gateReadControl
         , mirrorControl "c-mirror-getter" [o | o@(Get {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the getter reads the requested slot"
         , mirrorControl "c-mirror-write" [o | o@(Set {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the set omits the record-0 write"
         , readOnlyControl "c-read-only-stores" (\arm -> HookedField arm) [o | o@(Set {}) <- operations] "SPECIALS subkind read-only -> hooked field; the set stores the field"
@@ -1278,27 +1299,12 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
 
   -- Per-case stock evidence for the shared judge: the entry each case entered and
   -- the instructions the runner reports inside that entry's extent.
-  let entryExtents = [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions]
-      extentOf entry = fromMaybe 4 (lookup entry entryExtents)
   caseRows <- forM (zip3 [0 :: Int ..] runCases verdicts) $ \(ordinal, rc, (_, differences)) -> do
     let label = runLabel rc
         spec = stockSpec contract (fxOf rc) image4 properties label stockFunctions (runCase rc)
         N.GuestAddress entry = caseEntry spec
-        entryAddress = fromIntegral entry :: Word32
-        extent = extentOf entryAddress
         path = batchDirectory out "stock" (ordinal `div` batchLimit) </> (caseLabelText label ++ ".native-result.json")
-    stockEvidence <- evidenceAt path entryAddress extent
-    pure (object
-      [ "id" .= caseLabelText label
-      , "entry" .= hex entryAddress
-      , "extent" .= extent
-      , "stock_trace_instructions" .= evidenceTrace stockEvidence
-      , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
-      , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
-      , "stock_instructions" .= evidenceInstructions stockEvidence
-      , "stock_status" .= evidenceStatus stockEvidence
-      , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
-      ])
+    stockCaseRow path label (fromIntegral entry) differences
 
   -- Results.
   runnerSha <- sha256Hex <$> (canonicalizePath runner >>= sha256File)
