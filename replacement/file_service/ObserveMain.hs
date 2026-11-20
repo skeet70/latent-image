@@ -13,9 +13,11 @@
 -- compare: the calls whose return address lies outside the retired extents and the owned body
 -- (`__fixed_body_start` to `__fixed_body_end` in OWNED_SYMBOLS) are the component's interface.
 -- Their ordered entries with arguments up to each owned entry's arity, returns with r0..r3
--- except registers listed dead at the return address, worker entries with r0..r3, state
--- snapshots, the watched writes and the screens must be equal, and the owned role must fetch
--- nothing in the retired extents. Registers left out are reported, not compared.
+-- except registers the stock entry clobbers or the caller does not read, worker entries with
+-- r0..r3, state snapshots, the watched writes and the screens must be equal, and the owned role
+-- must fetch nothing in the retired extents. Registers left out are reported, not compared.
+-- Request payload bytes the stock posters leave undefined are masked in snapshots, request
+-- reads and watched writes.
 module Main (main) where
 
 import Control.Exception (SomeException, bracket, displayException, try)
@@ -24,7 +26,7 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits (shiftL, (.|.))
+import Data.Bits (shiftL, shiftR, (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -34,7 +36,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word8)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import EmulatorUsb
 import Numeric (readHex, showHex)
@@ -415,11 +417,29 @@ entryNames = M.fromList [(a, entryName e) | e <- entries, let Address a = entryA
 external :: Span -> Word32 -> Bool
 external body address = not (any (`inside` address) (body : retired))
 
--- | Registers a retained caller does not read after the call returning to it, from the stock
--- bytes. 0x7217c4: r3 is written before any read on both paths, at 0x7217cc, and at 0x72533c in
--- the receive reached from 0x7217dc through 0x7221c8, which reads r0..r2 only.
-deadAtReturn :: M.Map Word32 [T.Text]
-deadAtReturn = M.fromList [(0x7217c4, ["r3"])]
+-- | Registers the stock entry body, with its direct callees, writes on some path, at the stock
+-- addresses listed. A caller compiled against that body, under the AAPCS or with
+-- interprocedural register allocation, cannot read them after the call returns.
+clobbered :: String -> [T.Text]
+clobbered name = case name of
+  "open_async" -> ["r1", "r2", "r3"] -- 0x71c2f4, 0x71c498 (open), 0x71c654
+  "read_async" -> ["r1", "r2", "r3"] -- 0x71bec4, 0x71bf70, 0x71bed4 (read)
+  "close_async" -> ["r1", "r2", "r3"] -- 0x71c248, 0x71c250, 0x71c238 (close)
+  "translate" -> ["r1"] -- 0x71d50c
+  "media_ready" -> ["r1", "r2", "r3"] -- 0x71de38, 0x71de10, 0x71ddf8
+  "map_bind" -> ["r1", "r2", "r3"] -- 0x71ea6c, 0x71ea60, 0x71ea4c
+  "map_unbind" -> ["r1", "r2", "r3"] -- 0x71eadc, 0x71ead0, 0x71eabc
+  "map_lookup" -> ["r1", "r2", "r3"] -- 0x71eb5c, 0x71eb50, 0x71eb3c
+  "tag_release" -> ["r1", "r2", "r3"] -- 0x71f008, 0x71f02c, 0x71f018
+  "route" -> ["r1", "r2", "r3"] -- 0x721668, 0x72166c, 0x721580
+  "intercept" -> ["r2", "r3"] -- 0x721820, 0x7217f8
+  _ -> []
+
+-- | Return addresses of map_unbind (0x71f0a8, 0x71f164, 0x71f204, 0x71f3dc) and tag_release
+-- (0x71f094, 0x71f150, 0x71f1f0, 0x71f3e4), which the owned image declares without a result,
+-- whose stock caller writes r0 before reading it on every path.
+resultUnread :: [Word32]
+resultUnread = [0x71f0a8, 0x71f164, 0x71f204, 0x71f3dc, 0x71f094, 0x71f150, 0x71f1f0, 0x71f3e4]
 
 -- | Register arguments of each owned entry, as its Rust signature declares them.
 arity :: String -> Int
@@ -461,24 +481,149 @@ taskOf hit = object ["kernel" .= field "kernel" (field "task" hit), "task_id" .=
 readsOf :: Value -> Value
 readsOf hit = A.toJSON [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
 
+-- * Request bytes the stock posters leave undefined
+
+-- | Mediamsg's receive buffer: the request header, then the payload copied behind it.
+receiveHeader, receivePayload :: Word32
+receiveHeader = 0x91021c
+receivePayload = 0x910228
+
+payloadCapacity :: Int
+payloadCapacity = 0x50
+
+-- | Which payload bytes are defined. The stock open (0x71c2b0) and close (0x71c134) posters
+-- build the payload in an uninitialized stack frame and copy a string into it with 0x70e748:
+-- open's path field +4..+0x34 and close's name field +0xc..+0x20 are undefined after the
+-- terminator, and close stores its result-slot words +0x20..+0x28 (flag 1) only when it waits.
+-- Bytes at or past the payload length belong to no request.
+payloadDefined :: Word32 -> Int -> [Word8] -> [Bool]
+payloadDefined code len bytes = map defined [0 .. length bytes - 1]
+  where
+    (string, slot)
+      | code `elem` [0x2c17, 0x2c2d] = (Just (4, 0x34), Nothing)
+      | code `elem` [0x2c1a, 0x2c30] = (Just (0xc, 0x20), Just 0x20)
+      | otherwise = (Nothing, Nothing)
+    defined o
+      | o >= len = False
+      | Just (s, e) <- string, s <= o, o < e = notElem 0 (take (o - s) (drop s bytes))
+      | Just s <- slot, s <= o, o < s + 8 = length bytes >= s + 4 && littleEndian (take 4 (drop s bytes)) == 1
+      | otherwise = True
+
+-- | The defined flags of a payload behind a 12-byte request header.
+requestDefined :: [Word8] -> [Word8] -> [Bool]
+requestDefined header = payloadDefined (littleEndian (take 2 header)) (fromIntegral (min (littleEndian (take 4 (drop 4 header))) (fromIntegral payloadCapacity)))
+
+-- | The receive buffer's defined flags, from the header and payload bytes it holds.
+receiveDefined :: [Word8] -> [Word8] -> [Bool]
+receiveDefined header payload
+  | littleEndian (take 4 (drop 8 header)) == receivePayload = requestDefined header payload
+  | otherwise = map (const True) payload
+
+-- | A state snapshot (result slot, then session and open set) with the receive buffer's
+-- undefined payload bytes as "--".
+maskState :: Value -> Value
+maskState (Array snapshots) | [slot, String session] <- V.toList snapshots = A.toJSON [slot, String (maskSession (hexBytes session))]
+maskState other = other
+
+maskSession :: [Word8] -> T.Text
+maskSession bytes = maskedHex flags bytes
+  where
+    Span (Address sessionStart) _ = sessionAndOpenSet
+    headerAt = fromIntegral (receiveHeader - sessionStart)
+    payloadAt = fromIntegral (receivePayload - sessionStart)
+    payload = take payloadCapacity (drop payloadAt bytes)
+    flags = replicate payloadAt True ++ receiveDefined (take 12 (drop headerAt bytes)) payload ++ repeat True
+
+-- | A request header read and its payload read, with undefined payload bytes as "--".
+requestReads :: Value -> Value
+requestReads hit = case [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))] of
+  [String header, String payload] ->
+    let bytes = hexBytes payload
+     in A.toJSON [String header, String (maskedHex (requestDefined (hexBytes header) bytes) bytes)]
+  other -> A.toJSON other
+
+-- | The watched writes with each undefined receive-buffer payload byte, written or overwritten,
+-- as null. Records without a value (model bulk writes) pass unchanged. A write covering the
+-- header's code starts a request; a request's bytes are judged on the buffer its last write
+-- leaves.
+maskWrites :: [Value] -> [Value]
+maskWrites records = concat (zipWith3 maskRequest requests (const True : judged) judged)
+  where
+    writes = [fromMaybe (0, 0, [], [], record) (parseWrite record) | record <- records]
+    starts (address, size, _, _, _) = address <= receiveHeader && receiveHeader < address + fromIntegral size
+    requests = case splitRequests writes of
+      first : rest | not (any starts (take 1 first)) -> first : rest
+      groups -> [] : groups
+    images = drop 1 (scanl (foldl' apply) M.empty requests)
+    judged = zipWith (\index image -> if index == (0 :: Int) then const True else definedIn image) [0 ..] images
+    splitRequests [] = []
+    splitRequests (w : ws) = let (same, next) = break starts ws in (w : same) : splitRequests next
+    apply image (address, _, value, before, _) =
+      let at bytes = M.fromList (zip [address ..] bytes)
+       in M.union (at value) (M.union image (at before))
+    definedIn image =
+      let byteAt a = M.findWithDefault 0 a image
+          payloadAddresses = take payloadCapacity [receivePayload ..]
+          flags = M.fromList (zip payloadAddresses (receiveDefined (map byteAt (take 12 [receiveHeader ..])) (map byteAt payloadAddresses)))
+       in \a -> M.findWithDefault True a flags
+    maskRequest group previous current = zipWith mask group (scanl (\seen (address, _, value, _, _) -> foldr (:) seen (take (length value) [address ..])) [] group)
+      where
+        mask (address, _, value, before, record) seen
+          | null value = record
+          | otherwise =
+              let addresses = [address ..]
+                  keep defined b = if defined then Just b else Nothing
+                  beforeDefined a = if a `elem` seen then current a else previous a
+               in Object (KM.insert "value" (A.toJSON (zipWith keep (map current addresses) value)) (KM.insert "before" (A.toJSON (zipWith keep (map beforeDefined addresses) before)) (objectFields record)))
+    objectFields (Object fields) = fields
+    objectFields _ = KM.empty
+
+-- | A CPU write as address, size, value bytes, overwritten bytes and the record.
+parseWrite :: Value -> Maybe (Word32, Int, [Word8], [Word8], Value)
+parseWrite record = do
+  address <- hexValue (field "address" record)
+  Number size <- Just (field "size" record)
+  Number value <- Just (field "value" record)
+  let count = truncate size :: Int
+      word = truncate value :: Integer
+      before = [fromIntegral (truncate b :: Integer) | Number b <- arrayOf (field "before" record)]
+  pure (address, count, [fromIntegral (word `shiftR` (8 * i)) | i <- [0 .. count - 1]], before, record)
+
+hexBytes :: T.Text -> [Word8]
+hexBytes text = go (T.unpack text)
+  where
+    go (a : b : rest) | [(v, "")] <- readHex [a, b] = fromIntegral (v :: Int) : go rest
+    go _ = []
+
+maskedHex :: [Bool] -> [Word8] -> T.Text
+maskedHex flags bytes = T.pack (concat (zipWith byte flags bytes))
+  where
+    byte True b = (if b < 16 then "0" else "") ++ showHex b ""
+    byte False _ = "--"
+
+littleEndian :: [Word8] -> Word32
+littleEndian = foldr (\b acc -> acc `shiftL` 8 .|. fromIntegral b) 0
+
 event :: Span -> Value -> Maybe Event
 event body hit = do
   label <- textOf (field "site" hit)
   address <- hexValue (field "address" hit)
   lr <- hexValue (field "lr" hit)
-  let common = ["core" .= field "core" hit, "task" .= taskOf hit, "state" .= field "memory" hit]
+  let common = ["core" .= field "core" hit, "task" .= taskOf hit, "state" .= maskState (field "memory" hit)]
   case label of
     _ | "fs:" `isPrefixOf` label ->
           let name = drop 3 label
               (live, dead) = splitAt (arity name) argumentRegisters
-           in Just (Event "entry" name (external body lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
+              captured = if name == "post" then requestReads hit else readsOf hit
+           in Just (Event "entry" name (external body lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= registersOf live hit, "reads" .= captured] ++ common)) (registersOf dead hit))
       | "worker:" `isPrefixOf` label ->
-          Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= readsOf hit] ++ common)) (object []))
+          Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= requestReads hit] ++ common)) (object []))
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
           let name = fromMaybe (hexWord site) (M.lookup site entryNames)
               kind = if M.member site entryNames then "return" else "worker-return"
-              dead = if kind == "return" then M.findWithDefault [] address deadAtReturn else argumentRegisters
+              unread r = r `elem` clobbered name || (r == "r0" && address `elem` resultUnread)
+              dead = if kind == "return" then filter unread argumentRegisters else argumentRegisters
               live = filter (`notElem` dead) argumentRegisters
           Just (Event kind name (kind == "worker-return" || external body address) (object (["kind" .= kind, "name" .= name, "result" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
       | otherwise -> Nothing
@@ -520,11 +665,13 @@ compareMain stockDir ownedDir symbols output = do
   (ownedEvents, ownedReceipt, ownedSteps) <- load ownedDir
   forM_ [stockReceipt, ownedReceipt] $ \r -> need (field "status" (field "outcome" r) == String "completed") "an observation did not complete"
   need (field "role" stockReceipt == String (roleName Stock)) "the first observation must have the stock role"
-  let interface events = [eventValue e | e <- events, eventExternal e]
+  let watches receipt steps = [field "watch" s | s <- arrayOf (field "reset_segments" receipt)] ++ [field "watch" s | s <- steps]
+      writesOf receipt steps = maskWrites (concatMap (arrayOf . field "writes") (watches receipt steps))
+      stockWrites = writesOf stockReceipt stockSteps
+      ownedWrites = writesOf ownedReceipt ownedSteps
+      interface events = [eventValue e | e <- events, eventExternal e]
       dead events = [eventDead e | e <- events, eventExternal e]
       internal events = [eventValue e | e <- events, not (eventExternal e)]
-      watches receipt steps = [field "watch" s | s <- arrayOf (field "reset_segments" receipt)] ++ [field "watch" s | s <- steps]
-      writesOf receipt steps = concatMap (arrayOf . field "writes") (watches receipt steps)
       fetchTotal receipt steps = sum [n | w <- watches receipt steps, Number c <- [field "fetch_count" w], let n = truncate c :: Integer]
       violations receipt steps = [v | w <- watches receipt steps, let v = field "violation" w, v /= Null]
       screens receipt steps = field "sha256" (field "attached_screen" receipt) : [field "sha256" (field "screen" s) | s <- steps]
@@ -532,15 +679,15 @@ compareMain stockDir ownedDir symbols output = do
       pairValue = maybe (object ["interface" .= (0 :: Int), "internal" .= (0 :: Int)]) (\(a, b) -> object ["interface" .= a, "internal" .= b])
       stockCounts = counts stockEvents
       ownedCounts = counts ownedEvents
-      interfaceCounts = M.map fst
+      interfaceCounts = M.filter (> 0) . M.map fst
       sequenceDiff = firstDifferences 20 (interface stockEvents) (interface ownedEvents)
-      writeDiff = firstDifferences 20 (writesOf stockReceipt stockSteps) (writesOf ownedReceipt ownedSteps)
+      writeDiff = firstDifferences 20 stockWrites ownedWrites
       screenDiff = firstDifferences 20 (screens stockReceipt stockSteps) (screens ownedReceipt ownedSteps)
       ownedFetches = fetchTotal ownedReceipt ownedSteps
       behaviorEqual =
         interface stockEvents == interface ownedEvents
           && interfaceCounts stockCounts == interfaceCounts ownedCounts
-          && writesOf stockReceipt stockSteps == writesOf ownedReceipt ownedSteps
+          && stockWrites == ownedWrites
           && screens stockReceipt stockSteps == screens ownedReceipt ownedSteps
           && null (violations stockReceipt stockSteps) && null (violations ownedReceipt ownedSteps)
           && sharedInputs stockReceipt == sharedInputs ownedReceipt
@@ -552,8 +699,8 @@ compareMain stockDir ownedDir symbols output = do
   BL.writeFile output $ A.encode $ object
     [ "schema" .= (1 :: Int)
     , "owned_body" .= spanValue body
-    , "stock" .= object ["directory" .= stockDir, "inputs" .= field "inputs" stockReceipt, "hits" .= field "hit_count" stockReceipt, "events" .= length stockEvents, "interface_events" .= length (interface stockEvents), "internal_events" .= length (internal stockEvents), "retired_fetches" .= fetchTotal stockReceipt stockSteps, "watched_writes" .= length (writesOf stockReceipt stockSteps)]
-    , "owned" .= object ["directory" .= ownedDir, "inputs" .= field "inputs" ownedReceipt, "hits" .= field "hit_count" ownedReceipt, "events" .= length ownedEvents, "interface_events" .= length (interface ownedEvents), "internal_events" .= length (internal ownedEvents), "retired_fetches" .= ownedFetches, "watched_writes" .= length (writesOf ownedReceipt ownedSteps)]
+    , "stock" .= object ["directory" .= stockDir, "inputs" .= field "inputs" stockReceipt, "hits" .= field "hit_count" stockReceipt, "events" .= length stockEvents, "interface_events" .= length (interface stockEvents), "internal_events" .= length (internal stockEvents), "retired_fetches" .= fetchTotal stockReceipt stockSteps, "watched_writes" .= length stockWrites]
+    , "owned" .= object ["directory" .= ownedDir, "inputs" .= field "inputs" ownedReceipt, "hits" .= field "hit_count" ownedReceipt, "events" .= length ownedEvents, "interface_events" .= length (interface ownedEvents), "internal_events" .= length (internal ownedEvents), "retired_fetches" .= ownedFetches, "watched_writes" .= length ownedWrites]
     , "entry_counts" .= countTable
     , "interface_sequence" .= sequenceDiff
     , "dead_registers" .= firstDifferences 20 (dead stockEvents) (dead ownedEvents)
