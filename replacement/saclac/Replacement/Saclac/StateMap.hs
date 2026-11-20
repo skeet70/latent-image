@@ -83,7 +83,7 @@ parseFields base image countAddress tableAddress = do
   if count == 0 || count > 512 then Left ("the field table declares " ++ show count ++ " fields") else Right ()
   fields <- mapM (\index -> Field <$> (fromIntegral <$> word (tableAddress + 8 * index)) <*> (fromIntegral <$> word (tableAddress + 8 * index + 4))) [0 .. count - 1]
   if any ((<= 0) . fieldLength) fields then Left "a field is empty" else Right ()
-  if fieldsBytes fields > 4096 then Left "the overlay exceeds 4096 bytes" else Right ()
+  if fieldsBytes fields > 8192 then Left "the overlay exceeds 8192 bytes" else Right ()
   if overlapping fields then Left "two fields overlap" else Right fields
   where
     word address
@@ -121,14 +121,24 @@ fieldAt fields address = any (\field -> fieldAddress field <= address && address
 -- ---------------------------------------------------------------------------
 -- Stock-private data
 
--- | The data the replaced stock saclac code (0x00ef8ad0..0x00f473a4) owns: the x70view
--- 55436fc85c0560dd252b0410af6f2427fe198cd3 X-M1 1.50 data symbols whose translation unit lies
--- in that code range run contiguously from 0x0169cf00 to 0x016c73f0, with two further runs at
--- 0x016caf00 (mode_rate_controller) and 0x016cd228 (s54u_rate_workspace). Root keeps none of
--- it except the census shared spans; every byte of it the stock step reads before writing must
--- come from the map.
+-- | The data the stock code Root replaces owns and Root does not keep in stock layout. The
+-- saclac code (0x00ef8ad0..0x00f473a4): the x70view 55436fc85c0560dd252b0410af6f2427fe198cd3
+-- X-M1 1.50 data symbols whose translation unit lies in that range run contiguously from
+-- 0x0169cf00 to 0x016c73f0, with two further runs at 0x016caf00 (mode_rate_controller) and
+-- 0x016cd228 (s54u_rate_workspace). Outside that range the step also keeps the adjustment
+-- sequence at 0x016d8708, written by 0x00fa9588, which Root replaces with typed state.
+-- Memory Root keeps or reads in stock layout is not listed: the census shared spans, the
+-- shared profile block 0x0091904c and statistics descriptor 0x009190f0 (Root's
+-- ProfileRecords view) and the area-statistics entries at 0x1ffee718 Root reads through the
+-- descriptor. Every byte of the listed data the stock step reads before writing must come
+-- from the map.
 stockPrivate :: [Span]
-stockPrivate = [Span 0x0169cf00 0x016c73f0, Span 0x016caf00 0x016cc960, Span 0x016cd228 0x016cd2a0]
+stockPrivate =
+  [ Span 0x0169cf00 0x016c73f0
+  , Span 0x016caf00 0x016cc960
+  , Span 0x016cd228 0x016cd2a0
+  , Span 0x016d8708 0x016d8ff2
+  ]
 
 private :: [Span] -> Integer -> Bool
 private shared address = any (`spanAt` address) stockPrivate && not (any (`spanAt` address) shared)

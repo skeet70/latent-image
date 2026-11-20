@@ -555,13 +555,15 @@ data Qualification = Qualification
   , qualReadySize :: Word32
   }
 
--- | Harness scratch for one map call: the input overlay at +0, the output at +0x1000 and the
--- refusal detail word at +0x1ff0.
+-- | Harness scratch for one map call: the input overlay at +0, the output at +0x2000 and the
+-- refusal detail word at +0x4000; an overlay holds at most 8192 bytes.
 qualIoBase :: Word32
 qualIoBase = 0x02100000
 
-qualIoSize :: Word32
-qualIoSize = 0x2000
+qualIoSize, qualOutOffset, qualGapOffset :: Word32
+qualIoSize = 0x5000
+qualOutOffset = 0x2000
+qualGapOffset = 0x4000
 
 loadQualification :: (FilePath, FilePath) -> IO Qualification
 loadQualification (binPath, symbolsPath) = do
@@ -646,8 +648,8 @@ runQualification options qual ident state call = go (0 :: Int) (mapMaybe (granul
       QualEncode _ _ -> qualEncode qual
       QualRoundtrip _ -> qualRoundtrip qual
     arguments = case call of
-      QualEncode owner ready -> [owner, ready, qualIoBase + 0x1000, qualIoBase + 0x1ff0]
-      QualRoundtrip _ -> [qualIoBase, qualIoBase + 0x1000, qualIoBase + 0x1ff0, 0]
+      QualEncode owner ready -> [owner, ready, qualIoBase + qualOutOffset, qualIoBase + qualGapOffset]
+      QualRoundtrip _ -> [qualIoBase, qualIoBase + qualOutOffset, qualIoBase + qualGapOffset, 0]
     textSize = qualTextEnd qual - qualBase qual
     dataSize = qualEnd qual - qualTextEnd qual
     dataBytes = B.drop (fromIntegral textSize) (qualImage qual)
@@ -690,8 +692,8 @@ runQualification options qual ident state call = go (0 :: Int) (mapMaybe (granul
             "returned" -> pure $ case M.lookup "q-io" (runMemory run) of
               Just io | B.length io == fromIntegral qualIoSize -> Right QualRun
                 { qualCode = runR0 run
-                , qualGap = wordAt io 0x1ff0
-                , qualOut = B.take (fieldsBytes (qualFields qual)) (B.drop 0x1000 io)
+                , qualGap = wordAt io (fromIntegral qualGapOffset)
+                , qualOut = B.take (fieldsBytes (qualFields qual)) (B.drop (fromIntegral qualOutOffset) io)
                 , qualReads = coverageRead' (coverageAddresses isStateRegion run)
                 , qualInstructions = runInstructions run
                 , qualCaseSha = runCaseSha run
@@ -770,10 +772,12 @@ mapCycle options qualification shared lane index wake input completion = case qu
           completionMap <- completionRun
           refused "wake encode" wakeMap
           refused "completion encode" completionMap
-          let outside = [address | address <- qualReads wakeMap ++ qualReads completionMap, not (any (`spanAt` address) (rootData : shared))]
+          -- Root's state is its own data plus the retained memory it keeps or reads in stock
+          -- layout; the stock-private blocks hold nothing Root wrote, so the map may not read them.
+          let outside = [address | address <- qualReads wakeMap ++ qualReads completionMap, not (spanAt rootData address), not (abstractDifference shared [] address)]
           if null outside
             then Right ()
-            else Left ("refused: the map read outside Root's data and the shared spans: " ++ unwords [hexText low ++ ".." ++ hexText high | (low, high) <- take 16 (ranges (nub (sortOn id outside)))])
+            else Left ("refused: the map read stock-private memory Root does not keep: " ++ unwords [hexText low ++ ".." ++ hexText high | (low, high) <- take 16 (ranges (nub (sortOn id outside)))])
           input' <- applyOverlay (qualFields qual) (qualOut wakeMap) input
           observed' <- applyOverlay (qualFields qual) (qualOut completionMap) completion
           pure Mapping
