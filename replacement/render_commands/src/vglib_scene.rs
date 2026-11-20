@@ -110,8 +110,8 @@ pub enum ObjectRefusal {
     ColourTransform,
     /// Surface size or factors from `0x6dd884`/`0x6dda20` other than 720 x 480 at 1.0.
     SurfaceScale { display_mode: u32, output_mode: u8 },
-    /// A scaled position or size that is not finite, or a scaled width or height that is not positive.
-    DegenerateGeometry,
+    /// A scaled position or size that is not finite, or a negative scaled width or height (a mirrored draw).
+    NegativeOrNonFiniteGeometry,
     /// Created size words `+8`/`+0xc` differ from the VGImage extent.
     ImageSize,
     /// The image handle does not resolve to a live image (`0x82b428`).
@@ -411,6 +411,9 @@ pub enum Lowered<'a> {
     NoResource,
     /// Clipping enabled with a scissor rectangle that covers no panel pixel.
     ClippedOut,
+    /// A zero scaled width or height. [INFERENCE] The draw's singular matrix maps the object onto a line, which OpenVG
+    /// covers with no pixel.
+    Collapsed,
     Draw { clip: Option<PanelRect>, command: DrawCommand<'a> },
 }
 
@@ -422,6 +425,8 @@ pub struct SceneReport {
     pub drawn: usize,
     /// Visible objects whose scissor covers no panel pixel; their draw method still returns 1 (`6d8ce4`, `6da5fc`).
     pub clipped: usize,
+    /// Visible objects with a zero scaled width or height; their draw method still returns 1.
+    pub collapsed: usize,
 }
 
 /// A validated walk of the 24 groups.
@@ -492,7 +497,7 @@ impl<'m, 'a> Scene<'m, 'a> {
         if surface != (SurfaceScale { width: PANEL_WIDTH as f32, height: PANEL_HEIGHT as f32, x: 1.0, y: 1.0 }) {
             return Err(ObjectRefusal::SurfaceScale { display_mode: self.display.display_mode, output_mode: base.output_mode });
         }
-        let dest = destination(base, surface)?;
+        let Some(dest) = destination(base, surface)? else { return Ok(Lowered::Collapsed) };
         let clip = match base.clip {
             None => None,
             Some(clip) => match scissor(clip, surface, object.class) {
@@ -538,6 +543,7 @@ impl<'m, 'a> Scene<'m, 'a> {
                 Lowered::Hidden => {}
                 Lowered::NoResource => report.visible += 1,
                 Lowered::ClippedOut => { report.visible += 1; report.clipped += 1; }
+                Lowered::Collapsed => { report.visible += 1; report.collapsed += 1; }
                 Lowered::Draw { clip, command } => {
                     report.visible += 1;
                     report.drawn += 1;
@@ -609,13 +615,16 @@ pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], vertices: &mu
 /// [INFERENCE] Images land on the same rectangle: both classes take their position from the same commit packet
 /// (`img6:117d648-117d664`), and the image matrix ends in `diag(1, -1, 1)` (`0x774bac`), whose placement relative to
 /// the translation is an engine law of `vgDrawImage`.
-fn destination(base: BaseFields, surface: SurfaceScale) -> Result<SceneRect, ObjectRefusal> {
-    SceneRect::new(
-        base.position.x * surface.x,
-        base.position.y * surface.y,
-        base.size.width * base.scale.x * surface.x,
-        base.size.height * base.scale.y * surface.y,
-    ).ok_or(ObjectRefusal::DegenerateGeometry)
+/// `None` for a zero width or height.
+fn destination(base: BaseFields, surface: SurfaceScale) -> Result<Option<SceneRect>, ObjectRefusal> {
+    let x = base.position.x * surface.x;
+    let y = base.position.y * surface.y;
+    let width = base.size.width * base.scale.x * surface.x;
+    let height = base.size.height * base.scale.y * surface.y;
+    if !(x.is_finite() && y.is_finite() && width.is_finite() && height.is_finite()) || width < 0.0 || height < 0.0 {
+        return Err(ObjectRefusal::NegativeOrNonFiniteGeometry);
+    }
+    Ok(SceneRect::new(x, y, width, height))
 }
 
 /// The scissor rectangle each draw sets (`6d8c2c-6d8cb4`, `6da414-6da49c`), returned in top-left panel space and

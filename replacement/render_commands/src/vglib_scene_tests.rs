@@ -222,7 +222,7 @@ fn groups_render_from_twenty_three_down_and_each_list_from_its_head() {
     ram.group(7, &[(9, objects[2])]);
     ram.group(0, &[(1, objects[3])]);
     let (report, out) = render(&ram).unwrap();
-    assert_eq!(report, SceneReport { objects: 4, visible: 4, drawn: 4, clipped: 0 });
+    assert_eq!(report, SceneReport { objects: 4, visible: 4, drawn: 4, clipped: 0, collapsed: 0 });
     let expected: Vec<Out> = [10, 20, 30, 40].iter()
         .flat_map(|x| [Out::ResetClip, image_at(rect(*x, 0, 8, 4), (8, 4))]).collect();
     assert_eq!(out, expected);
@@ -276,17 +276,17 @@ fn shape_scissor_saturates_its_bottom_edge_and_image_scissor_does_not() {
 fn clip_outside_the_panel_draws_nothing_but_counts_as_visible() {
     let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
     ram.clip(object, [800, 0, 10, 10]);
-    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 1 }, vec![]));
+    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 1, collapsed: 0 }, vec![]));
 }
 
 #[test]
 fn hidden_and_resourceless_objects_draw_nothing() {
     let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
     ram.put8(object + 0x47, 0);
-    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 0, drawn: 0, clipped: 0 }, vec![]));
+    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 0, drawn: 0, clipped: 0, collapsed: 0 }, vec![]));
     let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
     ram.put32(object + 0xc4, 0);
-    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 0 }, vec![]));
+    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 0, collapsed: 0 }, vec![]));
 }
 
 #[test]
@@ -414,9 +414,18 @@ fn image_storage_and_geometry_refusals() {
     ram.put16(object + 0x200 + 0x3c, 9);
     ram.put16(object + 0x200 + 0x4c, 36);
     assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageSize));
-    for scale in [(0.0, 1.0), (1.0, -1.0)] {
+    for scale in [(-1.0, 1.0), (1.0, -1.0), (f32::MAX, 1.0)] {
         let (ram, object) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale });
-        assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::DegenerateGeometry));
+        assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NegativeOrNonFiniteGeometry));
+    }
+}
+
+#[test]
+fn zero_width_or_height_draws_nothing_but_counts_as_visible() {
+    // The picker-15 parent screen's shape 0xaf42e8 has scale words (9, 0).
+    for scale in [(0.0, 1.0), (9.0, 0.0), (-0.0, 1.0)] {
+        let (ram, _) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale });
+        assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 0, collapsed: 1 }, vec![]));
     }
 }
 

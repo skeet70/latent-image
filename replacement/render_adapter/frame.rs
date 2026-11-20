@@ -338,7 +338,7 @@ fn decide(state: &mut FrameState) -> Result<Decided, FallbackReason> {
         _ => FallbackReason::Publisher,
     })?;
     let buffer = ScanoutAddress::new(addresses.0[match back { BufferIndex::First => 0, BufferIndex::Second => 1 }]);
-    let reached = report.drawn + report.clipped;
+    let reached = report.drawn + report.clipped + report.collapsed;
     let floor = f32::from_bits(word(RESULT_FLOOR));
     let render_result = if reached > 0 || floor > 0.0 { 1 } else { 0 };
     Ok(Decided { frame, buffer, commands: commands.draw_list().commands().len(), visible: report.visible as u32, render_result })
