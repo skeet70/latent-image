@@ -36,6 +36,20 @@ This is a static contract for image4 `[0x6ac2b4,0x6ae114)`. **byte-read** denote
 
 **byte-read**: Cache misses invoke `0x6aad94(aligned_pool_relative_byte_address, cache_buffer)`; its terminal dispatch is `0x6a8d40(address>>17,1,cache_buffer)`, a complete 128 KiB block read (`0x6ad910..0x6ad930`, `0x6aad94..0x6aadd0`, `0x6aafc8..0x6aafd0`). Raw physical remapping is below this contract. The supplied known backend chain reaches NAND request entries read `0x6fb904`, write `0x6fb7c8`, erase `0x6fb57c`; their physical-device completion semantics are outside the replaced span.
 
+## Client call sites
+
+**byte-read** (`lz/id4.dis`): every direct image4 call into the nine entries, by client. The root task opens the service once at `0x69d1d4`; image5's only call is `0x6ae0fc` from `0xdbad50`.
+
+| Kind | Client | Register | Read latest | Append | Close | Erase all | Collect, read at |
+| ---: | --- | --- | --- | --- | --- | --- | --- |
+| 0 | registered by `0x727e5c` | `0x727eac` | `0x727efc` | `0x728098` | `0x727ecc` | `0x72824c` | `0x72827c`, `0x728334` |
+| 1 | registered by `0x727c08` | `0x727c58` | `0x727ca8` | `0x727cec` | `0x727c78` | `0x727d08` | `0x727d38` |
+| 2 | area 2 settings log | `0x6a75f4` | `0x6a7604` | `0x6a81b4` in `0x6a8074` | `0x6a81cc` | `0x6a83ec` in `0x6a83d8` | none |
+| 3 | area 3 custom record | `0x6a8b0c` | `0x6a867c` | `0x6a874c` in `0x6a86c4` | `0x6a86b8` | `0x6a8be4` | none |
+| 4 | registered by `0x6b02d4` | `0x6b0324` | `0x6b0334` | `0x6b04f4` | `0x6b0494` | `0x6b05d0` | none |
+
+The area-2 appender `0x6a8074` is the only area-2 writer through this service; its callers are `0x00ec2cb8` (argument 1) and `0x00ec4154` (argument 0), and `0x6a83d8` has no caller (E-AREA2-WRITERS-150). The area-3 appender `0x6a86c4` runs from the settings copy-back `0x6a6f3c` and from boot refresh `0x6a8b68` ([settings lifecycle](../emulation/settings-lifecycle-matrix.md)).
+
 ## Nine client entries
 
 ### `0x6ac2b4`: open service

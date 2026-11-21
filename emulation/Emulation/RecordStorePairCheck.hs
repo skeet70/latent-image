@@ -852,16 +852,20 @@ qualify role bindings observation = do
   (>=>) first second value = first value >>= second
 
 coverageValue :: Qualified -> Value
-coverageValue (Qualified role cohort _ intervals _) = object
+coverageValue (Qualified role cohort _ intervals _) = object (
   [ "role" .= (if role == Stock then "stock" else "owned" :: T.Text)
   , "record_nand_sha256" .= fmap (\(Digest value) -> value) (lookup (InputName "record-nand") cohort)
-  , "external_entries" .= object [K.fromText (entryName entry) .= length [() | Call called _ _ _ <- calls, called == entry] | entry <- [minBound..maxBound]]
-  , "external_entry_total" .= length calls
-  , "nand" .= object ["program" .= length [() | Program _ _ <- requests],"erase" .= length [() | Erase _ _ <- requests]]
-  ]
+  ] ++ counts intervals
+  ++ concat [["power_off" .= object (counts off),"reboot" .= object (counts reboot)] | not (null off)])
  where
-  calls = concat [observed | Interval _ _ observed _ _ _ _ _ <- intervals]
-  requests = concat [observed | Interval _ _ _ observed _ _ _ _ <- intervals]
+  off = [interval | interval@(Interval name _ _ _ _ _ _ _) <- intervals, name == "power-off"]
+  reboot = [interval | interval@(Interval name _ _ _ _ _ _ _) <- intervals, "reboot-" `T.isPrefixOf` name]
+  counts selected =
+    let calls = concat [observed | Interval _ _ observed _ _ _ _ _ <- selected]
+        requests = concat [observed | Interval _ _ _ observed _ _ _ _ <- selected]
+     in [ "external_entries" .= object [K.fromText (entryName entry) .= length [() | Call called _ _ _ <- calls, called == entry] | entry <- [minBound..maxBound]]
+        , "external_entry_total" .= length calls
+        , "nand" .= object ["program" .= length [() | Program _ _ <- requests],"erase" .= length [() | Erase _ _ <- requests]] ]
   entryName entry = case entry of
     Open -> "record_store_open"
     Register -> "record_store_register"
