@@ -203,6 +203,8 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/scanout_pair.rs",
     "//emulation:fujimod-xm1/src/scanout_pair_laws.rs",
     "//emulation:fujimod-xm1/src/scanout_pair_laws_tests.rs",
+    "//emulation:fujimod-xm1/src/scanout_pair_route.rs",
+    "//emulation:fujimod-xm1/src/scanout_pair_route_tests.rs",
     "//emulation:fujimod-xm1/src/scheduler_pair.rs",
     "//emulation:fujimod-xm1/src/sd_host.rs",
     "//emulation:fujimod-xm1/src/startup_callers.rs",
