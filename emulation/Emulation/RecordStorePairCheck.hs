@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.RecordStorePairCheck
-  ( Role (..), Sidecar (..), sidecarName, Observation (..), Bindings (..)
+  ( Role (..), Sidecar (..), sidecarName, baseSidecars, cycleSidecars, Observation (..), Bindings (..)
   , Qualified, qualify, ComparisonContract, parseComparisonContract, comparisonEvidencePath, validateComparisonEvidence, comparePair, comparisonValue, validateInputs, cacheContract, cacheSymbolLayout
   ) where
 
@@ -34,7 +34,10 @@ import EmulatorUsb (CrawlKey (..))
 import Numeric (readHex, showHex)
 
 data Role = Stock | Owned deriving (Eq, Show)
-data Sidecar = Spec | Extents | Reset | Hits | Steps | MediumFile | Session deriving (Eq, Ord, Show, Enum, Bounded)
+data Sidecar = Spec | Extents | Reset | Hits | Steps | MediumFile | Session | PowerOffFile | RebootReset | RebootHits | RebootSession deriving (Eq, Ord, Show, Enum, Bounded)
+baseSidecars, cycleSidecars :: [Sidecar]
+baseSidecars = [Spec .. Session]
+cycleSidecars = [PowerOffFile .. RebootSession]
 sidecarName :: Sidecar -> String
 sidecarName file = case file of
   Spec -> "spec.json"
@@ -44,6 +47,10 @@ sidecarName file = case file of
   Steps -> "steps.json"
   MediumFile -> "medium.json"
   Session -> "emulator-session.json"
+  PowerOffFile -> "power-off.json"
+  RebootReset -> "reboot/reset-observation.json"
+  RebootHits -> "reboot-hits.jsonl"
+  RebootSession -> "reboot/emulator-session.json"
 data Observation = Observation { receiptBytes :: B.ByteString, sidecars :: M.Map Sidecar B.ByteString }
 data Bindings = Bindings { contractBytes :: B.ByteString, linkedBytes :: B.ByteString, symbolBytes :: B.ByteString, routeBytes :: B.ByteString }
 newtype Address = Address Word32 deriving (Eq, Ord, Show)
@@ -672,7 +679,11 @@ forceQualified (Qualified _ cohort routes intervals medium) =
 qualify :: Role -> Bindings -> Observation -> Parse Qualified
 qualify role bindings observation = do
   receipt <- json (receiptBytes observation)
-  need (field "schema" receipt == Right (Number 2)) "unsupported receipt schema"
+  schema <- field "schema" receipt
+  cycled <- case schema of
+    Number 2 -> Right False
+    Number 3 -> Right True
+    _ -> Left "unsupported receipt schema"
   need (field "endpoint_contract" receipt == Right (String "finite-post-settle-prefix-v2")) "endpoint contract differs"
   need (field "post_settle_prefix_ticks" receipt == Right (A.toJSON (tickValue (Tick 833334)))) "post-settle prefix policy differs"
   need (field "role" receipt == Right (String (if role == Stock then "stock" else "owned"))) "receipt role differs"
@@ -681,8 +692,9 @@ qualify role bindings observation = do
   need (field "output_rule" receipt == Right (String "Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles.")) "caller-output preservation rule differs"
   cohort <- validateInputs bindings role receipt
   fileDigests <- field "files" receipt
-  exact (map (T.pack . sidecarName) [minBound..maxBound]) fileDigests
-  forM_ [minBound..maxBound] $ \file -> do
+  let files = baseSidecars ++ (if cycled then cycleSidecars else [])
+  exact (map (T.pack . sidecarName) files) fileDigests
+  forM_ files $ \file -> do
     bytes <- maybe (Left "missing sidecar") Right (M.lookup file (sidecars observation))
     expected <- field (T.pack (sidecarName file)) fileDigests >>= parseDigest
     need (digest bytes == expected) ("sidecar digest differs: " ++ sidecarName file)
@@ -711,28 +723,22 @@ qualify role bindings observation = do
   need (field "write_ranges" spec == Right (rangesValue writes) && field "read_ranges" spec == Right (rangesValue (retired role)) && field "fetch_ranges" spec == Right (rangesValue fetches)) "observation guard specification differs"
   need (field "hit_limit" spec == Right (Number 1500000) && field "watch_limit" spec == Right (Number 1048576)) "observation limits differ"
   routes <- decodeRouteFile (routeBytes bindings)
-  hitsBytes <- maybe (Left "missing hits") Right (M.lookup Hits (sidecars observation))
-  hits <- mapM (json >=> parseHit) (C.lines hitsBytes)
-  need (length hits < 1500000) "trace limit reached"
   let bridgeSites = [0x1469b20,0x1469b38,0xd806e8,0xd8073c,0x6b0aa8,0x6b0c3c,0x61c490,0x6c6b5c,0x6b0704]
       capturedSites = map (addressValue . entryAddress) [minBound..maxBound] ++ [0x6fb7c8,0x6fb57c]
-  forM_ hits $ \(Hit _ address _ _ _ captured) -> case captured of
-    Nothing -> need (addressValue address `notElem` capturedSites && (addressValue address `elem` bridgeSites || M.member (addressValue address) declaredSites)) "trace hit lacks required capture or has an undeclared site"
-    Just _ -> pure ()
-  reset <- load Reset
-  resetPoint <- field "reset" reset
-  need (field "instructions" resetPoint == Right (Number 0)) "observation did not begin at reset instruction zero"
-  initial <- field "regions_at_reset" reset >>= parseRegions (ResetSnapshot role)
-  segments <- field "segments" reset >>= array
-  need (length segments == 3) "reset phases missing"
-  let empty = State BeforeOpen Unopened M.empty M.empty
-      slice start end = do
-        need (start <= end && end <= length hits) "hit interval outside trace"
-        pure (take (end-start) (drop start hits))
-      interval (State activation service layouts pending) name keys before after start end press medium watch views = do
+      trace file = do
+        bytes <- maybe (Left "missing hits") Right (M.lookup file (sidecars observation))
+        parsed <- mapM (json >=> parseHit) (C.lines bytes)
+        need (length parsed < 1500000) "trace limit reached"
+        forM_ parsed $ \(Hit _ address _ _ _ captured) -> case captured of
+          Nothing -> need (addressValue address `notElem` capturedSites && (addressValue address `elem` bridgeSites || M.member (addressValue address) declaredSites)) "trace hit lacks required capture or has an undeclared site"
+          Just _ -> pure ()
+        pure parsed
+      empty = State BeforeOpen Unopened M.empty M.empty
+      interval traced (State activation service layouts pending) name keys before after start end press medium watch views = do
         nextActivation <- checkWatch role code activation views watch
-        window <- slice start end
-        let opens (Hit _ address _ lr _ captured) = address == entryAddress Open && not (within [(0x6ac2b4,0x6ae114)] (addressValue lr) 1)
+        need (start <= end && end <= length traced) "hit interval outside trace"
+        let window = take (end-start) (drop start traced)
+            opens (Hit _ address _ lr _ captured) = address == entryAddress Open && not (within [(0x6ac2b4,0x6ae114)] (addressValue lr) 1)
               && maybe False (\(event,_,_) -> event == Enter) captured
         when (role == Owned && activation == BeforeOpen && any opens window) $
           need (nextActivation == AfterOpen) "open entry lacks its activation fetch"
@@ -740,22 +746,30 @@ qualify role bindings observation = do
         let State _ _ _ remaining = next
         need (M.null remaining) "interval ends inside an external record call"
         pure (next,Interval name keys calls nand before after press medium)
-  (rootState,rootRegions,rootEnd,phases) <- foldM (\(state,before,start,acc) (phase,segment) -> do
-    name <- field "phase" segment >>= text
-    need (name == attachPhaseWire phase) "reset phases out of order"
-    end <- field "hits_end" segment >>= int
-    after <- field "regions" segment >>= parseRegions (ResetSnapshot role)
-    watch <- field "watch" segment
-    (next,result) <- interval state name [] before after start end Nothing Nothing watch "observe"
-    pure (next,after,end,acc ++ [result])) (empty,initial,0,[]) (zip [minBound..maxBound] segments)
-  let State rootActivation _ _ _ = rootState
-  when (role == Owned) $ need (rootActivation == AfterOpen) "missing first open-veneer fetch"
+      boot prefix traced reset = do
+        resetPoint <- field "reset" reset
+        need (field "instructions" resetPoint == Right (Number 0)) "observation did not begin at reset instruction zero"
+        initial <- field "regions_at_reset" reset >>= parseRegions (ResetSnapshot role)
+        segments <- field "segments" reset >>= array
+        need (length segments == 3) "reset phases missing"
+        result@(State activation _ _ _,_,_,_) <- foldM (\(state,before,start,acc) (phase,segment) -> do
+          name <- field "phase" segment >>= text
+          need (name == attachPhaseWire phase) "reset phases out of order"
+          end <- field "hits_end" segment >>= int
+          after <- field "regions" segment >>= parseRegions (ResetSnapshot role)
+          watch <- field "watch" segment
+          (next,observed) <- interval traced state (prefix <> name) [] before after start end Nothing Nothing watch "observe"
+          pure (next,after,end,acc ++ [observed])) (empty,initial,0,[]) (zip [minBound..maxBound] segments)
+        when (role == Owned) $ need (activation == AfterOpen) "missing first open-veneer fetch"
+        pure result
+  hits <- trace Hits
+  (rootState,rootRegions,rootEnd,phases) <- load Reset >>= boot "" hits
   attachedSettings <- field "settings_at_attach" receipt >>= parseRegions SettingsSnapshot
   need (attachedSettings == rootRegions) "attach settings differ from reset endpoint"
   attachedMedium <- field "medium_at_attach" receipt >>= parseMedium
   stepsBytes <- maybe (Left "missing steps") Right (M.lookup Steps (sidecars observation))
   let expectedPaths = S.fromList [take n keys | route <- routeList routes, let keys = routeKeys route, n <- [1..length keys]]
-  (_,lastEnd,reversedResults,_,paths) <- foldSteps (\(number,start,acc,known,seen) step -> do
+  (_,lastEnd,reversedResults,lastStates,paths) <- foldSteps (\(number,start,acc,known,seen) step -> do
     actual <- field "step" step >>= int
     need (actual == number) "steps are not sequential"
     parent <- field "parent" step >>= int
@@ -781,12 +795,12 @@ qualify role bindings observation = do
     let leaf = not (any (\candidate -> length candidate > length keys && take (length keys) candidate == keys) (S.toList expectedPaths))
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"
     watch <- field "watch" step
-    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press menu endpointMenu endpointMode)) finalMedium watch "fixed"
+    (next,result) <- interval hits parentState (T.pack (show number)) keys before after first last' (Just (Press menu endpointMenu endpointMode)) finalMedium watch "fixed"
     let acc' = result:acc
         accumulator = (number+1,last',acc',M.insert number (next,after,keys) known,S.insert keys seen)
     forceInterval result `seq` forceState next `seq` forceRegions after `seq` forceKeys keys `seq` acc' `seq` accumulator `seq` pure accumulator) (1,rootEnd,[],M.empty,S.empty) stepsBytes
   let results = reverse reversedResults
-  need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
+  need (paths == expectedPaths) "routes unobserved"
   forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
     case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
       [Interval _ _ calls requests _ _ (Just (Press _ _ _)) _] ->
@@ -798,7 +812,41 @@ qualify role bindings observation = do
         Interval _ _ _ _ _ _ _ (Just blocks):_ -> blocks
         _ -> attachedMedium
   need (terminal == lastMedium) "terminal medium differs from final leaf"
-  let qualified = Qualified role cohort (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results) terminal
+  powerCycle <- if not cycled then need (lastEnd == length hits) "trace tail unobserved" >> pure [] else do
+    budget <- field "power_off_budget" receipt >>= word64
+    need (budget >= 1 && budget <= 4000000000) "power-off budget outside the bridge range"
+    (leafState,leafRegions,leafKeys) <- case (routeList routes >>= \route -> [routeKeys route | not (null (routeKeys route))],M.lookupMax lastStates) of
+      ([keys],Just (_,leaf@(_,_,observed))) | observed == keys -> Right leaf
+      _ -> Left "a power cycle follows exactly one key route"
+    off <- load PowerOffFile
+    exact ["power_off","hits","watch","regions_before","regions_after","medium_after","export"] off
+    switched <- field "power_off" off >>= field "switched" >>= word64
+    terminal' <- field "power_off" off >>= field "terminal" >>= word64
+    need (terminal' > switched) "POWER OFF did not reach the stock terminal after the switch"
+    window <- field "hits" off >>= array >>= mapM int
+    (first,last') <- case window of [first,last'] | first == lastEnd && last' == length hits -> Right (first,last'); _ -> Left "power-off hit interval does not end the trace"
+    before <- field "regions_before" off >>= parseRegions SettingsSnapshot
+    need (before == leafRegions) "power-off settings do not start from the final leaf"
+    after <- field "regions_after" off >>= parseRegions SettingsSnapshot
+    offMedium <- field "medium_after" off >>= parseMedium
+    watch <- field "watch" off
+    (_,offInterval) <- interval hits leafState "power-off" leafKeys before after first last' Nothing (Just offMedium) watch "fixed"
+    exported <- field "export" off
+    need (field "status" exported == Right (String "exported")) "power-off NAND export refused"
+    exportDigest <- field "artifact" exported >>= field "sha256" >>= parseDigest
+    reboot <- field "reboot" receipt
+    exact ["emulator_start","input_committed_sha256","medium_at_attach","settings_at_attach"] reboot
+    committed <- field "input_committed_sha256" reboot >>= parseDigest
+    consumed <- field "emulator_start" reboot >>= field "inputs" >>= field "committed_nand" >>= parseDigest
+    need (committed == exportDigest && consumed == exportDigest) "reboot did not boot the exported medium"
+    rebootHits <- trace RebootHits
+    (_,rebootRegions,rebootEnd,rebootPhases) <- load RebootReset >>= boot "reboot-" rebootHits
+    need (rebootEnd == length rebootHits) "reboot trace tail unobserved"
+    rebootSettings <- field "settings_at_attach" reboot >>= parseRegions SettingsSnapshot
+    need (rebootSettings == rebootRegions) "reboot attach settings differ from reset endpoint"
+    rebootMedium <- field "medium_at_attach" reboot >>= parseMedium
+    pure (offInterval : rebootPhases ++ [Interval "reboot-attach-medium" [] [] [] rebootRegions rebootRegions Nothing (Just rebootMedium)])
+  let qualified = Qualified role cohort (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results ++ powerCycle) terminal
   forceQualified qualified `seq` pure qualified
  where
   (>=>) first second value = first value >>= second

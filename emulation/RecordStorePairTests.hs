@@ -325,6 +325,45 @@ keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation rec
   inputs = set "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
   receipt = encode (set "inputs" inputs (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original))
 
+data CycleEvidence = CycleOriginal | CyclePayload | CycleRebootMedium | CycleRebootSettings | CycleOtherExport | CycleTruncatedTail | CycleNoTerminal | CycleMissingRebootMarker | CycleOpenAtPowerOff deriving (Eq, Show, Enum, Bounded)
+
+-- | One key route, then POWER OFF that programs one record and a cold boot that opens and registers.
+cycleFixture :: Role -> CycleEvidence -> (Bindings, Observation)
+cycleFixture role evidence = (bound, Observation receipt files) where
+  (bound,Observation keyReceipt keyFiles) = keyFixture role BudgetedKey Sampled
+  decode bytes = either error id (A.eitherDecodeStrict' bytes)
+  get key (Object fields) = maybe (error "fixture field missing") id (KM.lookup key fields)
+  get _ _ = error "fixture object required"
+  set key value (Object fields) = Object (KM.insert key value fields)
+  set _ _ _ = error "fixture object required"
+  keyHits = maybe (error "fixture hits missing") id (M.lookup Hits keyFiles)
+  keyCount = length (C.lines keyHits)
+  program = hit 0x6fb7c8 0x6fb7c8 0x6a8d00 [0x910200,0,0,0] "entry"
+    [readback 0x910200 (B.concat (map wordBytes [0x3d6,0x2000,512,0x408e1700])),readback 0x8e1700 (B.cons (if evidence == CyclePayload then 1 else 2) (B.replicate 511 2))]
+  powerEvents = [program] ++ [hit 0x6ac7d4 0x6ac7d4 0x700100 [0x89f8b4,1,0x910100,0] "entry" [readback 0x910100 (B.replicate 4096 34)] | evidence == CycleOpenAtPowerOff]
+  hits = keyHits <> B.concat [encode event <> "\n" | event <- powerEvents]
+  powerEnd = keyCount + length powerEvents - (if evidence == CycleTruncatedTail then 1 else 0)
+  exported = object ["status" .= ("exported"::T.Text),"boundary" .= (1::Int),"after" .= (1::Int),"artifact" .= object ["sha256" .= hash "exported-nand","bytes" .= (4::Int)]]
+  powerOff = object ["power_off" .= object ["switched" .= (10::Int),"terminal" .= (if evidence == CycleNoTerminal then 10 else 20::Int)]
+    ,"hits" .= [keyCount,powerEnd],"watch" .= set "views" (String "fixed") (watch role LiveViewPhase Original)
+    ,"regions_before" .= regions Original,"regions_after" .= regions Original,"medium_after" .= medium Original,"export" .= exported]
+  rebootEvents = trace role Original OpenAndRegister
+  rebootMarker = if evidence == CycleMissingRebootMarker then MissingMarker else Original
+  rebootReset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
+    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= length rebootEvents,"watch" .= watch role phase rebootMarker,"regions" .= resetRegions role Original] | phase <- [minBound..maxBound]::[AttachPhase]]]
+  committed = hash (if evidence == CycleOtherExport then "other-nand" else "exported-nand")
+  reboot = object ["emulator_start" .= object ["inputs" .= object ["committed_nand" .= committed]],"input_committed_sha256" .= committed
+    ,"medium_at_attach" .= medium (if evidence == CycleRebootMedium then MappedMedium else Original),"settings_at_attach" .= regions (if evidence == CycleRebootSettings then BadSettings else Original)]
+  rebootResetFixed = if evidence == CycleRebootSettings
+    then set "segments" (A.toJSON [set "regions" (resetRegions role BadSettings) segment | segment <- arrayOf (get "segments" rebootReset)]) rebootReset
+    else rebootReset
+  arrayOf (Array values) = foldr (:) [] values
+  arrayOf _ = error "fixture array required"
+  files = M.union (M.fromList [(Hits,hits),(PowerOffFile,encode powerOff),(RebootReset,encode rebootResetFixed)
+    ,(RebootHits,B.intercalate "\n" (map encode rebootEvents) <> "\n"),(RebootSession,"{}")]) keyFiles
+  receipt = encode (set "schema" (Number 3) (set "power_off_budget" (Number 1000000000) (set "reboot" reboot
+    (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) (decode keyReceipt)))))
+
 data ImageSizePoint = RootPoint | ParentPoint | EntryPoint | DownPoint | UpPoint | BackPoint deriving (Eq, Show, Enum, Bounded)
 data ImageSizeEvidence = IntendedChoice | StalledChoice | ErasedStalledChoice | NoDownChange | WrongEntryCursor | WrongBackCursor | ChangedOtherSetting | ChangedAspect | UnpublishedBackup | ChangedImageSizeMode | WrongImageSizeTrial | WrongImageSizeFixture | ChangedUpRecord | ChangedBackRecord | ChangedUpNand | ChangedBackNand | ImageSizeRetiredFetch deriving (Eq, Show)
 data FixtureMenuFrame = FixtureMenuFrame MenuNodeAddress SettingIdentifier MenuCursor MenuDepth
@@ -528,6 +567,10 @@ main = do
         ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
           (Right left,Right right) -> not (isLeft (comparePair strictComparison left right))
           _ -> False
+      cycleCompared evidence = case (cycleFixture Stock CycleOriginal,cycleFixture Owned evidence) of
+        ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
+          (Right left,Right right) -> Just (not (isLeft (comparePair strictComparison left right)))
+          _ -> Nothing
       changedSteps transform =
         let (bound,observation) = keyFixture Owned ResetAppends Sampled
             steps = transform (maybe (error "missing steps") id (M.lookup Steps (sidecars observation)))
@@ -631,7 +674,10 @@ main = do
         ,("latched budget-exhausted keys admit finite input observations",all (\role -> let (bound,observation) = keyFixture role BudgetedKey Sampled in isRight (qualify role bound observation)) [Stock,Owned])
         ,("missing or changed exact prefix ticks refuse both roles",and [wrongPrefixPolicy role policy | role <- [Stock,Owned], policy <- [Nothing,Just (Number 833333)]])
         ,("old receipt schema refuses both roles",all (\role -> wrongEndpointVersion role "schema" (Number 1)) [Stock,Owned])
-        ,("old endpoint contract refuses both roles",all (\role -> wrongEndpointVersion role "endpoint_contract" (String "local-ui-drain")) [Stock,Owned])]
+        ,("old endpoint contract refuses both roles",all (\role -> wrongEndpointVersion role "endpoint_contract" (String "local-ui-drain")) [Stock,Owned])
+        ,("power cycle qualifies both roles and compares equal",cycleCompared CycleOriginal == Just True)]
+        ++ [("power cycle comparison detects " ++ show evidence,cycleCompared evidence == Just False) | evidence <- [CyclePayload,CycleRebootMedium,CycleRebootSettings]]
+        ++ [("power cycle qualification refuses " ++ show evidence,cycleCompared evidence == Nothing) | evidence <- [CycleOtherExport,CycleTruncatedTail,CycleNoTerminal,CycleMissingRebootMarker,CycleOpenAtPowerOff]]
         ++ [("intended image-size selection accepts the known stock stall without calling it equality",reportField "outcome" intendedDifference == Just (String "accepted-functional-difference"))
            ,("intended image-size selection reports both declared cases and derived rollback",intendedCasesReported)
            ,("a responsive stock image-size selection also satisfies the intended oracle",reportField "outcome" intendedMatch == Just (String "matched"))

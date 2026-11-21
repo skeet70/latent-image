@@ -14,23 +14,25 @@ import qualified Data.ByteString.Lazy as BL
 import Data.IORef
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Emulation.PropertyPairPlan (PhysicalRange (..), recordSettingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.WatchObservation (Tick (..))
 import EmulatorUsb
 import Numeric (readHex, showHex)
-import System.Directory (createDirectory, doesPathExist, makeAbsolute)
+import System.Directory (createDirectory, doesPathExist, getFileSize, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), IOMode (..), hFlush, hSetBuffering, stdout, withBinaryFile)
 
 data Role = Stock | Owned deriving (Eq)
-data Options = Options { role :: Role, inputs :: M.Map String FilePath, output :: FilePath }
+data Options = Options { role :: Role, inputs :: M.Map String FilePath, output :: FilePath, powerOffBudget :: Maybe Word64 }
 data Trie = Trie [(CrawlKey, Trie)]
 
 insertPath :: [CrawlKey] -> Trie -> Trie
@@ -56,13 +58,19 @@ parseOptions args = do
   pairs <- collect args
   let values = M.fromList pairs
       required = ["routes", "update", "contract", "linked", "symbols", "run", "boot-rom", "adjustment-nand", "bridge"]
+      controls = ["role", "output", "power-off-budget"]
   need (length pairs == M.size values && all (`M.member` values) ("role" : "output" : required)
-    && all (`elem` ("role" : "output" : "record-nand" : required)) (M.keys values)) "invalid record-store-pair-observe options"
+    && all (`elem` (controls ++ "record-nand" : required)) (M.keys values)) "invalid record-store-pair-observe options"
   selected <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
-  pure (Options selected (M.restrictKeys values (M.keysSet (M.delete "output" (M.delete "role" values)))) (values M.! "output"))
+  budget <- case M.lookup "power-off-budget" values of
+    Nothing -> pure Nothing
+    Just text -> case reads text of
+      [(instructions,"")] | instructions >= 1 && instructions <= (4000000000::Integer) -> pure (Just (fromInteger instructions))
+      _ -> ioError (userError "--power-off-budget must be 1..4000000000 instructions")
+  pure (Options selected (M.withoutKeys values (S.fromList controls)) (values M.! "output") budget)
  where
   collect [] = pure []
   collect (('-':'-':key) : value : rest) = ((key, value) :) <$> collect rest
@@ -163,7 +171,8 @@ main = do
   receipt <- newIORef KM.empty
   let record key value = modifyIORef' receipt (KM.insert key value)
       save status = do
-        hashes <- forM ["spec.json","owned-extents.json","reset-observation.json","hits.jsonl","steps.json","medium.json","emulator-session.json"] $ \name -> do
+        let cycleFiles = if isJust (powerOffBudget options) then ["power-off.json","reboot-hits.jsonl","reboot/reset-observation.json","reboot/emulator-session.json"] else []
+        hashes <- forM (["spec.json","owned-extents.json","reset-observation.json","hits.jsonl","steps.json","medium.json","emulator-session.json"] ++ cycleFiles) $ \name -> do
           present <- doesPathExist (directory </> name)
           digest <- if present then Just . sha256Hex <$> sha256File (directory </> name) else pure Nothing
           pure (K.fromString name .= digest)
@@ -185,7 +194,8 @@ observe options directory record = do
     pure (K.fromString name .= object ["path" .= path,"sha256" .= sha256Hex digest])
   observer <- getExecutablePath
   observerDigest <- sha256File observer
-  record "schema" (Number 2)
+  record "schema" (Number (if isJust (powerOffBudget options) then 3 else 2))
+  forM_ (powerOffBudget options) (record "power_off_budget" . A.toJSON)
   record "role" (String (if role options == Owned then "owned" else "stock"))
   record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer,"sha256" .= sha256Hex observerDigest]]))
   symbols <- B.readFile (paths M.! "symbols")
@@ -236,17 +246,21 @@ observe options directory record = do
   steps <- newIORef []
   cursor <- newIORef 0
   counter <- newIORef (0::Int)
+  let keyRoutes = [routeKeys route | route <- routeList routes, not (null (routeKeys route))]
+      exportPath = directory </> "nand-power-off.nand.gz"
+      drainInto file position emulator = do
+        start <- readIORef position
+        reply <- emulatorTraceHitsPage emulator start 65536
+        values <- case field "hits" reply of Array values -> pure (V.toList values); _ -> ioError (userError "trace-hits lacks hits")
+        forM_ values (\value -> BL.hPut file (A.encode value <> "\n"))
+        let end = start + length values
+        writeIORef position end
+        hFlush file
+        case field "count" reply of Number total | end < truncate total -> drainInto file position emulator; _ -> pure end
+      stop (emulator,_,()) = stopEmulator emulator
+  when (isJust (powerOffBudget options)) $ need (length keyRoutes == 1) "a power cycle follows exactly one key route"
   withBinaryFile (directory </> "hits.jsonl") WriteMode $ \hits -> do
-    let drain emulator = do
-          start <- readIORef cursor
-          reply <- emulatorTraceHitsPage emulator start 65536
-          values <- case field "hits" reply of Array values -> pure (V.toList values); _ -> ioError (userError "trace-hits lacks hits")
-          forM_ values (\value -> BL.hPut hits (A.encode value <> "\n"))
-          let end = start + length values
-          writeIORef cursor end
-          hFlush hits
-          case field "count" reply of Number total | end < truncate total -> drain emulator; _ -> pure end
-        stop (emulator,_,()) = stopEmulator emulator
+    let drain = drainInto hits cursor
     bracket (startEmulator (paths M.! "bridge") directory arguments (\_ -> pure (Nothing,()))) stop $ \(emulator,start,()) -> do
       need (bootStart start == FreshBootStart) "bridge did not fresh boot"
       record "emulator_start" (startRecord start)
@@ -287,6 +301,45 @@ observe options directory record = do
               BL.writeFile (directory </> "steps.json") . A.encode . reverse =<< readIORef steps
               putStrLn ("step " ++ show step ++ " " ++ unwords (map crawlKeyWire keys))
               walk keys step child
-      walk [] 0 (foldl (flip insertPath) (Trie []) [routeKeys route | route <- routeList routes, not (null (routeKeys route))])
+      walk [] 0 (foldl (flip insertPath) (Trie []) keyRoutes)
       final <- medium emulator
       BL.writeFile (directory </> "medium.json") (A.encode final <> "\n")
+      forM_ (powerOffBudget options) $ \budget -> do
+        first <- readIORef cursor
+        before <- settings emulator
+        _ <- emulatorBridgeCommand emulator watch
+        off <- emulatorPowerOff emulator budget
+        observed <- emulatorWatchEnd emulator
+        last' <- drain emulator
+        after <- settings emulator
+        blocks <- medium emulator
+        label <- either (ioError . userError) pure (nandExportLabel "power-off")
+        exported <- emulatorNandExport emulator label
+        let artifact = field "artifact" exported
+        need (field "status" exported == String "exported" && field "boundary" exported == field "after" exported) "power-off NAND export refused or advanced the machine"
+        need (field "path" artifact == String (T.pack exportPath)) "power-off NAND export path differs"
+        digest <- sha256Hex <$> sha256File exportPath
+        extent <- getFileSize exportPath
+        need (field "sha256" artifact == String (T.pack digest) && field "bytes" artifact == A.toJSON extent) "power-off NAND export digest or extent differs"
+        BL.writeFile (directory </> "power-off.json") (A.encode (object
+          ["power_off" .= off,"hits" .= [first,last'],"watch" .= observed,"regions_before" .= before,"regions_after" .= after
+          ,"medium_after" .= blocks,"export" .= exported]) <> "\n")
+        putStrLn ("power off " ++ show first ++ ".." ++ show last')
+  forM_ (powerOffBudget options) $ \_ -> do
+    let rebootDirectory = directory </> "reboot"
+        rebootArguments = ["--run",paths M.! "run","--boot-rom",paths M.! "boot-rom","--installed-dat",paths M.! "update","--committed-nand",exportPath
+          ,"--output",rebootDirectory,"--ram-push-checkpoints",rebootDirectory </> "unused-checkpoints","--fresh-boot","--reset-observation",specPath]
+    createDirectory rebootDirectory
+    committed <- sha256Hex <$> sha256File exportPath
+    rebootCursor <- newIORef 0
+    withBinaryFile (directory </> "reboot-hits.jsonl") WriteMode $ \rebootHits ->
+      bracket (startEmulator (paths M.! "bridge") rebootDirectory rebootArguments (\_ -> pure (Nothing,()))) stop $ \(emulator,start,()) -> do
+        need (bootStart start == FreshBootStart) "reboot bridge did not fresh boot"
+        let supplied = field "inputs" (startRecord start)
+        need (field "committed_nand" supplied == String (T.pack committed) && field "source_kind" supplied == String "full-committed"
+          && field "adjustment_nand" supplied == Null && field "record_nand" supplied == Null) "reboot did not boot only the exported medium"
+        _ <- drainInto rebootHits rebootCursor emulator
+        blocks <- medium emulator
+        regions <- settings emulator
+        record "reboot" (object ["emulator_start" .= startRecord start,"input_committed_sha256" .= committed,"medium_at_attach" .= blocks,"settings_at_attach" .= regions])
+        putStrLn "reboot attached"

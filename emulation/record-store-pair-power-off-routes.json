@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "crawl_graph_sha256": "59e5a284618aad053283e6c12ef101d074532e3ccfb8e045a6cb093f3bcad734",
+  "selection": "One value change, crawl trial 488 of the finite-v2 route file (SHOOTING MENU row 7, DOWN, OK: setter 0x101 and a commit), followed by POWER OFF and a cold boot from the exported committed NAND.",
+  "effects_source": {
+    "hits_sha256": "13cd0a4e5c2b93c785ac6416b3dc0babb7bde0136cbbc81503e4a23e8d2148a4",
+    "kind": "retained-observation",
+    "receipt_sha256": "872646998d978a39892b2f6136f7f1a0132e5ffdba39e3857e8796a02c20aff9",
+    "steps_sha256": "bef060ce57f3ace44c03c3cb72f147215dbcf05ce51a5a3bc8da39deb48515d7"
+  },
+  "exclusions": [],
+  "routes": [
+    {
+      "name": "boot",
+      "phase": "first-start"
+    },
+    {
+      "name": "start-menu",
+      "phase": "live-view"
+    },
+    {
+      "name": "attach",
+      "phase": "attached"
+    },
+    {
+      "crawl_trial": 488,
+      "effects": [
+        {
+          "kind": "commit"
+        },
+        {
+          "kind": "setter",
+          "property": "0x101"
+        },
+        {
+          "kind": "setter",
+          "property": "0x1e6"
+        },
+        {
+          "kind": "setter",
+          "property": "0x1c9"
+        },
+        {
+          "kind": "setter",
+          "property": "0x1c8"
+        },
+        {
+          "kind": "setter",
+          "property": "0x27f"
+        },
+        {
+          "kind": "setter",
+          "property": "0x280"
+        },
+        {
+          "kind": "setter",
+          "property": "0x278"
+        },
+        {
+          "kind": "setter",
+          "property": "0x278"
+        },
+        {
+          "kind": "setter",
+          "property": "0x279"
+        },
+        {
+          "kind": "setter",
+          "property": "0x279"
+        }
+      ],
+      "keys": [
+        "ok",
+        "down",
+        "down",
+        "down",
+        "down",
+        "down",
+        "ok",
+        "down",
+        "ok"
+      ],
+      "name": "crawl-trial-00488"
+    }
+  ]
+}

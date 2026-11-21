@@ -38,7 +38,11 @@ load directory = do
       actual <- sha256Hex <$> sha256File (T.unpack path)
       need (T.pack actual == expected) ("input file digest differs: " ++ K.toString name)
     _ -> ioError (userError "receipt inputs are not an object")
-  files <- forM [minBound..maxBound] $ \file -> (,) file <$> B.readFile (directory </> sidecarName file)
+  base <- forM baseSidecars $ \file -> (,) file <$> B.readFile (directory </> sidecarName file)
+  cycle' <- fmap concat $ forM cycleSidecars $ \file -> do
+    present <- doesPathExist (directory </> sidecarName file)
+    if present then (\bytes -> [(file,bytes)]) <$> B.readFile (directory </> sidecarName file) else pure []
+  let files = base ++ cycle'
   pure (Observation receipt (M.fromList files))
 
 run :: [String] -> IO ()
