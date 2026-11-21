@@ -15,7 +15,8 @@
 -- Their ordered entries with arguments up to each owned entry's arity, returns with r0..r3
 -- except registers the stock entry clobbers or the caller does not read, worker entries with
 -- r0..r3, the calls the component makes into the retained filesystem, path and media-state
--- services (arguments and the bytes they point at, and r0 on return), state snapshots, the
+-- services (arguments and the bytes they point at, and r0 on return unless it is a caller's
+-- stack address), state snapshots, the
 -- watched writes, the screens and the card's accepted writes, dirty sectors and final command
 -- history must be equal, and the owned role must fetch nothing in the retired extents.
 -- Registers left out are reported, not compared. Request payload bytes the stock posters leave
@@ -698,7 +699,9 @@ event body hit = do
           case M.lookup site backendSites of
             Just backend
               | external body address -> Nothing
-              | otherwise -> Just (Event "backend-return" (backendName backend) True (object (["kind" .= ("backend-return" :: T.Text), "name" .= backendName backend, "result" .= registersOf ["r0"] hit] ++ common)) (object []))
+              | otherwise ->
+                  let result = if backendName backend `elem` stackResults then [] else ["r0"]
+                   in Just (Event "backend-return" (backendName backend) True (object (["kind" .= ("backend-return" :: T.Text), "name" .= backendName backend, "result" .= registersOf result hit] ++ common)) (object []))
             Nothing -> returned site
       | otherwise -> Nothing
   where
@@ -715,14 +718,24 @@ event body hit = do
 backendSites :: M.Map Word32 Backend
 backendSites = M.fromList backends
 
+-- | The backends whose r0 on return is the caller's stack argument advanced past the bytes they
+-- wrote: fill_memory's destination, local_record's through 0x722054, and volume_geometry's
+-- r1 + 0x40 through 0x70e6c4.
+stackResults :: [String]
+stackResults = ["fill_memory", "local_record", "volume_geometry"]
+
 -- | A backend call's captured bytes; a path read stops at its terminator, the bytes past it
--- being whatever the poster's frame held.
+-- being whatever the poster's frame held. entry_update and entry_update_one read the first 11
+-- bytes of the name at r1 (0x70e8d8 with r2 = 11; entry_update_one also r1 + 4..8).
 backendReadsOf :: Backend -> Value -> Value
 backendReadsOf backend hit
   | backendName backend `elem` ["fs_open", "register_written", "parse_path", "directory_number", "fs_close_named", "fs_close_entry"] =
-      A.toJSON [String (maskedHex (terminated bytes) bytes) | r <- arrayOf (field "reads" (field "observation" hit)), String text <- [field "bytes" r], let bytes = hexBytes text]
+      A.toJSON [String (maskedHex (terminated bytes) bytes) | String text <- captured, let bytes = hexBytes text]
+  | backendName backend `elem` ["entry_update", "entry_update_one"], String name : rest <- captured =
+      A.toJSON (String (maskedHex (map (< (11 :: Int)) [0 ..]) (hexBytes name)) : rest)
   | otherwise = readsOf hit
   where
+    captured = [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
     terminated bytes = scanl (\open b -> open && b /= 0) True (take (length bytes - 1) bytes)
 
 loadHits :: FilePath -> IO [Value]
