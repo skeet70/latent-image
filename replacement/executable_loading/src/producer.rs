@@ -1,6 +1,7 @@
-use core::{ptr::NonNull, slice};
+use core::{ptr::{addr_of, addr_of_mut, read_volatile, write_volatile, NonNull}, slice};
 
 use crate::{LoadedProof, Producer, ProducerCompletion, Retention};
+use crate::bss::{self, Bss, FillPorts};
 use crate::protocol::{CommandKind, Request};
 use crate::nand::{PhysicalBlock, BLOCK_BYTES};
 use crate::nand::dma_native::{
@@ -63,6 +64,23 @@ extern "C" {
     fn xm1_loading_initialize_storage() -> i32;
     fn xm1_loading_register_completion() -> i32;
     fn xm1_loading_auxiliary(selection: u32) -> i32;
+    fn xm1_loading_fill_request(base: u32, words: u32, value: u32, done: unsafe extern "C" fn()) -> i32;
+    fn xm1_loading_fill_done();
+    static mut xm1_loading_fill_flag: u32;
+}
+
+struct NativeFill;
+
+impl FillPorts for NativeFill {
+    fn clear_flag(&mut self) { unsafe { write_volatile(addr_of_mut!(xm1_loading_fill_flag), 0) } }
+
+    fn request(&mut self, base: u32, words: u32) -> i32 { unsafe { xm1_loading_fill_request(base, words, 0, xm1_loading_fill_done) } }
+
+    fn flag_set(&mut self) -> bool { unsafe { read_volatile(addr_of!(xm1_loading_fill_flag)) != 0 } }
+
+    fn cpu_fill(&mut self, base: u32, bytes: u32) { unsafe { core::ptr::write_bytes(base as *mut u8, 0, bytes as usize) } }
+
+    fn publish(&mut self) { unsafe { xm1_loading_cache(0, 0) } }
 }
 
 pub struct NativeDestination { address: u32, bytes: usize }
@@ -265,10 +283,14 @@ impl NativeProducer {
         if self.clock.now() >= request.deadline.instant() {
             return Self::failed(PrimaryError::Deadline(Phase::Publication), Self::report_zero(), Retention::Released);
         }
-        unsafe {
-            core::ptr::write_bytes(segment.bss as *mut u8, 0, segment.bss_bytes as usize);
-            xm1_loading_cache(0, 0);
-        }
+        let bss = Bss { base: segment.bss, bytes: segment.bss_bytes };
+        let fill = bss::begin(bss, &mut NativeFill);
+        let completion = self.image5_load(request, segment);
+        bss::finish(bss, fill, &mut NativeFill);
+        completion
+    }
+
+    fn image5_load(&mut self, request: Request, segment: &Segment) -> ProducerCompletion {
         let skipped = unsafe { xm1_loading_mode() } != 0;
         if !skipped {
             if self.clock.now() >= request.deadline.instant() {

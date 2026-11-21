@@ -173,6 +173,9 @@ loadingRetained =
   , Retained "xm1_loading_initialize_storage" 0x69f920
   , Retained "xm1_loading_register_completion" 0x6c1444
   , Retained "xm1_loading_auxiliary" 0x6aa838
+  , Retained "xm1_loading_fill_request" 0x66609c
+  , Retained "xm1_loading_fill_done" 0x6a8bec
+  , Retained "xm1_loading_fill_flag" 0x89f8ac
   , Retained "xm1_lower_read_clean_invalidate" 0x42634
   , Retained "xm1_lower_read_clock_mask" 0x42560
   , Retained "xm1_lower_read_clock_restore" 0x42568

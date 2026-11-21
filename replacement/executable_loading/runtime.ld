@@ -33,6 +33,9 @@ xm1_loading_region = 0x6aa750;
 xm1_loading_initialize_storage = 0x69f920;
 xm1_loading_register_completion = 0x6c1444;
 xm1_loading_auxiliary = 0x6aa838;
+xm1_loading_fill_request = 0x66609c;
+xm1_loading_fill_done = 0x6a8bec;
+xm1_loading_fill_flag = 0x89f8ac;
 
 xm1_power_semaphore_wait = 0x724b68;
 xm1_power_semaphore_signal = 0x724c00;

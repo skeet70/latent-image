@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod bss;
 pub mod client;
 pub mod protocol;
 pub mod receiver;
@@ -108,3 +109,5 @@ pub trait SenderKernel {
 extern crate std;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod bss_tests;
