@@ -686,7 +686,7 @@ backendSites = M.fromList backends
 -- being whatever the poster's frame held.
 backendReadsOf :: Backend -> Value -> Value
 backendReadsOf backend hit
-  | backendName backend `elem` ["fs_open", "register_written", "parse_path"] =
+  | backendName backend `elem` ["fs_open", "register_written", "parse_path", "directory_number", "fs_close_named", "fs_close_entry"] =
       A.toJSON [String (maskedHex (terminated bytes) bytes) | r <- arrayOf (field "reads" (field "observation" hit)), String text <- [field "bytes" r], let bytes = hexBytes text]
   | otherwise = readsOf hit
   where

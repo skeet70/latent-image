@@ -35,3 +35,7 @@ main = do
   check "attribute set value is compared" (visible stock /= visible (take 0x34 stock ++ word 2 ++ drop 0x38 stock))
   check "attribute set selector is compared" (visible stock /= visible (take 0x38 stock ++ [1] ++ drop 0x39 stock))
   check "attribute set path is compared" (visible stock /= visible (take 4 stock ++ [0x44] ++ drop 5 stock))
+  let entry name = word 0x0121aa58 ++ word 3 ++ [1] ++ field 0x14 name ++ field 0xc (C.pack "A") ++ replicate 0xb 0x5a
+      field size name = take size (B.unpack name ++ [0] ++ cycle [0xcc, 0x45, 0x05, 0x40])
+      masked bytes = [if d then Just b else Nothing | (b, d) <- zip bytes (payloadDefined 0x2c1b 0x34 bytes)]
+  check "entry-update name byte before its terminator is compared" (masked (entry (C.pack "DSCF3097.JPG")) /= masked (entry (C.pack "DSCF3097.JPH")))
