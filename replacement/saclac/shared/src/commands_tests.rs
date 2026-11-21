@@ -127,7 +127,7 @@ fn a_lens_drive_reply_clears_the_pending_flag_then_enters_the_client() {
     commands.reply_lens_drive(reply(0, 3), &Configured(4), &mut clients);
     assert_eq!(*log.borrow(), [
         Event::Pending(CommandKind::LensDrive, false),
-        Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: [3, 0x1234, 7, 9] }),
+        Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: ReplyWords::new(&[3, 0x1234, 7, 9]) }),
     ]);
 }
 
@@ -151,7 +151,7 @@ fn an_unconfigured_channel_replaces_the_clients_word() {
     for channel in [-1, 4, 100] {
         let (mut commands, mut clients, log) = commands(&[(StoredCommand::LensDrive, 0, CALLBACK), (StoredCommand::LensDrive, 2, 0x1234)]);
         commands.reply_lens_drive(reply(-3, channel), &Configured(4), &mut clients);
-        let words = [channel as u32, UNCONFIGURED_CHANNEL, 7, 9];
+        let words = ReplyWords::new(&[channel as u32, UNCONFIGURED_CHANNEL, 7, 9]);
         assert_eq!(log.borrow().last(), Some(&Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(-3), words })));
     }
     assert_eq!(UNCONFIGURED_CHANNEL, 0x0080_0000);
@@ -181,7 +181,7 @@ fn pending_flags_are_set_for_any_command() {
 
 #[test]
 fn a_client_reply_finishes_its_message_then_enters_the_client_with_the_arguments() {
-    let arguments = ClientArguments::Reply { status: CompletionStatus(20), words: [5, 6, 0, 0] };
+    let arguments = ClientArguments::Reply { status: CompletionStatus(20), words: ReplyWords::new(&[5, 6]) };
     let (mut commands, mut clients, log) = commands(&[(StoredCommand::Step, 0, CALLBACK)]);
     commands.reply(StoredCommand::Step, arguments, &mut clients);
     assert_eq!(*log.borrow(), [
@@ -268,14 +268,14 @@ fn the_autofocus_lens_reply_consumes_the_notices_before_finishing() {
     assert_eq!(events, [
         Event::NoticesCleared,
         Event::Pending(CommandKind::Autofocus, false),
-        Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: [0x80, 0xabcd, 1, 0] }),
+        Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: ReplyWords::new(&[0x80, 0xabcd, 1, 0]) }),
     ]);
 }
 
 #[test]
 fn only_a_notice_of_one_is_reported() {
     let events = autofocus_reply([ProbeState::Reported; 3], [2, 0, 0xffff_ffff]);
-    assert_eq!(events.last(), Some(&Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: [0x80, 0xabcd, 0, 0] })));
+    assert_eq!(events.last(), Some(&Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: ReplyWords::new(&[0x80, 0xabcd, 0, 0]) })));
 }
 
 #[test]
@@ -288,6 +288,6 @@ fn overridden_probes_set_their_reply_bits() {
         ([Overridden; 3], 0b111),
     ] {
         let events = autofocus_reply(states, [0; 3]);
-        assert_eq!(events.last(), Some(&Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: [0x80, 0xabcd, 0, bits] })));
+        assert_eq!(events.last(), Some(&Event::Entered(CALLBACK, ClientArguments::Reply { status: CompletionStatus(0), words: ReplyWords::new(&[0x80, 0xabcd, 0, bits]) })));
     }
 }

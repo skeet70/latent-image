@@ -15,7 +15,7 @@ use xm1_saclac_lens_drive::ports::{
 use xm1_saclac_lens_drive::stock::{drive_policy, reply_call};
 use xm1_saclac_profile_records::stock::shared::{group_17, group_20, group_38};
 use xm1_saclac_profile_records::{Access, MeasurementSelection, Memory, StockEntries, Tag};
-use xm1_saclac_shared::commands::{ClientArguments, CommandMemory, LensDriveReply, StoredCommand};
+use xm1_saclac_shared::commands::{ClientArguments, CommandMemory, LensDriveReply, ReplyWords, StoredCommand};
 use xm1_saclac_shared::lens::{LensControl as SharedLensControl, LensProbe, ProbeState};
 use xm1_saclac_shared::settings::{AdjustmentKey, Adjustments, Channel};
 use xm1_saclac_shared::stock::{Machine, Stock};
@@ -81,7 +81,7 @@ pub(crate) fn reply<M: Machine + Clone>(machine: M, reply: Reply) {
     };
     let arguments = match call.count {
         1 => ClientArguments::Status(status),
-        _ => ClientArguments::Reply { status, words: [first, second, third, 0] },
+        count => ClientArguments::Reply { status, words: ReplyWords::new(&[first, second, third][..count - 1]) },
     };
     commands.reply(command, arguments, &mut stock);
 }

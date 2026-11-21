@@ -120,7 +120,10 @@
             "xm1_loading_region",
             "xm1_loading_initialize_storage",
             "xm1_loading_register_completion",
-            "xm1_loading_auxiliary"
+            "xm1_loading_auxiliary",
+            "xm1_loading_fill_request",
+            "xm1_loading_fill_done",
+            "xm1_loading_fill_flag"
           ],
           "contract": "replacement/saclac/Replacement/Saclac/Artifact.hs",
           "requirement": "The DMA unit is 0x20000 bytes; plain backing 0x360000 and image5 staging 0x2e0000 bytes; 0x100000 is a controller budget. Producers use stock segment ids 5 (image5) and 6 (plain); the plain progress reporter is the source-inspected void ABI at 0x73b924. NAND and decoder are owned and linked in the same bank.",

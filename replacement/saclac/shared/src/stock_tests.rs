@@ -9,7 +9,7 @@ use xm1_saclac_interface::stock::{
 };
 use xm1_saclac_interface::{ClientNotification, CommandKind, CompletionStatus, ReplyTarget};
 
-use crate::commands::{ClientArguments, Clients, CommandMemory, StoredCommand};
+use crate::commands::{ClientArguments, Clients, CommandMemory, ReplyWords, StoredCommand};
 use crate::display::{active_outputs, Display, DisplayRoute, Outputs};
 use crate::image_registers::{RegisterGroup, RegisterSnapshot, WindowLimits};
 use crate::lens::{
@@ -20,7 +20,7 @@ use crate::settings::{
     AdjustmentKey, Adjustments, Aspect, CaptureMode, ChannelRemap, Conversions, RemapArguments, RemappedWord,
     WindowVariant,
 };
-use crate::stock::{Machine, Stock, StockConfiguration};
+use crate::stock::{ClientRecord, Machine, Stock, StockConfiguration};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
@@ -30,6 +30,14 @@ enum Call {
     Write8(u32, u8),
     Write32(u32, u32),
     Enter(u32, Vec<usize>),
+    Client(u32, Vec<ClientArgument>),
+}
+
+/// A client call's argument as the client sees it: a word, or the record its address holds.
+#[derive(Clone, Debug, PartialEq)]
+enum ClientArgument {
+    Word(usize),
+    Record(Vec<u8>),
 }
 
 struct State {
@@ -38,8 +46,6 @@ struct State {
     calls: Vec<Call>,
     route: u8,
     status: [u8; 60],
-    record_at: Option<u32>,
-    records: Vec<(u32, [u32; 4])>,
 }
 
 impl Default for State {
@@ -50,8 +56,6 @@ impl Default for State {
             calls: Vec::new(),
             route: 0,
             status: [0; 60],
-            record_at: None,
-            records: Vec::new(),
         }
     }
 }
@@ -85,10 +89,6 @@ impl Fake {
     fn set_route(&self, route: u8) { self.0.borrow_mut().route = route }
 
     fn set_status(&self, status: [u8; 60]) { self.0.borrow_mut().status = status }
-
-    fn expect_record(&self, address: u32) { self.0.borrow_mut().record_at = Some(address) }
-
-    fn records(&self) -> Vec<(u32, [u32; 4])> { self.0.borrow().records.clone() }
 
     fn calls(&self) -> Vec<Call> { self.0.borrow().calls.clone() }
 
@@ -138,13 +138,19 @@ impl Machine for Fake {
                 unsafe { core::ptr::copy_nonoverlapping(state.status.as_ptr(), arguments[0] as *mut u8, state.status.len()) };
                 0
             }
-            _ if state.record_at == Some(address) => {
-                let words = unsafe { *(arguments[0] as *const [u32; 4]) };
-                state.records.push((address, words));
-                0
-            }
             _ => state.answers.get_mut(&address).and_then(VecDeque::pop_front).unwrap_or(0),
         }
+    }
+
+    fn enter_client(&self, target: u32, arguments: &[usize], record: Option<ClientRecord>) -> u32 {
+        let arguments = arguments.iter().enumerate().map(|(index, &argument)| match record {
+            Some(record) if record.index == index => {
+                ClientArgument::Record(unsafe { std::slice::from_raw_parts(argument as *const u8, record.bytes) }.to_vec())
+            }
+            _ => ClientArgument::Word(argument),
+        }).collect();
+        self.0.borrow_mut().calls.push(Call::Client(target, arguments));
+        0
     }
 }
 
@@ -213,14 +219,17 @@ fn the_pending_flag_is_one_byte_per_message_code() {
 }
 
 #[test]
-fn client_replies_reach_the_callback_word_in_order() {
+fn client_replies_reach_the_callback_word_in_order_with_only_their_own_words() {
     let (fake, mut stock) = stock();
     let callback = optional_callback(0x00c0_ffee).unwrap();
-    Clients::enter(&mut stock, callback, ClientArguments::Reply { status: CompletionStatus(-3), words: [7, 9, 11, 13] });
+    Clients::enter(&mut stock, callback, ClientArguments::Reply { status: CompletionStatus(-3), words: ReplyWords::new(&[7, 9, 11, 13]) });
+    Clients::enter(&mut stock, callback, ClientArguments::Reply { status: CompletionStatus(2), words: ReplyWords::new(&[7]) });
     Clients::enter(&mut stock, callback, ClientArguments::Status(CompletionStatus(5)));
+    let words = |words: &[usize]| words.iter().map(|&word| ClientArgument::Word(word)).collect::<Vec<_>>();
     assert_eq!(fake.calls(), [
-        Call::Enter(0x00c0_ffee, vec![(-3i32) as usize, 7, 9, 11, 13]),
-        Call::Enter(0x00c0_ffee, vec![5]),
+        Call::Client(0x00c0_ffee, words(&[(-3i32) as usize, 7, 9, 11, 13])),
+        Call::Client(0x00c0_ffee, words(&[2, 7])),
+        Call::Client(0x00c0_ffee, words(&[5])),
     ]);
     assert_eq!(callback_word(callback), 0x00c0_ffee);
 }
@@ -276,13 +285,13 @@ fn lens_notices_read_and_clear_the_shared_block() {
 }
 
 #[test]
-fn the_bounds_notifier_receives_the_detail_then_the_bounds() {
+fn the_bounds_notifier_is_a_client_reading_the_detail_then_the_bounds_through_its_one_argument() {
     let (fake, mut stock) = stock();
     fake.set_word(0x95_4dbc + 0x1c, 0x00c0_ffee);
     fake.set_word(0x95_4dbc + 0x20, 1);
-    fake.expect_record(0x00c0_ffee);
     notify_bounds(5, LensBounds([10, 20, 30]), &mut stock);
-    assert_eq!(fake.records(), [(0x00c0_ffee, [5, 10, 20, 30])]);
+    let record = [5u32, 10, 20, 30].iter().flat_map(|word| word.to_le_bytes()).collect();
+    assert_eq!(fake.calls().last(), Some(&Call::Client(0x00c0_ffee, vec![ClientArgument::Record(record)])));
 }
 
 #[test]

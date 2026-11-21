@@ -4,6 +4,7 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_host_rlib", "
 package(default_visibility = ["//visibility:public"])
 
 _CORE = [
+    "src/bss.rs",
     "src/client.rs",
     "src/protocol.rs",
     "src/receiver.rs",
@@ -24,7 +25,7 @@ xm1_rust_host_test(
     name = "host-tests",
     src = "src/lib.rs",
     crate_name = "xm1_executable_loading",
-    data = _CORE + ["src/tests.rs"],
+    data = _CORE + ["src/tests.rs", "src/bss_tests.rs"],
     rlib_deps = {"xm1_application_nand": "//replacement/application_nand:host"},
 )
 

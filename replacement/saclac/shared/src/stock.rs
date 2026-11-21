@@ -75,7 +75,8 @@ pub trait Machine {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn xm1_saclac_client_call(target: u32, words: *const u32, count: u32, record: u32) -> u32 {
-    let _ = record;
+    // The census reads `record` from r3 at entry.
+    core::hint::black_box(record);
     let mut arguments = [0usize; MOST_CLIENT_ARGUMENTS];
     let count = (count as usize).min(MOST_CLIENT_ARGUMENTS);
     for (index, argument) in arguments[..count].iter_mut().enumerate() {
@@ -262,8 +263,11 @@ impl<M: Machine> Clients for Stock<M> {
         let word = callback_word(callback);
         match arguments {
             ClientArguments::Status(status) => self.machine.enter_client(word, &[status.0 as usize], None),
-            ClientArguments::Reply { status, words: [first, second, third, fourth] } => {
-                self.machine.enter_client(word, &[status.0 as usize, first as usize, second as usize, third as usize, fourth as usize], None)
+            ClientArguments::Reply { status, words } => {
+                let mut call = [0; 5];
+                call[0] = status.0 as usize;
+                for (argument, value) in call[1..].iter_mut().zip(words.words()) { *argument = *value as usize; }
+                self.machine.enter_client(word, &call[..1 + words.words().len()], None)
             }
         };
     }
@@ -324,11 +328,13 @@ impl<M: Machine> LensNotices for Stock<M> {
         Some(self.machine.read_u32(LENS_NOTICES + 0x1c)).filter(|word| *word != 0).map(StockCallbackWord)
     }
 
-    /// The notifier takes the address of the detail word followed by the bounds (0xefba28..0xefba3c).
+    /// The notifier is a client that takes the address of the detail word followed by the bounds
+    /// (0xefba28..0xefba3c).
     fn enter_notifier(&mut self, notifier: StockCallbackWord, detail: u32, bounds: LensBounds) {
         let [first, second, third] = bounds.0;
         let record = [detail, first, second, third];
-        self.machine.enter(notifier.0, &[record.as_ptr() as usize]);
+        let shape = ClientRecord { index: 0, bytes: core::mem::size_of_val(&record) };
+        self.machine.enter_client(notifier.0, &[record.as_ptr() as usize], Some(shape));
     }
 }
 
