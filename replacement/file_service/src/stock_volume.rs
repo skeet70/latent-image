@@ -3,7 +3,7 @@
 //! services.
 
 use crate::requests::Callback;
-use crate::stock::{read_byte, read_word, write_byte, write_half, write_word};
+use crate::stock::{file_service_copy_memory, file_service_fill_memory, read_byte, read_word, write_byte, write_half, write_word};
 use crate::volume::{self, Context, Field, Letter, Port, Residue, Volume};
 use crate::workers::Offset;
 
@@ -23,8 +23,6 @@ extern "C" {
     fn file_service_volume_detach(header: u32) -> u32;
     fn file_service_volume_format(header: u32, volume: u32) -> u32;
     fn file_service_volume_reformat(header: u32, volume: u32) -> u32;
-    fn file_service_copy_memory(destination: u32, source: u32, bytes: u32) -> u32;
-    fn file_service_fill_memory(destination: u32, value: u32, bytes: u32);
     fn file_service_media_snapshot();
     fn file_service_set_level(slot: u32, level: u32);
     fn file_service_flagged_prepare();

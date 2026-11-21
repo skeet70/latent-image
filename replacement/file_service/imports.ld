@@ -83,3 +83,14 @@ file_service_entry_update = 0x714940;
 file_service_entry_update_one = 0x713ef4;
 file_service_device_state = 0x6f52e4;
 file_service_fs_delete = 0x6ff84c;
+/* media_io workers */
+file_service_volume_geometry = 0x701090;
+file_service_volume_flag = 0x7012a0;
+file_service_volume_units = 0x7012c0;
+file_service_query_path = 0x701e18;
+file_service_read_pages = 0x700cd8;
+file_service_write_pages = 0x700d20;
+file_service_pattern_pass = 0x715b34;
+file_service_fs_read = 0x6feeec;
+file_service_local_size = 0x6aa4ec;
+file_service_local_read = 0x6aa52c;

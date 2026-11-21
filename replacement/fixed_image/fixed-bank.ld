@@ -70,6 +70,12 @@ SECTIONS {
   .file_counts_worker 0x718a8c : { KEEP(*(.text.file_service_entry_file_counts_worker)) . = 0x718de4; } > RETIRED_CATALOG =0xf000f0e7
   .file_position_worker 0x718de4 : { KEEP(*(.text.file_service_entry_file_position_worker)) . = 0x719098; } > RETIRED_CATALOG =0xf000f0e7
   .select_worker 0x719098 : { KEEP(*(.text.file_service_entry_select_worker)) . = 0x719614; } > RETIRED_CATALOG =0xf000f0e7
+  .capacity_worker 0x715a58 : { KEEP(*(.text.file_service_entry_capacity_worker)) . = 0x715b34; } > RETIRED_CAPACITY =0xf000f0e7
+  .pattern_worker 0x715de4 : { KEEP(*(.text.file_service_entry_pattern_worker)) . = 0x715f0c; } > RETIRED_CAPACITY =0xf000f0e7
+  .query_worker 0x71ded4 : { KEEP(*(.text.file_service_entry_query_worker)) . = 0x71df20; } > RETIRED =0xf000f0e7
+  .read_pages_worker 0x71e828 : { KEEP(*(.text.file_service_entry_read_pages_worker)) . = 0x71e8c4; } > RETIRED =0xf000f0e7
+  .write_pages_worker 0x71e8c4 : { KEEP(*(.text.file_service_entry_write_pages_worker)) . = 0x71e960; } > RETIRED =0xf000f0e7
+  .read_worker 0x71edbc : { KEEP(*(.text.file_service_entry_read_worker)) . = 0x71ef18; } > RETIRED =0xf000f0e7
   .text : { __fixed_body_start = .; *(.text*) } > OWNED_FIXED
   .rodata : { KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) } > OWNED_FIXED
   .data : { *(.data*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED
@@ -81,6 +87,7 @@ ASSERT(xm1_file_service_entry_find_first_worker == 0x712700 && xm1_file_service_
 ASSERT(xm1_file_service_entry_volume_attach_worker == 0x7120d8 && xm1_file_service_entry_volume_detach_worker == 0x7122dc && xm1_file_service_entry_volume_format_armed_worker == 0x7123b4 && xm1_file_service_entry_volume_format_worker == 0x712580, "volume worker veneers are not at their stock entries")
 ASSERT(xm1_file_service_entry_select_worker == 0x719098, "selection worker veneers are not at their stock entries")
 ASSERT(xm1_file_service_entry_file_delete_worker == 0x7118fc && xm1_file_service_entry_filename_set_worker == 0x7119b0 && xm1_file_service_entry_directory_delete_worker == 0x711b50 && xm1_file_service_entry_image_remove_worker == 0x711bc8 && xm1_file_service_entry_readonly_worker == 0x711ea4 && xm1_file_service_entry_attribute_set_worker == 0x711f58, "paths worker veneers are not at their stock entries")
+ASSERT(xm1_file_service_entry_capacity_worker == 0x715a58 && xm1_file_service_entry_pattern_worker == 0x715de4 && xm1_file_service_entry_query_worker == 0x71ded4 && xm1_file_service_entry_read_pages_worker == 0x71e828 && xm1_file_service_entry_write_pages_worker == 0x71e8c4 && xm1_file_service_entry_read_worker == 0x71edbc, "media_io worker veneers are not at their stock entries")
 ASSERT(__fixed_body_start == ORIGIN(OWNED_FIXED), "fixed body does not start at the fixed origin")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "the fixed bank has writable statics")
 ASSERT(__fixed_bss_end <= ORIGIN(OWNED_FIXED) + LENGTH(OWNED_FIXED), "the fixed bank exceeds the fixed reservation")

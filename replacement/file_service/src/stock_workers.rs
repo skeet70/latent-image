@@ -1,7 +1,7 @@
 //! The stock boundary of the handle workers: the media-state context, the request header
 //! the media task passes, and the retained path, filesystem and media-state services.
 
-use crate::completion::{self, RawStatus};
+use crate::completion::RawStatus;
 use crate::handles::FileIndex;
 use crate::requests::Callback;
 use crate::stock::{read_byte, read_word, write_word};

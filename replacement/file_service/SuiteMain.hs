@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Counts as Counts
 import qualified Replacement.FileService.Handles as Handles
+import qualified Replacement.FileService.MediaIo as MediaIo
 import qualified Replacement.FileService.Requests as Requests
 import qualified Replacement.FileService.Search as Search
 import qualified Replacement.FileService.Selection as Selection
@@ -111,6 +112,15 @@ increments =
         | (name, address) <-
             [ ("file_delete_worker", 0x7118fc), ("filename_set_worker", 0x7119b0), ("directory_delete_worker", 0x711b50)
             , ("image_remove_worker", 0x711bc8), ("readonly_worker", 0x711ea4), ("attribute_set_worker", 0x711f58)
+            ]
+        ]
+    )
+  , ( "media-io"
+    , Increment MediaIo.code MediaIo.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("capacity_worker", 0x715a58), ("pattern_worker", 0x715de4), ("query_worker", 0x71ded4)
+            , ("read_pages_worker", 0x71e828), ("write_pages_worker", 0x71e8c4), ("read_worker", 0x71edbc)
             ]
         ]
     )

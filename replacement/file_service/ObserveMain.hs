@@ -161,6 +161,14 @@ backends =
   , (0x71d1b8, Backend "path_wildcard" ["r0"] [])
   , (0x714940, Backend "entry_update" ["r0", "r2", "r3"] [readSpec (register 1) 16, readSpec (register 13) 8])
   , (0x713ef4, Backend "entry_update_one" ["r0", "r2", "r3"] [readSpec (register 1) 16, readSpec (register 13) 8])
+  , (0x701090, Backend "volume_geometry" ["r0"] [])
+  , (0x7012a0, Backend "volume_flag" ["r0"] [])
+  , (0x7012c0, Backend "volume_units" ["r0"] [])
+  , (0x6feeec, Backend "fs_read" ["r0", "r1", "r2"] [])
+  , (0x7111c4, Backend "local_record" [] [])
+  , (0x6aa4ec, Backend "local_size" ["r0"] [])
+  , (0x6aa52c, Backend "local_read" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 4])
+  , (0x7111e0, Backend "local_position" ["r0"] [])
   ]
 
 backendCapture :: Backend -> Value

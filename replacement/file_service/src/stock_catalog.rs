@@ -1,10 +1,13 @@
 //! The stock boundary of the catalog workers: the media-state context, the request header the
 //! media task passes, and the retained catalog, directory and memory services.
 
-use crate::catalog::{self, CatalogMark, Directory, FindSelectors, GroupMask, Port, RebuildMode, ResolveFrame, Window, WindowQuery};
+use crate::catalog::{self, CatalogMark, Directory, FindSelectors, GroupMask, Port, RebuildMode, ResolveFrame};
 use crate::completion::RawStatus;
 use crate::requests::Callback;
-use crate::stock::{read_byte, read_half, read_word, write_byte, write_word};
+use crate::stock::{
+    address, file_service_catalog_find, file_service_catalog_window, file_service_fill_memory, read_byte, read_half,
+    read_word, write_byte, write_word,
+};
 use crate::workers::Offset;
 
 const CONTEXT: u32 = 0x910204;
@@ -20,14 +23,11 @@ const CONTEXT_DIRECTORY_COUNTS: u32 = 0x35a4;
 
 extern "C" {
     fn file_service_catalog_rebuild(full: u32, mode: u32) -> u32;
-    fn file_service_fill_memory(address: u32, value: u32, length: u32);
-    fn file_service_catalog_find(mode: u32, commit: u32, step: u32, word: u32, name: u32, record: u32) -> u32;
     fn file_service_rescan() -> u32;
     fn file_service_page_selected(directory: u32, marked: *mut u32) -> u32;
     fn file_service_page_cluster(directory: u32, cluster: *mut u32) -> u32;
     fn file_service_directory_reserved(directory: u32, reserved: *mut u32);
     fn file_service_cluster_path(cluster: u32, name: *mut u8, reserved: u32, bare: u32) -> u32;
-    fn file_service_catalog_window(query: *mut WindowQuery, visit: unsafe extern "C" fn(), window: *mut Window) -> u32;
     fn file_service_catalog_window_visit();
 }
 
@@ -146,7 +146,13 @@ impl Port for StockCatalog {
     }
 
     fn scan_window(&mut self, frame: &mut ResolveFrame) -> RawStatus {
-        RawStatus(unsafe { file_service_catalog_window(&mut frame.query, file_service_catalog_window_visit, &mut frame.window) })
+        RawStatus(unsafe {
+            file_service_catalog_window(
+                address(&mut frame.query),
+                file_service_catalog_window_visit as unsafe extern "C" fn() as usize as u32,
+                address(&mut frame.window),
+            )
+        })
     }
 }
 

@@ -4,7 +4,11 @@
 use crate::completion::RawStatus;
 use crate::counts::{self, Directory, ExtensionKey, FileNumber, Frame, Lookup, Offset, Page, Port, Window};
 use crate::requests::Callback;
-use crate::stock::{read_byte, read_half, read_word, write_word};
+use crate::stock::{
+    address, file_service_catalog_locate, file_service_extension_key, file_service_fill_memory, read_byte, read_half,
+    read_word, write_word,
+};
+use crate::stock_workers::file_service_split_path;
 
 const CONTEXT: u32 = 0x910204;
 const CONTEXT_DIRECTORIES: u32 = 0x2604;
@@ -19,16 +23,12 @@ const FIRST_NUMBERED: u32 = 100;
 const EXTENSION: usize = 8;
 
 extern "C" {
-    fn file_service_fill_memory(destination: *mut u8, value: u32, bytes: u32);
-    fn file_service_split_path(path: u32, directory: *mut u8, name: *mut u8, word: *mut u32, prefix: *mut u8, flag: *mut u32) -> u32;
-    fn file_service_extension_key(extension: *const u8) -> u32;
     fn file_service_extension_byte4(key: u32) -> u32;
     fn file_service_extension_byte5(key: u32) -> u32;
     fn file_service_directory_number(directory: *const u8, word: u32) -> u32;
     fn file_service_page_cluster(page: u32, cluster: *mut u32) -> u32;
     fn file_service_cluster_path(cluster: u32, path: *mut u8, marker: u32, bare: u32) -> u32;
     fn file_service_text_difference(first: *const u8, second: *const u8) -> u32;
-    fn file_service_catalog_locate(lookup: *mut StockLookup, position: *mut u32) -> u32;
     fn file_service_file_number(pattern: *const u8) -> u32;
 }
 
@@ -113,7 +113,7 @@ impl Port for StockCounts {
     }
 
     fn clear(&mut self, buffer: &mut [u8; 32]) {
-        unsafe { file_service_fill_memory(buffer.as_mut_ptr(), 0, 32) }
+        unsafe { file_service_fill_memory(address(buffer.as_mut_ptr()), 0, 32) }
     }
 
     fn split_path(&mut self, path: u32, frame: &mut Frame) -> RawStatus {
@@ -123,7 +123,7 @@ impl Port for StockCounts {
     }
 
     fn extension_key(&mut self, frame: &Frame) -> ExtensionKey {
-        ExtensionKey(unsafe { file_service_extension_key(frame.pattern[EXTENSION..].as_ptr()) })
+        ExtensionKey(unsafe { file_service_extension_key(address(frame.pattern[EXTENSION..].as_ptr())) })
     }
 
     fn extension_byte4(&mut self, key: ExtensionKey) -> u32 {
@@ -161,7 +161,7 @@ impl Port for StockCounts {
             page: lookup.page.0,
             pattern: frame.pattern.as_ptr() as u32,
         };
-        RawStatus(unsafe { file_service_catalog_locate(&mut stock, &mut frame.position) })
+        RawStatus(unsafe { file_service_catalog_locate(address(&mut stock), address(&mut frame.position)) })
     }
 
     fn file_number(&mut self, frame: &Frame) -> FileNumber {

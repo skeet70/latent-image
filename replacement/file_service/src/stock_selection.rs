@@ -4,7 +4,10 @@
 use crate::completion::RawStatus;
 use crate::requests::Callback;
 use crate::selection::{self, ContextOffset, ExtensionKind, Frame, Page, Port, Position};
-use crate::stock::{read_byte, read_half, read_word, write_half, write_word};
+use crate::stock::{
+    address, file_service_catalog_locate, file_service_catalog_window, file_service_extension_key,
+    file_service_fill_memory, read_byte, read_half, read_word, write_half, write_word,
+};
 use crate::stock_workers::file_service_split_path;
 
 const CONTEXT: u32 = 0x910204;
@@ -12,19 +15,15 @@ const PATH: u32 = 4;
 const EXTENSION: usize = 8;
 
 extern "C" {
-    fn file_service_fill_memory(buffer: *mut u8, value: u32, length: u32);
-    fn file_service_extension_key(extension: *const u8) -> u32;
     fn file_service_extension_byte4(kind: u32) -> u32;
     fn file_service_directory_number(directory: *const u8, word: u32) -> u32;
     fn file_service_page_cluster(page: u32, cluster: *mut u32) -> u32;
     fn file_service_cluster_path(cluster: u32, path: *mut u8, marker: u32, bare: u32) -> u32;
     fn file_service_text_difference(first: *const u8, second: *const u8) -> u32;
-    fn file_service_catalog_locate(query: *mut selection::Query, position: *mut u32) -> u32;
     fn file_service_marked_before(position: u32) -> u32;
     fn file_service_page_counted(page: u32) -> u32;
     fn file_service_media_snapshot();
     fn file_service_page_selected(page: u32, selected: *mut u32) -> u32;
-    fn file_service_catalog_window(query: *mut selection::Query, first: u32, second: u32) -> u32;
 }
 
 /// A request the media task hands a worker: the header address, whose word at +8 is the
@@ -78,7 +77,7 @@ impl Port for StockSelection {
     }
 
     fn clear(&mut self, buffer: &mut [u8; 32]) {
-        unsafe { file_service_fill_memory(buffer.as_mut_ptr(), 0, 32) }
+        unsafe { file_service_fill_memory(address(buffer.as_mut_ptr()), 0, 32) }
     }
 
     fn split_path(&mut self, path: u32, frame: &mut Frame) -> RawStatus {
@@ -95,7 +94,7 @@ impl Port for StockSelection {
     }
 
     fn extension_kind(&mut self, frame: &Frame) -> ExtensionKind {
-        ExtensionKind(unsafe { file_service_extension_key(frame.pattern[EXTENSION..].as_ptr()) })
+        ExtensionKind(unsafe { file_service_extension_key(address(frame.pattern[EXTENSION..].as_ptr())) })
     }
 
     fn kind_supported(&mut self, kind: ExtensionKind) -> u32 {
@@ -119,7 +118,7 @@ impl Port for StockSelection {
     }
 
     fn find(&mut self, frame: &mut Frame) -> RawStatus {
-        RawStatus(unsafe { file_service_catalog_locate(&mut frame.query, &mut frame.position) })
+        RawStatus(unsafe { file_service_catalog_locate(address(&mut frame.query), address(&mut frame.position)) })
     }
 
     fn marked_before(&mut self, position: Position) -> u32 {
@@ -139,7 +138,7 @@ impl Port for StockSelection {
     }
 
     fn load_window(&mut self, frame: &mut Frame) {
-        unsafe { file_service_catalog_window(&mut frame.query, 0, 0) };
+        unsafe { file_service_catalog_window(address(&mut frame.query), 0, 0) };
     }
 
     fn translate(&mut self, raw: RawStatus) -> u32 {

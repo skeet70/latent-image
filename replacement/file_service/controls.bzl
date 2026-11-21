@@ -47,6 +47,13 @@ FILE_SERVICE_CONTROLS = [
     "paths_filename_returns_status",
     "paths_remove_restores_callback",
     "paths_attribute_failure_unreloaded",
+    # media_io
+    "capacity_ignores_units",
+    "pattern_single_repeat",
+    "query_raw_status",
+    "pages_range_inclusive",
+    "pages_keep_state",
+    "read_redirect_keeps_position",
 ]
 
 def file_service_suffixes():

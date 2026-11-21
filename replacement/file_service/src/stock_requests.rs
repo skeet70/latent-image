@@ -659,4 +659,10 @@ entry_veneer! {
     "image_remove_worker" => "xm1_file_service_image_remove_worker",
     "readonly_worker" => "xm1_file_service_readonly_worker",
     "attribute_set_worker" => "xm1_file_service_attribute_set_worker",
+    "capacity_worker" => "xm1_file_service_capacity_worker",
+    "pattern_worker" => "xm1_file_service_pattern_worker",
+    "query_worker" => "xm1_file_service_query_worker",
+    "read_pages_worker" => "xm1_file_service_read_pages_worker",
+    "write_pages_worker" => "xm1_file_service_write_pages_worker",
+    "read_worker" => "xm1_file_service_read_worker",
 }

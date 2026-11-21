@@ -5,6 +5,7 @@ pub mod catalog;
 pub mod completion;
 pub mod counts;
 pub mod handles;
+pub mod media_io;
 pub mod paths;
 pub mod requests;
 pub mod routing;
@@ -17,9 +18,11 @@ pub mod stock_catalog;
 #[allow(unsafe_code)]
 pub mod stock_counts;
 #[allow(unsafe_code)]
-pub mod stock_requests;
+pub mod stock_media_io;
 #[allow(unsafe_code)]
 pub mod stock_paths;
+#[allow(unsafe_code)]
+pub mod stock_requests;
 #[allow(unsafe_code)]
 pub mod stock_search;
 #[allow(unsafe_code)]
@@ -35,6 +38,8 @@ pub mod workers;
 mod catalog_tests;
 #[cfg(test)]
 mod counts_tests;
+#[cfg(test)]
+mod media_io_tests;
 #[cfg(test)]
 mod paths_tests;
 #[cfg(test)]

@@ -7,7 +7,10 @@ use crate::paths::{
     self, Cancel, DeviceState, DirectoryNumber, DirectoryRecord, Entry, EntryService, ExtensionId, FileNumber, Port, Rebuild, Split,
 };
 use crate::requests::Callback;
-use crate::stock::{read_byte, read_half, read_word, write_byte, write_word};
+use crate::stock::{
+    address, file_service_catalog_find, file_service_extension_key, read_byte, read_half, read_word, write_byte,
+    write_word,
+};
 use crate::stock_workers::file_service_split_path;
 use crate::workers::Offset;
 
@@ -31,9 +34,7 @@ extern "C" {
     fn file_service_entry_update_one(record: u32, name: *const u8, mode: u32, value: u32, wildcard: u32, one: u32) -> u32;
     fn file_service_device_state(device: u32, state: *mut u8);
     fn file_service_file_number(name: *const u8) -> u32;
-    fn file_service_extension_key(extension: u32) -> u32;
     fn file_service_extension_byte5(id: u32) -> u32;
-    fn file_service_catalog_find(first: u32, second: u32, third: u32, position: u32, fifth: u32, entry: *mut u8) -> u32;
     fn file_service_fs_delete(path: u32, mode: u32) -> u32;
 }
 
@@ -188,7 +189,7 @@ impl Port for StockPaths {
     }
 
     fn find_entry(&mut self, entry: &mut Entry) -> RawStatus {
-        RawStatus(unsafe { file_service_catalog_find(0, 0, 0, u32::MAX, 0, entry.0.as_mut_ptr()) })
+        RawStatus(unsafe { file_service_catalog_find(0, 0, 0, u32::MAX, 0, address(entry.0.as_mut_ptr())) })
     }
 
     fn delete_path(&mut self, path: u32) -> RawStatus {

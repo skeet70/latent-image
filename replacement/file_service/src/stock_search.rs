@@ -6,15 +6,13 @@ use core::mem::MaybeUninit;
 use crate::completion::RawStatus;
 use crate::requests::Callback;
 use crate::search::{self, Entry, EntryOffset, Field, Port, Record, ENTRY_BYTES, TESTED, TESTED_BYTES};
-use crate::stock::{read_half, read_word, write_byte, write_word};
+use crate::stock::{address, file_service_copy_memory, file_service_fill_memory, read_half, read_word, write_byte, write_word};
 use crate::workers::Offset;
 
 const CONTEXT: u32 = 0x910204;
 const CONTEXT_ROUNDING: u32 = 0x16bf8;
 
 extern "C" {
-    fn file_service_fill_memory(destination: *mut u8, value: u32, length: u32);
-    fn file_service_copy_memory(destination: *mut u8, source: *const u8, length: u32);
     fn file_service_little_endian(value: u32) -> u32;
     fn file_service_divide(dividend: u32, divisor: u32) -> u32;
     fn file_service_format_timestamp(destination: u32, stamp: *const u8, byte: u32);
@@ -23,10 +21,6 @@ extern "C" {
     fn file_service_find_first_entry(path: u32, pattern: u32, entry: *mut u8, flag: u32) -> u32;
     fn file_service_find_next_entry(entry: *mut u8) -> u32;
     fn file_service_name_rejected(name: *const u8, length: u32) -> u32;
-}
-
-fn guest(address: u32) -> *mut u8 {
-    address as usize as *mut u8
 }
 
 /// A request the media task hands a worker: the header address, whose word at +8 is the
@@ -62,17 +56,17 @@ impl Port for StockSearch {
     fn cleared_entry(&mut self) -> Entry {
         let mut entry = MaybeUninit::<[u8; ENTRY_BYTES]>::uninit();
         unsafe {
-            file_service_fill_memory(entry.as_mut_ptr().cast(), 0, ENTRY_BYTES as u32);
+            file_service_fill_memory(address(entry.as_mut_ptr()), 0, ENTRY_BYTES as u32);
             Entry(entry.assume_init())
         }
     }
 
     fn clear(&mut self, output: Record, length: u32) {
-        unsafe { file_service_fill_memory(guest(output.0), 0, length) }
+        unsafe { file_service_fill_memory(output.0, 0, length) }
     }
 
     fn copy(&mut self, output: Record, entry: &Entry, length: u32) {
-        unsafe { file_service_copy_memory(guest(output.0), entry.0.as_ptr(), length) }
+        unsafe { file_service_copy_memory(output.0, address(entry.0.as_ptr()), length) };
     }
 
     fn set_byte(&mut self, output: Record, at: Field, value: u8) {
