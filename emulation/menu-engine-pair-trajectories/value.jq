@@ -96,13 +96,14 @@ def change($kind):
           observed("other-leave"; [["back",1,5,5]]),
           ($segments[] | select(.phase == "close-menu"))]
     elif $kind == "late" then
-      .entry = "IMAGE SIZE changed under a run document whose pipeline schedule completes 0x4010 only after the next key. DOWN submits; a half-press arrives while the submission is pending; the completion follows during the idle before a second half-press; a reopen and a restore elsewhere follow. Landings after the first DOWN are observed, not asserted."
+      .entry = "IMAGE SIZE changed under a run document whose pipeline schedule completes 0x4010 only after a key that arrives while it is pending. DOWN submits; a half-press arrives while the submission is pending; twelve RIGHTs, each after a 90,000,000-instruction idle, span the board time at which the schedule first completes the pair in both roles; a half-press then closes the menu, and a reopen and a restore elsewhere follow. Landings after the first DOWN are observed, not asserted."
       | .before_unload = $segments[0:$route] + [
           ($template | .steps = [["ok",1,5,2],["down",1,5,3]] | .reads += change_reads),
           segment("value-open"; [["ok",1,246,0]]),
           observed("value-change"; [["down",1,246,1]]),
           observed("value-close-pending"; [["half-press",1,246,1]]),
-          observed("value-close-completed"; [["half-press",1,246,1,idle]]),
+          observed("value-wait"; [range(12) | ["right",1,246,1,{"idle_instructions": 90000000}]]),
+          observed("value-close-completed"; [["half-press",1,246,1]]),
           observed("value-reopen"; [["ok",1,5,3]]),
           observed("other-route"; [["down",1,5,4],["down",1,5,5]]),
           observed("other-open"; [["ok",1,260,0]]),
