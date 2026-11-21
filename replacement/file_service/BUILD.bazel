@@ -102,7 +102,7 @@ haskell_test(
 haskell_binary(
     name = "file-service-observe",
     srcs = ["ObserveMain.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
     main_file = "ObserveMain.hs",
     deps = [
         ":payload",
@@ -112,10 +112,29 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:deepseq",
         "//host:directory",
         "//host:filepath",
         "//host:text",
         "//host:vector",
+    ],
+)
+
+haskell_test(
+    name = "observe-compare-tests",
+    size = "small",
+    srcs = ["ObserveCompareTests.hs"],
+    args = ["$(rootpath :file-service-observe)"],
+    data = [":file-service-observe"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
     ],
 )
 

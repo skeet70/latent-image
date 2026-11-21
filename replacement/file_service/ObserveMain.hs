@@ -23,16 +23,17 @@
 -- undefined are masked in snapshots, request reads and watched writes.
 module Main (main) where
 
+import Control.DeepSeq (rnf)
 import Control.Exception (SomeException, bracket, displayException, try)
-import Control.Monad (forM, forM_, replicateM, unless)
+import Control.Monad (foldM, forM, forM_, replicateM, unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftL, shiftR, (.|.))
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.IORef
 import Data.List (isPrefixOf, sort, sortOn)
 import qualified Data.Map.Strict as M
@@ -738,10 +739,17 @@ backendReadsOf backend hit
     captured = [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
     terminated bytes = scanl (\open b -> open && b /= 0) True (take (length bytes - 1) bytes)
 
-loadHits :: FilePath -> IO [Value]
-loadHits directory = do
-  bytes <- B.readFile (directory </> "hits.jsonl")
-  forM (filter (not . B.null) (C.lines bytes)) (either (ioError . userError) pure . A.eitherDecodeStrict')
+-- | The hits that are events, decoded one line at a time; the others are dropped as read.
+loadEvents :: Span -> FilePath -> IO [Event]
+loadEvents body directory = do
+  bytes <- BL.readFile (directory </> "hits.jsonl")
+  reverse <$> foldM keep [] (filter (not . BL.null) (BLC.lines bytes))
+  where
+    keep kept line = case A.eitherDecode line of
+      Left problem -> ioError (userError problem)
+      Right hit -> case event body hit of
+        Nothing -> pure kept
+        Just e -> rnf (eventValue e) `seq` rnf (eventDead e) `seq` rnf (eventKind e, eventName e, eventExternal e) `seq` pure (e : kept)
 
 loadJson :: FilePath -> IO Value
 loadJson path = B.readFile path >>= either (ioError . userError) pure . A.eitherDecodeStrict'
@@ -767,7 +775,7 @@ compareMain stockDir ownedDir symbols output = do
   need (not exists) "comparison output must be new"
   body <- readBody symbols
   let load directory = do
-        events <- mapMaybe (event body) <$> loadHits directory
+        events <- loadEvents body directory
         receipt <- loadJson (directory </> "receipt.json")
         steps <- arrayOf <$> loadJson (directory </> "steps.json")
         pure (events, receipt, steps)
