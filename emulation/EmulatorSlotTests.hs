@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Behavioral admission tests against the host user manager, without large
--- allocations, under a 16 GiB RAM budget; the host needs at least 16 GiB RAM.
+-- allocations, under a 16 GiB RAM budget and a simulated 64 GiB meminfo.
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
@@ -9,10 +9,10 @@ import Control.Monad (forM, forM_, unless)
 import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict', withObject, (.:))
 import qualified Data.ByteString as B
 import Data.Char (isHexDigit)
-import Data.IORef (modifyIORef, newIORef, readIORef)
+import Data.IORef (atomicModifyIORef', modifyIORef, newIORef, readIORef)
 import Data.List (isInfixOf, stripPrefix)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
-import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, findExecutable, getTemporaryDirectory, listDirectory, makeAbsolute, removeFile)
+import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, findExecutable, getTemporaryDirectory, listDirectory, makeAbsolute, removeFile, renameFile)
 import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>), takeFileName)
@@ -81,11 +81,18 @@ run source builder wrapper = do
     , "done"
     ])
   setFileMode (failedBin </> "systemctl") 0o700
-  let environment = change "XM1_HOST_MEMORY_BUDGET" "16G" (change "XM1_HOST_BUILD_MEMORY_MAX" "2G"
-        (change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited))
+  let hostInfo = root </> "meminfo"
+      smallHostInfo = root </> "meminfo-small-host"
+  writeMeminfo hostInfo (64 * gib) (64 * gib)
+  writeMeminfo smallHostInfo (24 * gib) (24 * gib)
+  serial <- newIORef (0 :: Int)
+  let next = atomicModifyIORef' serial (\count -> (count + 1, count + 1))
+      environment = change "XM1_HOST_MEMINFO" hostInfo (change "XM1_HOST_MEMORY_BUDGET" "16G" (change "XM1_HOST_BUILD_MEMORY_MAX" "2G"
+        (change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited)))
       native = change "XM1_PROBE_CLASS" "native" environment
-      spawn env = start (proc source []) {env = Just env}
-      build = start (proc builder ["build", "//fake:target"]) {env = Just environment}
+      labelled count env = if any ((== "XM1_RUN_LABEL") . fst) env then env else change "XM1_RUN_LABEL" ("probe-" ++ show count) env
+      spawn env = next >>= \count -> start (proc source []) {env = Just (labelled count env)}
+      build = next >>= \count -> start (proc builder ["build", "//fake:target-" ++ show count]) {env = Just environment}
       rawScope unit = start (proc "systemd-run" ["--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit, "--property=MemoryMax=4G", "--property=MemorySwapMax=0", "--", source]) {env = Just (change "XM1_PROBE_LEGACY" "1" environment)}
       failedState unit env =
         change "XM1_FAILED_UNIT" unit
@@ -453,16 +460,34 @@ run source builder wrapper = do
         (proc source []) {env = Just invalidEnvironment} ""
       pure (capCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` capOutput))
   capOk <- expect "invalid RAM and swap caps are refused before admission" (and invalidCaps)
+  let smallHost = change "XM1_HOST_MEMINFO" smallHostInfo (filter ((/= "XM1_HOST_MEMORY_BUDGET") . fst) native)
   budgetCases <- forM
     [ change "XM1_HOST_MEMORY_BUDGET" "1024T" native
     , change "XM1_HOST_MEMORY_BUDGET" "128M" native
+    , change "XM1_HOST_MEMORY_BUDGET" (show (56 * gib + token)) native
     , change "XM1_HOST_MEMORY_BUDGET" "4G" (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "5G" native))
+    , change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" (show (16 * gib + token)) smallHost)
     ] $ \budgetEnvironment -> do
       (budgetCode, budgetOutput, _) <- readCreateProcessWithExitCode
         (proc source []) {env = Just budgetEnvironment} ""
       pure (budgetCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` budgetOutput))
-  budgetOk <- expect "a budget above physical RAM or below one token, or smaller than one scope's RAM, is refused rather than waited for"
+  budgetOk <- expect "a budget above MemTotal less the 8 GiB host reserve or below one token, or smaller than one scope's RAM, is refused rather than waited for"
     (and budgetCases)
+  let repeated = change "XM1_RUN_LABEL" "repeat-label" (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "2G" native))
+      repeatRun = do
+        job <- spawn repeated
+        seen <- admission job
+        release job
+        code <- finish job
+        waitUnitEnded environment 50 (fromMaybe "missing.scope" (observedText "probe-unit " seen))
+        pure (seen, code)
+  (firstRepeat, firstRepeatCode) <- repeatRun
+  (secondRepeat, secondRepeatCode) <- repeatRun
+  repeatOk <- expect "a run label's first scope reserves its RAM cap as MemoryHigh and a repeat reserves 1.25 times the recorded peak in whole tokens"
+    (observedText "probe-memory-high " firstRepeat == Just "2147483648"
+      && observedText "probe-memory-high " secondRepeat == Just "268435456"
+      && observedText "probe-memory-max " secondRepeat == Just "2147483648"
+      && firstRepeatCode == Just ExitSuccess && secondRepeatCode == Just ExitSuccess)
   let missingRuntime = root </> "no-session"
       sessionless = change "XDG_RUNTIME_DIR" missingRuntime
         (change "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ missingRuntime ++ "/bus") environment)
@@ -542,10 +567,21 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and (concat requestedSlots) && and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and (concat requestedSlots) && and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, repeatOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
+
+gib, token :: Integer
+gib = 1024 * 1024 * 1024
+token = 256 * 1024 * 1024
+
+-- | A meminfo file for @XM1_HOST_MEMINFO@.
+writeMeminfo :: FilePath -> Integer -> Integer -> IO ()
+writeMeminfo path total available = do
+  writeFile (path ++ ".tmp") (unlines
+    ["MemTotal: " ++ show (total `div` 1024) ++ " kB", "MemAvailable: " ++ show (available `div` 1024) ++ " kB"])
+  renameFile (path ++ ".tmp") path
 
 admitted :: Admission -> Bool
 admitted (Admission _ slot) = slot /= Nothing
@@ -665,6 +701,6 @@ probeEnvironment home = do
   uid <- getEffectiveUserID
   let runtime = "/run/user/" ++ show uid
       keep key value environment = if any ((== key) . fst) environment then environment else (key, value) : environment
-      dropped = ["HOME", "XM1_HOST_MEMORY_BUDGET", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_SLOTS", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_INHERIT", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_GRANT", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
+      dropped = ["HOME", "XM1_HOST_MEMORY_BUDGET", "XM1_HOST_MEMINFO", "XM1_EMULATOR_SLOT", "XM1_EMULATOR_SLOTS", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX", "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_NATIVE_SLOTS", "XM1_HOST_BUILD", "XM1_ADMISSION_SCOPE", "XM1_ADMISSION_OWNER", "XM1_ADMISSION_CLASS", "XM1_ADMISSION_INHERIT", "XM1_STORAGE_MIN_FREE", "XM1_PROBE_CLASS", "XM1_PROBE_LEGACY", "XM1_PROBE_NESTED", "XM1_PROBE_GRANT", "XM1_PROBE_SURVIVOR", "XM1_PROBE_EXIT", "XM1_PROBE_ALLOCATE_BYTES", "XM1_RUN_DIR", "XM1_RUN_WORK", "XM1_RUN_RESULT", "XM1_RUN_PROGRAM", "XM1_RUN_LABEL", "XM1_TASK_OUTPUT_MAX", "XM1_TASK_MEASURE_SECONDS"]
   pure (("HOME", home) : ("XM1_STORAGE_MIN_FREE", "1") : filter ((`notElem` dropped) . fst)
     (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited)))
