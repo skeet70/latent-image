@@ -637,4 +637,10 @@ entry_veneer! {
     "close_entry_worker" => "xm1_file_service_close_entry_worker",
     "seek_worker" => "xm1_file_service_seek_worker",
     "release_worker" => "xm1_file_service_release_worker",
+    "file_delete_worker" => "xm1_file_service_file_delete_worker",
+    "filename_set_worker" => "xm1_file_service_filename_set_worker",
+    "directory_delete_worker" => "xm1_file_service_directory_delete_worker",
+    "image_remove_worker" => "xm1_file_service_image_remove_worker",
+    "readonly_worker" => "xm1_file_service_readonly_worker",
+    "attribute_set_worker" => "xm1_file_service_attribute_set_worker",
 }

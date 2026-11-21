@@ -17,6 +17,13 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # paths
+    "paths_cancel_restores_callback",
+    "paths_request_callback_unrestored",
+    "paths_directory_delete_returns_zero",
+    "paths_filename_returns_status",
+    "paths_remove_restores_callback",
+    "paths_attribute_failure_unreloaded",
 ]
 
 def file_service_suffixes():

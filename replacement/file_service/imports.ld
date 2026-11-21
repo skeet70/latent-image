@@ -31,3 +31,17 @@ file_service_fs_release = 0x6ffc68;
 file_service_media_refresh = 0x71d66c;
 file_service_after_written_close = 0x71141c;
 file_service_rescan = 0x71985c;
+/* paths workers */
+file_service_delete_file_request = 0x71df30;
+file_service_delete_directory_request = 0x71e08c;
+file_service_readonly_request = 0x71e288;
+file_service_catalog_rebuild = 0x719de0;
+file_service_path_wildcard = 0x71d1b8;
+file_service_entry_update = 0x714940;
+file_service_entry_update_one = 0x713ef4;
+file_service_device_state = 0x6f52e4;
+file_service_file_number = 0x713360;
+file_service_extension_id = 0x713264;
+file_service_extension_kind = 0x713488;
+file_service_catalog_find = 0x71a93c;
+file_service_fs_delete = 0x6ff84c;
