@@ -380,6 +380,9 @@ enum Request {
     LocalUiDrain { ticks: BoardTicks },
     UiState,
     SnapshotDrop { name: SnapshotName },
+    /// Switches POWER OFF and runs to the stock terminal; afterwards only reads, `watch-end`,
+    /// `nand-export` and `finish` are admitted.
+    PowerOff { budget_instructions: u64 },
     Finish,
 }
 
@@ -438,6 +441,7 @@ enum RequestKind {
     LocalUiDrain,
     UiState,
     SnapshotDrop,
+    PowerOff,
     Finish,
 }
 
@@ -496,10 +500,14 @@ impl Request {
             Request::LocalUiDrain { .. } => RequestKind::LocalUiDrain,
             Request::UiState => RequestKind::UiState,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
+            Request::PowerOff { .. } => RequestKind::PowerOff,
             Request::Finish => RequestKind::Finish,
         }
     }
 }
+
+/// Upper bound on one `power-off` run.
+const MAX_POWER_OFF: u64 = 4_000_000_000;
 
 /// Host seconds per request kind, and seconds spent waiting for the host's next request.
 #[derive(Default, Serialize)]
@@ -553,6 +561,8 @@ struct Server {
     nand_source: NandSourceKind,
     modal_request: Option<Vec<u8>>,
     installed_observation: Option<ObservedInstall>,
+    /// The guest reached the stock POWER OFF terminal.
+    powered_off: bool,
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -1244,6 +1254,9 @@ impl Server {
             && !matches!(request, Request::TraceResume { .. }) {
             return Err("trace continuation must resume before mutation".into());
         }
+        if self.powered_off && !read_only && !matches!(request, Request::WatchEnd) {
+            return Err("the guest is at the stock POWER OFF terminal; only reads, watch-end, nand-export and finish remain".into());
+        }
         if self.bridge.machine.traces.pauses_active() && !read_only
             && !matches!(request, Request::TraceSites { .. } | Request::TraceResume { .. } | Request::Key { .. }
                 | Request::CaptureObservationWindow) {
@@ -1305,6 +1318,14 @@ impl Server {
             Request::JpegObservationEnd(_) => serde_json::to_value(self.end_jpeg_observation()?)
                 .map_err(|error| error.to_string())?,
             Request::NandExport { label } => self.export_nand(label)?,
+            Request::PowerOff { budget_instructions } => {
+                if !(1..=MAX_POWER_OFF).contains(&budget_instructions) {
+                    return Err(format!("power-off budget must be 1..{MAX_POWER_OFF} instructions"));
+                }
+                let off = self.bridge.power_off(budget_instructions)?;
+                self.powered_off = true;
+                serde_json::to_value(off).map_err(|error| error.to_string())?
+            }
             Request::List => {
                 let c = &self.attachment.configuration;
                 let byte = |index: usize| c.get(index).copied().ok_or("configuration descriptor is short");
@@ -2168,6 +2189,7 @@ fn drive() -> Result<(), String> {
         nand_source,
         modal_request: None,
         installed_observation,
+        powered_off: false,
     };
     server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites), None)?;
     server.serve()
@@ -2592,6 +2614,7 @@ mod tests {
             nand_source: NandSourceKind::InitialSeeded,
             modal_request: None,
             installed_observation: None,
+            powered_off: false,
         }
     }
 
@@ -2708,6 +2731,41 @@ mod tests {
         assert!(server.handle(request(json!({"command":"nand-export","label":"retry"}))).is_err());
         assert_eq!(read(&destination).unwrap(), original);
         assert_eq!(std::fs::read_dir(&server.output).unwrap().count(), 1);
+    }
+
+    /// Core 0 runs two NOPs into the stock power-off self-branch.
+    fn reaching_power_off_terminal() -> Server {
+        let server = server(&[0xeaff_fffe]);
+        let code: Vec<u8> = [0xe1a0_0000u32, 0xe1a0_0000, 0xeaff_fffe].iter().flat_map(|word| word.to_le_bytes()).collect();
+        server.bridge.machine.session.board.write_physical(0x00ec5810, &code).unwrap();
+        server.bridge.machine.session.board.write_register(0, fujimod_emulator_cpu::Register::Pc, 0x00ec5810).unwrap();
+        server
+    }
+
+    #[test]
+    fn power_off_at_the_stock_terminal_admits_reads_and_nand_export_only() {
+        let mut server = reaching_power_off_terminal();
+        let off = server.handle(request(json!({"command":"power-off","budget_instructions":1_000_000}))).unwrap().unwrap();
+        assert!(off["terminal"].as_u64().unwrap() > off["switched"].as_u64().unwrap());
+        assert!(server.handle(request(json!({"command":"idle","instructions":10}))).is_err());
+        assert!(server.handle(request(json!({"command":"power-off","budget_instructions":1_000_000}))).is_err());
+        assert!(server.handle(request(json!({"command":"read-memory","address":0x00ec5818,"count":4}))).unwrap().is_some());
+        let exported = server.handle(request(json!({"command":"nand-export","label":"power-off"}))).unwrap().unwrap();
+        assert_eq!(exported["status"], "exported");
+    }
+
+    #[test]
+    fn power_off_that_misses_the_terminal_is_refused_and_not_terminal() {
+        let mut server = server(&[0xeaff_fffe]);
+        assert!(server.handle(request(json!({"command":"power-off","budget_instructions":2_000_000}))).is_err());
+        assert!(server.handle(request(json!({"command":"idle","instructions":10}))).unwrap().is_some());
+    }
+
+    #[test]
+    fn nand_export_stays_refused_after_another_machine_failure() {
+        let mut server = server(&[0xeaff_fffe]);
+        server.bridge.machine.failure = Some("synthetic strict stop".into());
+        assert!(server.handle(request(json!({"command":"nand-export","label":"failed"}))).is_err());
     }
 
     #[test]

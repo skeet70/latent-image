@@ -1,5 +1,5 @@
 {-# LANGUAGE GHC2021 #-}
-module CustomAdmission (admitCustomBoundaries, admitCustomBoundaryEncodings, customEntries, recordEntries, bankEntries, retiredSettingsRegions, CustomStoreWidth(..), customStoreName, customStoreWords, customStoreIndex, BankApplyElfInput(..), BankApplyBinding(..), BankApplyBoundary, admitBankApplyElf, bankApplyEntry, bankApplyEnd, bankApplyCallReturn, bankApplyBinding, bankApplyRoots) where
+module CustomAdmission (admitCustomBoundaries, admitCustomBoundaryEncodings, customEntries, recordEntries, bankEntries, retiredSettingsRegions, CustomStoreWidth(..), customStoreName, customStoreWords, customStoreIndex, BankApplyElfInput(..), BankApplyBinding(..), BankApplyBoundary, admitBankApplyElf, bankApplyEntry, bankApplyEnd, bankApplyCallReturn, bankApplySetterTail, bankApplyBinding, bankApplyRoots) where
 
 import qualified A32 as A
 import qualified ArmElf as E
@@ -178,6 +178,8 @@ data BankApplyBoundary = BankApplyBoundary
   , bankApplyCallReturns :: S.Set GuestAddress
   , bankApplyBinding :: BankApplyBinding
   , bankApplyRootEntries :: S.Set GuestAddress
+  -- | `xm1_storage_apply` holds a non-link branch to the property setter.
+  , bankApplySetterTail :: Bool
   } deriving (Eq, Show)
 
 bankApplyCallReturn :: BankApplyBoundary -> GuestAddress -> Bool
@@ -221,8 +223,9 @@ admitBankApplyElf input = do
         _ -> False
       binding = BankApplyBinding (sha256 (bankApplyElfBytes input)) (sha256 (bankApplyLinkedBytes input))
         (sha256 (bankApplySymbolBytes input)) (bankApplyImageBase input) (bankApplyCarriers input)
-  unless (not (S.null returns)) (Left "bank apply function has no admitted property-set call")
-  pure (BankApplyBoundary (admittedBankEntry function) (admittedBankEnd function) returns binding roots)
+      tails = or [True | AdmittedBankInstruction _ (A.Branch _ False 0x624694) <- admittedBankInstructions function]
+  unless (not (S.null returns) || tails) (Left "bank apply function has no admitted property-set call")
+  pure (BankApplyBoundary (admittedBankEntry function) (admittedBankEnd function) returns binding roots tails)
 
 uniqueBankElf :: String -> [a] -> Either String a
 uniqueBankElf label items = case items of

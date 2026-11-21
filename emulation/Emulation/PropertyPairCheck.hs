@@ -52,7 +52,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.List (find, sort, zip4)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, isNothing, isJust, catMaybes)
+import Data.Maybe (fromMaybe, isNothing, isJust, catMaybes, listToMaybe)
 import Data.Int (Int32)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Set as S
@@ -425,7 +425,10 @@ parseHit :: Value -> Parse Hit
 parseHit value = do
   fields <- asObject value
   exact (["site", "address", "core", "instructions", "registers", "sp", "lr", "cpsr"]
-    ++ ["memory" | KM.member "memory" fields] ++ ["task" | KM.member "task" fields]) fields
+    ++ ["memory" | KM.member "memory" fields] ++ ["task" | KM.member "task" fields]
+    ++ [provenanceKey | KM.member (K.fromText provenanceKey) fields]) fields
+  -- The runtime's render-object stream ordinal; property pairs do not observe that stream.
+  forM_ (KM.lookup (K.fromText provenanceKey) fields) asWord64
   registers <- at "registers" fields >>= asObject
   let general = KM.member "r8" registers
   exact (["r0", "r1", "r2", "r3"] ++ if general then ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"] else []) registers
@@ -450,6 +453,9 @@ parseHit value = do
   Hit <$> (at "site" fields >>= asText >>= parseHitSite) <*> (at "address" fields >>= hexWordText)
     <*> pure core <*> pure instructions <*> pure arguments <*> pure r8
     <*> pure task <*> pure sp <*> (at "lr" fields >>= hexWordText) <*> pure flags <*> pure memory
+  where
+    provenanceKey :: T.Text
+    provenanceKey = "render_object_provenance_sequence"
 
 persistenceEvents :: Contract -> Value -> Either Refusal [PersistenceEvent]
 persistenceEvents contract value = do
@@ -562,7 +568,7 @@ parseWatch policy value = do
   views <- maybe (Left "unknown watch views") Right (lookup viewText [(viewPolicyWire known, known) | known <- [minBound .. maxBound]])
   unless (views == policy) (Left "watch views differ from the expected policy")
   ranges <- at "ranges" fields >>= asArray >>= mapM (\pair -> asArray pair >>= mapM asWord)
-  unless (ranges == [[rangeStart range, rangeEnd range] | range <- settingsRanges]) (Left "watch ranges differ from the settings ranges")
+  unless (sort ranges == sort [[rangeStart range, rangeEnd range] | range <- settingsRanges]) (Left "watch ranges differ from the settings ranges")
   rows <- at "records" fields >>= asArray
   when (length rows > watchLimit) (Left "watch rows exceed the declared bound")
   mapM parseRow rows
@@ -685,10 +691,12 @@ data PairState = PairState
   , pairDone :: M.Map Int Returned
   , pairApplyFrames :: M.Map ApplyFrameKey [ApplyFrame]
   , pairApplyDone :: M.Map Int CallerContext
+  -- | Setter entries reached through the apply's tail branch.
+  , pairSetterTails :: S.Set Int
   }
 
 emptyPairState :: PairState
-emptyPairState = PairState M.empty M.empty M.empty M.empty
+emptyPairState = PairState M.empty M.empty M.empty M.empty S.empty
 
 hitTaskId :: Hit -> Maybe LogicalTaskId
 hitTaskId hit = case hitTask hit of
@@ -725,8 +733,7 @@ bankCaller :: Maybe StorageBoundaries.BankApplyBoundary -> Role -> Hit -> Either
 bankCaller Nothing _ _ = Right False
 bankCaller (Just boundary) role hit
   | caller > 0x6309c4 && caller <= 0x630a34 =
-      if role == RetainedRole && caller == 0x630a04 then Right True
-      else if role == RetainedRole && caller == 0x630a2c then Right False
+      if role == RetainedRole && caller `elem` [0x630a04,0x630a2c] then Right True
       else Left ApplyCallerInvalid
   | caller > entry && caller <= end =
       if role /= RetainedRole && StorageBoundaries.bankApplyCallReturn boundary (GuestAddress caller)
@@ -737,13 +744,32 @@ bankCaller (Just boundary) role hit
     GuestAddress entry = StorageBoundaries.bankApplyEntry boundary
     GuestAddress end = StorageBoundaries.bankApplyEnd boundary
 
+-- | An owned setter entered through the admitted apply's tail branch: it carries the innermost
+-- apply frame's stack pointer and return address, before any setter of that frame.
+setterTail :: Maybe StorageBoundaries.BankApplyBoundary -> Role -> PairState -> Hit -> Bool
+setterTail boundary role state hit = role /= RetainedRole
+  && maybe False StorageBoundaries.bankApplySetterTail boundary
+  && case M.lookup (hitCore hit,hitTaskId hit) (pairApplyFrames state) of
+    Just (ApplyFrame entry []:_) -> hitCore entry == hitCore hit && hitSp entry == hitSp hit
+      && physicalAddress (hitLr entry) == physicalAddress (hitLr hit)
+    _ -> False
+
+-- | The apply return also returns from the setter its tail branch entered.
+closeSetterTail :: Int -> Hit -> PairState -> PairState
+closeSetterTail index hit state = case (hitSite hit,M.lookup key (pairOpen state)) of
+  (PlanSite label@(StorageSite Storage.BankApplyReturn),Just (expected,entry,_)) | expected == label ->
+    state { pairOpen = M.delete key (pairOpen state)
+          , pairDone = M.insert entry (Returned index (sum (take 1 (hitArguments hit)))) (pairDone state) }
+  _ -> state
+  where key = (hitCore hit,hitTaskId hit,hitSp hit,hitAddress hit)
+
 pairApply :: Plan -> Maybe StorageBoundaries.BankApplyBoundary -> Int -> Hit -> PairState -> Either Refusal PairState
 pairApply plan boundary index hit state = case hitSite hit of
   PlanSite (StorageSite Storage.BankApplyEntry) ->
     pure state {pairApplyFrames=M.insertWith (++) key [ApplyFrame hit []] (pairApplyFrames state)}
   PlanSite SetterEntry -> do
     isBank <- fault (bankCaller boundary (planRole plan) hit)
-    if not isBank then pure state else do
+    if not (isBank || setterTail boundary (planRole plan) state hit) then pure state else do
       current <- fault (executionTask hit)
       frames <- maybe (Left (BankApplyContextRefused index ApplyEntryMissing)) Right (M.lookup key (pairApplyFrames state))
       case frames of
@@ -760,18 +786,22 @@ pairApply plan boundary index hit state = case hitSite hit of
           Just (frame:rest) -> Just (key,frame,rest)
           _ -> find (\(_,frame,_) -> null (applySetters frame) && matches frame)
             [(candidate,frame,rest) | (candidate,frame:rest) <- M.toList (pairApplyFrames state)]
-    (owner,frame,rest) <- maybe (Left (BankApplyContextRefused index ApplyReturnUnexpected)) Right candidates
-    unless (matches frame) (Left (BankApplyContextRefused index ApplyReturnUnexpected))
-    done <- case applySetters frame of
-      [] -> pure (pairApplyDone state)
-      setters -> do
-        entered <- fault (executionTask (applyEntryHit frame))
-        returned <- fault (executionTask hit)
-        unless (sameTask entered returned) (Left (BankApplyContextRefused index ApplyNotTaskExecution))
-        unless (all (`M.member` pairDone state) setters) (Left (BankApplyContextRefused index ApplyReturnMissing))
-        let context = BankApplyCaller (taskKernel entered) (taskLogicalId entered)
-        pure (foldr (\setter -> M.insert setter context) (pairApplyDone state) setters)
-    pure state {pairApplyFrames=if null rest then M.delete owner (pairApplyFrames state) else M.insert owner rest (pairApplyFrames state),pairApplyDone=done}
+    case candidates of
+      -- A branch landing reached with no apply call open.
+      Nothing | S.member (physicalAddress (hitAddress hit)) (planApplyLandings plan) -> pure state
+      _ -> do
+        (owner,frame,rest) <- maybe (Left (BankApplyContextRefused index ApplyReturnUnexpected)) Right candidates
+        unless (matches frame) (Left (BankApplyContextRefused index ApplyReturnUnexpected))
+        done <- case applySetters frame of
+          [] -> pure (pairApplyDone state)
+          setters -> do
+            entered <- fault (executionTask (applyEntryHit frame))
+            returned <- fault (executionTask hit)
+            unless (sameTask entered returned) (Left (BankApplyContextRefused index ApplyNotTaskExecution))
+            unless (all (`M.member` pairDone state) setters) (Left (BankApplyContextRefused index ApplyReturnMissing))
+            let context = BankApplyCaller (taskKernel entered) (taskLogicalId entered)
+            pure (foldr (\setter -> M.insert setter context) (pairApplyDone state) setters)
+        pure state {pairApplyFrames=if null rest then M.delete owner (pairApplyFrames state) else M.insert owner rest (pairApplyFrames state),pairApplyDone=done}
   _ -> pure state
   where
     key = (hitCore hit,hitTaskId hit)
@@ -781,7 +811,7 @@ callsIn :: Plan -> Maybe StorageBoundaries.BankApplyBoundary -> V.Vector Hit -> 
 callsIn plan boundary hits state indices label = forM [index | index <- indices, hitSite (hits V.! index) == PlanSite label] $ \index -> do
   let hit = hits V.! index
   isBank <- if label == SetterEntry
-    then either (Left . BankApplyContextRefused index) Right (bankCaller boundary (planRole plan) hit)
+    then (|| S.member index (pairSetterTails state)) <$> either (Left . BankApplyContextRefused index) Right (bankCaller boundary (planRole plan) hit)
     else pure False
   context <- if isBank then maybe (Left (BankApplyContextRefused index ApplyReturnMissing)) Right (M.lookup index (pairApplyDone state)) else pure ExactCaller
   pure (Call (hitArguments hit) (hitLr hit) (returnValue <$> M.lookup index (pairDone state)) context)
@@ -806,14 +836,17 @@ pairHits plan boundary hits (from, to) initial = foldM visit initial [from .. to
   visit state index = do
     let hit = hits V.! index
     kind <- classifyHit plan index hit
-    applied <- pairApply plan boundary index hit state
+    applied <- pairApply plan boundary index hit (closeSetterTail index hit state)
     case kind of
       GuardHit -> Left (GuardedFetch index)
       EntryHit returnLabel -> do
-        unless (M.lookup (hitLr hit) (planSites plan) == Just returnLabel) (Left (UnarmedReturn index))
+        let tailed = returnLabel == SetterReturn && setterTail boundary (planRole plan) state hit
+        unless (tailed || M.lookup (hitLr hit) (planSites plan) == Just returnLabel) (Left (UnarmedReturn index))
         let key = (hitCore hit,hitTaskId hit,hitSp hit,hitLr hit)
+            expected = if tailed then StorageSite Storage.BankApplyReturn else returnLabel
         when (M.member key (pairOpen applied)) (Left (DuplicateOpenCall index))
-        pure applied { pairOpen = M.insert key (returnLabel, index, hitArguments hit) (pairOpen applied) }
+        pure applied { pairOpen = M.insert key (expected, index, hitArguments hit) (pairOpen applied)
+                     , pairSetterTails = if tailed then S.insert index (pairSetterTails applied) else pairSetterTails applied }
       ReturnHit label -> case M.lookup (hitCore hit,hitTaskId hit,hitSp hit,hitAddress hit) (pairOpen applied) of
         Just (expected, entry, _) | expected == label -> do
           isBank <- either (Left . BankApplyContextRefused index) Right (bankCaller boundary (planRole plan) (hits V.! entry))
@@ -1807,7 +1840,10 @@ data StorageStepEvidence = StorageStepEvidence
   , storageEvidenceDial :: Maybe ModeDialWitness
   , storageEvidenceEe :: [EeWitness]
   , storageEvidenceHandback :: [S1Witness]
+  , storageEvidenceUnchangedCommit :: Maybe CommitActivity
   } deriving (Eq, Show)
+-- | A step's property commit count and bank-apply entry arguments r0-r2, in order.
+data CommitActivity = CommitActivity Int [[Word32]] deriving (Eq, Show)
 data BootChain = BootChain BootSession Sha256 Sha256 deriving Eq
 data StorageEvidence = StorageEvidence
   { storageEvidenceSteps :: [StorageStepEvidence]
@@ -1825,6 +1861,7 @@ data BootIdentity = BootIdentity
   , identityRom :: Sha256
   , identityProcedure :: Sha256
   , identitySeed :: BootSeed
+  , identityEmulator :: Maybe Sha256
   } deriving Eq
 data FreshStart = FreshStart
   { freshIdentity :: BootIdentity
@@ -1870,7 +1907,8 @@ bootResetPaths bytes = either (Left . StorageShape) Right $ do
 parseBootIdentity :: Value -> Parse BootIdentity
 parseBootIdentity value = do
   fields <- asObject value
-  exact ["schema","model","run_document","installed_dat","boot_rom","adjustment_nand","record_nand","committed_nand","source_kind","card_sha256","procedure"] fields
+  exact (["schema","model","run_document","installed_dat","boot_rom","adjustment_nand","record_nand","committed_nand","source_kind","card_sha256","procedure"]
+    ++ ["emulator_binary" | KM.member "emulator_binary" fields]) fields
   schema <- at "schema" fields >>= asInt
   unless (schema == 3) (Left "SDK boot identity schema differs")
   model <- at "model" fields >>= asText
@@ -1889,6 +1927,7 @@ parseBootIdentity value = do
   BootIdentity (SdkModel model) <$> (at "run_document" fields >>= parseDigest)
     <*> (at "installed_dat" fields >>= parseDigest) <*> (at "boot_rom" fields >>= parseDigest)
     <*> (at "procedure" fields >>= parseDigest) <*> pure seed
+    <*> traverse parseDigest (KM.lookup "emulator_binary" fields)
 
 parseFreshStart :: BootSession -> Value -> Parse FreshStart
 parseFreshStart (BootSession number) value = do
@@ -1998,6 +2037,8 @@ data StorageColdBoot = StorageColdBoot
   , coldPhases :: [(AttachPhase,Interval)]
   , coldExport :: CommittedExport
   , coldInputDigest :: Sha256
+  -- | Instructions at which POWER was switched OFF; the export is at the reported terminal.
+  , coldPowerOffSwitched :: Instructions
   }
 data ObservedStorageStep = ObservedStorageStep
   { observedStorageNumber :: Int
@@ -2042,7 +2083,9 @@ parseStoragePress action result = do
   unless (began >= ran) (Left "storage key idle instruction boundary is invalid")
   press <- at "press" result
   fields <- asObject press
-  exact ["snapshot","key","menu","settle","instructions","display_wait_instructions","failure"] fields
+  -- Current SDK display-key responses also report the presentation and publication they waited on.
+  exact (["snapshot","key","menu","settle","instructions","display_wait_instructions","failure"]
+    ++ [name | name <- ["presentation","publication"], KM.member (K.fromText name) fields]) fields
   let expected = case action of
         StorageCrawlKey key -> T.pack (crawlKeyWire key)
         StorageHalfShutter -> "half-press"
@@ -2065,6 +2108,11 @@ parseStoragePress action result = do
   unless (toInteger began+toInteger pressed+toInteger prefixRan == toInteger end)
     (Left "storage key and bounded prefix instruction ranges are discontinuous")
   pure (Press status menu endpointMenu endpointMode,Instructions began)
+
+-- | Instructions the SDK's mode-dial request executes before it replies (`MODE_DIAL_SETTLE` in
+-- fujimod-xm1/src/ram_push.rs).
+modeDialSettle :: Integer
+modeDialSettle = 40000000
 
 parseModeDialWitness :: ModeDial -> A.Object -> Parse (ModeDialWitness,StorageEndpoint)
 parseModeDialWitness expected result = do
@@ -2137,7 +2185,7 @@ parseStorageStep manifests resets expectedSession expected spec value = do
       (dial,endpoint) <- parseModeDialWitness position result
       pure (warm Nothing (Just endpoint) (Just dial) Nothing)
     Storage.ColdReboot -> do
-      exact ["kind","export","prior_session","new_start","new_reset","input_committed_sha256","next_session","new_hits_start","regions_before_reboot","storage_before_reboot"] result
+      exact ["kind","power_off","export","prior_session","new_start","new_reset","input_committed_sha256","next_session","new_hits_start","regions_before_reboot","storage_before_reboot"] result
       unless (KM.lookup "kind" result == Just (String "cold-reboot")) (Left "storage cold reboot has another result kind")
       next <- at "next_session" result >>= parseBootSession
       unless (toInteger (bootSessionNumber next) == toInteger (bootSessionNumber session)+1) (Left "cold reboot skips a session")
@@ -2147,8 +2195,14 @@ parseStorageStep manifests resets expectedSession expected spec value = do
       unless (start == manifestStart nextManifest) (Left "cold reboot supplied another fresh start")
       exported <- at "export" result >>= parseCommittedExport (Storage.storageStepName spec)
       inputDigest <- at "input_committed_sha256" result >>= parseDigest
+      powerOff <- at "power_off" result >>= asObject
+      exact ["switched","terminal"] powerOff
+      switched <- at "switched" powerOff >>= asWord64
+      terminal <- at "terminal" powerOff >>= asWord64
+      unless (switched <= terminal) (Left "POWER OFF terminal precedes its switch")
       unless (exportedParent exported == manifestIdentity oldManifest
         && exportedInstructions exported == manifestInstructions oldManifest
+        && exportedInstructions exported == Instructions terminal
         && inputDigest == exportedDigest exported
         && identitySeed (manifestIdentity nextManifest) == CommittedBoot inputDigest)
         (Left "committed export does not bind the actual parent and child boots")
@@ -2165,8 +2219,9 @@ parseStorageStep manifests resets expectedSession expected spec value = do
         [] -> False) (Left "cold reboot after-state is not its fresh attach state")
       beforeReboot <- at "regions_before_reboot" result >>= parseRegions
       oldSnapshot <- at "storage_before_reboot" result >>= parseStorageSnapshot
-      unless (storageBefore == oldSnapshot) (Left "cold reboot advanced before exporting its medium")
-      let cold = StorageColdBoot next phases exported inputDigest
+      forM_ (snapshotMismatch oldSnapshot beforeReboot) $ \address ->
+        Left ("storage snapshot before reboot differs from watched bytes at " ++ show address)
+      let cold = StorageColdBoot next phases exported inputDigest (Instructions switched)
       pure (ObservedStorageStep number spec session (Interval (StepInterval number) before beforeReboot rows (from,newStart) Nothing)
         range after storageBefore storageAfter Nothing Nothing Nothing (Just cold))
 
@@ -2178,16 +2233,17 @@ snapshotSegments snapshot =
   ]
   where bank (StorageBankBytes bytes)=bytes; record (CustomRecordWire bytes)=bytes
 
-checkSnapshotRegions :: Int -> StorageSnapshot -> Regions -> Either Refusal ()
-checkSnapshotRegions number snapshot regions = do
-  forM_ (snapshotSegments snapshot) $ \(address,bytes) ->
-    unless (case M.lookupLE address regions of
+-- | The first snapshot segment address whose bytes differ from the watched regions.
+snapshotMismatch :: StorageSnapshot -> Regions -> Maybe Word32
+snapshotMismatch snapshot regions = listToMaybe
+  [ address | (address,bytes) <- snapshotSegments snapshot
+  , not (case M.lookupLE address regions of
       Just (base,region) -> let offset=fromIntegral (address-base) in offset+B.length bytes <= B.length region && B.take (B.length bytes) (B.drop offset region) == bytes
-      _ -> False) (Left (StorageShape ("storage snapshot differs from watched bytes in step " ++ show number ++ " at " ++ show address)))
-  unless (snapshotScannerRow snapshot == canonicalScannerRow) (Left (StorageShape "C scanner row differs from its source binding"))
+      _ -> False) ]
 
-canonicalScannerRow :: ScannerRowBytes
-canonicalScannerRow = ScannerRowBytes (B.pack (concatMap (valueBytes True 4) [0x317,0,0x101,3,0x37243726,8,0]))
+checkSnapshotRegions :: Int -> StorageSnapshot -> Regions -> Either Refusal ()
+checkSnapshotRegions number snapshot regions = forM_ (snapshotMismatch snapshot regions) $ \address ->
+  Left (StorageShape ("storage snapshot differs from watched bytes in step " ++ show number ++ " at " ++ show address))
 
 data StorageCall = StorageCall
   { boundaryEntryIndex :: Int
@@ -2217,13 +2273,16 @@ pairedStorageCalls entrySite returnSite hits (from,to) = reverse . snd <$> foldM
           entryKey=(hitCore hit,hitTaskId hit,hitSp hit,hitLr hit)
           returnKey=(hitCore hit,hitTaskId hit,hitSp hit,hitAddress hit)
       in case storageSite hit of
-        Just site | site == entrySite -> do
+        Just site | site == entrySite && returnsToTracedSite hit -> do
           unless (M.notMember entryKey open) (Left (StorageShape "storage boundary reenters an active caller frame"))
           pure (M.insert entryKey (index,hit) open,done)
         Just site | site == returnSite -> case M.lookup returnKey open of
           Just (entered,first) -> pure (M.delete returnKey open,StorageCall entered index first hit:done)
           Nothing -> pure (open,done)
         _ -> pure (open,done)
+    -- Entries from callers whose return address is not the fixed return site cannot be paired.
+    fixedReturns = [address | (address,site) <- Storage.lifecycleSites, site == returnSite]
+    returnsToTracedSite hit = null fixedReturns || physicalAddress (hitLr hit) `elem` fixedReturns
 
 sameExecution :: Hit -> Hit -> Bool
 sameExecution first second = case (executionTask first,executionTask second) of
@@ -2312,7 +2371,7 @@ copyWitness family direction call = do
             Storage.PreviousImage -> newPrevious == active && newAlternate == alternate
             Storage.AlternateImage -> newAlternate == active && newPrevious == previous
         Storage.Restore -> newActive == source && newAlternate == alternate && newPrevious == previous
-          && B.take 0x118 newBacking == B.take 0x118 (B.drop 16 source)
+          && B.take 0x118 (B.drop 16 newBacking) == B.take 0x118 (B.drop 16 source)
   if argumentMatches && copyMatches && sameExecution (boundaryEntry call) (boundaryReturn call)
     then Just (CopyWitness family direction before after (boundaryEntryIndex call) (boundaryReturnIndex call)) else Nothing
 
@@ -2385,6 +2444,8 @@ storageEvidenceValue evidence = object
           object ["sample" .= sample,"low" .= low,"high" .= high,"menu" .= sdkMenuValue menu]) (storageEvidenceDial step)
       , "ee" .= map eeWitnessValue (storageEvidenceEe step)
       , "s1" .= map s1WitnessValue (storageEvidenceHandback step)
+      , "unchanged_commit" .= fmap (\(CommitActivity commits applies) ->
+          object ["property_commits" .= commits,"bank_applies" .= applies]) (storageEvidenceUnchangedCommit step)
       ]
     snapshotValue snapshot =
       let ModeClassWord modeClass=snapshotModeClass snapshot
@@ -2508,8 +2569,9 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
         (from,to)=manifestHitRange manifest
     require (sha256Hex (identityRun identity) == expectedRun && sha256Hex (identityDat identity) == expectedDat
       && sha256Hex (identityRom identity) == expectedRom
-      && identityModel identity == identityModel firstIdentity && identityProcedure identity == identityProcedure firstIdentity)
-      "SDK boot changes the actual program, model, ROM, or procedure"
+      && identityModel identity == identityModel firstIdentity && identityProcedure identity == identityProcedure firstIdentity
+      && identityEmulator identity == identityEmulator firstIdentity)
+      "SDK boot changes the actual program, model, ROM, procedure or emulator"
     require (from >= 0 && from <= to && to <= V.length hits) "SDK boot hit range leaves the captured trace"
     _ <- foldM (\previous index -> do
       let counter=hitInstructions (hits V.! index)
@@ -2544,7 +2606,7 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
       result <- field "result" value
       case observedStorageCold step of
         Just cold -> do
-          unless (clock == exportedInstructions (coldExport cold)) (Left "cold export advanced beyond the previous action")
+          unless (clock == coldPowerOffSwitched cold) (Left "POWER OFF does not continue the previous action")
           maybe (Left "fresh child has no attached clock") Right (M.lookup (coldNextSession cold) attachedClocks)
         Nothing -> do
           prefix <- field "bounded_post_settle_prefix" result
@@ -2552,7 +2614,7 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
           end <- field "instructions" elapsed >>= asWord64
           ran <- field "ran" elapsed >>= asWord64
           case Storage.storageStepAction spec of
-            Storage.SetModeDial _ -> unless (ran <= end && Instructions (end-ran) == clock)
+            Storage.SetModeDial _ -> unless (ran <= end && toInteger (end-ran) == toInteger (instructionsValue clock)+modeDialSettle)
               (Left "physical dial prefix does not continue the previous action")
             _ -> do
               idleEnd <- field "idle" result >>= field "instructions" >>= asWord64
@@ -2604,6 +2666,7 @@ qualifyStorage role observation receipt contract plan bankBoundary hits matrix =
   let paired=emptyPairState
         { pairDone=M.unions (map pairDone sessionStates)
         , pairApplyDone=M.unions (map pairApplyDone sessionStates)
+        , pairSetterTails=S.unions (map pairSetterTails sessionStates)
         }
   events <- fmap concat . forM manifests $ \manifest ->
     normalizePersistenceLocated contract [(index,hits V.! index) | index <- window (manifestHitRange manifest)]
@@ -2705,14 +2768,22 @@ checkStorageStep contract hits paired events applications handbacks allCopies re
         (_,interval):_ -> snd (intervalHits interval)
         [] -> from
   criteria <- fmap concat . forM (Storage.storageStepChecks spec) $ \check -> case check of
-    Storage.CustomCommit change -> do
-      let matching=filter (refreshMatches change events) localRefreshes
-          persisted=snapshotCustomPrevious after
+    Storage.CustomCommit Storage.Changed -> do
+      let persisted=snapshotCustomPrevious after
           finishedRecord call=case refreshImages (boundaryReturn call) of Just (RefreshImages record _ _) -> record == persisted; _ -> False
-      reject check (any finishedRecord matching && case change of
-        Storage.Changed -> sealedCustomRecord persisted && persisted `elem` confirmedRecords (eventsBetween events (from,to))
-        Storage.Unchanged -> snapshotCustomPrevious before == persisted && not (any isPersistentCustom (eventsBetween events (from,to))))
-      pure [case change of Storage.Changed -> ChangedCustomSave; Storage.Unchanged -> UnchangedCustomSave]
+      reject check (any finishedRecord (filter (refreshMatches Storage.Changed events) localRefreshes)
+        && sealedCustomRecord persisted && persisted `elem` confirmedRecords (eventsBetween events (from,to)))
+      pure [ChangedCustomSave]
+    Storage.CustomCommit Storage.Unchanged -> do
+      let persistentWrite event=case event of HistoricalAppend _ -> True; _ -> isPersistentCustom event
+          persistentImages snapshot=(snapshotBank0 snapshot,snapshotBank1 snapshot,snapshotPrevious snapshot
+            ,snapshotBacking snapshot,snapshotCustomPrevious snapshot)
+          unchangedRefresh call=refreshMatches Storage.Unchanged events call && case refreshImages (boundaryReturn call) of
+            Just (RefreshImages record _ _) -> record == snapshotCustomPrevious after
+            Nothing -> False
+      reject check (not (any persistentWrite (eventsBetween events (from,to)))
+        && persistentImages before == persistentImages after && all unchangedRefresh localRefreshes)
+      pure [UnchangedCustomSave]
     Storage.BankCopy family direction -> do
       let matching=[witness | witness <- localCopies,copyFamily witness == family,copyDirection witness == direction]
           canceled restored=case copyBefore restored of
@@ -2753,8 +2824,12 @@ checkStorageStep contract hits paired events applications handbacks allCopies re
       pure [ColdCommittedReload]
   let commits=if Storage.CustomCommit Storage.Changed `elem` Storage.storageStepChecks spec
         then M.insert name (snapshotCustomPrevious after) (proofCommitted proof) else proofCommitted proof
+      unchangedCommit=if Storage.CustomCommit Storage.Unchanged `elem` Storage.storageStepChecks spec
+        then Just (CommitActivity (length [() | index <- [from..to-1],hitSite (hits V.! index) == PlanSite PropertyCommit])
+          [take 3 (hitArguments hit) | index <- [from..to-1],let hit=hits V.! index,storageSite hit == Just Storage.BankApplyEntry])
+        else Nothing
       evidence=StorageStepEvidence name before after (observedStorageEndpoint step) (Storage.storageStepChecks spec)
-        (observedStorageDial step) localEe observedHandbacks
+        (observedStorageDial step) localEe observedHandbacks unchangedCommit
   pure (MatrixProof (M.insert name step (proofSteps proof)) commits (proofCopies proof ++ localCopies)
     (criteria ++ proofCoverage proof) (evidence:proofEvidence proof))
 
@@ -2869,29 +2944,31 @@ newtype S1FrameBytes = S1FrameBytes B.ByteString deriving (Eq, Show)
 newtype S1QueueSlot = S1QueueSlot Word16 deriving (Eq, Show)
 newtype S1StackOffset = S1StackOffset Integer
 newtype S1ControllerState = S1ControllerState Word16 deriving (Eq, Show)
-data S1Continuation = S1MinusOne | S1Two | S1FiveD | S1FiveE | S1D9 deriving (Eq, Show)
+-- | Frame bytes 0..12, built from the code and form that key-event poster `0x6a1b40` passes. Its
+-- 80-byte local message sets only words 0 and 1, so frame bytes 12..80 (message bytes 8..76) are
+-- its caller's stack residue.
+newtype S1PostedBytes = S1PostedBytes B.ByteString deriving (Eq, Show)
+
+s1Posted :: S1FrameBytes -> S1PostedBytes
+s1Posted (S1FrameBytes bytes) = S1PostedBytes (B.take 12 bytes)
 
 data S1Witness = S1Witness
   { s1ProducerIdentity :: (TraceCore,LogicalTaskId)
   , s1ConsumerIdentity :: (TraceCore,LogicalTaskId)
-  , s1EnteredFrame :: S1FrameBytes
-  , s1ReplayedFrame :: S1FrameBytes
-  , s1ConsumedFrame :: S1FrameBytes
-  , s1DispatchContinuation :: S1Continuation
+  , s1PostedFrame :: S1PostedBytes
   , s1ControllerState :: S1ControllerState
   } deriving (Eq, Show)
 
 data LocatedS1 = LocatedS1 Int Int S1Witness
 data S1Point = S1Point { s1PointIndex :: Int, s1PointHit :: Hit }
 newtype S1Sites = S1Sites (M.Map Storage.LifecycleSite [S1Point])
+-- | An S1 press frame copied from the retained frame into its queue slot inside enqueue `0xd34d68`,
+-- whichever action called it.
 data S1Producer = S1Producer
-  { s1ProducerCall :: StorageCall
-  , s1ProducerCopy :: S1Point
+  { s1ProducerCopy :: S1Point
   , s1ProducerCopied :: S1Point
   , s1ProducerSlot :: S1QueueSlot
-  , s1ProducerEntered :: S1FrameBytes
   , s1ProducerReplayed :: S1FrameBytes
-  , s1ProducerContinuation :: S1Continuation
   }
 data S1Application = S1Application S1Point S1ControllerState
 data S1Consumer = S1Consumer StorageCall S1Point S1QueueSlot S1FrameBytes [S1Application]
@@ -2966,78 +3043,26 @@ s1NextExecution hits root (from,to) = case
     point:_ -> Just point
     [] -> Nothing
 
-s1Continuation :: Word32 -> Maybe S1Continuation
-s1Continuation value = case value of
-  0xffffffff -> Just S1MinusOne
-  2 -> Just S1Two
-  0x5d -> Just S1FiveD
-  0x5e -> Just S1FiveE
-  0xd9 -> Just S1D9
-  _ -> Nothing
-
-s1ContinuationWord :: S1Continuation -> Word32
-s1ContinuationWord continuation = case continuation of
-  S1MinusOne -> 0xffffffff
-  S1Two -> 2
-  S1FiveD -> 0x5d
-  S1FiveE -> 0x5e
-  S1D9 -> 0xd9
-
-s1ReadProducer :: V.Vector Hit -> S1Sites -> StorageCall -> Either Refusal (Maybe S1Producer)
-s1ReadProducer hits sites call = do
-  let first=boundaryEntry call
-      final=boundaryReturn call
-      range=(boundaryEntryIndex call+1,boundaryReturnIndex call)
-      inner site=s1One sites first range site (S1StackOffset (-16))
-      copying site=s1One sites first range site (S1StackOffset (-64))
-  entered <- s1SingleFrame first
-  if not (s1IsPress entered) then pure Nothing else do
-    _ <- s1Actor first
-    s1Require (sameExecution first final && physicalAddress (hitSp first) == physicalAddress (hitSp final)
-      && physicalAddress (hitLr first) == 0xbfb0cc) "action 161 lacks its source callback return"
-    guardCall <- inner Storage.S1GuardCall
-    guardResult <- inner Storage.S1GuardResult
-    s1Arguments [0x53] (s1PointHit guardCall)
-    s1Ordered [guardCall,guardResult]
-    guarded <- s1Argument 0 (s1PointHit guardResult)
-    if guarded /= 0 then pure Nothing else do
-      request <- inner Storage.S1RequestCall
-      dispatch <- inner Storage.S1DispatchCall
-      dispatched <- inner Storage.S1DispatchResult
-      s1Arguments [2,0x1d] (s1PointHit request)
-      s1Ordered [guardResult,request,dispatch,dispatched]
-      result <- s1Argument 0 (s1PointHit dispatched)
-      case s1Continuation result of
-        Nothing -> pure Nothing
-        Just continuation -> do
-          flagCall <- inner Storage.S1FlagCall
-          flagReturn <- inner Storage.S1FlagReturn
-          replayCall <- inner Storage.S1ReplayCall
-          copy <- copying Storage.S1FrameCopyCall
-          copied <- copying Storage.S1FrameCopyReturn
-          replayed <- inner Storage.S1ReplayReturn
-          returning <- inner Storage.S1ActionReturnInstruction
-          s1Ordered [dispatched,flagCall,flagReturn,replayCall,copy,copied,replayed,returning]
-          s1Arguments [1] (s1PointHit flagCall)
-          s1Require (case hitMemory (s1PointHit flagReturn) of [bytes] -> B.length bytes == 4 && word32At bytes 0 == 1; _ -> False)
-            "flag setter did not publish one"
-          s1Arguments [0] (s1PointHit replayCall)
-          (frame,slot) <- case hitMemory (s1PointHit copy) of
-            [bytes,tailBytes] -> (,) <$> s1Frame bytes <*> s1QueueIndex tailBytes
-            _ -> Left (StorageShape "S1 replay lacks its complete source frame and queue-tail read")
-          destination <- s1Argument 0 (s1PointHit copy)
-          source <- s1Argument 1 (s1PointHit copy)
-          count <- s1Argument 2 (s1PointHit copy)
-          s1Require (physicalAddress destination == s1SlotAddress slot && physicalAddress source == 0x944580 && count == 0x50)
-            "replay does not copy the complete source frame into its selected slot"
-          advanced <- s1Argument 0 (s1PointHit copied)
-          s1Require (physicalAddress advanced == s1SlotAddress slot+0x50) "replay copy lacks the retained callee's advanced destination return"
-          s1Arguments [s1ContinuationWord continuation] (s1PointHit returning)
-          s1Arguments [s1ContinuationWord continuation] final
-          s1Require (case s1NextExecution hits first (s1PointIndex returning+1,boundaryReturnIndex call+1) of
-            Just next -> s1PointIndex next == boundaryReturnIndex call
-            Nothing -> False) "shared callback return is not the action 161 continuation"
-          pure (Just (S1Producer call copy copied slot entered frame continuation))
+s1ReadProducer :: V.Vector Hit -> Int -> S1Point -> Either Refusal (Maybe S1Producer)
+s1ReadProducer hits limit copy = do
+  let hit=s1PointHit copy
+  (frame,slot) <- case hitMemory hit of
+    [bytes,tailBytes] -> (,) <$> s1Frame bytes <*> s1QueueIndex tailBytes
+    _ -> Left (StorageShape "S1 enqueue lacks its complete source frame and queue-tail read")
+  if not (s1IsPress frame) then pure Nothing else do
+    _ <- s1Actor hit
+    destination <- s1Argument 0 hit
+    source <- s1Argument 1 hit
+    count <- s1Argument 2 hit
+    s1Require (physicalAddress destination == s1SlotAddress slot && physicalAddress source == 0x944580 && count == 0x50)
+      "enqueue does not copy the complete source frame into its selected slot"
+    copied <- case s1NextExecution hits hit (s1PointIndex copy+1,limit) of
+      Just point | storageSite (s1PointHit point) == Just Storage.S1FrameCopyReturn
+        && physicalAddress (hitSp (s1PointHit point)) == physicalAddress (hitSp hit) -> Right point
+      _ -> Left (StorageShape "S1 enqueue copy lacks its direct return")
+    advanced <- s1Argument 0 (s1PointHit copied)
+    s1Require (physicalAddress advanced == s1SlotAddress slot+0x50) "enqueue copy lacks the retained callee's advanced destination return"
+    pure (Just (S1Producer copy copied slot frame))
 
 s1ReadApplications :: S1Sites -> Hit -> (Int,Int) -> S1FrameBytes -> Either Refusal [S1Application]
 s1ReadApplications sites consumer (from,to) frame = fmap concat . forM entries $ \entry -> do
@@ -3149,8 +3174,7 @@ s1Witnesses hits (from,to) = do
       insert table index hit=case storageSite hit of
         Just site -> M.insertWith (++) site [S1Point (from+index) hit] table
         Nothing -> table
-  producerCalls <- pairedStorageCalls Storage.S1ActionEntry Storage.S1ActionReturned hits (from,to)
-  producerResults <- mapM (s1ReadProducer hits sites) producerCalls
+  producerResults <- mapM (s1ReadProducer hits to) (s1Points sites Storage.S1FrameCopyCall)
   consumerCalls <- pairedStorageCalls Storage.S1DequeueEntry Storage.S1DequeueWrapperReturn hits (from,to)
   consumerResults <- mapM (s1ReadConsumer hits sites to) consumerCalls
   let producers=[producer | Just producer <- producerResults]
@@ -3163,22 +3187,18 @@ s1Witnesses hits (from,to) = do
     case matches of
       [] -> pure []
       [producer] -> do
-        producerIdentity <- s1Actor (boundaryEntry (s1ProducerCall producer))
+        producerIdentity <- s1Actor (s1PointHit (s1ProducerCopy producer))
         consumerIdentity <- s1Actor (boundaryEntry call)
-        pure [LocatedS1 (boundaryEntryIndex (s1ProducerCall producer))
-          (max (boundaryReturnIndex (s1ProducerCall producer)) (s1PointIndex dispatched))
-          (S1Witness producerIdentity consumerIdentity (s1ProducerEntered producer) (s1ProducerReplayed producer)
-            frame (s1ProducerContinuation producer) state) | S1Application dispatched state <- applications]
+        pure [LocatedS1 (s1PointIndex (s1ProducerCopy producer))
+          (max (s1PointIndex (s1ProducerCopied producer)) (s1PointIndex dispatched))
+          (S1Witness producerIdentity consumerIdentity (s1Posted frame) state)
+          | S1Application dispatched state <- applications]
       _ -> Left (StorageShape "S1 consumed queue slot has ambiguous producer lineage")
 
 s1WitnessValue :: S1Witness -> Value
 s1WitnessValue witness = object
   [ "producer" .= taskIdentityValue (s1ProducerIdentity witness)
   , "consumer" .= taskIdentityValue (s1ConsumerIdentity witness)
-  , "entered_frame" .= frameValue (s1EnteredFrame witness)
-  , "replayed_frame" .= frameValue (s1ReplayedFrame witness)
-  , "consumed_frame" .= frameValue (s1ConsumedFrame witness)
-  , "continuation" .= s1ContinuationWord (s1DispatchContinuation witness)
+  , "posted_frame" .= (case s1PostedFrame witness of S1PostedBytes bytes -> C.unpack (hexEncode bytes))
   , "m74_state" .= (case s1ControllerState witness of S1ControllerState state -> state)
   ]
- where frameValue (S1FrameBytes bytes) = C.unpack (hexEncode bytes)

@@ -15,7 +15,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.IORef
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word16, Word32)
+import Data.Word (Word16, Word32, Word64)
 import Emulation.PropertyPairPlan
 import Emulation.SettingsStorageMatrix
 import Emulation.Sha256 (Sha256, sha256File, sha256Hex, parseSha256Hex)
@@ -209,6 +209,7 @@ runStorageMatrix inputs output matrix record = withBinaryFile (output </> "hits.
               watched <- emulatorWatchEnd emulator
               pure (object ["kind" .= ("mode-dial"::T.Text),"dial" .= dial,"bounded_post_settle_prefix" .= prefix],watched)
             ColdReboot -> do
+              poweredOff <- emulatorPowerOff emulator powerOffBudget
               watched <- emulatorWatchEnd emulator
               finalRegions <- readSettingsRegions emulator
               finalStorage <- readStorageState emulator
@@ -234,7 +235,7 @@ runStorageMatrix inputs output matrix record = withBinaryFile (output </> "hits.
               fresh <- start (SessionNumber (sessionValue (activeNumber old)+1)) (CommittedSeed expectedPath)
               reset <- jsonFile (activeDirectory fresh </> "reset-observation.json")
               pure (object
-                [ "kind" .= ("cold-reboot"::T.Text),"export" .= exported,"prior_session" .= oldSdk
+                [ "kind" .= ("cold-reboot"::T.Text),"power_off" .= poweredOff,"export" .= exported,"prior_session" .= oldSdk
                 , "new_start" .= startRecord (activeStart fresh),"new_reset" .= reset,"input_committed_sha256" .= sha256Hex advertised
                 , "next_session" .= sessionValue (activeNumber fresh),"new_hits_start" .= cursorValue newHitsStart
                 , "regions_before_reboot" .= finalRegions,"storage_before_reboot" .= stateValue finalStorage ],watched)
@@ -256,6 +257,10 @@ runStorageMatrix inputs output matrix record = withBinaryFile (output </> "hits.
     (Left failure,_) -> throwIO (failure::SomeException)
     (Right (),Left failure) -> throwIO (failure::SomeException)
     (Right (),Right ()) -> pure ()
+
+-- | Instructions the cold step allows from POWER OFF to the stock terminal.
+powerOffBudget :: Word64
+powerOffBudget = 1000000000
 
 beginWatch :: Emulator -> IO ()
 beginWatch emulator = do
