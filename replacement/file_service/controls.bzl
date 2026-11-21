@@ -21,6 +21,11 @@ FILE_SERVICE_CONTROLS = [
     "search_output_uncleared",
     "search_keeps_rejected",
     "entry_size_unrounded",
+    # volume
+    "volume_attach_kind_unset",
+    "volume_detach_callback_unrestored",
+    "volume_format_slots_kept",
+    "volume_reformat_state_unset",
 ]
 
 def file_service_suffixes():

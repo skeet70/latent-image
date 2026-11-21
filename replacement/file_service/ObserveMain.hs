@@ -147,6 +147,16 @@ backends =
   , (0x70e650, Backend "little_endian" ["r0"] [])
   , (0x4d978, Backend "divide" ["r0", "r1"] [])
   , (0x71d214, Backend "format_timestamp" ["r2"] [readSpec (register 1) 4])
+  , (0x70ec84, Backend "device_for_letter" ["r0"] [])
+  , (0x71f4b8, Backend "volume_record" ["r0"] [])
+  , (0x71f4d8, Backend "volume_release" ["r0"] [])
+  , (0x71f418, Backend "volume_switch" ["r0", "r1"] [])
+  , (0x6fae80, Backend "set_level" ["r0", "r1"] [])
+  , (0x6f535c, Backend "flagged_prepare" [] [])
+  , (0x71f7dc, Backend "volume_attach" [] [readSpec (register 0) 12, readSpec (registerWord 0 8) 0x44])
+  , (0x71fcbc, Backend "volume_reattach" [] [readSpec (register 0) 12, readSpec (registerWord 0 8) 0x44])
+  , (0x719de0, Backend "catalog_rebuild" ["r0", "r1"] [])
+  , (0x6f5330, Backend "flagged_select" ["r0", "r1"] [])
   ]
 
 backendCapture :: Backend -> Value

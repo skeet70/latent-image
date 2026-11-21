@@ -641,4 +641,8 @@ entry_veneer! {
     "find_next_worker" => "xm1_file_service_find_next_worker",
     "find_first_entry_worker" => "xm1_file_service_find_first_entry_worker",
     "find_next_entry_worker" => "xm1_file_service_find_next_entry_worker",
+    "volume_attach_worker" => "xm1_file_service_volume_attach_worker",
+    "volume_detach_worker" => "xm1_file_service_volume_detach_worker",
+    "volume_format_armed_worker" => "xm1_file_service_volume_format_armed_worker",
+    "volume_format_worker" => "xm1_file_service_volume_format_worker",
 }
