@@ -488,6 +488,7 @@ clobbered name = case name of
   "map_lookup" -> ["r1", "r2", "r3"] -- 0x71eb5c, 0x71eb50, 0x71eb3c
   "tag_release" -> ["r1", "r2", "r3"] -- 0x71f008, 0x71f02c, 0x71f018
   "route" -> ["r1", "r2", "r3"] -- 0x721668, 0x72166c, 0x721580
+  "post" -> ["r1", "r2", "r3"] -- 0x71fe1c, 0x725058 (send), 0x71fdf0
   "intercept" -> ["r2", "r3"] -- 0x721820, 0x7217f8
   _ -> []
 

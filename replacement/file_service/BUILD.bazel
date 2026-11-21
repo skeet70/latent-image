@@ -139,7 +139,6 @@ filegroup(
         ":file-service-stage",
         ":file-service-suite",
         ":host-tests",
-        ":payload-tests",
     ] + ["//replacement/fixed_image:fixed-bank-image" + suffix for suffix in file_service_suffixes()],
 )
 
