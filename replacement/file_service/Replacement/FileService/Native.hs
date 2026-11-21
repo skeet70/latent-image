@@ -32,7 +32,7 @@ import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.List (nub)
+import Data.List (nub, partition)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -41,7 +41,7 @@ import qualified Emulation.NativeCase as Native
 import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
 import qualified Replacement.FixedImage.Layout as Layout
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 
 -- | A retired stock extent @[low, high)@ of image 4.
@@ -224,10 +224,10 @@ fixedBody elf = case sections of
 ownedFixed :: Extent
 ownedFixed = Extent (Layout.imageBase + Layout.headerBytes) Layout.imageLimit
 
--- | Stock functions, or the owned functions direct A32 branches reach from the retired extents' words.
+-- | Stock functions, or the owned functions in the retired extents and those direct A32 branches reach from them.
 functionsOf :: Code -> Role -> [(Word32, Word32)]
 functionsOf code Stock = codeStockFunctions code
-functionsOf code (Owned _ elf) = M.toList (reach M.empty seeds)
+functionsOf code (Owned _ elf) = M.toList (reach entries seeds)
   where
     functions = M.fromList
       [ (E.symbolValue symbol, E.symbolSize symbol)
@@ -236,6 +236,7 @@ functionsOf code (Owned _ elf) = M.toList (reach M.empty seeds)
       , E.symbolSize symbol > 0
       , any (\extent -> extentContains extent (E.symbolValue symbol)) (ownedFixed : map snd (codeExtents code))
       ]
+    entries = M.filterWithKey (\low _ -> any (\(_, extent) -> extentContains extent low) (codeExtents code)) functions
     seeds = concat [branchTargets low (high - low) | (_, Extent low high) <- codeExtents code]
     containing target = case M.lookupLE target functions of
       Just (low, size) | target < low + size -> Just (low, size)
@@ -267,14 +268,15 @@ rowValue row = case row of
 preserved :: [(String, Word32)]
 preserved = [("r" ++ show index, 0x10101010 * fromIntegral index) | index <- [4 :: Int .. 11]]
 
-caseDocument :: Code -> B.ByteString -> Role -> Scenario -> (Value, [(String, B.ByteString)])
-caseDocument code image role scenario = (document, artifacts)
+-- | One scenario's case; @body@ is the owned role's 'fixedBody'.
+caseDocument :: Code -> B.ByteString -> Role -> Maybe (Word32, B.ByteString) -> Scenario -> (Value, [(String, B.ByteString)])
+caseDocument code image role body scenario = (document, artifacts)
   where
     driver = words32le (driverWords (scenarioCalls scenario))
     regions =
       [Region name low "rx" (codeBytes image code role extent) | (name, extent@(Extent low _)) <- codeExtents code]
         ++ [Region name low "rx" (codeBytes image code Stock extent) | (name, extent@(Extent low _)) <- codeRetained code]
-        ++ [Region "owned-fixed" low "rx" bytes | Owned _ elf <- [role], Just (low, bytes) <- [fixedBody elf]]
+        ++ [Region "owned-fixed" low "rx" bytes | Just (low, bytes) <- [body]]
         ++ [Region "stop" (stopAddress stop) "rx" (word32le trapWord) | Just stop <- [scenarioStop scenario]]
         ++ [Region (dataName region) (dataAddress region) "rw" (dataInitial region) | region <- scenarioData scenario]
         ++ [ Region "driver" driverBase "rx" driver
@@ -282,11 +284,15 @@ caseDocument code image role scenario = (document, artifacts)
            , Region "stack" stackBase "rw" (B.replicate (fromIntegral (stackTop - stackBase)) 0xa5)
            , Region "exit" exitAddress "rx" (word32le 0xe12fff1e)
            ]
-    blob = B.concat [bytes | Region _ _ _ bytes <- regions]
-    offsets = scanl (+) 0 [B.length bytes | Region _ _ _ bytes <- regions]
-    blobName = sha256Hex (sha256 blob)
-    blobId = "a-" ++ take 40 blobName
-    artifacts = [(blobName ++ ".bin", blob)]
+    -- The owned bank body is its own artifact, so a batch reads its bytes once across cases.
+    (bodyRegions, caseRegions) = partition (\(Region name _ _ _) -> name == "owned-fixed") regions
+    placed = concatMap place (filter (not . null) [caseRegions, bodyRegions])
+    place group =
+      let blob = B.concat [bytes | Region _ _ _ bytes <- group]
+       in [(region, sha256Hex (sha256 blob), offset, blob) | (region, offset) <- zip group (scanl (+) 0 [B.length bytes | Region _ _ _ bytes <- group])]
+    blobs = nub [(name, blob) | (_, name, _, blob) <- placed]
+    artifactId name = "a-" ++ take 40 name
+    artifacts = [(name ++ ".bin", blob) | (name, blob) <- blobs]
     stackFrame = object ["region" .= ("stack" :: String), "offset" .= (0 :: Int), "length" .= (fromIntegral (stackTop - stackBase) :: Int)]
     services = scenarioServices scenario
     stubs =
@@ -327,7 +333,7 @@ caseDocument code image role scenario = (document, artifacts)
         , "origin" .= (case role of Stock -> "stock"; Owned _ _ -> "synthetic" :: String)
         , "provenance" .= ("X-M1 1.50 image4 file-service extents at x70view 55436fc85c0560dd252b0410af6f2427fe198cd3 byte-read boundaries; " ++ roleLabel role ++ " role" :: String)
         , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
-        , "artifacts" .= [object ["id" .= blobId, "path" .= name, "size" .= B.length bytes, "sha256" .= sha256Hex (sha256 bytes)] | (name, bytes) <- artifacts]
+        , "artifacts" .= [object ["id" .= artifactId name, "path" .= (name ++ ".bin"), "size" .= B.length blob, "sha256" .= name] | (name, blob) <- blobs]
         , "entry" .= hexWord driverBase
         , "exit" .= hexWord exitAddress
         , "registers" .= registers initial
@@ -337,9 +343,9 @@ caseDocument code image role scenario = (document, artifacts)
                 , "address" .= hexWord address
                 , "size" .= B.length bytes
                 , "permissions" .= permissions
-                , "initial" .= object ["artifact" .= blobId, "offset" .= offset, "length" .= B.length bytes]
+                , "initial" .= object ["artifact" .= artifactId blobName, "offset" .= offset, "length" .= B.length bytes]
                 ]
-            | (Region name address permissions bytes, offset) <- zip regions offsets
+            | (Region name address permissions bytes, blobName, offset, _) <- placed
             ]
         , "functions" .=
             [ object ["address" .= hexWord address, "size" .= size]
@@ -374,37 +380,50 @@ text :: Value -> String
 text (String value) = T.unpack value
 text _ = ""
 
-observe :: Native.CaseReport -> Observation
-observe report = Observation
-  { observationCase = Native.caseIdText (Native.reportCase report)
-  , observationPassed = text (field "status" value) == "passed"
-  , observationRunnerStatus = text (field "status" runner)
-  , observationMismatches = case field "mismatches" value of
-      Array items -> map text (V.toList items)
-      _ -> []
-  , observationInstructions = case field "instructions" runner of
-      Number count -> truncate count
-      String count | [(parsed, "")] <- reads (T.unpack count) -> parsed
-      _ -> 0
-  , observationMemory = case field "memory" runner of
-      Array items -> [(text (field "address" item), text (field "bytes" item)) | item <- V.toList items]
-      _ -> []
-  , observationEvents = field "events" runner
-  , observationRegisters = field "registers" runner
-  }
+-- | The report's verdict, registers, events and the memory rows at @compared@ addresses, fully
+-- evaluated so the report itself is not retained.
+observe :: [String] -> Native.CaseReport -> Observation
+observe compared report = forced `seq` observation
   where
     value = Native.reportValue report
     runner = field "runner" value
+    observation = Observation
+      { observationCase = Native.caseIdText (Native.reportCase report)
+      , observationPassed = text (field "status" value) == "passed"
+      , observationRunnerStatus = text (field "status" runner)
+      , observationMismatches = case field "mismatches" value of
+          Array items -> map text (V.toList items)
+          _ -> []
+      , observationInstructions = case field "instructions" runner of
+          Number count -> truncate count
+          String count | [(parsed, "")] <- reads (T.unpack count) -> parsed
+          _ -> 0
+      , observationMemory = case field "memory" runner of
+          Array items -> [(address, text (field "bytes" item)) | item <- V.toList items, let address = text (field "address" item), address `elem` compared]
+          _ -> []
+      , observationEvents = field "events" runner
+      , observationRegisters = field "registers" runner
+      }
+    strings = concat ([observationCase observation, observationRunnerStatus observation] ++ observationMismatches observation
+      ++ concat [[address, bytes] | (address, bytes) <- observationMemory observation])
+    forced = foldr seq () strings `seq` observationPassed observation `seq` observationInstructions observation
+      `seq` observationEvents observation `seq` observationRegisters observation `seq` ()
 
 -- | Writes each scenario's case for one role into its own directory and runs them as one batch.
 runRole :: FilePath -> FilePath -> Code -> B.ByteString -> Role -> [Scenario] -> IO [Observation]
 runRole runner directory code image role scenarios = do
   let batchDirectory = directory </> roleLabel role
+      compared = nub (hexWord resultsBase : [hexWord (dataAddress region) | scenario <- scenarios, region <- scenarioData scenario])
   createDirectoryIfMissing True batchDirectory
+  let body = case role of
+        Owned _ elf -> fixedBody elf
+        Stock -> Nothing
   entries <- forM scenarios $ \scenario -> do
-    let (document, artifacts) = caseDocument code image role scenario
+    let (document, artifacts) = caseDocument code image role body scenario
         ident = scenarioName scenario ++ "-" ++ roleTag role
-    forM_ artifacts $ \(name, bytes) -> B.writeFile (batchDirectory </> name) bytes
+    forM_ artifacts $ \(name, bytes) -> do
+      written <- doesFileExist (batchDirectory </> name)
+      unless written (B.writeFile (batchDirectory </> name) bytes)
     BL.writeFile (batchDirectory </> (ident ++ ".case.json")) (encode document)
     pure (object ["id" .= ident, "path" .= (ident ++ ".case.json")])
   let batchPath = batchDirectory </> "batch.json"
@@ -412,7 +431,7 @@ runRole runner directory code image role scenarios = do
   collected <- newIORef []
   summary <- Native.runBatch runner batchPath $ \report -> do
     BL.writeFile (batchDirectory </> (Native.caseIdText (Native.reportCase report) ++ ".report.json")) (encode (Native.reportValue report))
-    modifyIORef' collected (observe report :)
+    modifyIORef' collected (observe compared report :)
   observations <- reverse <$> readIORef collected
   unless (Native.summaryStatus summary == Native.BatchComplete && length observations == length scenarios) $
     fail ("native batch did not complete for " ++ roleLabel role ++ ": " ++ show (Native.summaryReason summary))
