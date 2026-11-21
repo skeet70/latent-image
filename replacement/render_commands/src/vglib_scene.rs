@@ -6,11 +6,12 @@
 //! Frame step `0x6d7920` renders through `0x6d724c` (`6d72a4-6d72b4`): `0x6d92d8(0x6d7324, &filter, 0xff)` walks the
 //! group sentinels from group 23 down to group 0 (`6d92f8-6d9334`). For each group `0x6d909c` copies the group list
 //! into a temporary list (`0x6d8fc4`, nodes from `0x6d8f28`) and calls the visitor with each node's object word
-//! `+8` in list order (`6d90f0-6d9114`). The visitor `0x6d7324` stops the whole walk on a null object
-//! (`6d7330-6d7338`), skips objects whose ops `+0x04` returns 0 (`6d733c-6d7354`), and otherwise calls ops
-//! `+0xa0`, ORs its result into `0x8e2098+0x15c`, increments `+0x158` and delays 0 ticks when bit 1 of the count is
-//! clear (`6d73e0-6d7434`). Away from frame modes 8 and 10 the filter is -1 (`6d7a90-6d7aa0`, `6d7b0c-6d7b10`),
-//! which draws every visible object (`6d7368-6d7378`).
+//! `+8` in list order (`6d90f0-6d9114`). The visitor `0x6d7324` ends that group's walk on a null object
+//! (`6d7330-6d7338`, `6d9100-6d9108`), skips objects whose ops `+0x04` returns 0 (`6d733c-6d7354`), and otherwise
+//! calls ops `+0xa0`, ORs its result into `0x8e2098+0x15c`, increments `+0x158` and delays 0 ticks when bit 1 of the
+//! count is clear (`6d73e0-6d7434`). Away from frame modes 8 and 10 the filter is -1 (`6d7a90-6d7aa0`,
+//! `6d7b0c-6d7b10`), which draws every visible object (`6d7368-6d7378`). Other tasks run during those delays and
+//! during the draws' OpenVG calls, so lists and objects change between visits.
 
 use super::resources::{DataAddress, ResourceError, ResourceMemory};
 use super::stock_objects::VglibObject;
@@ -62,7 +63,7 @@ pub struct GroupIndex(u8);
 impl GroupIndex {
     pub const fn new(index: u8) -> Option<Self> { if (index as usize) < GROUP_COUNT { Some(Self(index)) } else { None } }
     pub const fn index(self) -> u8 { self.0 }
-    const fn sentinel(self) -> u32 { SENTINEL_BASE.0 + self.0 as u32 * 12 }
+    pub const fn sentinel(self) -> u32 { SENTINEL_BASE.0 + self.0 as u32 * 12 }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,13 +77,12 @@ pub enum SceneError {
     FreeNode { group: GroupIndex, node: DataAddress },
     /// A node reached twice: a cycle within this group or a node shared with an earlier group.
     RepeatedNode { group: GroupIndex, node: DataAddress },
-    /// A null object word, which ends the stock walk (`6d7330-6d7338`, `6d9324-6d9328`).
+    /// A null object word, which ends the group's stock walk (`6d7330-6d7338`, `6d9100-6d9108`).
     NullObject { group: GroupIndex, node: DataAddress },
     CountMismatch { group: GroupIndex, count: u8, listed: usize },
     /// Fewer free nodes than the longest group: `0x6d8fc4` fails the copy and the group is not drawn (`6d90cc-6d90d8`).
     NodeCapacity { free: usize, needed: usize },
     Object { object: VglibObject, refusal: ObjectRefusal },
-    Capacity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,34 +263,60 @@ pub struct ImageDraw {
     pub parameter: f32,
     pub clip: Option<[i32; 4]>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ShapeDraw {
+pub struct ShapeDraw<'a> {
     pub blend: BlendMode,
     pub transform: Transform,
     /// `0x858950(-(sx * x0), -(sy * y1))` with x0 `+0x30` and y1 `+0x24` (`6da3b0-6da3c8`).
     pub origin: [f32; 2],
     pub clip: Option<[i32; 4]>,
-    /// Items `+0xd8`, count `+0xe0` (`6da4a0-6da4a4`).
+    /// Items `+0xd8`, count `+0xe0` (`6da4a0-6da4a4`); `item_bytes` covers all `count` items.
     pub items: DataAddress,
-    pub count: u32,
+    pub item_bytes: &'a [u8],
 }
 
 /// What the visitor does with one visible object.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Visit {
+pub enum Visit<'a> {
     /// Image handle `+0xc4` or shape paint `+0xd4` zero: the draw returns 0 before any OpenVG call
     /// (`6d8874-6d8880`, `6da13c-6da148`).
     NoResource,
     Image(ImageDraw),
-    Shape(ShapeDraw),
+    Shape(ShapeDraw<'a>),
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct SceneReport {
-    pub objects: usize,
-    /// Objects the visitor counts at `0x8e2098+0x158`.
-    pub visible: usize,
+/// The visitor's treatment of one decoded object; `None` for a hidden object, which it skips uncounted.
+pub fn visit<'a>(memory: &ResourceMemory<'a>, display: DisplayState, object: &SceneObject<'a>) -> Result<Option<Visit<'a>>, ObjectRefusal> {
+    let base = object.base;
+    if !base.visible { return Ok(None); }
+    let resource = match object.class { ObjectClass::Image => word(object.bytes, 0xc4), ObjectClass::Shape => word(object.bytes, 0xd4) };
+    if resource == 0 { return Ok(Some(Visit::NoResource)); }
+    if base.parameter != 0.0 { return Err(ObjectRefusal::Rotation); }
+    if base.blend == BlendMode::ColourTransform { return Err(ObjectRefusal::ColourTransform); }
+    let surface = display.surface(base.output_mode);
+    let transform = if base.matrix {
+        Transform::Object(DataAddress(object.address.0.0.wrapping_add(0x50)))
+    } else {
+        Transform::Placed(placement(base, surface, display.mirror))
+    };
+    let clip = base.clip.map(|clip| scissor(clip, surface, object.class));
+    Ok(Some(match object.class {
+        ObjectClass::Image => Visit::Image(ImageDraw { handle: resource, transform, height: base.height, parameter: base.parameter, clip }),
+        ObjectClass::Shape => {
+            let items = DataAddress(word(object.bytes, 0xd8));
+            let length = (word(object.bytes, 0xe0) as usize).checked_mul(SHAPE_ITEM_BYTES).ok_or(ObjectRefusal::Memory(ResourceError::AddressOverflow))?;
+            let item_bytes = if length == 0 { &[][..] } else { memory.bytes(items, length).map_err(ObjectRefusal::Memory)? };
+            let scale = [base.scale_x * surface.x, base.scale_y * surface.y];
+            let origin = [-(scale[0] * float(object.bytes, 0x30)), -(scale[1] * float(object.bytes, 0x24))];
+            Visit::Shape(ShapeDraw { blend: base.blend, transform, origin, clip, items, item_bytes })
+        }
+    }))
+}
+
+/// Decodes `object` and its visit from memory as it is now.
+fn visit_now<'a>(memory: &ResourceMemory<'a>, group: GroupIndex, object: VglibObject) -> Result<Option<Visit<'a>>, ObjectRefusal> {
+    let display = DisplayState::read(memory).map_err(ObjectRefusal::Memory)?;
+    visit(memory, display, &SceneObject::decode(memory, group, object)?)
 }
 
 /// A validated walk of the 24 groups.
@@ -346,63 +372,17 @@ impl<'m, 'a> Scene<'m, 'a> {
         SceneWalk { scene: self, next_group: GROUP_COUNT as u8, node: 0, remaining: 0, group: GroupIndex(0) }
     }
 
-    /// The visitor's treatment of one decoded object; `None` for a hidden object, which it skips uncounted.
-    pub fn visit(&self, object: &SceneObject<'a>) -> Result<Option<Visit>, ObjectRefusal> {
-        let base = object.base;
-        if !base.visible { return Ok(None); }
-        let resource = match object.class { ObjectClass::Image => word(object.bytes, 0xc4), ObjectClass::Shape => word(object.bytes, 0xd4) };
-        if resource == 0 { return Ok(Some(Visit::NoResource)); }
-        if base.parameter != 0.0 { return Err(ObjectRefusal::Rotation); }
-        if base.blend == BlendMode::ColourTransform { return Err(ObjectRefusal::ColourTransform); }
-        let surface = self.display.surface(base.output_mode);
-        let transform = if base.matrix {
-            Transform::Object(DataAddress(object.address.0.0.wrapping_add(0x50)))
-        } else {
-            Transform::Placed(placement(base, surface, self.display.mirror))
-        };
-        let clip = base.clip.map(|clip| scissor(clip, surface, object.class));
-        Ok(Some(match object.class {
-            ObjectClass::Image => Visit::Image(ImageDraw { handle: resource, transform, height: base.height, parameter: base.parameter, clip }),
-            ObjectClass::Shape => {
-                let items = DataAddress(word(object.bytes, 0xd8));
-                let count = word(object.bytes, 0xe0);
-                let length = (count as usize).checked_mul(SHAPE_ITEM_BYTES).ok_or(ObjectRefusal::Memory(ResourceError::AddressOverflow))?;
-                if count != 0 { self.memory.bytes(items, length).map_err(ObjectRefusal::Memory)?; }
-                let scale = [base.scale_x * surface.x, base.scale_y * surface.y];
-                let origin = [-(scale[0] * float(object.bytes, 0x30)), -(scale[1] * float(object.bytes, 0x24))];
-                Visit::Shape(ShapeDraw { blend: base.blend, transform, origin, clip, items, count })
-            }
-        }))
-    }
-
-    /// Decodes every listed object and appends the visits of the visible ones to `out`. `Ok` is the completeness
-    /// predicate together with a successful `decode`.
-    pub fn plan(&self, out: &mut PlanBuffer<'_>) -> Result<SceneReport, SceneError> {
-        let mut report = SceneReport::default();
+    /// Decodes every listed object and its visit. `Ok` together with a successful `decode` is the predicate for owning
+    /// the frame.
+    pub fn check(&self) -> Result<(), SceneError> {
         for entry in self.objects() {
             let (group, address) = entry?;
             let refuse = |refusal| SceneError::Object { object: address, refusal };
             let object = SceneObject::decode(self.memory, group, address).map_err(refuse)?;
-            report.objects += 1;
-            if let Some(visit) = self.visit(&object).map_err(refuse)? {
-                report.visible += 1;
-                out.push(visit)?;
-            }
+            visit(self.memory, self.display, &object).map_err(refuse)?;
         }
-        Ok(report)
-    }
-}
-
-/// Visits in walk order, in caller storage.
-pub struct PlanBuffer<'s> { storage: &'s mut [Visit], length: usize }
-impl<'s> PlanBuffer<'s> {
-    pub fn new(storage: &'s mut [Visit]) -> Self { Self { storage, length: 0 } }
-    fn push(&mut self, visit: Visit) -> Result<(), SceneError> {
-        *self.storage.get_mut(self.length).ok_or(SceneError::Capacity)? = visit;
-        self.length += 1;
         Ok(())
     }
-    pub fn visits(&self) -> &[Visit] { &self.storage[..self.length] }
 }
 
 pub struct SceneWalk<'s, 'm, 'a> {
@@ -475,11 +455,11 @@ fn scissor(clip: ObjectClip, surface: SurfaceScale, class: ObjectClass) -> [i32;
 }
 
 /// The calls of one visit's draw method; returns the method's result.
-pub fn draw(visit: &Visit, memory: &ResourceMemory<'_>, device: &mut impl StageDevice) -> Result<u32, ResourceError> {
+pub fn draw(visit: &Visit<'_>, device: &mut impl StageDevice) -> u32 {
     fn set(call: &mut impl FnMut(VgCall), parameter: VgWord, value: i32) { call(VgCall::SetInteger { parameter, value }) }
     let mut call = |operation: VgCall| device.call(operation);
     match *visit {
-        Visit::NoResource => return Ok(0),
+        Visit::NoResource => return 0,
         Visit::Image(image) => {
             set(&mut call, MATRIX_MODE, 0x1401);
             set(&mut call, IMAGE_QUALITY, 0x1f00);
@@ -524,9 +504,8 @@ pub fn draw(visit: &Visit, memory: &ResourceMemory<'_>, device: &mut impl StageD
                 call(VgCall::SetIntegers { parameter: SCISSOR_RECTS, values });
                 set(&mut call, SCISSORING, 1);
             }
-            for index in 0..shape.count {
-                let address = DataAddress(shape.items.0.wrapping_add(index * SHAPE_ITEM_BYTES as u32));
-                let item = memory.bytes(address, SHAPE_ITEM_BYTES)?;
+            for (index, item) in shape.item_bytes.chunks_exact(SHAPE_ITEM_BYTES).enumerate() {
+                let address = DataAddress(shape.items.0.wrapping_add((index * SHAPE_ITEM_BYTES) as u32));
                 let at = |slot: usize| word(item, 4 * slot);
                 let first = index == 0;
                 set(&mut call, BLEND_MODE, if at(11) != 0 { 0x2001 } else { 0x2000 });
@@ -556,7 +535,7 @@ pub fn draw(visit: &Visit, memory: &ResourceMemory<'_>, device: &mut impl StageD
             call(VgCall::SetFloat { parameter: STROKE_LINE_WIDTH, value: 0.0 });
         }
     }
-    Ok(1)
+    1
 }
 
 /// How the stage-0 render of `0x6d7920` ended.
@@ -568,10 +547,40 @@ pub enum RenderOutcome {
     Rendered(u32),
 }
 
-/// Surface selection `0x6d788c` and the render `0x6d724c(-1, width, height, surface, object)` for planned visits.
-/// `floor` is the float at `R+0x154` (`I4:6d72ec-6d730c`).
-pub fn render_stage(visits: &[Visit], width: i32, height: i32, floor: f32, memory: &ResourceMemory<'_>, device: &mut impl StageDevice) -> Result<RenderOutcome, ResourceError> {
-    if !device.make_current() { return Ok(RenderOutcome::SurfaceRefused); }
+/// Guest memory as the render reads it at each group and visit.
+pub trait SceneMemory {
+    fn read<R>(&self, f: impl FnOnce(&ResourceMemory<'_>) -> R) -> R;
+}
+impl SceneMemory for ResourceMemory<'_> {
+    fn read<R>(&self, f: impl FnOnce(&ResourceMemory<'_>) -> R) -> R { f(self) }
+}
+
+/// The objects of `group`'s list as `0x6d8fc4` copies them, or `None` when the copy is left to stock: more objects
+/// than `snapshot` holds, an unreadable node, or fewer free pool nodes than objects, where `0x6d8f28` fails
+/// (`6d8f28-6d8fb4`).
+fn copy_group(memory: &ResourceMemory<'_>, group: GroupIndex, snapshot: &mut [VglibObject]) -> Option<usize> {
+    let sentinel = group.sentinel();
+    let mut next = read_word(memory, DataAddress(sentinel)).ok()?;
+    let mut listed = 0;
+    while next != sentinel {
+        let node = memory.bytes(DataAddress(next), 12).ok()?;
+        *snapshot.get_mut(listed)? = VglibObject(DataAddress(word(node, 8)));
+        listed += 1;
+        next = word(node, 0);
+    }
+    let nodes = memory.bytes(NODE_POOL, NODE_POOL_BYTES).ok()?;
+    let free = nodes.chunks_exact(NODE_BYTES).filter(|record| word(record, 0xc) == 0).take(listed).count();
+    (free == listed).then_some(listed)
+}
+
+enum Step { Hidden, Drawn(u32), Stock }
+
+/// Surface selection `0x6d788c` and the render `0x6d724c(-1, width, height, surface, object)`. Like `0x6d909c` and
+/// `0x6d7324`, the walk copies each group's list when it reaches the group and decodes each object when it visits it.
+/// A group `copy_group` leaves to stock goes to `StageDevice::stock_walk`, and an object that does not decode to an
+/// owned visit to `StageDevice::stock_visit`. `floor` is the float at `R+0x154` (`I4:6d72ec-6d730c`).
+pub fn render_stage(width: i32, height: i32, floor: f32, memory: &impl SceneMemory, snapshot: &mut [VglibObject], device: &mut impl StageDevice) -> RenderOutcome {
+    if !device.make_current() { return RenderOutcome::SurfaceRefused; }
     if device.get_integer(RENDERING_QUALITY) != RENDERING_QUALITY_BETTER {
         device.call(VgCall::SetInteger { parameter: RENDERING_QUALITY, value: RENDERING_QUALITY_BETTER });
     }
@@ -579,11 +588,34 @@ pub fn render_stage(visits: &[Visit], width: i32, height: i32, floor: f32, memor
     device.call(VgCall::Clear { x: 0, y: 0, width, height });
     let (mut visited, mut result) = (0u32, 0u32);
     device.set_visits(visited, result);
-    for visit in visits {
-        result |= draw(visit, memory, device)?;
-        visited = visited.wrapping_add(1);
-        device.set_visits(visited, result);
-        if visited & 2 == 0 { device.yield_task(); }
+    for index in (0..GROUP_COUNT as u8).rev() {
+        let group = GroupIndex(index);
+        let Some(listed) = memory.read(|memory| copy_group(memory, group, snapshot)) else {
+            device.stock_walk(group);
+            (visited, result) = device.visits();
+            continue;
+        };
+        for &object in &snapshot[..listed] {
+            if object.0.0 == 0 { break; }
+            let step = memory.read(|memory| match visit_now(memory, group, object) {
+                Ok(None) => Step::Hidden,
+                Ok(Some(visit)) => Step::Drawn(draw(&visit, device)),
+                Err(_) => Step::Stock,
+            });
+            match step {
+                Step::Hidden => {}
+                Step::Drawn(drawn) => {
+                    result |= drawn;
+                    visited = visited.wrapping_add(1);
+                    device.set_visits(visited, result);
+                    if visited & 2 == 0 { device.yield_task(); }
+                }
+                Step::Stock => {
+                    device.stock_visit(object);
+                    (visited, result) = device.visits();
+                }
+            }
+        }
     }
     device.call(VgCall::Finish);
     if !device.copy_buffers() { device.record_error(); }
@@ -591,7 +623,7 @@ pub fn render_stage(visits: &[Visit], width: i32, height: i32, floor: f32, memor
         result = 1;
         device.set_visits(visited, result);
     }
-    Ok(RenderOutcome::Rendered(result))
+    RenderOutcome::Rendered(result)
 }
 
 #[cfg(test)]

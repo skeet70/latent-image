@@ -3,14 +3,16 @@
 //! stock at `0x6d7930` with that frame and lock when it returns `Fallback`. Every refusal happens before the first
 //! stock call after the lock, so a fallback leaves stock state as the stock step finds it at `0x6d7930`. On `Owned`,
 //! `frame.S` calls `rb_render_frame_commit`, which submits the frame's OpenVG calls to the retained OpenVG client
-//! (`render_commands::vglib_scene::render_stage`); a nonzero commit result is the step's return value, otherwise the
-//! `0xfefe` wait and `rb_render_frame_complete` follow.
+//! (`render_commands::vglib_scene::render_stage`, which decodes each object when it visits it and hands objects and
+//! groups it does not own to stock's visitor `0x6d7324` and group walk `0x6d909c`); a nonzero commit result is the
+//! step's return value, otherwise the `0xfefe` wait and `rb_render_frame_complete` follow.
 
 use crate::render_commands::publisher::{BufferIndex, BufferState, ContextId, DrainState, FrameId, Publisher, PublisherError, SubmissionError};
 use crate::render_commands::resources::{DataAddress, DataRegion, ResourceMemory};
 use crate::render_commands::scanout_latch::{ScanoutAddress, ScanoutLatch};
+use crate::render_commands::stock_objects::VglibObject;
 use crate::render_commands::vg_submission::{Matrix, StageDevice, VgCall, VgWord, SURFACE_ATTRIBUTES};
-use crate::render_commands::vglib_scene::{render_stage, PlanBuffer, RenderOutcome, Scene, SceneError, Visit};
+use crate::render_commands::vglib_scene::{render_stage, GroupIndex, RenderOutcome, Scene};
 use crate::render_commands::SurfaceId;
 use core::ptr::{read_volatile, write_volatile};
 
@@ -60,12 +62,18 @@ static mut ONE_SHOT_HANDLE: u32 = 0;
 const RAM_LOW: (u32, usize) = (0x0000_1000, 0x0400_0000 - 0x1000);
 const RAM_ALIAS: (u32, usize) = (0x4000_0000, 0x0400_0000);
 
-const VISIT_CAPACITY: usize = 96;
+/// Objects of one group list the render copies; a longer list goes to stock's group walk.
+const GROUP_SNAPSHOT: usize = 128;
 /// Bytes of the frame statics in the bank engine region, excluding code.
-const FRAME_STATIC_BYTES: usize = VISIT_CAPACITY * core::mem::size_of::<Visit>()
+const FRAME_STATIC_BYTES: usize = GROUP_SNAPSHOT * core::mem::size_of::<VglibObject>()
     + core::mem::size_of::<FrameState>()
     + core::mem::size_of::<FrameRecord>();
 const _: () = assert!(FRAME_STATIC_BYTES <= 0x10000, "frame statics exceed their engine-region budget");
+/// The stock visitor; `0x6d724c` passes it to the group walk (`I4:6d72a4-6d72a8`).
+const STOCK_VISITOR: u32 = 0x006d_7324;
+/// The visitor's output-mode filter word away from frame modes 8 and 10, which draws every visible object
+/// (`I4:6d7a90-6d7aa0`, `6d7368-6d7378`).
+static VISIT_FILTER: i32 = -1;
 /// The frame step's return for a refused surface selection (`I4:6d7ac0-6d7ac8`, `6d7ddc-6d7dfc`).
 const SURFACE_REFUSED: i32 = -255;
 
@@ -88,12 +96,11 @@ enum FallbackReason {
     Geometry = 4,
     /// The display addresses differ from the publisher's buffer tokens.
     BufferMoved = 5,
-    /// The scene did not decode or plan completely.
+    /// The scene did not decode completely.
     Scene = 7,
-    VisitCapacity = 8,
     /// The back buffer is not `Free` in the publisher.
     PublisherBusy = 9,
-    /// Counted when `vglib_select_surface` fails after the frame was owned; slot 6 is unused.
+    /// Counted when `vglib_select_surface` fails after the frame was owned; slots 6 and 8 are unused.
     SurfaceRefused = 10,
     Publisher = 11,
 }
@@ -163,7 +170,7 @@ struct FrameState {
 }
 
 static mut STATE: FrameState = FrameState { publisher: None, buffers: None, owned_front: None, stock_since: false, next_context: 1, prepared: None };
-static mut VISITS: [Visit; VISIT_CAPACITY] = [Visit::NoResource; VISIT_CAPACITY];
+static mut SNAPSHOT: [VglibObject; GROUP_SNAPSHOT] = [VglibObject(DataAddress(0)); GROUP_SNAPSHOT];
 static mut REGIONS: [DataRegion<'static>; 2] = [DataRegion { base: DataAddress(0), bytes: &[] }; 2];
 /// Accessed only through `with_latch`.
 static mut LATCH: ScanoutLatch = ScanoutLatch::new();
@@ -175,6 +182,8 @@ unsafe extern "C" {
     fn rb_render_frame_advance_front() -> u8;
     fn rb_render_call_6cfc68(vector: u32);
     fn rb_render_call_723ce8(ticks: u32) -> i32;
+    fn rb_render_call_6d7324(filter: *const i32, object: u32) -> u32;
+    fn rb_render_call_6d909c(sentinel: u32, visitor: u32, filter: *const i32) -> u32;
     fn rb_render_call_88bf94(display: u32, draw: u32, read: u32, context: u32, attributes: *const u32) -> u32;
     fn rb_render_call_88d620(display: u32, surface: u32, object: u32) -> u32;
     fn rb_render_call_887280() -> u32;
@@ -223,13 +232,12 @@ fn render_next_buffer(front: u8) -> BufferIndex {
     if u32::from(front) + 1 <= 1 { BufferIndex::Second } else { BufferIndex::First }
 }
 
-/// A begun frame whose visits occupy `VISITS[..visits]`.
+/// A begun frame for `rb_render_frame_commit`.
 struct Prepared {
     frame: FrameId,
     back: BufferIndex,
     address: u32,
     buffer: ScanoutAddress,
-    visits: usize,
 }
 
 /// The retained OpenVG client and VGLIB state of the stage-0 surface `S(0,b)` and image object `O(0,b)`.
@@ -268,7 +276,10 @@ impl StageDevice for StockStage {
         set_word(RENDER_RESULT, result);
         set_word(VISITED, visited);
     }
+    fn visits(&mut self) -> (u32, u32) { (word(VISITED), word(RENDER_RESULT)) }
     fn yield_task(&mut self) { unsafe { rb_render_call_723ce8(0); } }
+    fn stock_visit(&mut self, object: VglibObject) { unsafe { rb_render_call_6d7324(&VISIT_FILTER, object.0.0); } }
+    fn stock_walk(&mut self, group: GroupIndex) { unsafe { rb_render_call_6d909c(group.sentinel(), STOCK_VISITOR, &VISIT_FILTER); } }
 }
 
 /// Owned work before the first stock call after the lock; `Owned` leaves the frame for `rb_render_frame_commit`.
@@ -358,13 +369,7 @@ fn decide(state: &mut FrameState) -> Result<Prepared, FallbackReason> {
     if state.buffers.is_some_and(|held| held != addresses) { return Err(FallbackReason::BufferMoved); }
 
     let memory = guest_memory().ok_or(FallbackReason::Scene)?;
-    let scene = Scene::decode(&memory).map_err(|_| FallbackReason::Scene)?;
-    let mut plan = PlanBuffer::new(unsafe { &mut *(&raw mut VISITS) });
-    scene.plan(&mut plan).map_err(|error| match error {
-        SceneError::Capacity => FallbackReason::VisitCapacity,
-        _ => FallbackReason::Scene,
-    })?;
-    let visits = plan.visits().len();
+    Scene::decode(&memory).and_then(|scene| scene.check()).map_err(|_| FallbackReason::Scene)?;
 
     apply_latch(state);
     let front = unsafe { read_volatile(FRONT as *const u8) };
@@ -376,7 +381,7 @@ fn decide(state: &mut FrameState) -> Result<Prepared, FallbackReason> {
         _ => FallbackReason::Publisher,
     })?;
     let address = addresses.0[slot(back)];
-    Ok(Prepared { frame, back, address, buffer: ScanoutAddress::new(address), visits })
+    Ok(Prepared { frame, back, address, buffer: ScanoutAddress::new(address) })
 }
 
 fn slot(index: BufferIndex) -> usize { match index { BufferIndex::First => 0, BufferIndex::Second => 1 } }
@@ -434,22 +439,22 @@ fn publisher(state: &mut FrameState, addresses: BufferAddresses) -> Result<&mut 
     state.publisher.as_mut().ok_or(FallbackReason::Publisher)
 }
 
-/// The stock stage-0 sequence from the lock to the wait (`I4:6d7938-6d7da0`): option, surface selection and render
-/// of the planned visits, hand-off as the publisher's submit transport, front advance, option restore, and the
-/// scanout bridge queued in place of `0x6d80f0`.
+/// The stock stage-0 sequence from the lock to the wait (`I4:6d7938-6d7da0`): option, surface selection and render,
+/// hand-off as the publisher's submit transport, front advance, option restore, and the scanout bridge queued in place
+/// of `0x6d80f0`.
 #[inline(never)]
 fn commit(state: &mut FrameState, prepared: Prepared) -> i32 {
-    let Prepared { frame, back, address, buffer, visits } = prepared;
+    let Prepared { frame, back, address, buffer } = prepared;
     unsafe { rb_render_call_6499d0(OPTION_GROUP, OPTION_INDEX, OPTION_RENDER); }
     let index = 4 * slot(back) as u32;
     let mut stage = StockStage { surface: word(SURFACES + index), object: word(IMAGES + index) };
-    let all: &'static [Visit; VISIT_CAPACITY] = unsafe { &*(&raw const VISITS) };
+    let snapshot: &'static mut [VglibObject; GROUP_SNAPSHOT] = unsafe { &mut *(&raw mut SNAPSHOT) };
     let floor = f32::from_bits(word(RESULT_FLOOR));
     let outcome = guest_memory().map(|memory| {
-        render_stage(&all[..visits], i32::from(half(GEOMETRY)), i32::from(half(GEOMETRY + 2)), floor, &memory, &mut stage)
+        render_stage(i32::from(half(GEOMETRY)), i32::from(half(GEOMETRY + 2)), floor, &memory, snapshot, &mut stage)
     });
     let render_result = match outcome {
-        Some(Ok(RenderOutcome::Rendered(result))) => result,
+        Some(RenderOutcome::Rendered(result)) => result,
         _ => {
             if let Some(publisher) = state.publisher.as_mut() { let _ = publisher.cancel(frame); }
             count_fallback(FallbackReason::SurfaceRefused);

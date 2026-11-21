@@ -186,6 +186,27 @@
         "same_image_comparison": "unestablished",
         "direct_owned_api": "unestablished"
       }
+    },
+    {
+      "id": "render_adapter-06",
+      "shim": "`rb_render_call_6d7324` and `rb_render_call_6d909c` in `frame.S`: stock's visitor for an object the owned render walk does not decode to an owned visit (rotation, colour transform, other classes), and stock's group walk for a list the owned walk does not copy",
+      "kind": "trampoline into retained stock",
+      "other_side": "VGLIB's visitor `0x6d7324`, its group walk `0x6d909c` and the draw methods they reach",
+      "owned": "no",
+      "removal": "the owned walk draws every object class and visit state, and copies every list the stock copy accepts",
+      "state": "required",
+      "evidence": [
+        {
+          "kind": "reference-only",
+          "contract": "menu/recipe_bank_render_frame_allowlist_fragment.json",
+          "requirement": "The render-frame variant has no declared produced linked ELF in the shim image registry; both trampolines are declared in the variant's allowlist fragment."
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
     }
   ]
 }

@@ -4,6 +4,7 @@ module Replacement.ModalRuntime.RenderPair
   ( RenderConfig(..), DrawCoverage(..), ResourceId(..), DrawClass(..), DrawFunction(..), Draw(..)
   , deriveDrawClass, renderDraws, compareDraws, checkRenderStackObservations, checkRetainedRenderStackObservations
   , validateRenderDeclarations, validateRetainedRenderDeclarations, DeclarationScope (..), checkRenderCoverage
+  , FramePublication (..), parseFramePublication
   , osdInputs, discoveredBanks
   , foldRenderDraws, collectDrawsReader, compareDrawsReader, compareDrawsReaderRole, discoveredBanksReader, discoveredBanksReaderRole
   , checkRenderCoverageReader, checkRenderStackObservationsReader
@@ -625,8 +626,53 @@ checkRetainedRenderStackObservationsReader config readers
         Right ()
     | otherwise = Right ()
 
-osdInputsReader :: [ObservationReader] -> IO (Either String [(T.Text,J.Value)])
-osdInputsReader readers = do
+-- | The render-frame package's owned stage-0 publication pair (`render-frame-record.json` `presentation`): the
+-- hand-off return `pop {r4, pc}`, which the `render-osd-buffer` hit names as lr, and the front store
+-- `strb r2, [r3, #0x160]`, traced as `frame-owned-osd-increment` with r2 the incremented byte.
+data FramePublication = FramePublication { publicationHandOffReturn :: Word32, publicationFrontStore :: Word32 } deriving (Eq, Show)
+
+parseFramePublication :: J.Value -> J.Parser FramePublication
+parseFramePublication = J.withObject "render frame record" $ \fields -> do
+  presentation <- fields J..: "presentation"
+  FramePublication <$> owned presentation "hand_off_return" 0xe8bd8010 <*> owned presentation "front_store" 0xe5c32160
+ where
+  owned presentation name expected = do
+    instruction <- presentation J..: name
+    pc <- instruction J..: "pc" >>= prefixed
+    value <- instruction J..: "word" >>= prefixed
+    unless (value == expected) (fail ("render frame " ++ show name ++ " word differs"))
+    pure pc
+  prefixed text = case text of
+    '0':'x':digits | length digits == 8, [(value,"")] <- readHex digits -> pure (value :: Word32)
+    _ -> fail "render frame site requires a 0x-prefixed word"
+
+-- | One hit of the OSD front fold: a stage-0 hand-off from a stock caller or the package's hand-off return, then its
+-- front increment.
+osdHit :: Maybe FramePublication -> (M.Map Word32 Word32,Maybe Word32,Maybe (Word32,Word32),Integer) -> Hit
+  -> Either String (M.Map Word32 Word32,Maybe Word32,Maybe (Word32,Word32),Integer)
+osdHit publication (buffers,pending,indices,count) trace
+  | site trace == "render-osd-buffer" && hitLr trace `elem` map Just handOffReturns = do
+      unless (pending == Nothing) (Left "OSD buffer handoff overwritten before increment")
+      let (_,buffer,_,_) = hitRegisters trace
+      Right (buffers,Just buffer,indices,count)
+  | site trace == "render-osd-increment" || (publication /= Nothing && site trace == "frame-owned-osd-increment") = do
+      let (_,_,newFront,_) = hitRegisters trace
+      unless (newFront == 1 || newFront == 2) (Left "OSD increment index out of range")
+      buffer <- maybe (Left "OSD increment has no buffer handoff") Right pending
+      let index = newFront `mod` 2
+      start <- case indices of
+        Nothing -> Right (newFront - 1)
+        Just (initial,previous) -> do
+          unless (newFront == previous + 1) (Left "OSD increments do not alternate within window")
+          Right initial
+      case M.lookup index buffers of Just old -> unless (old == buffer) (Left "OSD stage-0 buffer changed"); Nothing -> Right ()
+      Right (M.insert index buffer buffers,Nothing,Just (start,index),count+1)
+  | otherwise = Right (buffers,pending,indices,count)
+ where
+  handOffReturns = [0x6d7b3c,0x6d7c24,0x6d7d10] ++ maybe [] (pure . publicationHandOffReturn) publication
+
+osdInputsReader :: Maybe FramePublication -> [ObservationReader] -> IO (Either String [(T.Text,J.Value)])
+osdInputsReader publication readers = do
   -- Captures may precede the first observation of both stage-0 buffer addresses.
   complete <- collectBuffers M.empty readers
   case complete of
@@ -656,7 +702,7 @@ osdInputsReader readers = do
     Right bytes -> do
       let ending = fromIntegral (B.head bytes) :: Word32
       if ending > 1 then pure (Left "invalid OSD front byte") else do
-        result <- readerFoldHits reader (hitStep known) (known,Nothing,Nothing,0 :: Integer)
+        result <- readerFoldHits reader (osdHit publication) (known,Nothing,Nothing,0 :: Integer)
         pure $ case result of
           Left problem -> Left problem
           Right (buffers,pending,indices,increments) -> case pending of
@@ -665,26 +711,6 @@ osdInputsReader readers = do
               Nothing -> Right (buffers,ending,increments)
               Just (start,lastFront) | lastFront == ending -> Right (buffers,start,increments)
                                      | otherwise -> Left "OSD end byte disagrees with last increment"
-  hitStep _known (buffers,pending,indices,count) trace
-    | site trace == "render-osd-buffer" && hitLr trace `elem` map Just [0x6d7b3c,0x6d7c24,0x6d7d10] = do
-        unless (pending == Nothing) (Left "OSD buffer handoff overwritten before increment")
-        let (_,buffer,_,_) = hitRegisters trace
-        Right (buffers,Just buffer,indices,count)
-    | site trace == "render-osd-increment" = do
-        let (_,_,newFront,_) = hitRegisters trace
-        unless (newFront == 1 || newFront == 2) (Left "OSD increment index out of range")
-        buffer <- maybe (Left "OSD increment has no buffer handoff") Right pending
-        let index = newFront `mod` 2
-        start <- case indices of
-          Nothing -> Right (newFront - 1)
-          Just (initial,previous) -> do
-            unless (newFront == previous + 1) (Left "OSD increments do not alternate within window")
-            Right initial
-        case M.lookup index buffers of
-          Just old -> unless (old == buffer) (Left "OSD stage-0 buffer changed")
-          Nothing -> Right ()
-        Right (M.insert index buffer buffers,Nothing,Just (start,index),count+1)
-    | otherwise = Right (buffers,pending,indices,count)
 
 discoveredBanks :: RenderConfig -> [Draw] -> Either String [Int]
 discoveredBanks config draws = fmap (sort . nub . concat) $ forM draws $ \draw -> do
@@ -753,8 +779,8 @@ renderStackObservations config admission observations = do
   safeFirst (a:_) = Just a
   safeFirst [] = Nothing
 
-osdInputs :: [Observation] -> Either String [(T.Text,J.Value)]
-osdInputs observations = do
+osdInputs :: Maybe FramePublication -> [Observation] -> Either String [(T.Text,J.Value)]
+osdInputs publication observations = do
   known <- foldM (\buffers observation -> do
     (updated,_,_) <- window buffers observation
     pure updated) M.empty observations
@@ -764,7 +790,7 @@ osdInputs observations = do
     bytes <- readNamed "render-osd-front" 1 observation
     let ending = fromIntegral (B.head bytes) :: Word32
     unless (ending <= 1) (Left "invalid OSD front byte")
-    (buffers, pending, indices, increments) <- foldM hit (known,Nothing,Nothing,0 :: Integer) (observationHits observation)
+    (buffers, pending, indices, increments) <- foldM (osdHit publication) (known,Nothing,Nothing,0 :: Integer) (observationHits observation)
     unless (pending == Nothing) (Left "OSD buffer handoff has no increment")
     initial <- case indices of
       Nothing -> Right ending
@@ -777,37 +803,20 @@ osdInputs observations = do
     case (M.lookup 0 buffers,M.lookup 1 buffers) of
       (Just a,Just b) | a /= b -> Right [(observationPhase observation,J.object ["front_byte" J..= initial,"buffers" J..= [a,b],"increments" J..= increments])]
       _ -> if increments == 0 then Right [] else Left "OSD has not observed both stage-0 buffers"
-  hit (buffers,pending,indices,count) trace
-    | site trace == "render-osd-buffer" && hitLr trace `elem` map Just [0x6d7b3c,0x6d7c24,0x6d7d10] = do
-        unless (pending == Nothing) (Left "OSD buffer handoff overwritten before increment")
-        let (_,buffer,_,_) = hitRegisters trace
-        Right (buffers,Just buffer,indices,count)
-    | site trace == "render-osd-increment" = do
-        let (_,_,newFront,_) = hitRegisters trace
-        unless (newFront == 1 || newFront == 2) (Left "OSD increment index out of range")
-        buffer <- maybe (Left "OSD increment has no buffer handoff") Right pending
-        let index = newFront `mod` 2
-        start <- case indices of
-          Nothing -> Right (newFront - 1)
-          Just (initial,previous) -> do
-            unless (newFront == previous + 1) (Left "OSD increments do not alternate within window")
-            Right initial
-        case M.lookup index buffers of Just old -> unless (old == buffer) (Left "OSD stage-0 buffer changed"); Nothing -> Right ()
-        pure (M.insert index buffer buffers,Nothing,Just (start,index),count+1)
-    | otherwise = Right (buffers,pending,indices,count)
 
 data ReadRange = AbsoluteRange Word32 Int | StackRange Int Int | RegisterRange Int Int Int Bool deriving (Eq, Show)
 
 data DeclarationScope = AllDrawers | RetainedTreePicker deriving (Eq)
 
-validateRenderDeclarations :: RenderConfig -> Role -> J.Value -> J.Parser ()
+-- | `publication` is the owned role's render-frame package, whose front store the receipt must declare.
+validateRenderDeclarations :: RenderConfig -> Role -> Maybe FramePublication -> J.Value -> J.Parser ()
 validateRenderDeclarations = validateDeclarations AllDrawers
 
 validateRetainedRenderDeclarations :: RenderConfig -> J.Value -> J.Parser ()
-validateRetainedRenderDeclarations config = validateDeclarations RetainedTreePicker config StockRole
+validateRetainedRenderDeclarations config = validateDeclarations RetainedTreePicker config StockRole Nothing
 
-validateDeclarations :: DeclarationScope -> RenderConfig -> Role -> J.Value -> J.Parser ()
-validateDeclarations scope config role = J.withObject "render receipt" $ \fields -> do
+validateDeclarations :: DeclarationScope -> RenderConfig -> Role -> Maybe FramePublication -> J.Value -> J.Parser ()
+validateDeclarations scope config role publication = J.withObject "render receipt" $ \fields -> do
   declarations <- fields J..: "declared_trace_sites" >>= mapM (J.withObject "trace declaration" $ \declaration -> do
     label <- declaration J..: "label"
     address <- declaration J..: "address" >>= hex
@@ -834,6 +843,10 @@ validateDeclarations scope config role = J.withObject "render receipt" $ \fields
              , ("rtc-counter-byte-0",(0x6a5cfc,[])),("rtc-counter-byte-1",(0x6a5d08,[]))
              , ("rtc-counter-byte-2",(0x6a5d14,[])),("rtc-counter-byte-3",(0x6a5d20,[])) ]
   forM_ selected $ \(label,value) -> unless ([actual | (name,actual) <- declarations,name == label] == [value]) (fail ("render trace declaration differs: " ++ T.unpack label))
+  case (publication, [actual | (name,actual) <- declarations,name == "frame-owned-osd-increment"]) of
+    (Nothing,[]) -> pure ()
+    (Nothing,_) -> fail "render receipt declares the owned front store without a render-frame package"
+    (Just frame,owned) -> unless (owned == [(publicationFrontStore frame,[])]) (fail "render trace declaration differs: frame-owned-osd-increment")
   when (scope == RetainedTreePicker && any (\(label,_) -> "-adapter" `T.isSuffixOf` label) declarations)
     (fail "retained render receipt declares an owned adapter")
   when (role == OwnedRole) $ forM_ ["render-tree-adapter","render-picker-adapter","render-pane-adapter"] $ \label ->

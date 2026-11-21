@@ -341,6 +341,7 @@ check() {
     mode=draw-free
     reason='Neither role reached tree, picker or pane entry in any observed segment.'
   fi
+  if [ -n "$frame_step" ]; then render_mode+=(--render-frame-record "$prelinked/render-frame-record.json"); fi
   jq -n --arg mode "$mode" --arg reason "$reason" --argjson stock "$stock_draws" --argjson owned "$owned_draws" \
     '{mode:$mode,reason:$reason,stock_draw_entries:$stock,owned_draw_entries:$owned}' > "$results/$name$s-render-mode.json"
   if [ -n "${RENDER_CLOCK_RESOURCE:-}" ]; then clock=(--render-clock-resource "$RENDER_CLOCK_RESOURCE"); fi

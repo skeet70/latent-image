@@ -42,6 +42,8 @@
       "source": "menu/recipe_bank_ram_engine.ld; vglib_post_display_event, the 0xfefe post on scanout-latch delivery"
     },
     {"address": "0x00723ce8", "name": "rb_render_call_723ce8", "source": "replacement/render_adapter/frame.rs; zero-tick delay after every second visit"},
+    {"address": "0x006d7324", "name": "rb_render_call_6d7324", "source": "replacement/render_adapter/frame.rs; stock visitor for an object the owned walk does not decode"},
+    {"address": "0x006d909c", "name": "rb_render_call_6d909c", "source": "replacement/render_adapter/frame.rs; stock group walk for a list the owned walk does not copy"},
     {"address": "0x0088bf94", "name": "rb_render_call_88bf94", "source": "replacement/render_adapter/frame.rs; EGL surface selection of vglib_select_surface"},
     {"address": "0x0088d620", "name": "rb_render_call_88d620", "source": "replacement/render_adapter/frame.rs; EGL surface-to-image copy ending the render"},
     {"address": "0x00887280", "name": "rb_render_call_887280", "source": "replacement/render_adapter/frame.rs; EGL error read stored at R+0x50"},

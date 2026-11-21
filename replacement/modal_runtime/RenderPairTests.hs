@@ -169,9 +169,34 @@ main = do
   args <- getArgs
   fixturePath <- case args of [path] -> pure path; _ -> fail "expected declaration receipt"
   declaration <- B.readFile fixturePath >>= either fail pure . J.eitherDecodeStrict'
-  check "declared reads match bank set" (passes (J.parseEither (validateRenderDeclarations config OwnedRole) declaration))
-  check "different bank declaration fails" (not (passes (J.parseEither (validateRenderDeclarations (config {renderBanks=[3]}) OwnedRole) declaration)))
-  check "missing declarations fail" (not (passes (J.parseEither (validateRenderDeclarations config OwnedRole) (J.object []))))
+  check "declared reads match bank set" (passes (J.parseEither (validateRenderDeclarations config OwnedRole Nothing) declaration))
+  check "different bank declaration fails" (not (passes (J.parseEither (validateRenderDeclarations (config {renderBanks=[3]}) OwnedRole Nothing) declaration)))
+  check "missing declarations fail" (not (passes (J.parseEither (validateRenderDeclarations config OwnedRole Nothing) (J.object []))))
+  let publication = FramePublication 0xa9ff54 0xa9ff6c
+      sites change = case declaration of
+        J.Object fields -> case KM.lookup "declared_trace_sites" fields of
+          Just (J.Array rows) -> J.Object (KM.insert "declared_trace_sites" (J.toJSON (change (foldr (:) [] rows))) fields)
+          _ -> error "fixture lacks declared_trace_sites"
+        _ -> error "fixture must be an object"
+      frontStore = J.object ["label" J..= ("frame-owned-osd-increment" :: String),"address" J..= ("00a9ff6c" :: String)]
+      label row = case row of J.Object fields -> KM.lookup "label" fields; _ -> Nothing
+      framed = sites (++ [frontStore])
+      validates frame value = passes (J.parseEither (validateRenderDeclarations config OwnedRole frame) value)
+  check "a render-frame receipt declaring both owned publication sites passes" (validates (Just publication) framed)
+  check "a render-frame receipt without the owned front store fails" (not (validates (Just publication) declaration))
+  check "a render-frame receipt without the hand-off site fails"
+    (not (validates (Just publication) (sites (filter ((/= Just (J.String "render-osd-buffer")) . label) . (++ [frontStore])))))
+  check "a render-frame receipt declaring another front store fails"
+    (not (validates (Just (publication {publicationFrontStore = 0xa9ff70})) framed))
+  check "an owned front store without a render-frame package fails" (not (validates Nothing framed))
+  check "the render-frame record's presentation sites parse"
+    (J.parseEither parseFramePublication (J.object ["presentation" J..= J.object
+      [ "hand_off_return" J..= J.object ["pc" J..= ("0x00a9ff54" :: String),"word" J..= ("0xe8bd8010" :: String)]
+      , "front_store" J..= J.object ["pc" J..= ("0x00a9ff6c" :: String),"word" J..= ("0xe5c32160" :: String)] ]]) == Right publication)
+  check "a render-frame record with another hand-off word fails"
+    (not (passes (J.parseEither parseFramePublication (J.object ["presentation" J..= J.object
+      [ "hand_off_return" J..= J.object ["pc" J..= ("0x00a9ff54" :: String),"word" J..= ("0xe8bd8000" :: String)]
+      , "front_store" J..= J.object ["pc" J..= ("0x00a9ff6c" :: String),"word" J..= ("0xe5c32160" :: String)] ]]))))
   forM_ [TreeDraw,PickerDraw] $ \function -> do
     check "live stock class owned" (deriveDrawClass document document function (entry function) == Right (OwnedDraw function))
     let e = entry function
@@ -292,26 +317,39 @@ main = do
   let handoff buffer = (hit "render-osd-buffer") {hitRegisters = (0,buffer,0,0),hitLr = Just 0x6d7b3c}
       increment n = (hit "render-osd-increment") {hitRegisters = (0,0,n,0)}
       osd = observation [handoff 0x4228c800,increment 1,handoff 0x423de000,increment 2]
-  check "OSD two buffers and wrap pass" (passes (osdInputs [osd]))
-  check "OSD inputs carry both buffers and increments" (osdInputs [osd] == Right [("segment",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (2 :: Int)])])
-  check "OSD zero-increment window starts at its own end byte" (passes (osdInputs [osd,(observation []) {observationReads = [("render-osd-front",B.singleton 1)]}]))
+  check "OSD two buffers and wrap pass" (passes (osdInputs Nothing [osd]))
+  check "OSD inputs carry both buffers and increments" (osdInputs Nothing [osd] == Right [("segment",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (2 :: Int)])])
+  check "OSD zero-increment window starts at its own end byte" (passes (osdInputs Nothing [osd,(observation []) {observationReads = [("render-osd-front",B.singleton 1)]}]))
   let afterOddGap = observation [handoff 0x423de000,increment 2]
       endingOne hits = (observation hits) {observationReads = [("render-osd-front",B.singleton 1)]}
-  check "OSD odd untraced gap between windows passes" (osdInputs [osd,afterOddGap] == Right
+  check "OSD odd untraced gap between windows passes" (osdInputs Nothing [osd,afterOddGap] == Right
     [ ("segment",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (2 :: Int)])
     , ("segment",J.object ["front_byte" J..= (1 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (1 :: Int)]) ])
-  check "OSD nonalternating increments within a window fail" (not (passes (osdInputs [endingOne [handoff 0x4228c800,increment 1,handoff 0x4228c800,increment 1]])))
-  check "OSD end byte differing from last increment fails" (not (passes (osdInputs [osd {observationReads = [("render-osd-front",B.singleton 1)]}])))
-  check "OSD duplicate handoff before increment fails" (not (passes (osdInputs [endingOne [handoff 0x4228c800,handoff 0x4228c800,increment 1]])))
-  check "OSD increment without buffer fails" (not (passes (osdInputs [observation [increment 1]])))
-  check "OSD buffer replacement fails" (not (passes (osdInputs [osd,endingOne [handoff 0x4228d000,increment 1]])))
+  check "OSD nonalternating increments within a window fail" (not (passes (osdInputs Nothing [endingOne [handoff 0x4228c800,increment 1,handoff 0x4228c800,increment 1]])))
+  check "OSD end byte differing from last increment fails" (not (passes (osdInputs Nothing [osd {observationReads = [("render-osd-front",B.singleton 1)]}])))
+  check "OSD duplicate handoff before increment fails" (not (passes (osdInputs Nothing [endingOne [handoff 0x4228c800,handoff 0x4228c800,increment 1]])))
+  check "OSD increment without buffer fails" (not (passes (osdInputs Nothing [observation [increment 1]])))
+  check "OSD buffer replacement fails" (not (passes (osdInputs Nothing [osd,endingOne [handoff 0x4228d000,increment 1]])))
+  let ownedHandoff buffer = (handoff buffer) {hitLr = Just 0xa9ff54}
+      ownedIncrement n = (hit "frame-owned-osd-increment") {hitRegisters = (0,0,n,0)}
+      ownedOsd = observation [ownedHandoff 0x4228c800,ownedIncrement 1,handoff 0x423de000,increment 2]
+  check "render-frame OSD accepts the package's hand-off return and front store beside stock frames"
+    (osdInputs (Just publication) [ownedOsd] == osdInputs Nothing [osd])
+  check "owned publication sites without the render-frame package give no front"
+    (osdInputs Nothing [observation [ownedHandoff 0x4228c800,ownedIncrement 1]] == Right [])
+  check "render-frame OSD hand-off without its front store fails"
+    (not (passes (osdInputs (Just publication) [endingOne [ownedHandoff 0x4228c800]])))
+  check "render-frame OSD front store without its hand-off fails"
+    (not (passes (osdInputs (Just publication) [endingOne [ownedIncrement 1]])))
   let beforeDraw = (observation []) {observationPhase = "before"}
       afterDraw = osd {observationPhase = "after"}
-  earlyFront <- osdInputsReader (map readerFor [beforeDraw,afterDraw])
+  earlyFront <- osdInputsReader Nothing (map readerFor [beforeDraw,afterDraw])
   check "earlier captures use the subsequently observed stable buffer pair" (earlyFront == Right
     [ ("before",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (0 :: Int)])
     , ("after",J.object ["front_byte" J..= (0 :: Int),"buffers" J..= ([0x423de000,0x4228c800] :: [Word32]),"increments" J..= (2 :: Int)]) ])
-  bufferDrift <- osdInputsReader (map readerFor [beforeDraw,osd,endingOne [handoff 0x4228d000,increment 1]])
+  ownedFront <- osdInputsReader (Just publication) (map readerFor [beforeDraw,ownedOsd {observationPhase = "after"}])
+  check "streaming render-frame OSD accepts the owned publication pair" (ownedFront == earlyFront)
+  bufferDrift <- osdInputsReader Nothing (map readerFor [beforeDraw,osd,endingOne [handoff 0x4228d000,increment 1]])
   check "later buffer replacement refuses streaming front evidence" (not (passes bufferDrift))
   provenanceCases
   putStrLn "render pair synthetic receipts pass"

@@ -87,6 +87,8 @@ RB_RENDER_CALL rb_render_call_6499d0, 0x6499d0, 0
 RB_RENDER_CALL rb_render_call_6cfc68, 0x6cfc68, 0
 RB_RENDER_CALL rb_render_call_7243a8, 0x7243a8, 0
 RB_RENDER_CALL rb_render_call_723ce8, 0x723ce8, 0
+RB_RENDER_CALL rb_render_call_6d7324, 0x6d7324, 0
+RB_RENDER_CALL rb_render_call_6d909c, 0x6d909c, 0
 RB_RENDER_CALL rb_render_call_88bf94, 0x88bf94, 1
 RB_RENDER_CALL rb_render_call_88d620, 0x88d620, 0
 RB_RENDER_CALL rb_render_call_887280, 0x887280, 0

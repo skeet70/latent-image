@@ -3,6 +3,8 @@
 //! "Vector-engine submission"). Addresses are image-4 entries (`lz/id4.dis`).
 
 use super::resources::DataAddress;
+use super::stock_objects::VglibObject;
+use super::vglib_scene::GroupIndex;
 
 /// An OpenVG parameter or value word as the draws pass it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,10 +79,16 @@ pub trait StageDevice {
     fn copy_buffers(&mut self) -> bool;
     /// `0x6d7230`: `R+0x50 = 0x887280()`.
     fn record_error(&mut self);
-    /// `R+0x158` and `R+0x15c`.
+    /// Writes `R+0x158` and `R+0x15c`.
     fn set_visits(&mut self, visited: u32, result: u32);
+    /// Reads `R+0x158` and `R+0x15c`.
+    fn visits(&mut self) -> (u32, u32);
     /// `0x723ce8(0)`.
     fn yield_task(&mut self);
+    /// Stock's visitor `0x6d7324(&-1, object)`, which counts, draws and delays through `R+0x158`/`R+0x15c` itself.
+    fn stock_visit(&mut self, object: VglibObject);
+    /// Stock's group walk `0x6d909c(sentinel, 0x6d7324, &-1)`: copy the list, then the stock visitor per object.
+    fn stock_walk(&mut self, group: GroupIndex);
 }
 
 /// The attribute list `vglib_select_surface` copies from `0x774b10` (`I4:6d789c-6d78bc`).

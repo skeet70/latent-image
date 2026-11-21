@@ -1,6 +1,8 @@
 extern crate std;
 use super::*;
 use super::super::resources::DataRegion;
+use std::boxed::Box;
+use std::cell::RefCell;
 use std::vec;
 use std::vec::Vec;
 
@@ -95,43 +97,80 @@ impl Ram {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Event { Call(VgCall), MakeCurrent, GetInteger(VgWord), CopyBuffers, RecordError, Visits(u32, u32), Yield }
+enum Event { Call(VgCall), MakeCurrent, GetInteger(VgWord), CopyBuffers, RecordError, Visits(u32, u32), Yield, StockVisit(u32), StockWalk(u8) }
 
-struct Recorder { events: Vec<Event>, current: bool, quality: i32, copied: bool }
-impl Recorder {
-    fn new() -> Self { Self { events: Vec::new(), current: true, quality: RENDERING_QUALITY_BETTER, copied: true } }
+/// Guest RAM that other tasks change while the render yields.
+struct Live(RefCell<Ram>);
+impl SceneMemory for Live {
+    fn read<R>(&self, f: impl FnOnce(&ResourceMemory<'_>) -> R) -> R {
+        let ram = self.0.borrow();
+        let regions = ram.regions();
+        f(&ResourceMemory::new(&regions).unwrap())
+    }
+}
+
+/// Records the render's calls. `on_yield` changes `live` at the first yield; the stock visitor counts and draws each
+/// object it is given.
+struct Recorder<'r> {
+    events: Vec<Event>,
+    current: bool,
+    quality: i32,
+    copied: bool,
+    counters: (u32, u32),
+    live: Option<&'r Live>,
+    on_yield: Option<Box<dyn FnOnce(&mut Ram) + 'r>>,
+}
+impl<'r> Recorder<'r> {
+    fn new() -> Self {
+        Self { events: Vec::new(), current: true, quality: RENDERING_QUALITY_BETTER, copied: true, counters: (0, 0), live: None, on_yield: None }
+    }
+    fn changing(live: &'r Live, change: impl FnOnce(&mut Ram) + 'r) -> Self {
+        Self { live: Some(live), on_yield: Some(Box::new(change)), ..Self::new() }
+    }
     fn calls(&self) -> Vec<VgCall> {
         self.events.iter().filter_map(|event| match event { Event::Call(call) => Some(*call), _ => None }).collect()
     }
+    fn drawn(&self) -> Vec<u32> {
+        self.events.iter().filter_map(|event| match event { Event::Call(VgCall::DrawImage(handle)) => Some(*handle), _ => None }).collect()
+    }
 }
-impl StageDevice for Recorder {
+impl StageDevice for Recorder<'_> {
     fn call(&mut self, call: VgCall) { self.events.push(Event::Call(call)); }
     fn make_current(&mut self) -> bool { self.events.push(Event::MakeCurrent); self.current }
     fn get_integer(&mut self, parameter: VgWord) -> i32 { self.events.push(Event::GetInteger(parameter)); self.quality }
     fn copy_buffers(&mut self) -> bool { self.events.push(Event::CopyBuffers); self.copied }
     fn record_error(&mut self) { self.events.push(Event::RecordError); }
-    fn set_visits(&mut self, visited: u32, result: u32) { self.events.push(Event::Visits(visited, result)); }
-    fn yield_task(&mut self) { self.events.push(Event::Yield); }
+    fn set_visits(&mut self, visited: u32, result: u32) { self.counters = (visited, result); self.events.push(Event::Visits(visited, result)); }
+    fn visits(&mut self) -> (u32, u32) { self.counters }
+    fn yield_task(&mut self) {
+        self.events.push(Event::Yield);
+        if let (Some(live), Some(change)) = (self.live, self.on_yield.take()) { change(&mut *live.0.borrow_mut()); }
+    }
+    fn stock_visit(&mut self, object: VglibObject) {
+        self.events.push(Event::StockVisit(object.0.0));
+        self.counters = (self.counters.0 + 1, self.counters.1 | 1);
+    }
+    fn stock_walk(&mut self, group: GroupIndex) { self.events.push(Event::StockWalk(group.index())); }
 }
 
-fn plan(ram: &Ram) -> Result<(SceneReport, Vec<Visit>), SceneError> {
+fn check(ram: &Ram) -> Result<(), SceneError> {
     let regions = ram.regions();
     let memory = ResourceMemory::new(&regions).unwrap();
-    let scene = Scene::decode(&memory)?;
-    let mut storage = [Visit::NoResource; 16];
-    let mut buffer = PlanBuffer::new(&mut storage);
-    let report = scene.plan(&mut buffer)?;
-    Ok((report, buffer.visits().to_vec()))
+    Scene::decode(&memory)?.check()
 }
 
-fn render(ram: &Ram, device: &mut Recorder) -> RenderOutcome {
-    let (_, visits) = plan(ram).unwrap();
+fn render_floor(ram: &Ram, floor: f32, device: &mut Recorder<'_>) -> RenderOutcome {
     let regions = ram.regions();
     let memory = ResourceMemory::new(&regions).unwrap();
-    render_stage(&visits, 720, 480, 0.0, &memory, device).unwrap()
+    render_stage(720, 480, floor, &memory, &mut [VglibObject(DataAddress(0)); 16], device)
+}
+fn render(ram: &Ram, device: &mut Recorder<'_>) -> RenderOutcome { render_floor(ram, 0.0, device) }
+fn render_live(live: &Live, device: &mut Recorder<'_>) -> RenderOutcome {
+    render_stage(720, 480, 0.0, live, &mut [VglibObject(DataAddress(0)); 16], device)
 }
 
 fn object_calls(ram: &Ram) -> Vec<VgCall> {
+    check(ram).unwrap();
     let mut device = Recorder::new();
     render(ram, &mut device);
     let calls = device.calls();
@@ -139,7 +178,7 @@ fn object_calls(ram: &Ram) -> Vec<VgCall> {
     calls[2..calls.len() - 1].to_vec()
 }
 
-fn refusal(ram: &Ram) -> SceneError { plan(ram).unwrap_err() }
+fn refusal(ram: &Ram) -> SceneError { check(ram).unwrap_err() }
 fn object_refusal(object: u32, refusal: ObjectRefusal) -> SceneError { SceneError::Object { object: VglibObject(DataAddress(object)), refusal } }
 fn group(index: u8) -> GroupIndex { GroupIndex::new(index).unwrap() }
 fn seti(parameter: VgWord, value: i32) -> VgCall { VgCall::SetInteger { parameter, value } }
@@ -350,12 +389,11 @@ fn frame_errors_follow_the_stock_render() {
 
 #[test]
 fn a_positive_floor_makes_an_undrawn_frame_rendered() {
-    let ram = Ram::new();
-    let regions = ram.regions();
-    let memory = ResourceMemory::new(&regions).unwrap();
-    assert_eq!(render_stage(&[], 720, 480, 0.0, &memory, &mut Recorder::new()), Ok(RenderOutcome::Rendered(0)));
-    assert_eq!(render_stage(&[], 720, 480, 0.25, &memory, &mut Recorder::new()), Ok(RenderOutcome::Rendered(1)));
-    assert_eq!(render_stage(&[Visit::NoResource], 720, 480, 0.0, &memory, &mut Recorder::new()), Ok(RenderOutcome::Rendered(0)));
+    assert_eq!(render_floor(&Ram::new(), 0.0, &mut Recorder::new()), RenderOutcome::Rendered(0));
+    assert_eq!(render_floor(&Ram::new(), 0.25, &mut Recorder::new()), RenderOutcome::Rendered(1));
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
+    ram.put32(object + 0xc4, 0);
+    assert_eq!(render(&ram, &mut Recorder::new()), RenderOutcome::Rendered(0));
 }
 
 #[test]
@@ -400,10 +438,16 @@ fn rotation_and_colour_transform_are_refused() {
 fn hidden_objects_are_not_visits_and_resourceless_ones_draw_nothing() {
     let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put8(object + 0x47, 0);
-    assert_eq!(plan(&ram).unwrap(), (SceneReport { objects: 1, visible: 0 }, vec![]));
+    let mut device = Recorder::new();
+    render(&ram, &mut device);
+    assert!(!device.events.iter().any(|event| matches!(event, Event::Visits(1, _))));
+    assert_eq!(object_calls(&ram), vec![]);
     let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put32(object + 0xc4, 0);
-    assert_eq!(plan(&ram).unwrap(), (SceneReport { objects: 1, visible: 1 }, vec![Visit::NoResource]));
+    let mut device = Recorder::new();
+    render(&ram, &mut device);
+    assert!(device.events.contains(&Event::Visits(1, 0)));
+    assert_eq!(object_calls(&ram), vec![]);
 }
 
 #[test]
@@ -444,12 +488,94 @@ fn a_full_node_pool_cannot_copy_a_group() {
     let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     for slot in 0..NODE_COUNT { ram.put32(node(slot) + 0xc, 1); }
     assert_eq!(refusal(&ram), SceneError::NodeCapacity { free: 0, needed: 1 });
+    // Mid-frame the group goes to stock's walk, which fails the copy as stock does; empty groups need no node.
+    let mut device = Recorder::new();
+    render(&ram, &mut device);
+    assert_eq!(device.events.iter().filter(|event| matches!(event, Event::StockWalk(_))).cloned().collect::<Vec<_>>(), vec![Event::StockWalk(0)]);
+    assert_eq!(device.drawn(), vec![]);
 }
 
 #[test]
-fn a_full_plan_buffer_is_a_capacity_refusal() {
+fn a_list_longer_than_the_copy_goes_to_the_stock_walk() {
     let mut ram = Ram::new();
     let entries: Vec<(usize, u32)> = (0..17).map(|index| (index as usize + 1, ram.image(index, place(0.0, 0.0, (8.0, 4.0))))).collect();
     ram.group(0, &entries);
-    assert_eq!(refusal(&ram), SceneError::Capacity);
+    let other = ram.image(20, place(0.0, 0.0, (8.0, 4.0)));
+    ram.group(1, &[(30, other)]);
+    let mut device = Recorder::new();
+    render(&ram, &mut device);
+    assert!(device.events.contains(&Event::StockWalk(0)));
+    assert_eq!(device.drawn(), vec![0x2200_0014]);
+}
+
+/// Five images in group 0; the render yields after the first, fourth and fifth visit.
+fn five_images() -> (Ram, Vec<u32>) {
+    let mut ram = Ram::new();
+    let objects: Vec<u32> = (0..5).map(|index| ram.image(index, place(0.0, 0.0, (8.0, 4.0)))).collect();
+    ram.group(0, &objects.iter().enumerate().map(|(index, object)| (index + 1, *object)).collect::<Vec<_>>());
+    (ram, objects)
+}
+
+#[test]
+fn visibility_is_read_when_each_object_is_visited() {
+    let (ram, objects) = five_images();
+    let live = Live(RefCell::new(ram));
+    let (hide, show) = (objects[3], objects[1]);
+    live.0.borrow_mut().put8(show + 0x47, 0);
+    let mut device = Recorder::changing(&live, move |ram: &mut Ram| { ram.put8(hide + 0x47, 0); ram.put8(show + 0x47, 1); });
+    assert_eq!(render_live(&live, &mut device), RenderOutcome::Rendered(1));
+    assert_eq!(device.drawn(), vec![0x2200_0000, 0x2200_0001, 0x2200_0002, 0x2200_0004]);
+}
+
+#[test]
+fn an_object_refused_mid_frame_is_drawn_by_the_stock_visitor() {
+    let (ram, objects) = five_images();
+    let live = Live(RefCell::new(ram));
+    let rotated = objects[1];
+    let mut device = Recorder::changing(&live, move |ram: &mut Ram| ram.putf(rotated + 0x1c, 90.0));
+    render_live(&live, &mut device);
+    let walk: Vec<Event> = device.events.iter().filter(|event| matches!(event, Event::StockVisit(_) | Event::Visits(..) | Event::Call(VgCall::DrawImage(_)))).cloned().collect();
+    let draw = |index: u32| Event::Call(VgCall::DrawImage(0x2200_0000 | index));
+    assert_eq!(walk, vec![
+        Event::Visits(0, 0), draw(0), Event::Visits(1, 1),
+        Event::StockVisit(rotated),
+        draw(2), Event::Visits(3, 1), draw(3), Event::Visits(4, 1), draw(4), Event::Visits(5, 1),
+    ]);
+}
+
+#[test]
+fn each_group_list_is_copied_when_the_walk_reaches_it() {
+    let (mut ram, objects) = five_images();
+    let late = ram.image(9, place(0.0, 0.0, (8.0, 4.0)));
+    let live = Live(RefCell::new(ram));
+    // After the first visit: drop the last object from group 0, whose copy still holds it, and list one in group 7,
+    // which the walk has already passed.
+    let kept = objects[..4].to_vec();
+    let mut device = Recorder::changing(&live, move |ram: &mut Ram| {
+        ram.group(0, &kept.iter().enumerate().map(|(index, object)| (index + 1, *object)).collect::<Vec<_>>());
+        ram.group(7, &[(40, late)]);
+    });
+    render_live(&live, &mut device);
+    assert_eq!(device.drawn(), vec![0x2200_0000, 0x2200_0001, 0x2200_0002, 0x2200_0003, 0x2200_0004]);
+
+    let (mut ram, objects) = five_images();
+    let late = ram.image(9, place(0.0, 0.0, (8.0, 4.0)));
+    let first = ram.image(10, place(0.0, 0.0, (8.0, 4.0)));
+    ram.group(23, &[(50, first)]);
+    ram.group(0, &[(1, objects[0])]);
+    let live = Live(RefCell::new(ram));
+    let mut device = Recorder::changing(&live, move |ram: &mut Ram| ram.group(7, &[(40, late)]));
+    render_live(&live, &mut device);
+    assert_eq!(device.drawn(), vec![0x2200_000a, 0x2200_0009, 0x2200_0000]);
+}
+
+#[test]
+fn a_null_object_ends_only_its_group() {
+    let mut ram = Ram::new();
+    let objects: Vec<u32> = (0..3).map(|index| ram.image(index, place(0.0, 0.0, (8.0, 4.0)))).collect();
+    ram.group(5, &[(1, objects[0]), (2, 0), (3, objects[1])]);
+    ram.group(4, &[(4, objects[2])]);
+    let mut device = Recorder::new();
+    render(&ram, &mut device);
+    assert_eq!(device.drawn(), vec![0x2200_0000, 0x2200_0002]);
 }

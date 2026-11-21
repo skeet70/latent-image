@@ -1,7 +1,7 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | menu-engine-pair-check --tables MENU-TABLES.json --package-plan BANK-PLAN.json --stock RECEIPT --owned RECEIPT
+-- | menu-engine-pair-check [--render [--render-frame-record RECORD] ...] --tables MENU-TABLES.json --package-plan BANK-PLAN.json --stock RECEIPT --owned RECEIPT
 --
 -- Checks one owned menu engine guest pair against the menu tables composed with the installed
 -- package's rows: each role's e2e observations by "Replacement.ModalRuntime.MenuEnginePair", then
@@ -98,7 +98,7 @@ runRetained config write tree stockTables document stockPath ownedPath = do
   forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(_,path,segments) -> do
     value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
     either fail pure (J.parseEither (validateRetainedRenderDeclarations config) value)
-    when write (writeRenderReceipt path segments)
+    when write (writeRenderReceipt Nothing path segments)
   let renderFailure problem = hPutStrLn stderr ("render: " ++ problem) >> pure False
   unless (map readerPhase stock == map readerPhase owned) (fail "render segment phases differ")
   coverage <- checkRenderCoverageReader config stock owned
@@ -188,7 +188,9 @@ countDrawers directory = do
 
 runCheck :: [String] -> IO ()
 runCheck arguments = do
-  (render, writeReceipt, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
+  (render, writeReceipt, frameRecord, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
+  publication <- forM frameRecord $ \path ->
+    B.readFile path >>= either fail pure . (\bytes -> J.eitherDecodeStrict' bytes >>= J.parseEither parseFramePublication)
   stockTables <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
   plan <- B.readFile planPath >>= either fail pure . J.eitherDecodeStrict'
   overlay <- either (fail . ("package plan: " ++)) pure (parsePackagePlan plan)
@@ -232,6 +234,7 @@ runCheck arguments = do
       tagged <- either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither (J.withObject "manifest" (J..: "bank_variant")))
       selected <- either fail pure (parseBankVariantTag tagged)
       unless (selected `elem` [modalRenderBankVariant, modalRenderFrameBankVariant]) (fail "render manifest is neither the render nor the render-frame variant")
+      unless ((selected == modalRenderFrameBankVariant) == (publication /= Nothing)) (fail "--render-frame-record names the render-frame variant's record, and only that variant's")
       pure selected
   let size = runtimeAllocationSizeFor variant
   valueLifecycle <- checkValue variant owned
@@ -256,10 +259,10 @@ runCheck arguments = do
     Nothing -> pure True
     Just (RetainedRender _) -> pure True
     Just (OwnedRender config) -> do
-      forM_ [(StockRole,stockPath,stock),(OwnedRole,ownedPath,owned)] $ \(role,path,segments) -> do
+      forM_ [(StockRole,stockPath,stock,Nothing),(OwnedRole,ownedPath,owned,publication)] $ \(role,path,segments,frame) -> do
         value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
-        either fail pure (J.parseEither (validateRenderDeclarations config role) value)
-        writeRenderReceipt path segments
+        either fail pure (J.parseEither (validateRenderDeclarations config role frame) value)
+        writeRenderReceipt frame path segments
       renderBounds <- either fail pure (R.checkRenderStack elf (\address -> base <= address && address - base < size))
       forM_ [stockPath, ownedPath] checkLifetime
       checked <- (if map readerPhase stock /= map readerPhase owned
@@ -297,29 +300,31 @@ runCheck arguments = do
           pure True
   unless (and (valueLifecycle : rendered : paired : results ++ stacks)) exitFailure
 
-options :: [String] -> Either String (Maybe RenderSelection,Bool,FilePath,FilePath,FilePath,FilePath)
-options = go Nothing False
+options :: [String] -> Either String (Maybe RenderSelection,Bool,Maybe FilePath,FilePath,FilePath,FilePath,FilePath)
+options = go Nothing False Nothing
  where
   defaults = RenderConfig [0..18] Nothing 0xa4ce00 DrawsRequired
-  go selection _write ("--write-render-receipt":rest) = go selection True rest
-  go Nothing write ("--render":rest) = go (Just (OwnedRender defaults)) write rest
-  go Nothing write ("--retained-render":rest) = go (Just (RetainedRender (defaults {renderCoverage = RetainedObservation}))) write rest
-  go (Just selection) write ("--render-draw-free":rest) = go (Just (mapSelection (\config -> config {renderCoverage = DeclaredDrawFree}) selection)) write rest
-  go (Just selection) write ("--render-banks":banks:rest) = do
+  go selection _write frame ("--write-render-receipt":rest) = go selection True frame rest
+  go Nothing write frame ("--render":rest) = go (Just (OwnedRender defaults)) write frame rest
+  go Nothing write frame ("--retained-render":rest) = go (Just (RetainedRender (defaults {renderCoverage = RetainedObservation}))) write frame rest
+  go (Just selection@(OwnedRender _)) write Nothing ("--render-frame-record":record:rest) = go (Just selection) write (Just record) rest
+  go (Just selection) write frame ("--render-draw-free":rest) = go (Just (mapSelection (\config -> config {renderCoverage = DeclaredDrawFree}) selection)) write frame rest
+  go (Just selection) write frame ("--render-banks":banks:rest) = do
     parsed <- J.eitherDecodeStrict' (B.pack (map (fromIntegral . fromEnum) banks))
-    go (Just (mapSelection (\config -> config {renderBanks = parsed}) selection)) write rest
-  go (Just selection) write ("--render-clock-resource":resource:rest) = case stripPrefix "0x" resource of
-    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderClock = Just (ResourceId value)}) selection)) write rest
+    go (Just (mapSelection (\config -> config {renderBanks = parsed}) selection)) write frame rest
+  go (Just selection) write frame ("--render-clock-resource":resource:rest) = case stripPrefix "0x" resource of
+    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderClock = Just (ResourceId value)}) selection)) write frame rest
     _ -> Left "render clock resource requires a hex word"
-  go (Just selection) write ("--render-stack-base":address:rest) = case stripPrefix "0x" address of
-    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderStackBase = value}) selection)) write rest
+  go (Just selection) write frame ("--render-stack-base":address:rest) = case stripPrefix "0x" address of
+    Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderStackBase = value}) selection)) write frame rest
     _ -> Left "render stack base requires a hex word"
-  go selection write ["--tables",tables,"--package-plan",plan,"--stock",stock,"--owned",owned] = Right (selection,write,tables,plan,stock,owned)
-  go _ _ _ = Left "usage: menu-engine-pair-check [--render|--retained-render [--write-render-receipt] [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
+  go selection write frame ["--tables",tables,"--package-plan",plan,"--stock",stock,"--owned",owned] = Right (selection,write,frame,tables,plan,stock,owned)
+  go _ _ _ _ = Left "usage: menu-engine-pair-check [--render [--render-frame-record RECORD]|--retained-render [--write-render-receipt] [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
 
-writeRenderReceipt :: FilePath -> [ObservationReader] -> IO ()
-writeRenderReceipt directory segments = do
-  fronts <- either fail pure =<< osdInputsReader segments
+-- | `publication` is the role's render-frame package, if it installed one.
+writeRenderReceipt :: Maybe FramePublication -> FilePath -> [ObservationReader] -> IO ()
+writeRenderReceipt publication directory segments = do
+  fronts <- either fail pure =<< osdInputsReader publication segments
   labels <- fmap concat $ forM (zip [0 :: Int ..] segments) $ \(index,segment) -> do
     bytes <- B.readFile (directory </> ("e2e-observation-" ++ show index ++ ".json"))
     label <- either fail pure (J.eitherDecodeStrict' bytes >>= J.parseEither (J.withObject "observation" (\fields -> fields J..:? "capture" :: J.Parser (Maybe String))))
