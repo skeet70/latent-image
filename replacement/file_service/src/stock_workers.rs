@@ -20,7 +20,7 @@ extern "C" {
     fn file_service_cache_release(index: u32);
     fn file_service_parse_path(parsed: *mut u32, path: u32) -> u32;
     fn file_service_directory_slot(parsed: u32) -> u32;
-    fn file_service_split_path(path: u32, directory: *mut u8, name: *mut u8, word: *mut u32, prefix: *mut u8, flag: *mut u32) -> u32;
+    pub(crate) fn file_service_split_path(path: u32, directory: *mut u8, name: *mut u8, word: *mut u32, prefix: *mut u8, flag: *mut u32) -> u32;
     fn file_service_directory_number(directory: *const u8, word: u32) -> u32;
     fn file_service_make_directory(directory: u32, record: u32);
     fn file_service_fs_open(name: *const u8, mode: u32, index: u32, word: u32) -> u32;

@@ -647,4 +647,5 @@ entry_veneer! {
     "volume_format_worker" => "xm1_file_service_volume_format_worker",
     "file_counts_worker" => "xm1_file_service_file_counts_worker",
     "file_position_worker" => "xm1_file_service_file_position_worker",
+    "select_worker" => "xm1_file_service_select_worker",
 }

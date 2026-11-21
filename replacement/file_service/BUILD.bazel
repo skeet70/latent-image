@@ -6,22 +6,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["imports.ld"])
 
-_SOURCES = [
-    "src/completion.rs",
-    "src/handles.rs",
-    "src/requests.rs",
-    "src/routing.rs",
-    "src/search.rs",
-    "src/stock.rs",
-    "src/stock_requests.rs",
-    "src/stock_search.rs",
-    "src/stock_workers.rs",
-    "src/workers.rs",
-    "src/stock_volume.rs",
-    "src/volume.rs",
-    "src/counts.rs",
-    "src/stock_counts.rs",
-]
+_SOURCES = glob(["src/*.rs"], exclude = ["src/lib.rs", "src/*tests.rs"])
 
 [xm1_rust_rlib(
     name = "arm" + suffix,
@@ -53,6 +38,7 @@ haskell_library(
         "Replacement/FileService/Workers.hs",
         "Replacement/FileService/Volume.hs",
         "Replacement/FileService/Counts.hs",
+        "Replacement/FileService/Selection.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",

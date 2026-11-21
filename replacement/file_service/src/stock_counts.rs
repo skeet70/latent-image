@@ -25,10 +25,10 @@ extern "C" {
     fn file_service_extension_byte4(key: u32) -> u32;
     fn file_service_extension_byte5(key: u32) -> u32;
     fn file_service_directory_number(directory: *const u8, word: u32) -> u32;
-    fn file_service_reserved_cluster(page: u32, cluster: *mut u32) -> u32;
+    fn file_service_page_cluster(page: u32, cluster: *mut u32) -> u32;
     fn file_service_cluster_path(cluster: u32, path: *mut u8, marker: u32, bare: u32) -> u32;
     fn file_service_text_difference(first: *const u8, second: *const u8) -> u32;
-    fn file_service_directory_position(lookup: *mut StockLookup, position: *mut u32) -> u32;
+    fn file_service_catalog_locate(lookup: *mut StockLookup, position: *mut u32) -> u32;
     fn file_service_file_number(pattern: *const u8) -> u32;
 }
 
@@ -139,7 +139,7 @@ impl Port for StockCounts {
     }
 
     fn reserved_cluster(&mut self, page: Page, frame: &mut Frame) -> RawStatus {
-        RawStatus(unsafe { file_service_reserved_cluster(page.0, &mut frame.cluster.0) })
+        RawStatus(unsafe { file_service_page_cluster(page.0, &mut frame.cluster.0) })
     }
 
     fn cluster_path(&mut self, frame: &mut Frame) -> u32 {
@@ -161,7 +161,7 @@ impl Port for StockCounts {
             page: lookup.page.0,
             pattern: frame.pattern.as_ptr() as u32,
         };
-        RawStatus(unsafe { file_service_directory_position(&mut stock, &mut frame.position) })
+        RawStatus(unsafe { file_service_catalog_locate(&mut stock, &mut frame.position) })
     }
 
     fn file_number(&mut self, frame: &Frame) -> FileNumber {

@@ -30,6 +30,10 @@ FILE_SERVICE_CONTROLS = [
     "counts_extension_unchecked",
     "counts_flags_short",
     "position_without_directories",
+    # selection
+    "selection_odd_uncounted",
+    "selection_tag_untruncated",
+    "selection_selected_total_skipped",
 ]
 
 def file_service_suffixes():

@@ -18,8 +18,9 @@ import qualified Replacement.FileService.Counts as Counts
 import qualified Replacement.FileService.Handles as Handles
 import qualified Replacement.FileService.Requests as Requests
 import qualified Replacement.FileService.Search as Search
-import qualified Replacement.FileService.Workers as Workers
+import qualified Replacement.FileService.Selection as Selection
 import qualified Replacement.FileService.Volume as Volume
+import qualified Replacement.FileService.Workers as Workers
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -92,6 +93,7 @@ increments =
     , Increment Counts.code Counts.scenarios
         [("xm1_file_service_entry_file_counts_worker", 0x718a8c), ("xm1_file_service_entry_file_position_worker", 0x718de4)]
     )
+  , ("selection", Increment Selection.code Selection.scenarios [("xm1_file_service_entry_select_worker", 0x719098)])
   ]
 
 loadElf :: [(String, Word)] -> FilePath -> IO (E.Elf, String)
