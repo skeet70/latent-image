@@ -2,15 +2,15 @@
 //! `frame.S` reproduces the stock prologue and the lock `0x6d9478` before calling `rb_render_frame_apply`, and resumes
 //! stock at `0x6d7930` with that frame and lock when it returns `Fallback`. Every refusal happens before the first
 //! stock call after the lock, so a fallback leaves stock state as the stock step finds it at `0x6d7930`. On `Owned`,
-//! `frame.S` calls `rb_render_frame_commit`, the `0xfefe` wait and `rb_render_frame_complete`.
+//! `frame.S` calls `rb_render_frame_commit`, which submits the frame's OpenVG calls to the retained OpenVG client
+//! (`render_commands::vglib_scene::render_stage`); a nonzero commit result is the step's return value, otherwise the
+//! `0xfefe` wait and `rb_render_frame_complete` follow.
 
-use crate::render_commands::commands::DrawCommand;
-use crate::render_commands::producer::CommandBuffer;
 use crate::render_commands::publisher::{BufferIndex, BufferState, ContextId, DrainState, FrameId, Publisher, PublisherError, SubmissionError};
 use crate::render_commands::resources::{DataAddress, DataRegion, ResourceMemory};
 use crate::render_commands::scanout_latch::{ScanoutAddress, ScanoutLatch};
-use crate::render_commands::stock_objects::{ObjectPool, LISTS_BASE, LIST_BYTES, POOL_BASE, POOL_BYTES};
-use crate::render_commands::vglib_scene::{render_osd, OsdWorkspace, Scene, SceneError};
+use crate::render_commands::vg_submission::{Matrix, StageDevice, VgCall, VgWord, SURFACE_ATTRIBUTES};
+use crate::render_commands::vglib_scene::{render_stage, PlanBuffer, RenderOutcome, Scene, SceneError, Visit};
 use crate::render_commands::SurfaceId;
 use core::ptr::{read_volatile, write_volatile};
 
@@ -28,6 +28,11 @@ const FRAME_CALLBACKS: u32 = RENDER_STATE + 0x118;
 const CALLBACK_VECTOR: u32 = RENDER_STATE + 0x130;
 /// Float `0x6d724c` compares with zero when no draw returned nonzero (`I4:6d72ec-6d730c`).
 const RESULT_FLOOR: u32 = RENDER_STATE + 0x154;
+/// EGL display and context words `vglib_select_surface` passes (`I4:6d78c8-6d78cc`).
+const EGL_DISPLAY: u32 = RENDER_STATE + 0x84;
+const EGL_CONTEXT: u32 = RENDER_STATE + 0x88;
+/// `0x6d7230` stores `0x887280()` here (`I4:6d7238-6d7244`).
+const EGL_ERROR: u32 = RENDER_STATE + 0x50;
 const VISITED: u32 = RENDER_STATE + 0x158;
 const RENDER_RESULT: u32 = RENDER_STATE + 0x15c;
 const FRONT: u32 = RENDER_STATE + 0x160;
@@ -55,14 +60,14 @@ static mut ONE_SHOT_HANDLE: u32 = 0;
 const RAM_LOW: (u32, usize) = (0x0000_1000, 0x0400_0000 - 0x1000);
 const RAM_ALIAS: (u32, usize) = (0x4000_0000, 0x0400_0000);
 
-const COMMAND_CAPACITY: usize = 96;
+const VISIT_CAPACITY: usize = 96;
 /// Bytes of the frame statics in the bank engine region, excluding code.
-const FRAME_STATIC_BYTES: usize = COMMAND_CAPACITY * core::mem::size_of::<DrawCommand<'static>>()
-    + core::mem::size_of::<OsdWorkspace>()
-    + core::mem::size_of::<ObjectPool<'static>>()
+const FRAME_STATIC_BYTES: usize = VISIT_CAPACITY * core::mem::size_of::<Visit>()
     + core::mem::size_of::<FrameState>()
     + core::mem::size_of::<FrameRecord>();
 const _: () = assert!(FRAME_STATIC_BYTES <= 0x10000, "frame statics exceed their engine-region budget");
+/// The frame step's return for a refused surface selection (`I4:6d7ac0-6d7ac8`, `6d7ddc-6d7dfc`).
+const SURFACE_REFUSED: i32 = -255;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -83,13 +88,13 @@ enum FallbackReason {
     Geometry = 4,
     /// The display addresses differ from the publisher's buffer tokens.
     BufferMoved = 5,
-    ObjectPool = 6,
-    /// The scene did not decode or lower completely.
+    /// The scene did not decode or plan completely.
     Scene = 7,
-    CommandCapacity = 8,
+    VisitCapacity = 8,
     /// The back buffer is not `Free` in the publisher.
     PublisherBusy = 9,
-    Raster = 10,
+    /// Counted when `vglib_select_surface` fails after the frame was owned; slot 6 is unused.
+    SurfaceRefused = 10,
     Publisher = 11,
 }
 const FALLBACK_REASONS: usize = 12;
@@ -158,9 +163,7 @@ struct FrameState {
 }
 
 static mut STATE: FrameState = FrameState { publisher: None, buffers: None, owned_front: None, stock_since: false, next_context: 1, prepared: None };
-static mut COMMANDS: [DrawCommand<'static>; COMMAND_CAPACITY] = [DrawCommand::ResetClip; COMMAND_CAPACITY];
-static mut OSD: OsdWorkspace = OsdWorkspace::new();
-static mut POOL: ObjectPool<'static> = ObjectPool::empty();
+static mut VISITS: [Visit; VISIT_CAPACITY] = [Visit::NoResource; VISIT_CAPACITY];
 static mut REGIONS: [DataRegion<'static>; 2] = [DataRegion { base: DataAddress(0), bytes: &[] }; 2];
 /// Accessed only through `with_latch`.
 static mut LATCH: ScanoutLatch = ScanoutLatch::new();
@@ -170,6 +173,26 @@ unsafe extern "C" {
     fn rb_render_call_6499d0(group: u32, index: u32, value: u32) -> i32;
     fn rb_render_call_6d76ec(geometry: u32, address: u32, mode: u32, result: u32);
     fn rb_render_call_6cfc68(vector: u32);
+    fn rb_render_call_723ce8(ticks: u32) -> i32;
+    fn rb_render_call_88bf94(display: u32, draw: u32, read: u32, context: u32, attributes: *const u32) -> u32;
+    fn rb_render_call_88d620(display: u32, surface: u32, object: u32) -> u32;
+    fn rb_render_call_887280() -> u32;
+    fn rb_render_call_858e60(parameter: u32) -> i32;
+    fn rb_render_call_858c04(parameter: u32, value: i32);
+    fn rb_render_call_858b78(parameter: u32, value: f32);
+    fn rb_render_call_858c90(parameter: u32, count: i32, values: u32);
+    fn rb_render_call_858d24(parameter: u32, count: i32, values: *const i32);
+    fn rb_render_call_85a1b0(x: i32, y: i32, width: i32, height: i32);
+    fn rb_render_call_858748();
+    fn rb_render_call_8587c4(matrix: u32);
+    fn rb_render_call_8588cc(matrix: *const f32);
+    fn rb_render_call_858950(x: f32, y: f32);
+    fn rb_render_call_858af4(degrees: f32);
+    fn rb_render_call_8589dc(x: f32, y: f32);
+    fn rb_render_call_85afbc(paint: u32, modes: u32);
+    fn rb_render_call_85ab88(path: u32, modes: u32);
+    fn rb_render_call_85b930(image: u32);
+    fn rb_render_call_8586d8();
     fn xm1_kernel_critical_enter() -> u32;
     fn xm1_kernel_critical_exit(saved: u32);
     /// Called directly, without a trampoline frame, from the interrupt-context bridge and delivery.
@@ -205,46 +228,83 @@ fn advanced_front(front: u8) -> u8 {
     if next > 1 { 0 } else { next }
 }
 
-/// A begun frame whose commands occupy `COMMANDS[..commands]`.
-struct Decided {
-    frame: FrameId,
-    buffer: ScanoutAddress,
-    commands: usize,
-    visible: u32,
-    render_result: u32,
-}
-
+/// A begun frame whose visits occupy `VISITS[..visits]`.
 struct Prepared {
     frame: FrameId,
+    back: BufferIndex,
+    address: u32,
     buffer: ScanoutAddress,
-    visible: u32,
-    render_result: u32,
+    visits: usize,
+}
+
+/// The retained OpenVG client and VGLIB state of the stage-0 surface `S(0,b)` and image object `O(0,b)`.
+struct StockStage { surface: u32, object: u32 }
+impl StageDevice for StockStage {
+    fn call(&mut self, call: VgCall) {
+        unsafe {
+            match call {
+                VgCall::SetInteger { parameter, value } => rb_render_call_858c04(parameter.0, value),
+                VgCall::SetFloat { parameter, value } => rb_render_call_858b78(parameter.0, value),
+                VgCall::SetVector { parameter, count, values } => rb_render_call_858c90(parameter.0, count, values.0),
+                VgCall::SetIntegers { parameter, values } => rb_render_call_858d24(parameter.0, 4, values.as_ptr()),
+                VgCall::Clear { x, y, width, height } => rb_render_call_85a1b0(x, y, width, height),
+                VgCall::LoadIdentity => rb_render_call_858748(),
+                VgCall::LoadMatrix(matrix) => rb_render_call_8587c4(matrix.0),
+                VgCall::MultiplyMatrix(Matrix::Local(values)) => rb_render_call_8588cc(values.as_ptr()),
+                VgCall::MultiplyMatrix(Matrix::Guest(matrix)) => rb_render_call_8588cc(matrix.0 as *const f32),
+                VgCall::Translate { x, y } => rb_render_call_858950(x, y),
+                VgCall::Rotate(degrees) => rb_render_call_858af4(degrees),
+                VgCall::Scale { x, y } => rb_render_call_8589dc(x, y),
+                VgCall::SetPaint { paint, modes } => rb_render_call_85afbc(paint, modes),
+                VgCall::DrawPath { path, modes } => rb_render_call_85ab88(path, modes),
+                VgCall::DrawImage(image) => rb_render_call_85b930(image),
+                VgCall::Finish => rb_render_call_8586d8(),
+            }
+        }
+    }
+    fn make_current(&mut self) -> bool {
+        let attributes = SURFACE_ATTRIBUTES;
+        unsafe { rb_render_call_88bf94(word(EGL_DISPLAY), self.surface, self.surface, word(EGL_CONTEXT), attributes.as_ptr()) != 0 }
+    }
+    fn get_integer(&mut self, parameter: VgWord) -> i32 { unsafe { rb_render_call_858e60(parameter.0) } }
+    fn copy_buffers(&mut self) -> bool { unsafe { rb_render_call_88d620(word(EGL_DISPLAY), self.surface, self.object) != 0 } }
+    fn record_error(&mut self) { set_word(EGL_ERROR, unsafe { rb_render_call_887280() }); }
+    fn set_visits(&mut self, visited: u32, result: u32) {
+        set_word(RENDER_RESULT, result);
+        set_word(VISITED, visited);
+    }
+    fn yield_task(&mut self) { unsafe { rb_render_call_723ce8(0); } }
 }
 
 /// Owned work before the first stock call after the lock; `Owned` leaves the frame for `rb_render_frame_commit`.
 #[no_mangle]
 pub unsafe extern "C" fn rb_render_frame_apply() -> FrameOutcome {
     let state = unsafe { &mut *(&raw mut STATE) };
-    match decide(state).and_then(|decided| rasterize(state, decided)) {
+    match decide(state) {
         Ok(prepared) => {
             state.prepared = Some(prepared);
             FrameOutcome::Owned
         }
         Err(reason) => {
             state.stock_since = true;
-            let record = unsafe { &mut *(&raw mut rb_render_frame_record) };
-            record.fallbacks[reason as usize] = record.fallbacks[reason as usize].wrapping_add(1);
+            count_fallback(reason);
             publish_record(state);
             FrameOutcome::Fallback
         }
     }
 }
 
+fn count_fallback(reason: FallbackReason) {
+    let record = unsafe { &mut *(&raw mut rb_render_frame_record) };
+    record.fallbacks[reason as usize] = record.fallbacks[reason as usize].wrapping_add(1);
+}
+
 /// Called by `frame.S` after `Owned`, from the 48-byte stock frame, so the stock services run above that frame only.
+/// Returns 0, or the frame step's return value when it ends before the wait.
 #[no_mangle]
-pub unsafe extern "C" fn rb_render_frame_commit() {
+pub unsafe extern "C" fn rb_render_frame_commit() -> i32 {
     let state = unsafe { &mut *(&raw mut STATE) };
-    if let Some(prepared) = state.prepared.take() { commit(state, prepared); }
+    match state.prepared.take() { Some(prepared) => commit(state, prepared), None => 0 }
 }
 
 /// Called by `frame.S` with the `0xfefe` wait's result: the stock sequence after the wait (`I4:6d7da4-6d7df0`).
@@ -288,9 +348,8 @@ pub unsafe extern "C" fn rb_render_frame_scanout_delivery() {
     unsafe { rb_render_stock_6d7f30(); }
 }
 
-/// Separate frames keep the scene decode and the raster off each other's stack.
 #[inline(never)]
-fn decide(state: &mut FrameState) -> Result<Decided, FallbackReason> {
+fn decide(state: &mut FrameState) -> Result<Prepared, FallbackReason> {
     let current = word(CURRENT_MODE);
     if word(REQUESTED_MODE) != current { return Err(FallbackReason::ModeTransition); }
     if matches!(current, 8 | 10) { return Err(FallbackReason::DualOutput); }
@@ -303,24 +362,14 @@ fn decide(state: &mut FrameState) -> Result<Decided, FallbackReason> {
     if addresses.0 != [word(GEOMETRY + 4), word(GEOMETRY + 8)] || !disjoint(addresses) { return Err(FallbackReason::Geometry); }
     if state.buffers.is_some_and(|held| held != addresses) { return Err(FallbackReason::BufferMoved); }
 
-    let pool = unsafe { &mut *(&raw mut POOL) };
-    let banks = unsafe { core::slice::from_raw_parts(POOL_BASE.0 as *const u8, POOL_BYTES) };
-    let lists = unsafe { core::slice::from_raw_parts(LISTS_BASE.0 as *const u8, LIST_BYTES) };
-    pool.reparse(banks, lists).map_err(|_| FallbackReason::ObjectPool)?;
-    let regions = unsafe { &mut *(&raw mut REGIONS) };
-    *regions = [
-        DataRegion { base: DataAddress(RAM_LOW.0), bytes: unsafe { core::slice::from_raw_parts(RAM_LOW.0 as *const u8, RAM_LOW.1) } },
-        DataRegion { base: DataAddress(RAM_ALIAS.0), bytes: unsafe { core::slice::from_raw_parts(RAM_ALIAS.0 as *const u8, RAM_ALIAS.1) } },
-    ];
-    let regions: &'static [DataRegion<'static>; 2] = regions;
-    let memory = ResourceMemory::new(regions).map_err(|_| FallbackReason::Scene)?;
-    let pool: &'static ObjectPool<'static> = pool;
-    let scene = Scene::decode(&memory, pool).map_err(|_| FallbackReason::Scene)?;
-    let mut commands = CommandBuffer::new(unsafe { &mut *(&raw mut COMMANDS) });
-    let report = scene.lower(&mut commands).map_err(|error| match error {
-        SceneError::Capacity => FallbackReason::CommandCapacity,
+    let memory = guest_memory().ok_or(FallbackReason::Scene)?;
+    let scene = Scene::decode(&memory).map_err(|_| FallbackReason::Scene)?;
+    let mut plan = PlanBuffer::new(unsafe { &mut *(&raw mut VISITS) });
+    scene.plan(&mut plan).map_err(|error| match error {
+        SceneError::Capacity => FallbackReason::VisitCapacity,
         _ => FallbackReason::Scene,
     })?;
+    let visits = plan.visits().len();
 
     apply_latch(state);
     let front = unsafe { read_volatile(FRONT as *const u8) };
@@ -331,27 +380,21 @@ fn decide(state: &mut FrameState) -> Result<Decided, FallbackReason> {
         PublisherError::Busy => FallbackReason::PublisherBusy,
         _ => FallbackReason::Publisher,
     })?;
-    let buffer = ScanoutAddress::new(addresses.0[match back { BufferIndex::First => 0, BufferIndex::Second => 1 }]);
-    let reached = report.drawn + report.clipped + report.collapsed;
-    let floor = f32::from_bits(word(RESULT_FLOOR));
-    let render_result = if reached > 0 || floor > 0.0 { 1 } else { 0 };
-    Ok(Decided { frame, buffer, commands: commands.draw_list().commands().len(), visible: report.visible as u32, render_result })
+    let address = addresses.0[slot(back)];
+    Ok(Prepared { frame, back, address, buffer: ScanoutAddress::new(address), visits })
 }
 
-#[inline(never)]
-fn rasterize(state: &mut FrameState, decided: Decided) -> Result<Prepared, FallbackReason> {
-    let Decided { frame, buffer, commands, visible, render_result } = decided;
-    let publisher = state.publisher.as_mut().ok_or(FallbackReason::Publisher)?;
-    let all: &'static [DrawCommand<'static>; COMMAND_CAPACITY] = unsafe { &*(&raw const COMMANDS) };
-    let commands = &all[..commands];
-    let drawn = publisher.drawing_pixels(frame).map_err(|_| ()).and_then(|pixels| {
-        render_osd(commands, pixels, unsafe { &mut *(&raw mut OSD) }).map_err(|_| ())
-    });
-    if drawn.is_err() || publisher.publish(frame).is_err() || publisher.queued() != Some(frame) {
-        let _ = publisher.cancel(frame);
-        return Err(if drawn.is_err() { FallbackReason::Raster } else { FallbackReason::Publisher });
-    }
-    Ok(Prepared { frame, buffer, visible, render_result })
+fn slot(index: BufferIndex) -> usize { match index { BufferIndex::First => 0, BufferIndex::Second => 1 } }
+
+/// Guest RAM and its alias, from the static regions.
+fn guest_memory() -> Option<ResourceMemory<'static>> {
+    let regions = unsafe { &mut *(&raw mut REGIONS) };
+    *regions = [
+        DataRegion { base: DataAddress(RAM_LOW.0), bytes: unsafe { core::slice::from_raw_parts(RAM_LOW.0 as *const u8, RAM_LOW.1) } },
+        DataRegion { base: DataAddress(RAM_ALIAS.0), bytes: unsafe { core::slice::from_raw_parts(RAM_ALIAS.0 as *const u8, RAM_ALIAS.1) } },
+    ];
+    let regions: &'static [DataRegion<'static>; 2] = regions;
+    ResourceMemory::new(regions).ok()
 }
 
 fn disjoint(addresses: BufferAddresses) -> bool {
@@ -396,19 +439,39 @@ fn publisher(state: &mut FrameState, addresses: BufferAddresses) -> Result<&mut 
     state.publisher.as_mut().ok_or(FallbackReason::Publisher)
 }
 
-/// The stock stage-0 sequence from the lock to the wait (`I4:6d7938-6d7da0`) without surface selection and the
-/// OpenVG render, with the scanout bridge queued in place of `0x6d80f0`.
+/// The stock stage-0 sequence from the lock to the wait (`I4:6d7938-6d7da0`): option, surface selection and render
+/// of the planned visits, hand-off as the publisher's submit transport, front advance, option restore, and the
+/// scanout bridge queued in place of `0x6d80f0`.
 #[inline(never)]
-fn commit(state: &mut FrameState, prepared: Prepared) {
-    let Prepared { frame, buffer, visible, render_result } = prepared;
+fn commit(state: &mut FrameState, prepared: Prepared) -> i32 {
+    let Prepared { frame, back, address, buffer, visits } = prepared;
     unsafe { rb_render_call_6499d0(OPTION_GROUP, OPTION_INDEX, OPTION_RENDER); }
-    set_word(VISITED, visible);
-    set_word(RENDER_RESULT, render_result);
-    if let Some(publisher) = state.publisher.as_mut() {
-        let _ = publisher.submit(frame, |_, _, pixels| {
-            unsafe { rb_render_call_6d76ec(GEOMETRY, pixels.as_ptr() as u32, 0, render_result & 0xff); }
-            Ok::<(), SubmissionError<core::convert::Infallible>>(())
-        });
+    let index = 4 * slot(back) as u32;
+    let mut stage = StockStage { surface: word(SURFACES + index), object: word(IMAGES + index) };
+    let all: &'static [Visit; VISIT_CAPACITY] = unsafe { &*(&raw const VISITS) };
+    let floor = f32::from_bits(word(RESULT_FLOOR));
+    let outcome = guest_memory().map(|memory| {
+        render_stage(&all[..visits], i32::from(half(GEOMETRY)), i32::from(half(GEOMETRY + 2)), floor, &memory, &mut stage)
+    });
+    let render_result = match outcome {
+        Some(Ok(RenderOutcome::Rendered(result))) => result,
+        _ => {
+            if let Some(publisher) = state.publisher.as_mut() { let _ = publisher.cancel(frame); }
+            count_fallback(FallbackReason::SurfaceRefused);
+            publish_record(state);
+            return SURFACE_REFUSED;
+        }
+    };
+    let hand_off = |address: u32| unsafe { rb_render_call_6d76ec(GEOMETRY, address, 0, render_result & 0xff); };
+    let published = state.publisher.as_mut().and_then(|publisher| if publisher.publish(frame).is_ok() { Some(publisher) } else { None });
+    match published {
+        Some(publisher) => {
+            let _ = publisher.submit(frame, |_, _, pixels| {
+                hand_off(pixels.as_ptr() as u32);
+                Ok::<(), SubmissionError<core::convert::Infallible>>(())
+            });
+        }
+        None => hand_off(address),
     }
     let front = advanced_front(unsafe { read_volatile(FRONT as *const u8) });
     unsafe { write_volatile(FRONT as *mut u8, front); }
@@ -422,6 +485,7 @@ fn commit(state: &mut FrameState, prepared: Prepared) {
     let record = unsafe { &mut *(&raw mut rb_render_frame_record) };
     record.owned_frames = record.owned_frames.wrapping_add(1);
     record.last_sequence = frame.sequence();
+    0
 }
 
 /// Acknowledges the latest latched frame (`scanout_latch`). The publisher ignores a frame of another context and a

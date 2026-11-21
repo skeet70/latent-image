@@ -13,7 +13,7 @@ import Emulation.PreservationObservation
 import Emulation.Symbols
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
-import EmulatorUsb (CrawlKey (..), KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
+import EmulatorUsb (CrawlKey (..), Indirection (..), KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
 import Numeric (showHex)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
@@ -174,6 +174,14 @@ main = do
         all (\read_ -> refused (document ("[[\"00d4dd2c\",\"stage-entry\",{\"reads\":[" ++ read_ ++ "]}]]") "[]"))
           ["{\"sp\":0,\"bytes\":0}", "{\"sp\":0,\"bytes\":4097}", "{\"sp\":0}", "{\"bytes\":4}",
            "{\"sp\":2147483648,\"bytes\":4}", "{\"sp\":0,\"bytes\":4,\"address\":\"00000000\"}"]
+    , expect "register-relative site reads decode direct and indirect forms and round-trip" $
+        sitesOf (document "[[\"00858c90\",\"vg-set-vector\",{\"reads\":[{\"register\":2,\"offset\":0,\"bytes\":32},{\"register\":13,\"offset\":0,\"bytes\":44,\"indirect\":true}]}]]" "[]")
+          == Just [TraceSite (FixedAddress 0x00858c90) "vg-set-vector" [RegisterRead 2 0 32 Direct, RegisterRead 13 0 44 Indirect] RecordsLr OmitsSp]
+        && eitherDecode (encode [RegisterRead 1 (-8) 4 Direct, RegisterRead 13 4 8 Indirect]) == Right [RegisterRead 1 (-8) 4 Direct, RegisterRead 13 4 8 Indirect]
+    , expect "malformed register-relative reads are refused" $
+        all (\read_ -> refused (document ("[[\"00d4dd2c\",\"stage-entry\",{\"reads\":[" ++ read_ ++ "]}]]") "[]"))
+          ["{\"register\":14,\"offset\":0,\"bytes\":4}", "{\"register\":0,\"offset\":0,\"bytes\":0}",
+           "{\"register\":0,\"bytes\":4}", "{\"register\":0,\"offset\":0,\"bytes\":4,\"sp\":0}"]
     , expect "a trace site may ask for lr alone" $
         sitesOf (document "[[\"00bfa234\",\"kind-switch\",{\"lr\":true}]]" "[]")
           == Just [TraceSite (FixedAddress 0x00bfa234) "kind-switch" [] RecordsLr OmitsSp]

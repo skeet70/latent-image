@@ -1,5 +1,5 @@
-//! Typed decode of VGLIB's object groups as the stage-0 frame step renders them, and their lowering into
-//! scaled draw commands.
+//! Typed decode of VGLIB's object groups as the stage-0 frame step renders them, and the OpenVG calls of their
+//! draw methods.
 //!
 //! Listing addresses are in `lz/id4.dis` (image 4 at `0x0061c400`) unless prefixed `img6:` (`decode/img6.dis`).
 //!
@@ -8,17 +8,13 @@
 //! into a temporary list (`0x6d8fc4`, nodes from `0x6d8f28`) and calls the visitor with each node's object word
 //! `+8` in list order (`6d90f0-6d9114`). The visitor `0x6d7324` stops the whole walk on a null object
 //! (`6d7330-6d7338`), skips objects whose ops `+0x04` returns 0 (`6d733c-6d7354`), and otherwise calls ops
-//! `+0xa0` and increments `0x8e2098+0x158` (`6d73e0-6d7414`). Away from frame modes 8 and 10 the filter is -1
-//! (`6d7a90-6d7aa0`, `6d7b0c-6d7b10`), which draws every visible object (`6d7368-6d7378`).
+//! `+0xa0`, ORs its result into `0x8e2098+0x15c`, increments `+0x158` and delays 0 ticks when bit 1 of the count is
+//! clear (`6d73e0-6d7434`). Away from frame modes 8 and 10 the filter is -1 (`6d7a90-6d7aa0`, `6d7b0c-6d7b10`),
+//! which draws every visible object (`6d7368-6d7378`).
 
-use super::commands::{DrawCommand, DrawList, PixelOrder, PixelSource, RecolourBlock, SceneRect};
-use super::producer::CommandBuffer;
-use super::raster::{RasterError, Surface, VectorWorkspace};
 use super::resources::{DataAddress, ResourceError, ResourceMemory};
-use super::shape_assets::{Gvff, ShapeError};
-use super::stock_objects::{Bank, ObjectKind, ObjectPool, SlotIndex, VglibObject, BANK_COUNT};
-use super::vector_raster::{Crossing, CurveAccuracy, DashBudget, Event, SampleGrid, Scanlines, Span, StrokePrimitive, Vertex};
-use super::{PanelPoint, PanelRect, SurfaceId, PANEL_HEIGHT, PANEL_WIDTH};
+use super::stock_objects::VglibObject;
+use super::vg_submission::*;
 
 pub const GROUP_COUNT: usize = 24;
 /// Group sentinels `{next, prev, object}`, 12 bytes each (`0x6d920c`: `6d9224-6d9230`).
@@ -46,8 +42,6 @@ pub const PLANE_EVENT_OPS: u32 = 0x008f_a530;
 
 const IMAGE_DRAW: u32 = 0x006d_87dc;
 const SHAPE_DRAW: u32 = 0x006d_a0ac;
-/// Shape-type getter the shape constructor stores at object `+0xc8` (`6da668-6da670`; body `6d9fac-6d9fb4`).
-const SHAPE_TYPE_GETTER: u32 = 0x006d_9fac;
 /// Base getters at `0x7cfc94` (`7cfc94-7cfd38`) that both class tables keep: the constructors copy the 0xa8-byte
 /// table and patch only `+0xa0`/`+0xa4` (`6d8d20-6d8d44`, `6da634-6da658`).
 const BASE_GETTERS: [(usize, u32); 12] = [
@@ -56,10 +50,12 @@ const BASE_GETTERS: [(usize, u32); 12] = [
     (0x4c, 0x006d_8378), (0x5c, 0x006d_83f8), (0x6c, 0x006d_8428), (0x84, 0x006d_84b8),
 ];
 const OPS_BYTES: usize = 0xa8;
-const BASE_BYTES: usize = 0xc4;
 const IMAGE_BYTES: usize = 0xd4;
 const SHAPE_BYTES: usize = 0x14c;
-const VG_IMAGE_BYTES: usize = 0x6c;
+/// Bytes of one shape item at `+0xd8` (`6da4b0`, `6da5cc`).
+pub const SHAPE_ITEM_BYTES: usize = 0x54;
+/// `+0x30` of a shape item whose stroke has no dash pattern (`6da570-6da57c`).
+const NO_DASH: u32 = 0x29a;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub struct GroupIndex(u8);
@@ -99,44 +95,14 @@ pub enum ObjectRefusal {
     PlaneEvent,
     /// The class table no longer holds the base getters or the class draw method.
     OpsTable,
-    NonFinite,
-    /// A nonzero parameter rotates through `0x6db9a4` and `0x858af4` (`6d8aa0-6d8ab0`, `6da394-6da3ac`).
+    /// A nonzero parameter places the draw through `0x6dbb3c`'s rotation offsets (`6dbb3c`, `6db9a4`).
     Rotation,
-    /// Display mirror byte and object mirror byte both 1 (`6d8b80-6d8bc8`, `6da340-6da388`).
-    Mirror,
-    /// Matrix byte 1 loads the object's own matrix from `+0x50` (`6d8a7c-6d8a98`, `6da2e8-6da304`).
-    Matrix,
-    /// Blend byte 1 enables the colour transform (`6d89c8-6d8a24`, `6da24c-6da29c`).
+    /// Blend byte 1 sets the colour transform from `0x774bf4`/`0x774c7c` (`6d89c8-6d8a24`, `6da24c-6da29c`).
     ColourTransform,
-    /// Surface size or factors from `0x6dd884`/`0x6dda20` other than 720 x 480 at 1.0.
-    SurfaceScale { display_mode: u32, output_mode: u8 },
-    /// A scaled position or size that is not finite, or a negative scaled width or height (a mirrored draw).
-    NegativeOrNonFiniteGeometry,
-    /// Created size words `+8`/`+0xc` differ from the VGImage extent.
-    ImageSize,
-    /// The image handle does not resolve to a live image (`0x82b428`).
-    ImageHandle(u32),
-    ImageFormat,
-    ImageStorage,
-    ShapeMethod,
-    ShapeOwnerMissing,
-    ShapeOwnerAmbiguous,
-    ShapeOwnerKind(ObjectKind),
-    ShapeContentMissing,
-    Shape(ShapeError),
-    /// Bounds words `+0x24..+0x30` differ from the owner's GVFF header bounds.
-    ShapeBounds,
-    /// Bounds with `x0 > x1` or `y0 < y1`, whose stock placement does not cover the object rectangle.
-    ShapeOrientation,
-    RecolourBlock,
 }
 
 fn word(bytes: &[u8], offset: usize) -> u32 { u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]) }
-fn half(bytes: &[u8], offset: usize) -> u16 { u16::from_le_bytes([bytes[offset], bytes[offset + 1]]) }
-fn float(bytes: &[u8], offset: usize) -> Result<f32, ObjectRefusal> {
-    let value = f32::from_bits(word(bytes, offset));
-    if value.is_finite() { Ok(value) } else { Err(ObjectRefusal::NonFinite) }
-}
+fn float(bytes: &[u8], offset: usize) -> f32 { f32::from_bits(word(bytes, offset)) }
 fn read_word(memory: &ResourceMemory<'_>, address: DataAddress) -> Result<u32, ResourceError> {
     Ok(word(memory.bytes(address, 4)?, 0))
 }
@@ -175,14 +141,7 @@ impl DisplayState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceScale { pub width: f32, pub height: f32, pub x: f32, pub y: f32 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ScenePoint { pub x: f32, pub y: f32 }
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SceneSize { pub width: f32, pub height: f32 }
-/// Target size divided by created size (`0x6dbf14`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ScaleWords { pub x: f32, pub y: f32 }
-/// Integer clip words `+0x34..+0x40`, top-left object space (`0x6d8350`, converted at `6d8c2c-6d8c98`).
+/// Integer clip words `+0x34..+0x40` (`0x6d8378`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ObjectClip { pub x: i32, pub y: i32, pub width: i32, pub height: i32 }
 
@@ -191,31 +150,30 @@ pub struct ObjectClip { pub x: i32, pub y: i32, pub width: i32, pub height: i32 
 pub enum BlendMode {
     /// 1: colour transform on.
     ColourTransform,
-    /// 2: `VG_BLEND_MULTIPLY` before a shape's per-item blend (`6da2a4-6da2ac`); source-over for images (`6d8a2c-6d8a4c`).
+    /// 2: `0x1104 = 0x2005` for shapes (`6da2a4-6da2ac`); images take the default branch's calls (`6d8a2c-6d8a4c`).
     Multiply,
-    /// Any other value: source-over.
     Normal,
 }
 
-/// Fields of the 0xc4-byte base object (`0x6d86e0`) that the image and shape draws read through the base getters.
+/// Fields of the 0xc4-byte base object (`0x6d86e0`) that the image and shape draws read through the base getters
+/// (`6d8158-6d84cc`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaseFields {
-    /// Byte `+0x47` nonzero (`0x6d8158`; the visitor and both draws compare with 0).
+    /// Byte `+0x47` nonzero (`0x6d8158`).
     pub visible: bool,
-    /// `+0x00/+0x04` (`0x6d81fc`).
-    pub position: ScenePoint,
-    /// `+0x08/+0x0c` (`0x6d8264`).
-    pub size: SceneSize,
+    /// `+0x00/+0x04` (`0x6d81fc` outputs 1 and 2).
+    pub x: f32,
+    pub y: f32,
+    /// `+0x08/+0x0c` (`0x6d8264` outputs 1 and 2; `0x6d81fc` multiplies them by the scale words).
+    pub width: f32,
+    pub height: f32,
     /// `+0x14/+0x18` (`0x6d81bc`).
-    pub scale: ScaleWords,
-    /// `+0x1c` in degrees (`0x6d8188`; radians at `6db9c0-6db9d0`).
+    pub scale_x: f32,
+    pub scale_y: f32,
+    /// `+0x1c` in degrees (`0x6d8188`).
     pub parameter: f32,
     /// Enable byte `+0x46` nonzero (`0x6d8338`) and rectangle (`0x6d8378`).
     pub clip: Option<ObjectClip>,
-    /// Byte `+0x48` (`0x6d8308`); read only on the rotated path (`6d8ab4-6d8ac8`, `6dbba4-6dbbb8`).
-    pub coordinate_mode: u8,
-    /// Byte `+0x49`, the group recorded at insertion (`0x6d83c8`).
-    pub group: u8,
     /// Byte `+0x4a` equal to 1 (`0x6d83f8`).
     pub matrix: bool,
     /// Byte `+0x4b` equal to 1 (`0x6d8428`).
@@ -225,22 +183,23 @@ pub struct BaseFields {
     pub blend: BlendMode,
 }
 impl BaseFields {
-    fn parse(bytes: &[u8]) -> Result<Self, ObjectRefusal> {
+    fn parse(bytes: &[u8]) -> Self {
         let int = |offset| word(bytes, offset) as i32;
-        Ok(Self {
+        Self {
             visible: bytes[0x47] != 0,
-            position: ScenePoint { x: float(bytes, 0)?, y: float(bytes, 4)? },
-            size: SceneSize { width: float(bytes, 8)?, height: float(bytes, 0xc)? },
-            scale: ScaleWords { x: float(bytes, 0x14)?, y: float(bytes, 0x18)? },
-            parameter: float(bytes, 0x1c)?,
+            x: float(bytes, 0),
+            y: float(bytes, 4),
+            width: float(bytes, 8),
+            height: float(bytes, 0xc),
+            scale_x: float(bytes, 0x14),
+            scale_y: float(bytes, 0x18),
+            parameter: float(bytes, 0x1c),
             clip: if bytes[0x46] != 0 { Some(ObjectClip { x: int(0x34), y: int(0x38), width: int(0x3c), height: int(0x40) }) } else { None },
-            coordinate_mode: bytes[0x48],
-            group: bytes[0x49],
             matrix: bytes[0x4a] == 1,
             mirror: bytes[0x4b] == 1,
             output_mode: bytes[0x4c],
             blend: match bytes[0x45] { 1 => BlendMode::ColourTransform, 2 => BlendMode::Multiply, _ => BlendMode::Normal },
-        })
+        }
     }
 }
 
@@ -258,163 +217,73 @@ pub struct SceneObject<'a> {
 impl<'a> SceneObject<'a> {
     /// Classifies by the ops word `+0xc0` and checks the class table.
     pub fn decode(memory: &ResourceMemory<'a>, group: GroupIndex, address: VglibObject) -> Result<Self, ObjectRefusal> {
-        let base = memory.bytes(address.0, BASE_BYTES).map_err(ObjectRefusal::Memory)?;
-        let (class, draw, length) = match word(base, 0xc0) {
+        let ops_word = read_word(memory, DataAddress(address.0.0.wrapping_add(0xc0))).map_err(ObjectRefusal::Memory)?;
+        let (class, draw, length) = match ops_word {
             IMAGE_OPS => (ObjectClass::Image, IMAGE_DRAW, IMAGE_BYTES),
             SHAPE_OPS => (ObjectClass::Shape, SHAPE_DRAW, SHAPE_BYTES),
             PATH_LIST_OPS => return Err(ObjectRefusal::PathList),
             PLANE_EVENT_OPS => return Err(ObjectRefusal::PlaneEvent),
             other => return Err(ObjectRefusal::UnknownClass(other)),
         };
-        let ops = memory.bytes(DataAddress(word(base, 0xc0)), OPS_BYTES).map_err(ObjectRefusal::Memory)?;
+        let ops = memory.bytes(DataAddress(ops_word), OPS_BYTES).map_err(ObjectRefusal::Memory)?;
         if word(ops, 0xa0) != draw || BASE_GETTERS.iter().any(|(offset, getter)| word(ops, *offset) != *getter) {
             return Err(ObjectRefusal::OpsTable);
         }
         let bytes = memory.bytes(address.0, length).map_err(ObjectRefusal::Memory)?;
-        Ok(Self { address, group, class, base: BaseFields::parse(bytes)?, bytes })
+        Ok(Self { address, group, class, base: BaseFields::parse(bytes), bytes })
     }
 }
 
-/// The OpenVG context returned by `0x8834a4` (`0x886614`: `I4:886680-886688`).
-const VG_CONTEXT: DataAddress = DataAddress(0x0088_dd2c);
-/// Chunk lists past the pool's first block are walked at most this many times.
-const MAX_HANDLE_CHUNKS: usize = 64;
-
-/// Handle stored at image object `+0xc4`: pool type in bits 31..28, class in 27..25, table tag in 24..16 and
-/// slot in 15..0 (`I4:82b404-82b418`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ImageHandle(pub u32);
-impl ImageHandle {
-    /// The record `0x82b428` returns for this handle, reached from context `+0x1c`, then `+0x1c`, then the
-    /// table header at `+0xc` (`I4:83a6c4-83a6cc`, `834878-834880`). Header word 0 is the tag and word 1 the
-    /// pool. The pool's one-entry cache `+0x34/+0x38` is consulted first (`82b458-82b464`); otherwise the slot
-    /// state halfword must hold 2 in bits 15..12 and the handle's bits 27..16 in 11..0, and the record is
-    /// element base + stride x slot (`82b468-82b4b4`) or the same within a chunk of the list at `+0x40`
-    /// (`82b4bc-82b538`).
-    pub fn resolve(self, memory: &ResourceMemory<'_>) -> Result<DataAddress, ObjectRefusal> {
-        let refused = ObjectRefusal::ImageHandle(self.0);
-        let at = |address: u32| read_word(memory, DataAddress(address)).map_err(ObjectRefusal::Memory);
-        let manager = at(VG_CONTEXT.0.wrapping_add(0x1c))?;
-        let registry = at(manager.wrapping_add(0x1c))?;
-        let header = at(registry.wrapping_add(0xc))?;
-        if at(header)? != (self.0 >> 16) & 0x1ff { return Err(refused); }
-        let pool = at(header.wrapping_add(4))?;
-        if at(pool)? != self.0 >> 28 { return Err(refused); }
-        if at(pool.wrapping_add(0x34))? == self.0 { return Ok(DataAddress(at(pool.wrapping_add(0x38))?)); }
-        let slot = self.0 & 0xffff;
-        let stride = at(pool.wrapping_add(0x20))?;
-        let live = |states: u32, index: u32| -> Result<bool, ObjectRefusal> {
-            let bytes = memory.bytes(DataAddress(states.wrapping_add(index * 2)), 2).map_err(ObjectRefusal::Memory)?;
-            let state = u32::from(half(bytes, 0));
-            Ok(state >> 12 == 2 && state & 0xfff == (self.0 >> 16) & 0xfff)
-        };
-        let record = if slot < at(pool.wrapping_add(0xc))? {
-            if !live(at(pool.wrapping_add(0x30))?, slot)? { return Err(refused); }
-            at(pool.wrapping_add(8))?.wrapping_add(stride.wrapping_mul(slot))
-        } else {
-            let mut chunk = at(pool.wrapping_add(0x40))?;
-            let mut found = None;
-            for _ in 0..MAX_HANDLE_CHUNKS {
-                if chunk == 0 { break; }
-                let first = at(chunk.wrapping_add(4))?;
-                if slot >= first && slot < first.wrapping_add(at(chunk.wrapping_add(8))?) {
-                    let index = slot - first;
-                    if !live(at(chunk.wrapping_add(0x10))?, index)? { return Err(refused); }
-                    found = Some(at(chunk)?.wrapping_add(stride.wrapping_mul(index)));
-                    break;
-                }
-                chunk = at(chunk.wrapping_add(0x14))?;
-            }
-            found.ok_or(refused)?
-        };
-        if record == 0 { return Err(refused); }
-        Ok(DataAddress(record))
-    }
-}
-
-/// The VGImage record behind image handle `+0xc4`, filled by `0x835d90`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ImageStorage<'a> { pub width: u16, pub height: u16, pub pixels: PixelSource<'a> }
-impl<'a> ImageStorage<'a> {
-    /// Accepts format 1 (`+0x14 & 0x3f`, `835f14`) with flag bytes `+0x53/+0x54` zero (`835f30-835f38`) and no
-    /// sub-window offset `+0x44/+0x46` (`8391a0-8391b4`). Width/height are `+0x3c/+0x40`, stride `+0x4c`, CPU
-    /// pixels `+0x68` (`835ee0-836034`). Format 1 is `VG_sRGBA_8888` from `vgc_create_image(1, w, h, 4)` (`6d8dc0-6d8dd0`).
-    pub fn decode(memory: &ResourceMemory<'a>, handle: ImageHandle) -> Result<Self, ObjectRefusal> {
-        let record = memory.bytes(handle.resolve(memory)?, VG_IMAGE_BYTES).map_err(ObjectRefusal::Memory)?;
-        if word(record, 0x14) & 0x3f != 1 || record[0x53] != 0 || record[0x54] != 0 { return Err(ObjectRefusal::ImageFormat); }
-        if half(record, 0x44) != 0 || half(record, 0x46) != 0 { return Err(ObjectRefusal::ImageStorage); }
-        let width = half(record, 0x3c);
-        let height = half(record, 0x40);
-        let stride = half(record, 0x4c);
-        if width == 0 || height == 0 || (width as i16) < 0 || (height as i16) < 0 || (stride as i16) < 0 {
-            return Err(ObjectRefusal::ImageStorage);
-        }
-        let stride = usize::from(stride);
-        let length = stride.checked_mul(usize::from(height) - 1)
-            .and_then(|rows| rows.checked_add(usize::from(width) * 4)).ok_or(ObjectRefusal::ImageStorage)?;
-        let bytes = memory.bytes(DataAddress(word(record, 0x68)), length).map_err(ObjectRefusal::Memory)?;
-        let pixels = PixelSource::new(width, height, stride, PixelOrder::Abgr, bytes).ok_or(ObjectRefusal::ImageStorage)?;
-        Ok(Self { width, height, pixels })
-    }
-}
-
-/// The GVFF behind a shape object, reached through the pool object whose handle `+4` is the shape
-/// (`img6:117d75c-117d760`); its content `+0xc` is the block the constructor read (`img6:117d6a0`, `6da6b4`).
+/// The placement both draws compute with zero parameter, where `0x6dbb3c` leaves the translation slots at their
+/// zeroed values (`6dbd80-6dbef8`; zeroed at `6d87ec-6d87f4` and `6da0c0-6da0c8`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ShapePayload<'a> {
-    pub owner: (Bank, SlotIndex),
-    pub gvff: &'a [u8],
-    /// Header bounds `+0x28..+0x34` as x0, y0, x1, y1 (`6da6d0-6da718`).
-    pub bounds: [f32; 4],
-    /// Shape type `+0xe8` (`6da698-6da69c`); 2 applies the 96-byte block `+0xec` (`6da9c4-6da9d4`, `6da6a0-6da6ac`).
-    pub recolour: Option<RecolourBlock>,
-}
-impl<'a> ShapePayload<'a> {
-    pub fn decode(memory: &ResourceMemory<'a>, pool: &ObjectPool<'_>, object: &SceneObject<'a>) -> Result<Self, ObjectRefusal> {
-        let bytes = object.bytes;
-        if word(bytes, 0xc8) != SHAPE_TYPE_GETTER { return Err(ObjectRefusal::ShapeMethod); }
-        let mut owner = None;
-        for index in 0..BANK_COUNT as u8 {
-            let Some(bank) = Bank::new(index) else { continue };
-            for candidate in pool.listed(bank).filter(|candidate| candidate.handle == Some(object.address)) {
-                if owner.is_some() { return Err(ObjectRefusal::ShapeOwnerAmbiguous); }
-                owner = Some(candidate);
-            }
-        }
-        let owner = owner.ok_or(ObjectRefusal::ShapeOwnerMissing)?;
-        if !matches!(owner.kind, ObjectKind::ShapeKindOne | ObjectKind::ShapeKindTwo) { return Err(ObjectRefusal::ShapeOwnerKind(owner.kind)); }
-        let content = owner.content.ok_or(ObjectRefusal::ShapeContentMissing)?;
-        let tail = memory.region_tail(content).map_err(ObjectRefusal::Memory)?;
-        let file = Gvff::parse(tail).map_err(ObjectRefusal::Shape)?;
-        let bounds = file.bounds().map(|scalar| scalar.value());
-        // Constructor stores x0 at +0x30, y0 at +0x28, x1 at +0x2c, y1 at +0x24 (`6da700-6da718`).
-        let stored = [word(bytes, 0x30), word(bytes, 0x28), word(bytes, 0x2c), word(bytes, 0x24)];
-        if stored != bounds.map(f32::to_bits) { return Err(ObjectRefusal::ShapeBounds); }
-        let recolour = if word(bytes, 0xe8) == 2 {
-            let mut block = [0; 96];
-            block.copy_from_slice(&bytes[0xec..0x14c]);
-            if block.chunks_exact(4).any(|component| !f32::from_le_bytes([component[0], component[1], component[2], component[3]]).is_finite()) {
-                return Err(ObjectRefusal::RecolourBlock);
-            }
-            Some(RecolourBlock(block))
-        } else { None };
-        Ok(Self { owner: (owner.bank, owner.slot), gvff: &tail[..file.consumed_bytes()], bounds, recolour })
-    }
+pub struct Placement {
+    /// `0x858950` operands: `x + tx` and `((surface height - height) - y) + ty` (`6d8b4c-6d8b7c`, `6da30c-6da33c`).
+    pub translate: [f32; 2],
+    /// Identity from `0x774bd0`/`0x774c58`; under display and object mirror, element 0 negated and element 6
+    /// `surface width - 2(x + tx)` (`6d8b80-6d8bc8`, `6da340-6da388`).
+    pub first: [f32; 9],
+    pub scale: [f32; 2],
 }
 
-/// What one object contributes to the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Lowered<'a> {
-    /// Visibility byte zero: the visitor skips it without counting.
-    Hidden,
-    /// Image handle `+0xc4` or shape paint `+0xd4` zero: the draw returns before drawing (`6d8874-6d8880`, `6da13c-6da148`).
+pub enum Transform {
+    /// Matrix byte 1: the object's matrix at `+0x50` (`6d8a7c-6d8a98`, `6da2e8-6da304`).
+    Object(DataAddress),
+    Placed(Placement),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageDraw {
+    pub handle: u32,
+    pub transform: Transform,
+    /// `0x8589dc`'s product is followed by `0x774bac` with element 7 the unscaled height `+0xc` (`6d88f8-6d88fc`).
+    pub height: f32,
+    /// `0x858af4`'s operand, the parameter (`6d8bd4-6d8bd8`).
+    pub parameter: f32,
+    pub clip: Option<[i32; 4]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeDraw {
+    pub blend: BlendMode,
+    pub transform: Transform,
+    /// `0x858950(-(sx * x0), -(sy * y1))` with x0 `+0x30` and y1 `+0x24` (`6da3b0-6da3c8`).
+    pub origin: [f32; 2],
+    pub clip: Option<[i32; 4]>,
+    /// Items `+0xd8`, count `+0xe0` (`6da4a0-6da4a4`).
+    pub items: DataAddress,
+    pub count: u32,
+}
+
+/// What the visitor does with one visible object.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Visit {
+    /// Image handle `+0xc4` or shape paint `+0xd4` zero: the draw returns 0 before any OpenVG call
+    /// (`6d8874-6d8880`, `6da13c-6da148`).
     NoResource,
-    /// Clipping enabled with a scissor rectangle that covers no panel pixel.
-    ClippedOut,
-    /// A zero scaled width or height. [INFERENCE] The draw's singular matrix maps the object onto a line, which OpenVG
-    /// covers with no pixel.
-    Collapsed,
-    Draw { clip: Option<PanelRect>, command: DrawCommand<'a> },
+    Image(ImageDraw),
+    Shape(ShapeDraw),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -422,17 +291,11 @@ pub struct SceneReport {
     pub objects: usize,
     /// Objects the visitor counts at `0x8e2098+0x158`.
     pub visible: usize,
-    pub drawn: usize,
-    /// Visible objects whose scissor covers no panel pixel; their draw method still returns 1 (`6d8ce4`, `6da5fc`).
-    pub clipped: usize,
-    /// Visible objects with a zero scaled width or height; their draw method still returns 1.
-    pub collapsed: usize,
 }
 
 /// A validated walk of the 24 groups.
 pub struct Scene<'m, 'a> {
     memory: &'m ResourceMemory<'a>,
-    pool: &'m ObjectPool<'m>,
     display: DisplayState,
     lengths: [u8; GROUP_COUNT],
 }
@@ -440,7 +303,7 @@ pub struct Scene<'m, 'a> {
 impl<'m, 'a> Scene<'m, 'a> {
     /// Walks every group list, requiring in-pool, in-use, non-repeated nodes, non-null objects, count bytes equal
     /// to the list lengths, and enough free nodes for the frame step's per-group copy.
-    pub fn decode(memory: &'m ResourceMemory<'a>, pool: &'m ObjectPool<'m>) -> Result<Self, SceneError> {
+    pub fn decode(memory: &'m ResourceMemory<'a>) -> Result<Self, SceneError> {
         let display = DisplayState::read(memory).map_err(SceneError::Memory)?;
         if matches!(display.frame_mode, 8 | 10) { return Err(SceneError::DualRender(display.frame_mode)); }
         let nodes = memory.bytes(NODE_POOL, NODE_POOL_BYTES).map_err(SceneError::Memory)?;
@@ -472,7 +335,7 @@ impl<'m, 'a> Scene<'m, 'a> {
         }
         let free = nodes.chunks_exact(NODE_BYTES).filter(|record| word(record, 0xc) == 0).count();
         if free < longest { return Err(SceneError::NodeCapacity { free, needed: longest }); }
-        Ok(Self { memory, pool, display, lengths })
+        Ok(Self { memory, display, lengths })
     }
 
     pub fn display(&self) -> DisplayState { self.display }
@@ -483,77 +346,63 @@ impl<'m, 'a> Scene<'m, 'a> {
         SceneWalk { scene: self, next_group: GROUP_COUNT as u8, node: 0, remaining: 0, group: GroupIndex(0) }
     }
 
-    /// The contribution of one decoded object under this scene's display state.
-    pub fn lower_object(&self, object: &SceneObject<'a>) -> Result<Lowered<'a>, ObjectRefusal> {
+    /// The visitor's treatment of one decoded object; `None` for a hidden object, which it skips uncounted.
+    pub fn visit(&self, object: &SceneObject<'a>) -> Result<Option<Visit>, ObjectRefusal> {
         let base = object.base;
-        if !base.visible { return Ok(Lowered::Hidden); }
+        if !base.visible { return Ok(None); }
         let resource = match object.class { ObjectClass::Image => word(object.bytes, 0xc4), ObjectClass::Shape => word(object.bytes, 0xd4) };
-        if resource == 0 { return Ok(Lowered::NoResource); }
-        if base.matrix { return Err(ObjectRefusal::Matrix); }
-        if self.display.mirror && base.mirror { return Err(ObjectRefusal::Mirror); }
+        if resource == 0 { return Ok(Some(Visit::NoResource)); }
         if base.parameter != 0.0 { return Err(ObjectRefusal::Rotation); }
         if base.blend == BlendMode::ColourTransform { return Err(ObjectRefusal::ColourTransform); }
         let surface = self.display.surface(base.output_mode);
-        if surface != (SurfaceScale { width: PANEL_WIDTH as f32, height: PANEL_HEIGHT as f32, x: 1.0, y: 1.0 }) {
-            return Err(ObjectRefusal::SurfaceScale { display_mode: self.display.display_mode, output_mode: base.output_mode });
-        }
-        let Some(dest) = destination(base, surface)? else { return Ok(Lowered::Collapsed) };
-        let clip = match base.clip {
-            None => None,
-            Some(clip) => match scissor(clip, surface, object.class) {
-                Some(rect) => Some(rect),
-                None => return Ok(Lowered::ClippedOut),
-            },
+        let transform = if base.matrix {
+            Transform::Object(DataAddress(object.address.0.0.wrapping_add(0x50)))
+        } else {
+            Transform::Placed(placement(base, surface, self.display.mirror))
         };
-        let command = match object.class {
-            ObjectClass::Image => {
-                let storage = ImageStorage::decode(self.memory, ImageHandle(resource))?;
-                if base.size.width != f32::from(storage.width) || base.size.height != f32::from(storage.height) {
-                    return Err(ObjectRefusal::ImageSize);
-                }
-                DrawCommand::ScaledImage { dest, source: storage.pixels }
-            }
+        let clip = base.clip.map(|clip| scissor(clip, surface, object.class));
+        Ok(Some(match object.class {
+            ObjectClass::Image => Visit::Image(ImageDraw { handle: resource, transform, height: base.height, parameter: base.parameter, clip }),
             ObjectClass::Shape => {
-                let payload = ShapePayload::decode(self.memory, self.pool, object)?;
-                let [x0, y0, x1, y1] = payload.bounds;
-                if x0 > x1 || y0 < y1 { return Err(ObjectRefusal::ShapeOrientation); }
-                DrawCommand::ScaledShape { dest, gvff: payload.gvff, recolour: payload.recolour }
+                let items = DataAddress(word(object.bytes, 0xd8));
+                let count = word(object.bytes, 0xe0);
+                let length = (count as usize).checked_mul(SHAPE_ITEM_BYTES).ok_or(ObjectRefusal::Memory(ResourceError::AddressOverflow))?;
+                if count != 0 { self.memory.bytes(items, length).map_err(ObjectRefusal::Memory)?; }
+                let scale = [base.scale_x * surface.x, base.scale_y * surface.y];
+                let origin = [-(scale[0] * float(object.bytes, 0x30)), -(scale[1] * float(object.bytes, 0x24))];
+                Visit::Shape(ShapeDraw { blend: base.blend, transform, origin, clip, items, count })
             }
-        };
-        Ok(Lowered::Draw { clip, command })
+        }))
     }
 
-    /// Appends `Clip`/`ResetClip` and the draw of every drawn object. `Ok` is the completeness predicate together with
-    /// a successful `decode`: every listed object decoded and lowered. On error the buffer is not a valid frame.
-    pub fn lower(&self, out: &mut CommandBuffer<'_, 'a>) -> Result<SceneReport, SceneError> {
-        self.lower_with(|command| out.push(command).map_err(|_| SceneError::Capacity))
-    }
-
-    /// `lower` without emitting commands.
-    pub fn check(&self) -> Result<SceneReport, SceneError> { self.lower_with(|_| Ok(())) }
-
-    fn lower_with(&self, mut emit: impl FnMut(DrawCommand<'a>) -> Result<(), SceneError>) -> Result<SceneReport, SceneError> {
+    /// Decodes every listed object and appends the visits of the visible ones to `out`. `Ok` is the completeness
+    /// predicate together with a successful `decode`.
+    pub fn plan(&self, out: &mut PlanBuffer<'_>) -> Result<SceneReport, SceneError> {
         let mut report = SceneReport::default();
         for entry in self.objects() {
             let (group, address) = entry?;
             let refuse = |refusal| SceneError::Object { object: address, refusal };
             let object = SceneObject::decode(self.memory, group, address).map_err(refuse)?;
             report.objects += 1;
-            match self.lower_object(&object).map_err(refuse)? {
-                Lowered::Hidden => {}
-                Lowered::NoResource => report.visible += 1,
-                Lowered::ClippedOut => { report.visible += 1; report.clipped += 1; }
-                Lowered::Collapsed => { report.visible += 1; report.collapsed += 1; }
-                Lowered::Draw { clip, command } => {
-                    report.visible += 1;
-                    report.drawn += 1;
-                    emit(clip.map_or(DrawCommand::ResetClip, DrawCommand::Clip))?;
-                    emit(command)?;
-                }
+            if let Some(visit) = self.visit(&object).map_err(refuse)? {
+                report.visible += 1;
+                out.push(visit)?;
             }
         }
         Ok(report)
     }
+}
+
+/// Visits in walk order, in caller storage.
+pub struct PlanBuffer<'s> { storage: &'s mut [Visit], length: usize }
+impl<'s> PlanBuffer<'s> {
+    pub fn new(storage: &'s mut [Visit]) -> Self { Self { storage, length: 0 } }
+    fn push(&mut self, visit: Visit) -> Result<(), SceneError> {
+        *self.storage.get_mut(self.length).ok_or(SceneError::Capacity)? = visit;
+        self.length += 1;
+        Ok(())
+    }
+    pub fn visits(&self) -> &[Visit] { &self.storage[..self.length] }
 }
 
 pub struct SceneWalk<'s, 'm, 'a> {
@@ -593,81 +442,156 @@ fn node_slot(address: u32) -> Option<usize> {
     Some(offset / NODE_BYTES)
 }
 
-/// Rasterizer storage for one OSD frame.
-pub struct OsdWorkspace {
-    vertices: [Vertex; Self::VERTICES],
-    strokes: [StrokePrimitive; Self::STROKES],
-    crossings: [Crossing; Self::VERTICES],
-    spans: [Span; 2 * Self::STROKES],
-    events: [Event; Self::EVENTS],
-}
-impl OsdWorkspace {
-    pub const VERTICES: usize = 512;
-    /// The Run-3 shooting screen's largest shape item needs 212 stroke primitives.
-    pub const STROKES: usize = 256;
-    pub const EVENTS: usize = 2 * PANEL_WIDTH;
-    pub const fn new() -> Self {
-        Self {
-            vertices: [Vertex::EMPTY; Self::VERTICES],
-            strokes: [StrokePrimitive::EMPTY; Self::STROKES],
-            crossings: [Crossing::EMPTY; Self::VERTICES],
-            spans: [Span::EMPTY; 2 * Self::STROKES],
-            events: [Event::EMPTY; Self::EVENTS],
-        }
+/// Both draws scale position and size by the surface factors (`6d8900-6d894c`, `6da19c-6da1e8`), then translate by
+/// the scaled position in the y-up surface.
+fn placement(base: BaseFields, surface: SurfaceScale, display_mirror: bool) -> Placement {
+    let (tx, ty) = (0.0f32, 0.0f32);
+    let x = base.x * surface.x;
+    let y = base.y * surface.y;
+    let height = base.height * base.scale_y * surface.y;
+    let left = x + tx;
+    let mut first = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    if display_mirror && base.mirror {
+        first[0] = -first[0];
+        first[6] = surface.width - (left + left);
+    }
+    Placement {
+        translate: [left, ((surface.height - height) - y) + ty],
+        first,
+        scale: [base.scale_x * surface.x, base.scale_y * surface.y],
     }
 }
 
-/// Renders lowered stage-0 commands into a VGLIB format-1 OSD buffer (`VG_sRGBA_8888`, A,B,G,R bytes, the model's
-/// `mode1-abgr8888-straight` layer profile). The owned frame step and the host reference both render through here.
-pub fn render_osd(commands: &[DrawCommand<'_>], pixels: &mut [u8], storage: &mut OsdWorkspace) -> Result<(), RasterError> {
-    let mut workspace = VectorWorkspace {
-        vertices: &mut storage.vertices,
-        strokes: &mut storage.strokes,
-        scanlines: Scanlines { crossings: &mut storage.crossings, spans: &mut storage.spans, events: &mut storage.events },
-        dash_budget: DashBudget::new(256),
-        accuracy: CurveAccuracy::new(0.25).ok_or(RasterError::InvalidSurfaceBuffer)?,
-        samples: SampleGrid::Four,
-    };
-    Surface::with_order(SurfaceId::Osd, PixelOrder::Abgr, pixels)?.render_scene(DrawList::new(SurfaceId::Osd, commands), &mut workspace)
-}
-
-/// At zero parameter `0x6dbb3c` leaves the translation slots at their zeroed values (`6dbd80-6dbef8`; zeroed at
-/// `6d87ec-6d87f4` and `6da0c0-6da0c8`), so both draws translate by the scaled position alone: `(x, sh - y - h)` in
-/// the y-up surface (`6d8b4c-6d8b7c`, `6da30c-6da33c`). For shapes the GVFF minimum x and minimum y land there
-/// (`6da3b0-6da3d4`), so the drawn rectangle is `x, y, w, h` from the panel's top-left.
-/// [INFERENCE] Images land on the same rectangle: both classes take their position from the same commit packet
-/// (`img6:117d648-117d664`), and the image matrix ends in `diag(1, -1, 1)` (`0x774bac`), whose placement relative to
-/// the translation is an engine law of `vgDrawImage`.
-/// `None` for a zero width or height.
-fn destination(base: BaseFields, surface: SurfaceScale) -> Result<Option<SceneRect>, ObjectRefusal> {
-    let x = base.position.x * surface.x;
-    let y = base.position.y * surface.y;
-    let width = base.size.width * base.scale.x * surface.x;
-    let height = base.size.height * base.scale.y * surface.y;
-    if !(x.is_finite() && y.is_finite() && width.is_finite() && height.is_finite()) || width < 0.0 || height < 0.0 {
-        return Err(ObjectRefusal::NegativeOrNonFiniteGeometry);
-    }
-    Ok(SceneRect::new(x, y, width, height))
-}
-
-/// The scissor rectangle each draw sets (`6d8c2c-6d8cb4`, `6da414-6da49c`), returned in top-left panel space and
-/// intersected with the panel. The shape draw converts the y-up bottom edge with `vcvt.u32` (`6da47c`), the image
-/// draw with `vcvt.s32` (`6d8c94`). `None` when no panel pixel is inside.
-fn scissor(clip: ObjectClip, surface: SurfaceScale, class: ObjectClass) -> Option<PanelRect> {
+/// The scissor rectangle each draw passes to `0x858d24` (`6d8c2c-6d8ca8`, `6da414-6da490`): x, y-up bottom, width,
+/// height. The shape draw converts the bottom with `vcvt.u32` (`6da47c`), the image draw with `vcvt.s32` (`6d8c94`).
+fn scissor(clip: ObjectClip, surface: SurfaceScale, class: ObjectClass) -> [i32; 4] {
     let x = (clip.x as f32 * surface.x) as i32;
     let y = (clip.y as f32 * surface.y) as i32;
     let width = (surface.x * clip.width as f32) as i32;
     let height = (surface.y * clip.height as f32) as i32;
-    let bottom_up = surface.height - height as f32 - y as f32;
-    let bottom_up = match class { ObjectClass::Image => i64::from(bottom_up as i32), ObjectClass::Shape => i64::from(bottom_up as u32) };
-    if width <= 0 || height <= 0 { return None; }
-    let top = i64::from(surface.height as i32) - bottom_up - i64::from(height);
-    let left = i64::from(x).max(0);
-    let right = (i64::from(x) + i64::from(width)).min(PANEL_WIDTH as i64);
-    let upper = top.max(0);
-    let lower = (top + i64::from(height)).min(PANEL_HEIGHT as i64);
-    if left >= right || upper >= lower { return None; }
-    PanelRect::new(PanelPoint::new(left as u16, upper as u16)?, (right - left) as u16, (lower - upper) as u16)
+    let bottom = (surface.height - height as f32) - y as f32;
+    let bottom = match class { ObjectClass::Image => bottom as i32, ObjectClass::Shape => bottom as u32 as i32 };
+    [x, bottom, width, height]
+}
+
+/// The calls of one visit's draw method; returns the method's result.
+pub fn draw(visit: &Visit, memory: &ResourceMemory<'_>, device: &mut impl StageDevice) -> Result<u32, ResourceError> {
+    fn set(call: &mut impl FnMut(VgCall), parameter: VgWord, value: i32) { call(VgCall::SetInteger { parameter, value }) }
+    let mut call = |operation: VgCall| device.call(operation);
+    match *visit {
+        Visit::NoResource => return Ok(0),
+        Visit::Image(image) => {
+            set(&mut call, MATRIX_MODE, 0x1401);
+            set(&mut call, IMAGE_QUALITY, 0x1f00);
+            set(&mut call, BLEND_MODE, 0x2001);
+            set(&mut call, COLOR_TRANSFORM, 0);
+            call(VgCall::LoadIdentity);
+            match image.transform {
+                Transform::Object(matrix) => call(VgCall::LoadMatrix(matrix)),
+                Transform::Placed(placed) => {
+                    call(VgCall::Translate { x: placed.translate[0], y: placed.translate[1] });
+                    call(VgCall::MultiplyMatrix(Matrix::Local(placed.first)));
+                    call(VgCall::Rotate(image.parameter));
+                    call(VgCall::Scale { x: placed.scale[0], y: placed.scale[1] });
+                    call(VgCall::MultiplyMatrix(Matrix::Local([1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, image.height, 1.0])));
+                }
+            }
+            if let Some(values) = image.clip {
+                call(VgCall::SetIntegers { parameter: SCISSOR_RECTS, values });
+                set(&mut call, SCISSORING, 1);
+            }
+            set(&mut call, IMAGE_MODE, 4);
+            call(VgCall::DrawImage(image.handle));
+            set(&mut call, SCISSORING, 0);
+            set(&mut call, COLOR_TRANSFORM, 0);
+        }
+        Visit::Shape(shape) => {
+            set(&mut call, MATRIX_MODE, 0x1400);
+            set(&mut call, BLEND_MODE, if shape.blend == BlendMode::Multiply { 0x2005 } else { 0x2001 });
+            set(&mut call, COLOR_TRANSFORM, 0);
+            set(&mut call, FILL_RULE, 0x1901);
+            call(VgCall::LoadIdentity);
+            match shape.transform {
+                Transform::Object(matrix) => call(VgCall::MultiplyMatrix(Matrix::Guest(matrix))),
+                Transform::Placed(placed) => {
+                    call(VgCall::Translate { x: placed.translate[0], y: placed.translate[1] });
+                    call(VgCall::MultiplyMatrix(Matrix::Local(placed.first)));
+                    call(VgCall::Translate { x: shape.origin[0], y: shape.origin[1] });
+                    call(VgCall::Scale { x: placed.scale[0], y: placed.scale[1] });
+                }
+            }
+            if let Some(values) = shape.clip {
+                call(VgCall::SetIntegers { parameter: SCISSOR_RECTS, values });
+                set(&mut call, SCISSORING, 1);
+            }
+            for index in 0..shape.count {
+                let address = DataAddress(shape.items.0.wrapping_add(index * SHAPE_ITEM_BYTES as u32));
+                let item = memory.bytes(address, SHAPE_ITEM_BYTES)?;
+                let at = |slot: usize| word(item, 4 * slot);
+                let first = index == 0;
+                set(&mut call, BLEND_MODE, if at(11) != 0 { 0x2001 } else { 0x2000 });
+                let modes = at(1);
+                if modes == 0 { continue; }
+                if (modes & 2 != 0 && at(10) != 0) || first {
+                    set(&mut call, FILL_RULE, at(0) as i32);
+                    call(VgCall::SetPaint { paint: at(6), modes: 2 });
+                }
+                if (modes & 1 != 0 && at(9) != 0) || first {
+                    call(VgCall::SetFloat { parameter: STROKE_LINE_WIDTH, value: f32::from_bits(at(5)) });
+                    set(&mut call, STROKE_CAP_STYLE, at(2) as i32);
+                    set(&mut call, STROKE_JOIN_STYLE, at(3) as i32);
+                    call(VgCall::SetFloat { parameter: STROKE_MITER_LIMIT, value: f32::from_bits(at(4)) });
+                    if at(12) == NO_DASH {
+                        call(VgCall::SetVector { parameter: STROKE_DASH_PATTERN, count: 0, values: DataAddress(0) });
+                    } else {
+                        call(VgCall::SetFloat { parameter: STROKE_DASH_PHASE, value: f32::from_bits(at(14)) });
+                        call(VgCall::SetVector { parameter: STROKE_DASH_PATTERN, count: at(13) as i32, values: DataAddress(address.0.wrapping_add(0x3c)) });
+                    }
+                    call(VgCall::SetPaint { paint: at(7), modes: 1 });
+                }
+                call(VgCall::DrawPath { path: at(8), modes });
+            }
+            set(&mut call, SCISSORING, 0);
+            set(&mut call, COLOR_TRANSFORM, 0);
+            call(VgCall::SetFloat { parameter: STROKE_LINE_WIDTH, value: 0.0 });
+        }
+    }
+    Ok(1)
+}
+
+/// How the stage-0 render of `0x6d7920` ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderOutcome {
+    /// `vglib_select_surface` failed; the frame step returns -255 (`I4:6d7ac0-6d7ac8`).
+    SurfaceRefused,
+    /// The render result `0x6d724c` returns.
+    Rendered(u32),
+}
+
+/// Surface selection `0x6d788c` and the render `0x6d724c(-1, width, height, surface, object)` for planned visits.
+/// `floor` is the float at `R+0x154` (`I4:6d72ec-6d730c`).
+pub fn render_stage(visits: &[Visit], width: i32, height: i32, floor: f32, memory: &ResourceMemory<'_>, device: &mut impl StageDevice) -> Result<RenderOutcome, ResourceError> {
+    if !device.make_current() { return Ok(RenderOutcome::SurfaceRefused); }
+    if device.get_integer(RENDERING_QUALITY) != RENDERING_QUALITY_BETTER {
+        device.call(VgCall::SetInteger { parameter: RENDERING_QUALITY, value: RENDERING_QUALITY_BETTER });
+    }
+    device.call(VgCall::SetVector { parameter: VIEWPORT, count: 4, values: VIEWPORT_VALUES });
+    device.call(VgCall::Clear { x: 0, y: 0, width, height });
+    let (mut visited, mut result) = (0u32, 0u32);
+    device.set_visits(visited, result);
+    for visit in visits {
+        result |= draw(visit, memory, device)?;
+        visited = visited.wrapping_add(1);
+        device.set_visits(visited, result);
+        if visited & 2 == 0 { device.yield_task(); }
+    }
+    device.call(VgCall::Finish);
+    if !device.copy_buffers() { device.record_error(); }
+    if result == 0 && floor > 0.0 {
+        result = 1;
+        device.set_visits(visited, result);
+    }
+    Ok(RenderOutcome::Rendered(result))
 }
 
 #[cfg(test)]

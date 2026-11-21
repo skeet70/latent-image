@@ -25,7 +25,7 @@
     },
     {
       "path": "frame.rs",
-      "reason": "Retained VGLIB frame-step state at 0x8e2098, its stage-0 display buffers as transferred publisher tokens, guest RAM as scene resource regions, frame callbacks and stock frame services."
+      "reason": "Retained VGLIB frame-step state at 0x8e2098, its stage-0 display buffers as transferred publisher tokens, guest RAM as scene resource regions, frame callbacks, stock frame services and the retained OpenVG and EGL client calls."
     }
   ],
   "boundary_items": [],

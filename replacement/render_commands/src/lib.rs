@@ -26,6 +26,7 @@ pub use commands::{Alpha, CatalogTextId, Colour, CustomTextId, ImageId, StrokeWi
 pub mod stock_objects;
 pub mod guest_assets;
 pub mod vglib_scene;
+pub mod vg_submission;
 pub mod scanout_latch;
 pub use raster::{Surface, AssetPack, AssetProvenance, RasterError, RasterResources, FontBinding, FontRegistry, ShapeBinding, VectorWorkspace, PaintBlend, PaintCoverage};
 

@@ -2107,6 +2107,7 @@ traceSiteValues sites =
   where
     readValue (SiteRead start count) = object ["address" .= eightHex start, "length" .= count]
     readValue (StackRead offset count) = object ["sp" .= offset, "bytes" .= count]
+    readValue site@RegisterRead {} = toJSON site
 
 data HitEffects = HitEffects
   { effectDrawn :: ![Word32]

@@ -17,6 +17,7 @@ module EmulatorUsb
   , emulatorTraceSites
   , emulatorTraceSitesReading
   , SiteRead (..)
+  , Indirection (..)
   , TraceHit (..)
   , traceHitValue
   , TraceHitCursor (..)
@@ -91,7 +92,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent.MVar
 import Control.Exception (IOException, bracketOnError, try)
 import Control.Monad (forM_, unless)
-import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, withObject, withText, (.:), (.=))
+import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, withObject, withText, (.:), (.:?), (.!=), (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as M
 import qualified Data.ByteString as B
@@ -463,10 +464,15 @@ bridgeUsbApi exchange = UsbApi
 emulatorTraceSites :: Emulator -> [(Word32, String)] -> IO ()
 emulatorTraceSites emulator sites = emulatorTraceSitesReading emulator [(site, label, []) | (site, label) <- sites]
 
-data SiteRead = SiteRead Word32 Int | StackRead Int32 Int deriving (Eq, Show)
+-- | A site's read at entry: absolute, sp-relative, or relative to r0-r12 (13 for sp), optionally through
+-- the word stored there.
+data SiteRead = SiteRead Word32 Int | StackRead Int32 Int | RegisterRead Word8 Int32 Int Indirection
+  deriving (Eq, Show)
+
+data Indirection = Direct | Indirect deriving (Eq, Show)
 
 instance FromJSON SiteRead where
-  parseJSON value = absolute value <|> stack value
+  parseJSON value = absolute value <|> stack value <|> registerRelative value
     where
       absolute input = do
         (start, count) <- parseJSON input
@@ -480,17 +486,33 @@ instance FromJSON SiteRead where
         count <- fields .: "bytes"
         unless (count >= 1 && count <= 4096) (fail "trace site read requires 1..4096 bytes")
         pure (StackRead offset count)
+      registerRelative = withObject "register-relative trace read" $ \fields -> do
+        unless (sort (M.keys fields) `elem` [["bytes", "offset", "register"], ["bytes", "indirect", "offset", "register"]])
+          (fail "register-relative trace read takes register, offset, bytes and optionally indirect")
+        index <- fields .: "register"
+        offset <- fields .: "offset"
+        count <- fields .: "bytes"
+        indirect <- fields .:? "indirect" .!= False
+        unless (index <= (13 :: Int)) (fail "register-relative trace read names r0-r12 or sp (13)")
+        unless (count >= 1 && count <= 4096) (fail "trace site read requires 1..4096 bytes")
+        pure (RegisterRead (fromIntegral index) offset count (if indirect then Indirect else Direct))
 
 instance ToJSON SiteRead where
   toJSON (SiteRead start count) = toJSON (replicate (8 - length digits) '0' ++ digits, count)
     where digits = showHex start ""
   toJSON (StackRead offset count) = object ["sp" .= offset, "bytes" .= count]
+  toJSON (RegisterRead index offset count indirection) = registerReadValue index offset count indirection
+
+registerReadValue :: Word8 -> Int32 -> Int -> Indirection -> Value
+registerReadValue index offset count indirection = object
+  (["register" .= index, "offset" .= offset, "bytes" .= count] ++ ["indirect" .= True | indirection == Indirect])
 
 emulatorTraceSitesReading :: Emulator -> [(Word32, String, [SiteRead])] -> IO ()
 emulatorTraceSitesReading emulator sites = do
   let address value = "0x" ++ showHex value ""
       readValue (SiteRead start count) = toJSON [toInteger start, toInteger count]
       readValue (StackRead offset count) = object ["sp" .= offset, "bytes" .= count]
+      readValue (RegisterRead index offset count indirection) = registerReadValue index offset count indirection
   let siteReads = [K.fromString (address site) .= map readValue ranges
         | (site, _, ranges) <- sites, not (null ranges)]
   _ <- rpc emulator (object (["command" .= String "trace-sites",
@@ -611,7 +633,7 @@ parseTraceHit (Object item) = do
     Just (Array entries) -> mapM (\entry -> case entry of
       Object fields -> do
         kind <- textField "kind" fields
-        require (kind == "sp") "emulator stack memory requires sp kind"
+        require (kind `elem` ["sp", "register"]) "emulator stack memory requires sp or register kind"
         textField "bytes" fields >>= fmap B.pack . hexBytes
       _ -> ioError (userError "emulator stack memory must be objects")) (foldr (:) [] entries)
     Just _ -> ioError (userError "emulator stack memory must be an array")

@@ -40,7 +40,27 @@
       "address": "0x006d7f30",
       "name": "rb_render_stock_6d7f30",
       "source": "menu/recipe_bank_ram_engine.ld; vglib_post_display_event, the 0xfefe post on scanout-latch delivery"
-    }
+    },
+    {"address": "0x00723ce8", "name": "rb_render_call_723ce8", "source": "replacement/render_adapter/frame.rs; zero-tick delay after every second visit"},
+    {"address": "0x0088bf94", "name": "rb_render_call_88bf94", "source": "replacement/render_adapter/frame.rs; EGL surface selection of vglib_select_surface"},
+    {"address": "0x0088d620", "name": "rb_render_call_88d620", "source": "replacement/render_adapter/frame.rs; EGL surface-to-image copy ending the render"},
+    {"address": "0x00887280", "name": "rb_render_call_887280", "source": "replacement/render_adapter/frame.rs; EGL error read stored at R+0x50"},
+    {"address": "0x00858e60", "name": "rb_render_call_858e60", "source": "replacement/render_adapter/frame.rs; OpenVG integer parameter read"},
+    {"address": "0x00858c04", "name": "rb_render_call_858c04", "source": "replacement/render_adapter/frame.rs; OpenVG integer parameter"},
+    {"address": "0x00858b78", "name": "rb_render_call_858b78", "source": "replacement/render_adapter/frame.rs; OpenVG float parameter"},
+    {"address": "0x00858c90", "name": "rb_render_call_858c90", "source": "replacement/render_adapter/frame.rs; OpenVG vector parameter"},
+    {"address": "0x00858d24", "name": "rb_render_call_858d24", "source": "replacement/render_adapter/frame.rs; OpenVG scissor rectangles"},
+    {"address": "0x0085a1b0", "name": "rb_render_call_85a1b0", "source": "replacement/render_adapter/frame.rs; OpenVG clear"},
+    {"address": "0x00858748", "name": "rb_render_call_858748", "source": "replacement/render_adapter/frame.rs; OpenVG load identity"},
+    {"address": "0x008587c4", "name": "rb_render_call_8587c4", "source": "replacement/render_adapter/frame.rs; OpenVG load matrix"},
+    {"address": "0x008588cc", "name": "rb_render_call_8588cc", "source": "replacement/render_adapter/frame.rs; OpenVG multiply matrix"},
+    {"address": "0x00858950", "name": "rb_render_call_858950", "source": "replacement/render_adapter/frame.rs; OpenVG translate"},
+    {"address": "0x00858af4", "name": "rb_render_call_858af4", "source": "replacement/render_adapter/frame.rs; OpenVG rotate"},
+    {"address": "0x008589dc", "name": "rb_render_call_8589dc", "source": "replacement/render_adapter/frame.rs; OpenVG scale"},
+    {"address": "0x0085afbc", "name": "rb_render_call_85afbc", "source": "replacement/render_adapter/frame.rs; OpenVG set paint"},
+    {"address": "0x0085ab88", "name": "rb_render_call_85ab88", "source": "replacement/render_adapter/frame.rs; OpenVG draw path"},
+    {"address": "0x0085b930", "name": "rb_render_call_85b930", "source": "replacement/render_adapter/frame.rs; OpenVG draw image"},
+    {"address": "0x008586d8", "name": "rb_render_call_8586d8", "source": "replacement/render_adapter/frame.rs; OpenVG finish after the traversal"}
   ],
   "stock_regions": []
 }

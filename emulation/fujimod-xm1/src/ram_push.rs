@@ -3786,6 +3786,22 @@ mod tests {
     }
 
     #[test]
+    fn trace_site_register_reads_follow_the_register_and_its_pointer() {
+        let mut server = server(&[0xe3a01008, 0xeafffffe, 0x00000000]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000004": [{"register": 1, "offset": -8, "bytes": 4},
+                {"register": 1, "offset": 0, "bytes": 4, "indirect": true}]}}))).unwrap();
+        assert_eq!(server.bridge.machine.run(20), RunOutcome::Completed);
+        let hits = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        let hits = hits["hits"].as_array().unwrap();
+        assert!(!hits.is_empty() && hits.iter().all(|hit| hit["stack_memory"] == json!([
+            {"kind": "register", "register": 1, "offset": -8, "address": "0x0", "bytes": "0810a0e3"},
+            {"kind": "register", "register": 1, "offset": 0, "address": "0x0", "bytes": "0810a0e3"}])));
+        assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000004": [{"register": 14, "offset": 0, "bytes": 4}]}}))).is_err());
+    }
+
+    #[test]
     fn reset_trace_reads_capture_before_and_after_a_guest_store() {
         let mut server = server(&[0xe59f0008, 0xe3a0102a, 0xe5801000, 0xeafffffe, 0x00900000]);
         server.bridge.machine.session.board.write_physical(0x00900000, &[0; 4]).unwrap();

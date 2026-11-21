@@ -42,9 +42,12 @@ frame_step=${RENDER_FRAME_STEP:-}
 # RENDER_FRAME_OBJECTS=O00,O01: trace frame publication, with the stage-0 buffer objects at 0x8e2158/0x8e215c.
 frame_objects=${RENDER_FRAME_OBJECTS:-}
 case "$frame_step" in ''|1) ;; *) printf 'RENDER_FRAME_STEP must be empty or 1\n' >&2; exit 2 ;; esac
-# RENDER_CAPTURE_RAM=1: every capture of both roles also writes screenshots/LABEL.ram.bin for frame-pixel-pairs.sh.
+# RENDER_CAPTURE_RAM=1: every capture of both roles also writes screenshots/LABEL.ram.bin.
 capture_ram=${RENDER_CAPTURE_RAM:-}
 case "$capture_ram" in ''|1) ;; *) printf 'RENDER_CAPTURE_RAM must be empty or 1\n' >&2; exit 2 ;; esac
+# RENDER_SUBMISSION=1: both roles trace the stage-0 OpenVG calls and vector-engine jobs for frame-submission-check.
+submission=${RENDER_SUBMISSION:-}
+case "$submission" in ''|1) ;; *) printf 'RENDER_SUBMISSION must be empty or 1\n' >&2; exit 2 ;; esac
 
 reply() { jq -c '.key_reply.menu | [.menu_id, .setting_id, .cursor]' "$1/menu-observe.json"; }
 landing() {
@@ -130,9 +133,10 @@ check_end() {
 # role of the frame package also reads its rb_render_frame_record.
 frame_arguments() {
   FRAME=()
+  [ -z "$submission" ] || FRAME+=(--argjson submission true)
   [ -n "$frame_objects" ] || return 0
   local first="${frame_objects%%,*}" second="${frame_objects#*,}" record
-  FRAME=(--argjson frame_objects "[$((first)),$((second))]")
+  FRAME+=(--argjson frame_objects "[$((first)),$((second))]")
   if [ "$1" = owned ] && [ -n "$frame_step" ]; then
     record=$(jq -er '.address' "$prelinked/render-frame-record.json") || { printf 'missing frame record: %s\n' "$prelinked/render-frame-record.json" >&2; return 2; }
     FRAME+=(--argjson frame_record "$((record))")

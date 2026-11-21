@@ -1,69 +1,38 @@
 extern crate std;
 use super::*;
-use super::super::commands::Rgba;
 use super::super::resources::DataRegion;
-use super::super::stock_objects::{LIST_BYTES, POOL_BYTES};
 use std::vec;
 use std::vec::Vec;
 
 // Guest RAM: `LOW` covers the image ops copy 0x8e21fc, frame mode 0x8e2118, the node pool 0x8e22a4..0x8fa2a4,
 // sentinels 0x8fa2a4 (12 bytes per group), count bytes 0x8fa3c4, the class tables 0x8fa3dc/0x8fa484/0x8fa530 and
-// the display words 0x8fa5fc/0x8fa7e2. `HIGH` holds objects, VGImage records, pixels and GVFF blocks.
+// the display words 0x8fa5fc/0x8fa7e2. `HIGH` holds objects and shape items.
 const LOW: u32 = 0x008e_2100;
 const LOW_BYTES: usize = 0x18700;
 const HIGH: u32 = 0x0100_0000;
 const HIGH_BYTES: usize = 0x10000;
-const GVFF_AT: u32 = HIGH + 0x8000;
-// OpenVG context 0x88dd2c (I4:886680-886688) and its manager/registry/table-header/pool chain (I4:83a6c4-83a6cc,
-// 834878-834880, 82b428-82b4b4). Image records sit at pool element base HIGH+0x200 with stride 0x400, so the
-// record of image `index` is `block(index) + 0x200`.
-const VG: u32 = 0x0088_dd00;
-const MANAGER: u32 = HIGH + 0xf000;
-const REGISTRY: u32 = HIGH + 0xf020;
-const HEADER: u32 = HIGH + 0xf040;
-const HANDLE_POOL: u32 = HIGH + 0xf060;
-const STATES: u32 = HIGH + 0xf100;
-const CHUNK: u32 = HIGH + 0xf200;
-const CHUNK_STATES: u32 = HIGH + 0xf240;
-fn image_handle(index: u32) -> u32 { 0x2000_0000 | 1 << 25 | index }
-// First pixel as an OpenVG VG_sRGBA_8888 word 0x10203080 stored little-endian.
-const FIRST_PIXEL: [u8; 4] = [0x80, 0x30, 0x20, 0x10];
 
 fn node(slot: usize) -> u32 { 0x008e_22a4 + slot as u32 * 16 }
 fn sentinel(group: u8) -> u32 { 0x008f_a2a4 + u32::from(group) * 12 }
 fn block(index: u32) -> u32 { HIGH + index * 0x400 }
-fn pool_address(bank: u8, slot: u8) -> u32 { 0x015e_7538 + u32::from(bank) * 0x6a00 + u32::from(slot) * 0xd4 }
 
 #[derive(Clone, Copy)]
-struct Placement { x: f32, y: f32, created: (u16, u16), scale: (f32, f32) }
-fn place(x: f32, y: f32, created: (u16, u16)) -> Placement { Placement { x, y, created, scale: (1.0, 1.0) } }
+struct Place { x: f32, y: f32, size: (f32, f32), scale: (f32, f32) }
+fn place(x: f32, y: f32, size: (f32, f32)) -> Place { Place { x, y, size, scale: (1.0, 1.0) } }
 
-struct Ram { vg: Vec<u8>, low: Vec<u8>, high: Vec<u8>, pool: Vec<u8>, lists: Vec<u8> }
+struct Ram { low: Vec<u8>, high: Vec<u8> }
 impl Ram {
     fn new() -> Self {
-        let mut ram = Self { vg: vec![0; 0x100], low: vec![0; LOW_BYTES], high: vec![0; HIGH_BYTES], pool: vec![0; POOL_BYTES], lists: vec![0; LIST_BYTES] };
-        // Class tables keep the base getters of 0x7cfc94 and patch +0xa0 with the class draw (6d8d30-6d8d38, 6da644-6da64c).
+        let mut ram = Self { low: vec![0; LOW_BYTES], high: vec![0; HIGH_BYTES] };
         ram.ops(IMAGE_OPS, 0x006d_87dc);
         ram.ops(SHAPE_OPS, 0x006d_a0ac);
         for group in 0..24 { ram.group(group, &[]); }
-        ram.put32(0x0088_dd2c + 0x1c, MANAGER);
-        ram.put32(MANAGER + 0x1c, REGISTRY);
-        ram.put32(REGISTRY + 0xc, HEADER);
-        ram.put32(HEADER + 4, HANDLE_POOL);
-        ram.put32(HANDLE_POOL, 2);
-        ram.put32(HANDLE_POOL + 8, HIGH + 0x200);
-        ram.put32(HANDLE_POOL + 0xc, 16);
-        ram.put32(HANDLE_POOL + 0x20, 0x400);
-        ram.put32(HANDLE_POOL + 0x30, STATES);
         ram
     }
     fn bytes(&mut self, address: u32, count: usize) -> &mut [u8] {
-        if address >= HIGH { &mut self.high[(address - HIGH) as usize..][..count] }
-        else if address >= LOW { &mut self.low[(address - LOW) as usize..][..count] }
-        else { &mut self.vg[(address - VG) as usize..][..count] }
+        if address >= HIGH { &mut self.high[(address - HIGH) as usize..][..count] } else { &mut self.low[(address - LOW) as usize..][..count] }
     }
     fn put8(&mut self, address: u32, value: u8) { self.bytes(address, 1)[0] = value; }
-    fn put16(&mut self, address: u32, value: u16) { self.bytes(address, 2).copy_from_slice(&value.to_le_bytes()); }
     fn put32(&mut self, address: u32, value: u32) { self.bytes(address, 4).copy_from_slice(&value.to_le_bytes()); }
     fn putf(&mut self, address: u32, value: f32) { self.put32(address, value.to_bits()); }
     fn ops(&mut self, table: u32, draw: u32) {
@@ -85,160 +54,140 @@ impl Ram {
         }
         self.put8(0x008f_a3c4 + u32::from(group), entries.len() as u8);
     }
-    /// Base fields: x/y +0/+4, created size +8/+0xc, scale +0x14/+0x18, visible +0x47, ops +0xc0 (6d81e0-6d8264, 6d8140).
-    fn base(&mut self, object: u32, ops: u32, placement: Placement) {
+    fn base(&mut self, object: u32, ops: u32, place: Place) {
         self.put32(object + 0xc0, ops);
         self.put8(object + 0x47, 1);
-        self.putf(object, placement.x);
-        self.putf(object + 4, placement.y);
-        self.putf(object + 8, f32::from(placement.created.0));
-        self.putf(object + 0xc, f32::from(placement.created.1));
-        self.putf(object + 0x14, placement.scale.0);
-        self.putf(object + 0x18, placement.scale.1);
+        self.putf(object, place.x);
+        self.putf(object + 4, place.y);
+        self.putf(object + 8, place.size.0);
+        self.putf(object + 0xc, place.size.1);
+        self.putf(object + 0x14, place.scale.0);
+        self.putf(object + 0x18, place.scale.1);
     }
-    /// Image object with handle +0xc4 naming the VGImage record `block(index) + 0x200`, whose slot state is live
-    /// (0x2200: type 2 in bits 15..12, handle bits 27..16 in 11..0); the record holds format +0x14, width/height
-    /// +0x3c/+0x40, stride +0x4c and CPU pixels +0x68 (835ee0-836034).
-    fn image(&mut self, index: u32, placement: Placement) -> u32 {
+    fn image(&mut self, index: u32, place: Place) -> u32 {
         let object = block(index);
-        let record = object + 0x200;
-        let pixels = object + 0x280;
-        let (width, height) = placement.created;
-        self.base(object, IMAGE_OPS, placement);
-        self.put32(object + 0xc4, image_handle(index));
-        self.put16(STATES + 2 * index, 0x2200);
-        self.put32(record + 0x14, 1);
-        self.put16(record + 0x3c, width);
-        self.put16(record + 0x40, height);
-        self.put16(record + 0x4c, width * 4);
-        self.put32(record + 0x68, pixels);
-        self.bytes(pixels, 4).copy_from_slice(&FIRST_PIXEL);
+        self.base(object, IMAGE_OPS, place);
+        self.put32(object + 0xc4, 0x2200_0000 | index);
         object
     }
-    /// Clip words +0x34..+0x40 and enable byte +0x46 (6d8350, 6d8320).
     fn clip(&mut self, object: u32, clip: [i32; 4]) {
         self.put8(object + 0x46, 1);
         for (index, value) in clip.iter().enumerate() { self.put32(object + 0x34 + 4 * index as u32, *value as u32); }
     }
-    /// Shape object: type getter +0xc8 (6da668-6da670), paint +0xd4, type +0xe8, bounds x0 +0x30, y0 +0x28,
-    /// x1 +0x2c, y1 +0x24 (6da700-6da718), 96-byte block +0xec.
-    fn shape(&mut self, index: u32, placement: Placement, bounds: [f32; 4], shape_type: u32) -> u32 {
+    /// Shape object with paint word +0xd4, bounds y1 +0x24 and x0 +0x30, and `items` at +0xd8/+0xe0.
+    fn shape(&mut self, index: u32, place: Place, items: &[[u32; 21]]) -> u32 {
         let object = block(index);
-        self.base(object, SHAPE_OPS, placement);
-        self.put32(object + 0xc8, 0x006d_9fac);
+        self.base(object, SHAPE_OPS, place);
         self.put32(object + 0xd4, 1);
-        self.put32(object + 0xe8, shape_type);
-        self.putf(object + 0x30, bounds[0]);
-        self.putf(object + 0x28, bounds[1]);
-        self.putf(object + 0x2c, bounds[2]);
-        self.putf(object + 0x24, bounds[3]);
-        for component in 0..24u32 { self.putf(object + 0xec + component * 4, component as f32 / 24.0); }
+        self.putf(object + 0x24, 3.0);
+        self.putf(object + 0x30, 2.0);
+        let list = object + 0x200;
+        self.put32(object + 0xd8, list);
+        self.put32(object + 0xe0, items.len() as u32);
+        for (index, item) in items.iter().enumerate() {
+            for (slot, value) in item.iter().enumerate() { self.put32(list + (index * SHAPE_ITEM_BYTES + 4 * slot) as u32, *value); }
+        }
         object
     }
-    /// Header: magic "GVFF", zero item/paint/ramp/dash counts at +0x14..+0x20, bounds +0x28..+0x34 (6da6b8-6da718).
-    fn gvff(&mut self, address: u32, bounds: [f32; 4]) {
-        self.put32(address, 0x4646_5647);
-        for (index, value) in bounds.iter().enumerate() { self.putf(address + 40 + 4 * index as u32, *value); }
-        self.put32(address + 56, 0xdead_beef);
-    }
-    /// Pool object: handle +4, content +0xc, kind +0x14, bank byte +0x5a; sole member of its bank list.
-    fn own(&mut self, bank: u8, slot: u8, shape: u32, content: u32, kind: u32) {
-        let start = usize::from(bank) * 0x6a00 + usize::from(slot) * 0xd4;
-        let object = &mut self.pool[start..start + 0xd4];
-        object[4..8].copy_from_slice(&shape.to_le_bytes());
-        object[0xc..0x10].copy_from_slice(&content.to_le_bytes());
-        object[0x14..0x18].copy_from_slice(&kind.to_le_bytes());
-        object[0x5a] = bank;
-        let address = pool_address(bank, slot);
-        let list = usize::from(bank) * 8;
-        self.lists[list..list + 4].copy_from_slice(&address.to_le_bytes());
-        self.lists[list + 4..list + 8].copy_from_slice(&address.to_le_bytes());
-    }
-    fn regions(&self) -> [DataRegion<'_>; 3] {
-        [DataRegion { base: DataAddress(VG), bytes: &self.vg }, DataRegion { base: DataAddress(LOW), bytes: &self.low }, DataRegion { base: DataAddress(HIGH), bytes: &self.high }]
+    fn regions(&self) -> [DataRegion<'_>; 2] {
+        [DataRegion { base: DataAddress(LOW), bytes: &self.low }, DataRegion { base: DataAddress(HIGH), bytes: &self.high }]
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Out {
-    Clip(PanelRect),
-    ResetClip,
-    Image { dest: SceneRect, size: (u16, u16), first: Rgba },
-    Shape { dest: SceneRect, gvff: Vec<u8>, recolour: Option<Vec<u8>> },
+enum Event { Call(VgCall), MakeCurrent, GetInteger(VgWord), CopyBuffers, RecordError, Visits(u32, u32), Yield }
+
+struct Recorder { events: Vec<Event>, current: bool, quality: i32, copied: bool }
+impl Recorder {
+    fn new() -> Self { Self { events: Vec::new(), current: true, quality: RENDERING_QUALITY_BETTER, copied: true } }
+    fn calls(&self) -> Vec<VgCall> {
+        self.events.iter().filter_map(|event| match event { Event::Call(call) => Some(*call), _ => None }).collect()
+    }
+}
+impl StageDevice for Recorder {
+    fn call(&mut self, call: VgCall) { self.events.push(Event::Call(call)); }
+    fn make_current(&mut self) -> bool { self.events.push(Event::MakeCurrent); self.current }
+    fn get_integer(&mut self, parameter: VgWord) -> i32 { self.events.push(Event::GetInteger(parameter)); self.quality }
+    fn copy_buffers(&mut self) -> bool { self.events.push(Event::CopyBuffers); self.copied }
+    fn record_error(&mut self) { self.events.push(Event::RecordError); }
+    fn set_visits(&mut self, visited: u32, result: u32) { self.events.push(Event::Visits(visited, result)); }
+    fn yield_task(&mut self) { self.events.push(Event::Yield); }
 }
 
-fn render(ram: &Ram) -> Result<(SceneReport, Vec<Out>), SceneError> {
+fn plan(ram: &Ram) -> Result<(SceneReport, Vec<Visit>), SceneError> {
     let regions = ram.regions();
     let memory = ResourceMemory::new(&regions).unwrap();
-    let pool = ObjectPool::parse(&ram.pool, &ram.lists).unwrap();
-    let scene = Scene::decode(&memory, &pool)?;
-    let checked = scene.check();
-    let mut storage = [DrawCommand::ResetClip; 64];
-    let mut buffer = CommandBuffer::new(&mut storage);
-    let report = scene.lower(&mut buffer)?;
-    assert_eq!(checked, Ok(report));
-    let out = buffer.draw_list().commands().iter().map(|command| match *command {
-        DrawCommand::Clip(rect) => Out::Clip(rect),
-        DrawCommand::ResetClip => Out::ResetClip,
-        DrawCommand::ScaledImage { dest, source } => Out::Image { dest, size: (source.width(), source.height()), first: source.rgba(0, 0).unwrap() },
-        DrawCommand::ScaledShape { dest, gvff, recolour } => Out::Shape { dest, gvff: gvff.to_vec(), recolour: recolour.map(|block| block.0.to_vec()) },
-        other => panic!("unexpected {other:?}"),
-    }).collect();
-    Ok((report, out))
+    let scene = Scene::decode(&memory)?;
+    let mut storage = [Visit::NoResource; 16];
+    let mut buffer = PlanBuffer::new(&mut storage);
+    let report = scene.plan(&mut buffer)?;
+    Ok((report, buffer.visits().to_vec()))
 }
 
-fn refusal(ram: &Ram) -> SceneError { render(ram).unwrap_err() }
+fn render(ram: &Ram, device: &mut Recorder) -> RenderOutcome {
+    let (_, visits) = plan(ram).unwrap();
+    let regions = ram.regions();
+    let memory = ResourceMemory::new(&regions).unwrap();
+    render_stage(&visits, 720, 480, 0.0, &memory, device).unwrap()
+}
+
+fn object_calls(ram: &Ram) -> Vec<VgCall> {
+    let mut device = Recorder::new();
+    render(ram, &mut device);
+    let calls = device.calls();
+    // Quality check, viewport and clear open the frame; Finish closes it.
+    calls[2..calls.len() - 1].to_vec()
+}
+
+fn refusal(ram: &Ram) -> SceneError { plan(ram).unwrap_err() }
 fn object_refusal(object: u32, refusal: ObjectRefusal) -> SceneError { SceneError::Object { object: VglibObject(DataAddress(object)), refusal } }
-fn rect(x: i32, y: i32, width: u16, height: u16) -> SceneRect { SceneRect::new(x as f32, y as f32, f32::from(width), f32::from(height)).unwrap() }
-fn panel(x: u16, y: u16, width: u16, height: u16) -> PanelRect { PanelRect::new(PanelPoint::new(x, y).unwrap(), width, height).unwrap() }
 fn group(index: u8) -> GroupIndex { GroupIndex::new(index).unwrap() }
-const FIRST: Rgba = Rgba { red: 0x10, green: 0x20, blue: 0x30, alpha: 0x80 };
+fn seti(parameter: VgWord, value: i32) -> VgCall { VgCall::SetInteger { parameter, value } }
+const IDENTITY: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
 
-fn image_at(dest: SceneRect, size: (u16, u16)) -> Out { Out::Image { dest, size, first: FIRST } }
-
-fn single_image(placement: Placement) -> (Ram, u32) {
+fn single_image(place: Place) -> (Ram, u32) {
     let mut ram = Ram::new();
-    let object = ram.image(0, placement);
+    let object = ram.image(0, place);
     ram.group(0, &[(3, object)]);
     (ram, object)
 }
 
-const SHAPE_BOUNDS: [f32; 4] = [0.0, 12.0, 20.0, 0.0];
-fn single_shape(shape_type: u32) -> (Ram, u32) {
-    let mut ram = Ram::new();
-    let object = ram.shape(0, place(50.0, 60.0, (20, 12)), SHAPE_BOUNDS, shape_type);
-    ram.gvff(GVFF_AT, SHAPE_BOUNDS);
-    ram.own(3, 2, object, GVFF_AT, 5);
-    ram.group(0, &[(3, object)]);
-    (ram, object)
+fn image_calls(handle: u32, translate: [f32; 2], first: [f32; 9], scale: [f32; 2], height: f32, clip: Option<[i32; 4]>) -> Vec<VgCall> {
+    let mut calls = vec![
+        seti(MATRIX_MODE, 0x1401), seti(IMAGE_QUALITY, 0x1f00), seti(BLEND_MODE, 0x2001), seti(COLOR_TRANSFORM, 0),
+        VgCall::LoadIdentity,
+        VgCall::Translate { x: translate[0], y: translate[1] },
+        VgCall::MultiplyMatrix(Matrix::Local(first)),
+        VgCall::Rotate(0.0),
+        VgCall::Scale { x: scale[0], y: scale[1] },
+        VgCall::MultiplyMatrix(Matrix::Local([1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, height, 1.0])),
+    ];
+    if let Some(values) = clip { calls.extend([VgCall::SetIntegers { parameter: SCISSOR_RECTS, values }, seti(SCISSORING, 1)]); }
+    calls.extend([seti(IMAGE_MODE, 4), VgCall::DrawImage(handle), seti(SCISSORING, 0), seti(COLOR_TRANSFORM, 0)]);
+    calls
 }
 
 #[test]
-fn groups_render_from_twenty_three_down_and_each_list_from_its_head() {
+fn groups_draw_from_twenty_three_down_and_each_list_from_its_head() {
     let mut ram = Ram::new();
-    let objects: Vec<u32> = [10.0, 20.0, 30.0, 40.0].iter().enumerate()
-        .map(|(index, x)| ram.image(index as u32, place(*x, 0.0, (8, 4)))).collect();
+    let objects: Vec<u32> = (0..4).map(|index| ram.image(index, place(0.0, 0.0, (8.0, 4.0)))).collect();
     ram.group(23, &[(5, objects[0]), (2, objects[1])]);
     ram.group(7, &[(9, objects[2])]);
     ram.group(0, &[(1, objects[3])]);
-    let (report, out) = render(&ram).unwrap();
-    assert_eq!(report, SceneReport { objects: 4, visible: 4, drawn: 4, clipped: 0, collapsed: 0 });
-    let expected: Vec<Out> = [10, 20, 30, 40].iter()
-        .flat_map(|x| [Out::ResetClip, image_at(rect(*x, 0, 8, 4), (8, 4))]).collect();
-    assert_eq!(out, expected);
+    let drawn: Vec<u32> = object_calls(&ram).into_iter().filter_map(|call| match call { VgCall::DrawImage(handle) => Some(handle), _ => None }).collect();
+    assert_eq!(drawn, vec![0x2200_0000, 0x2200_0001, 0x2200_0002, 0x2200_0003]);
 }
 
 #[test]
 fn walk_reports_groups_and_objects_in_render_order() {
     let mut ram = Ram::new();
-    let a = ram.image(0, place(0.0, 0.0, (8, 4)));
-    let b = ram.image(1, place(0.0, 0.0, (8, 4)));
+    let a = ram.image(0, place(0.0, 0.0, (8.0, 4.0)));
+    let b = ram.image(1, place(0.0, 0.0, (8.0, 4.0)));
     ram.group(2, &[(40, a)]);
     ram.group(11, &[(7, b)]);
     let regions = ram.regions();
     let memory = ResourceMemory::new(&regions).unwrap();
-    let pool = ObjectPool::parse(&ram.pool, &ram.lists).unwrap();
-    let scene = Scene::decode(&memory, &pool).unwrap();
+    let scene = Scene::decode(&memory).unwrap();
     let walk: Vec<_> = scene.objects().map(Result::unwrap).collect();
     assert_eq!(walk, vec![(group(11), VglibObject(DataAddress(b))), (group(2), VglibObject(DataAddress(a)))]);
     assert_eq!(scene.group_length(group(11)), 1);
@@ -246,90 +195,174 @@ fn walk_reports_groups_and_objects_in_render_order() {
 }
 
 #[test]
-fn image_destination_and_clip_at_identity() {
-    let (mut ram, object) = single_image(place(100.0, 40.0, (8, 4)));
+fn an_image_draws_at_its_y_up_position_with_its_scissor() {
+    let (mut ram, object) = single_image(Place { x: 100.0, y: 40.0, size: (8.0, 4.0), scale: (1.5, 2.0) });
     ram.clip(object, [96, 32, 200, 40]);
-    let (_, out) = render(&ram).unwrap();
-    assert_eq!(out, vec![Out::Clip(panel(96, 32, 200, 40)), image_at(rect(100, 40, 8, 4), (8, 4))]);
+    // Translate (100, 480 - 8 - 40); scissor bottom 480 - 40 - 32.
+    assert_eq!(object_calls(&ram), image_calls(0x2200_0000, [100.0, 432.0], IDENTITY, [1.5, 2.0], 4.0, Some([96, 408, 200, 40])));
 }
 
 #[test]
-fn image_destination_at_nine_eighths_horizontal_ratio() {
-    // A pool object of 8 pixels placed by 0x1177a08's x*9/8 transform: target 9 wide, scale word 9/8.
-    let (ram, _) = single_image(Placement { x: 225.0, y: 40.0, created: (8, 4), scale: (1.125, 1.0) });
-    let (_, out) = render(&ram).unwrap();
-    assert_eq!(out, vec![Out::ResetClip, image_at(rect(225, 40, 9, 4), (8, 4))]);
+fn surface_factors_scale_position_size_and_scissor() {
+    let (mut ram, object) = single_image(place(100.0, 40.0, (8.0, 4.0)));
+    ram.put32(DISPLAY_MODE.0, 3);
+    ram.clip(object, [96, 32, 200, 40]);
+    // 360 x 240 at 0.5: translate (50, 240 - 2 - 20), scissor (48, 240 - 20 - 16, 100, 20).
+    assert_eq!(object_calls(&ram), image_calls(0x2200_0000, [50.0, 218.0], IDENTITY, [0.5, 0.5], 4.0, Some([48, 204, 100, 20])));
+}
+
+#[test]
+fn display_and_object_mirror_flip_the_first_matrix() {
+    let (mut ram, object) = single_image(place(100.0, 40.0, (8.0, 4.0)));
+    ram.put8(object + 0x4b, 1);
+    let unmirrored = object_calls(&ram);
+    assert_eq!(unmirrored, image_calls(0x2200_0000, [100.0, 436.0], IDENTITY, [1.0, 1.0], 4.0, None));
+    ram.put8(DISPLAY_MIRROR.0, 1);
+    let mut first = IDENTITY;
+    first[0] = -1.0;
+    first[6] = 720.0 - 200.0;
+    assert_eq!(object_calls(&ram), image_calls(0x2200_0000, [100.0, 436.0], first, [1.0, 1.0], 4.0, None));
+}
+
+#[test]
+fn an_object_matrix_replaces_the_placement() {
+    let (mut ram, object) = single_image(place(100.0, 40.0, (8.0, 4.0)));
+    ram.put8(object + 0x4a, 1);
+    assert_eq!(object_calls(&ram)[4..6], [VgCall::LoadIdentity, VgCall::LoadMatrix(DataAddress(object + 0x50))]);
+    let mut ram = Ram::new();
+    let shape = ram.shape(0, place(0.0, 0.0, (20.0, 12.0)), &[]);
+    ram.put8(shape + 0x4a, 1);
+    ram.group(0, &[(3, shape)]);
+    assert_eq!(object_calls(&ram)[4..6], [VgCall::LoadIdentity, VgCall::MultiplyMatrix(Matrix::Guest(DataAddress(shape + 0x50)))]);
 }
 
 #[test]
 fn shape_scissor_saturates_its_bottom_edge_and_image_scissor_does_not() {
     // Clip y 470, height 20: y-up bottom 480 - 20 - 470 = -10, which vcvt.u32 (6da47c) makes 0 and vcvt.s32 (6d8c94) keeps.
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.clip(object, [0, 470, 720, 20]);
-    assert_eq!(render(&ram).unwrap().1[0], Out::Clip(panel(0, 470, 720, 10)));
-    let (mut ram, object) = single_shape(1);
-    ram.clip(object, [0, 470, 720, 20]);
-    assert_eq!(render(&ram).unwrap().1[0], Out::Clip(panel(0, 460, 720, 20)));
-}
-
-#[test]
-fn clip_outside_the_panel_draws_nothing_but_counts_as_visible() {
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.clip(object, [800, 0, 10, 10]);
-    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 1, collapsed: 0 }, vec![]));
-}
-
-#[test]
-fn hidden_and_resourceless_objects_draw_nothing() {
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put8(object + 0x47, 0);
-    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 0, drawn: 0, clipped: 0, collapsed: 0 }, vec![]));
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put32(object + 0xc4, 0);
-    assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 0, collapsed: 0 }, vec![]));
-}
-
-#[test]
-fn shape_resolves_its_gvff_through_the_pool_owner() {
-    let (ram, _) = single_shape(2);
-    let (_, out) = render(&ram).unwrap();
-    let mut header = vec![0u8; 56];
-    header[..4].copy_from_slice(b"GVFF");
-    for (index, value) in SHAPE_BOUNDS.iter().enumerate() { header[40 + 4 * index..44 + 4 * index].copy_from_slice(&value.to_le_bytes()); }
-    let block: Vec<u8> = (0..24u32).flat_map(|component| (component as f32 / 24.0).to_le_bytes()).collect();
-    assert_eq!(out, vec![Out::ResetClip, Out::Shape { dest: rect(50, 60, 20, 12), gvff: header.clone(), recolour: Some(block) }]);
-    let (ram, _) = single_shape(1);
-    assert_eq!(render(&ram).unwrap().1[1], Out::Shape { dest: rect(50, 60, 20, 12), gvff: header, recolour: None });
-}
-
-#[test]
-fn shape_owner_problems_are_refused() {
+    assert!(object_calls(&ram).contains(&VgCall::SetIntegers { parameter: SCISSOR_RECTS, values: [0, -10, 720, 20] }));
     let mut ram = Ram::new();
-    let object = ram.shape(0, place(50.0, 60.0, (20, 12)), SHAPE_BOUNDS, 1);
-    ram.gvff(GVFF_AT, SHAPE_BOUNDS);
-    ram.group(0, &[(3, object)]);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ShapeOwnerMissing));
-    ram.own(3, 2, object, GVFF_AT, 2);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ShapeOwnerKind(ObjectKind::Bitmap)));
-    ram.own(3, 2, object, GVFF_AT + 4, 5);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::Shape(ShapeError::Magic)));
-    let (mut ram, object) = single_shape(1);
-    ram.putf(object + 0x30, 1.0);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ShapeBounds));
-    let reversed = [20.0, 12.0, 0.0, 0.0];
+    let shape = ram.shape(0, place(0.0, 0.0, (20.0, 12.0)), &[]);
+    ram.clip(shape, [0, 470, 720, 20]);
+    ram.group(0, &[(3, shape)]);
+    assert!(object_calls(&ram).contains(&VgCall::SetIntegers { parameter: SCISSOR_RECTS, values: [0, 0, 720, 20] }));
+}
+
+fn item(fill_rule: u32, modes: u32, fill_paint: u32, stroke_paint: u32, path: u32) -> [u32; 21] {
+    let mut item = [0; 21];
+    item[0] = fill_rule;
+    item[1] = modes;
+    item[2] = 0x1700;
+    item[3] = 0x1800;
+    item[4] = 4.0f32.to_bits();
+    item[5] = 1.5f32.to_bits();
+    item[6] = fill_paint;
+    item[7] = stroke_paint;
+    item[8] = path;
+    item[12] = 0x29a;
+    item
+}
+
+#[test]
+fn shape_items_set_paints_and_strokes_as_their_change_flags_say() {
+    let first = item(0x1901, 3, 0x51, 0x61, 0x71);
+    let mut unchanged = item(0x1902, 3, 0x52, 0x62, 0x72);
+    unchanged[11] = 1;
+    let mut dashed = item(0x1902, 1, 0x53, 0x63, 0x73);
+    dashed[9] = 1;
+    dashed[12] = 0;
+    dashed[13] = 2;
+    dashed[14] = 0.5f32.to_bits();
+    let hidden = item(0x1901, 0, 0x54, 0x64, 0x74);
     let mut ram = Ram::new();
-    let object = ram.shape(0, place(50.0, 60.0, (20, 12)), reversed, 1);
-    ram.gvff(GVFF_AT, reversed);
-    ram.own(3, 2, object, GVFF_AT, 5);
-    ram.group(0, &[(3, object)]);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ShapeOrientation));
+    let shape = ram.shape(0, Place { x: 50.0, y: 60.0, size: (20.0, 12.0), scale: (2.0, 1.0) }, &[first, unchanged, dashed, hidden]);
+    ram.put8(shape + 0x45, 2);
+    ram.group(0, &[(3, shape)]);
+    let stroke = |paint, dash: Option<(i32, u32)>| {
+        let mut calls = vec![
+            VgCall::SetFloat { parameter: STROKE_LINE_WIDTH, value: 1.5 }, seti(STROKE_CAP_STYLE, 0x1700),
+            seti(STROKE_JOIN_STYLE, 0x1800), VgCall::SetFloat { parameter: STROKE_MITER_LIMIT, value: 4.0 },
+        ];
+        calls.extend(match dash {
+            None => vec![VgCall::SetVector { parameter: STROKE_DASH_PATTERN, count: 0, values: DataAddress(0) }],
+            Some((count, values)) => vec![VgCall::SetFloat { parameter: STROKE_DASH_PHASE, value: 0.5 },
+                VgCall::SetVector { parameter: STROKE_DASH_PATTERN, count, values: DataAddress(values) }],
+        });
+        calls.push(VgCall::SetPaint { paint, modes: 1 });
+        calls
+    };
+    let list = shape + 0x200;
+    let mut expected = vec![
+        seti(MATRIX_MODE, 0x1400), seti(BLEND_MODE, 0x2005), seti(COLOR_TRANSFORM, 0), seti(FILL_RULE, 0x1901),
+        VgCall::LoadIdentity,
+        VgCall::Translate { x: 50.0, y: 480.0 - 12.0 - 60.0 },
+        VgCall::MultiplyMatrix(Matrix::Local(IDENTITY)),
+        VgCall::Translate { x: -(2.0 * 2.0), y: -3.0 },
+        VgCall::Scale { x: 2.0, y: 1.0 },
+        seti(BLEND_MODE, 0x2000), seti(FILL_RULE, 0x1901), VgCall::SetPaint { paint: 0x51, modes: 2 },
+    ];
+    expected.extend(stroke(0x61, None));
+    expected.extend([VgCall::DrawPath { path: 0x71, modes: 3 }, seti(BLEND_MODE, 0x2001), VgCall::DrawPath { path: 0x72, modes: 3 }, seti(BLEND_MODE, 0x2000)]);
+    expected.extend(stroke(0x63, Some((2, list + 2 * SHAPE_ITEM_BYTES as u32 + 0x3c))));
+    expected.extend([VgCall::DrawPath { path: 0x73, modes: 1 }, seti(BLEND_MODE, 0x2000),
+        seti(SCISSORING, 0), seti(COLOR_TRANSFORM, 0), VgCall::SetFloat { parameter: STROKE_LINE_WIDTH, value: 0.0 }]);
+    assert_eq!(object_calls(&ram), expected);
+}
+
+#[test]
+fn the_frame_selects_clears_visits_and_copies() {
+    let mut ram = Ram::new();
+    let objects: Vec<u32> = (0..5).map(|index| ram.image(index, place(0.0, 0.0, (8.0, 4.0)))).collect();
+    let hidden = ram.image(5, place(0.0, 0.0, (8.0, 4.0)));
+    ram.put8(hidden + 0x47, 0);
+    ram.put32(objects[1] + 0xc4, 0);
+    ram.group(0, &[(1, objects[0]), (2, hidden), (3, objects[1]), (4, objects[2]), (5, objects[3]), (6, objects[4])]);
+    let mut device = Recorder::new();
+    assert_eq!(render(&ram, &mut device), RenderOutcome::Rendered(1));
+    let frame: Vec<Event> = device.events.iter().filter(|event| !matches!(event, Event::Call(call) if !matches!(call,
+        VgCall::SetVector { parameter: VIEWPORT, .. } | VgCall::Clear { .. } | VgCall::DrawImage(_) | VgCall::Finish))).cloned().collect();
+    let draw = |index: u32| Event::Call(VgCall::DrawImage(0x2200_0000 | index));
+    assert_eq!(frame, vec![
+        Event::MakeCurrent, Event::GetInteger(RENDERING_QUALITY),
+        Event::Call(VgCall::SetVector { parameter: VIEWPORT, count: 4, values: VIEWPORT_VALUES }),
+        Event::Call(VgCall::Clear { x: 0, y: 0, width: 720, height: 480 }), Event::Visits(0, 0),
+        draw(0), Event::Visits(1, 1), Event::Yield,
+        Event::Visits(2, 1),
+        draw(2), Event::Visits(3, 1),
+        draw(3), Event::Visits(4, 1), Event::Yield,
+        draw(4), Event::Visits(5, 1), Event::Yield,
+        Event::Call(VgCall::Finish), Event::CopyBuffers,
+    ]);
+}
+
+#[test]
+fn frame_errors_follow_the_stock_render() {
+    let (ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
+    let mut device = Recorder { current: false, ..Recorder::new() };
+    assert_eq!(render(&ram, &mut device), RenderOutcome::SurfaceRefused);
+    assert_eq!(device.events, vec![Event::MakeCurrent]);
+    let mut device = Recorder { quality: 0x1201, copied: false, ..Recorder::new() };
+    render(&ram, &mut device);
+    assert_eq!(device.events[2], Event::Call(seti(RENDERING_QUALITY, RENDERING_QUALITY_BETTER)));
+    assert_eq!(device.events[device.events.len() - 2..], [Event::CopyBuffers, Event::RecordError]);
+}
+
+#[test]
+fn a_positive_floor_makes_an_undrawn_frame_rendered() {
+    let ram = Ram::new();
+    let regions = ram.regions();
+    let memory = ResourceMemory::new(&regions).unwrap();
+    assert_eq!(render_stage(&[], 720, 480, 0.0, &memory, &mut Recorder::new()), Ok(RenderOutcome::Rendered(0)));
+    assert_eq!(render_stage(&[], 720, 480, 0.25, &memory, &mut Recorder::new()), Ok(RenderOutcome::Rendered(1)));
+    assert_eq!(render_stage(&[Visit::NoResource], 720, 480, 0.0, &memory, &mut Recorder::new()), Ok(RenderOutcome::Rendered(0)));
 }
 
 #[test]
 fn classes_follow_the_ops_word() {
     let mut ram = Ram::new();
-    let image = ram.image(0, place(0.0, 0.0, (8, 4)));
-    let shape = ram.shape(1, place(0.0, 0.0, (20, 12)), SHAPE_BOUNDS, 1);
+    let image = ram.image(0, place(0.0, 0.0, (8.0, 4.0)));
+    let shape = ram.shape(1, place(0.0, 0.0, (20.0, 12.0)), &[]);
     let path = block(2);
     ram.put32(path + 0xc0, PATH_LIST_OPS);
     let plane = block(3);
@@ -348,170 +381,75 @@ fn classes_follow_the_ops_word() {
 
 #[test]
 fn a_changed_class_table_is_refused() {
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put32(IMAGE_OPS + 0x04, 0x006d_8160);
     assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::OpsTable));
 }
 
 #[test]
-fn base_fields_decode_from_their_getter_offsets() {
-    let (mut ram, object) = single_image(Placement { x: 7.0, y: 9.0, created: (8, 4), scale: (1.5, 2.0) });
-    ram.clip(object, [1, 2, 3, 4]);
-    ram.put8(object + 0x45, 2);
-    ram.put8(object + 0x48, 2);
-    ram.put8(object + 0x49, 17);
-    ram.put8(object + 0x4c, 1);
-    let regions = ram.regions();
-    let memory = ResourceMemory::new(&regions).unwrap();
-    let decoded = SceneObject::decode(&memory, group(0), VglibObject(DataAddress(object))).unwrap();
-    assert_eq!(decoded.base, BaseFields {
-        visible: true, position: ScenePoint { x: 7.0, y: 9.0 }, size: SceneSize { width: 8.0, height: 4.0 },
-        scale: ScaleWords { x: 1.5, y: 2.0 }, parameter: 0.0, clip: Some(ObjectClip { x: 1, y: 2, width: 3, height: 4 }),
-        coordinate_mode: 2, group: 17, matrix: false, mirror: false, output_mode: 1, blend: BlendMode::Multiply,
-    });
+fn rotation_and_colour_transform_are_refused() {
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
+    ram.putf(object + 0x1c, 90.0);
+    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::Rotation));
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
+    ram.put8(object + 0x45, 1);
+    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ColourTransform));
 }
 
 #[test]
-fn coordinate_mode_and_multiply_blend_do_not_move_an_unrotated_image() {
-    let (mut ram, object) = single_image(place(5.0, 6.0, (8, 4)));
-    ram.put8(object + 0x48, 2);
-    ram.put8(object + 0x45, 2);
-    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image_at(rect(5, 6, 8, 4), (8, 4))]);
-}
-
-#[test]
-fn unestablished_draw_state_is_refused() {
-    let cases: [(fn(&mut Ram, u32), ObjectRefusal); 6] = [
-        (|ram, object| ram.putf(object + 0x1c, 90.0), ObjectRefusal::Rotation),
-        (|ram, object| { ram.put8(DISPLAY_MIRROR.0, 1); ram.put8(object + 0x4b, 1); }, ObjectRefusal::Mirror),
-        (|ram, object| ram.put8(object + 0x4a, 1), ObjectRefusal::Matrix),
-        (|ram, object| ram.put8(object + 0x45, 1), ObjectRefusal::ColourTransform),
-        (|ram, _| ram.put32(DISPLAY_MODE.0, 3), ObjectRefusal::SurfaceScale { display_mode: 3, output_mode: 0 }),
-        (|ram, object| { ram.put32(DISPLAY_MODE.0, 8); ram.put8(object + 0x4c, 1); }, ObjectRefusal::SurfaceScale { display_mode: 8, output_mode: 1 }),
-    ];
-    for (mutate, expected) in cases {
-        let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-        mutate(&mut ram, object);
-        assert_eq!(refusal(&ram), object_refusal(object, expected));
-    }
-}
-
-#[test]
-fn display_states_matching_the_panel_still_draw() {
-    // Object mirror without display mirror, and display mode 8 with output mode 0 (720 x 480 at 6dd8c4-6dd8ec).
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put8(object + 0x4b, 1);
-    ram.put32(DISPLAY_MODE.0, 8);
-    assert_eq!(render(&ram).unwrap().0.drawn, 1);
-}
-
-#[test]
-fn image_storage_and_geometry_refusals() {
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put32(object + 0x200 + 0x14, 2);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageFormat));
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put16(object + 0x200 + 0x3c, 9);
-    ram.put16(object + 0x200 + 0x4c, 36);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageSize));
-    for scale in [(-1.0, 1.0), (1.0, -1.0), (f32::MAX, 1.0)] {
-        let (ram, object) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale });
-        assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::NegativeOrNonFiniteGeometry));
-    }
-}
-
-#[test]
-fn zero_width_or_height_draws_nothing_but_counts_as_visible() {
-    // The picker-15 parent screen's shape 0xaf42e8 has scale words (9, 0).
-    for scale in [(0.0, 1.0), (9.0, 0.0), (-0.0, 1.0)] {
-        let (ram, _) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale });
-        assert_eq!(render(&ram).unwrap(), (SceneReport { objects: 1, visible: 1, drawn: 0, clipped: 0, collapsed: 1 }, vec![]));
-    }
-}
-
-#[test]
-fn fractional_geometry_lowers_to_the_f32_products() {
-    let (ram, _) = single_image(Placement { x: 0.0, y: 0.0, created: (8, 4), scale: (1.1, 1.0) });
-    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image_at(SceneRect::new(0.0, 0.0, 8.0f32 * 1.1f32, 4.0).unwrap(), (8, 4))]);
-    let (ram, _) = single_image(place(3.0 + 1.0 / 2048.0, 0.0, (8, 4)));
-    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image_at(SceneRect::new(3.0 + 1.0 / 2048.0, 0.0, 8.0, 4.0).unwrap(), (8, 4))]);
-}
-
-#[test]
-fn image_handles_resolve_only_to_live_slots_of_the_tagged_pool() {
-    let image = image_at(rect(0, 0, 8, 4), (8, 4));
-    let (ram, _) = single_image(place(0.0, 0.0, (8, 4)));
-    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image.clone()]);
-    // A freed slot clears the state's type nibble (82b2ec-82b2f8).
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put16(STATES, 0x0200);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageHandle(image_handle(0))));
-    // The table header's tag must equal handle bits 24..16 (82b434-82b440).
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put32(HEADER, 1);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageHandle(image_handle(0))));
-    // The pool's type word must equal handle bits 31..28 (82b448-82b450).
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put32(HANDLE_POOL, 3);
-    assert_eq!(refusal(&ram), object_refusal(object, ObjectRefusal::ImageHandle(image_handle(0))));
-    // A cached handle returns the cached record without consulting slot state (82b458-82b464).
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
-    ram.put16(STATES, 0);
-    ram.put32(HANDLE_POOL + 0x34, image_handle(0));
-    ram.put32(HANDLE_POOL + 0x38, block(0) + 0x200);
-    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image.clone()]);
-    // A slot past the first block is found in a chunk {base, first, count, state array +0x10, next +0x14}
-    // (82b4bc-82b538): slot 20 is chunk index 2, base + 2 x stride.
-    let mut ram = Ram::new();
-    let object = ram.image(1, place(0.0, 0.0, (8, 4)));
-    ram.put32(object + 0xc4, image_handle(20));
-    ram.put32(HANDLE_POOL + 0x40, CHUNK);
-    ram.put32(CHUNK, block(1) + 0x200 - 2 * 0x400);
-    ram.put32(CHUNK + 4, 18);
-    ram.put32(CHUNK + 8, 4);
-    ram.put32(CHUNK + 0x10, CHUNK_STATES);
-    ram.put16(CHUNK_STATES + 4, 0x2200);
-    ram.group(0, &[(3, object)]);
-    assert_eq!(render(&ram).unwrap().1, vec![Out::ResetClip, image]);
+fn hidden_objects_are_not_visits_and_resourceless_ones_draw_nothing() {
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
+    ram.put8(object + 0x47, 0);
+    assert_eq!(plan(&ram).unwrap(), (SceneReport { objects: 1, visible: 0 }, vec![]));
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
+    ram.put32(object + 0xc4, 0);
+    assert_eq!(plan(&ram).unwrap(), (SceneReport { objects: 1, visible: 1 }, vec![Visit::NoResource]));
 }
 
 #[test]
 fn dual_render_frame_modes_are_refused() {
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put32(FRAME_MODE.0, 8);
     assert_eq!(refusal(&ram), SceneError::DualRender(8));
 }
 
 #[test]
 fn malformed_lists_are_refused() {
-    let (mut ram, object) = single_image(place(0.0, 0.0, (8, 4)));
-    // Group 4: node 1 -> node 2 -> node 1.
+    let (mut ram, object) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.group(4, &[(1, object), (2, object)]);
     ram.put32(node(2), node(1));
     assert_eq!(refusal(&ram), SceneError::RepeatedNode { group: group(4), node: DataAddress(node(1)) });
 
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put32(sentinel(6), 0x008f_a300);
     assert_eq!(refusal(&ram), SceneError::NodeOutsidePool { group: group(6), node: DataAddress(0x008f_a300) });
     ram.put32(sentinel(6), node(4) + 4);
     assert_eq!(refusal(&ram), SceneError::NodeOutsidePool { group: group(6), node: DataAddress(node(4) + 4) });
 
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put8(0x008f_a3c4, 2);
     assert_eq!(refusal(&ram), SceneError::CountMismatch { group: group(0), count: 2, listed: 1 });
 
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put32(node(3) + 8, 0);
     assert_eq!(refusal(&ram), SceneError::NullObject { group: group(0), node: DataAddress(node(3)) });
 
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     ram.put32(node(3) + 0xc, 0);
     assert_eq!(refusal(&ram), SceneError::FreeNode { group: group(0), node: DataAddress(node(3)) });
 }
 
 #[test]
 fn a_full_node_pool_cannot_copy_a_group() {
-    let (mut ram, _) = single_image(place(0.0, 0.0, (8, 4)));
+    let (mut ram, _) = single_image(place(0.0, 0.0, (8.0, 4.0)));
     for slot in 0..NODE_COUNT { ram.put32(node(slot) + 0xc, 1); }
     assert_eq!(refusal(&ram), SceneError::NodeCapacity { free: 0, needed: 1 });
+}
+
+#[test]
+fn a_full_plan_buffer_is_a_capacity_refusal() {
+    let mut ram = Ram::new();
+    let entries: Vec<(usize, u32)> = (0..17).map(|index| (index as usize + 1, ram.image(index, place(0.0, 0.0, (8.0, 4.0))))).collect();
+    ram.group(0, &entries);
+    assert_eq!(refusal(&ram), SceneError::Capacity);
 }

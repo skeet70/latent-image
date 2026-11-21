@@ -62,12 +62,19 @@ pub struct Hit {
 pub enum SiteRead {
     Absolute([u64; 2]),
     Stack { sp: i32, bytes: usize },
+    /// `bytes` at `register + offset` (r0-r12, 13 for sp), or with `indirect` at the word stored there.
+    Register { register: u8, offset: i32, bytes: usize, #[serde(default)] indirect: bool },
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct StackRead {
     kind: StackReadKind,
-    sp: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sp: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    register: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<i32>,
     address: String,
     bytes: String,
 }
@@ -76,6 +83,8 @@ pub struct StackRead {
 enum StackReadKind {
     #[serde(rename = "sp")]
     Sp,
+    #[serde(rename = "register")]
+    Register,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -111,6 +120,12 @@ pub fn parse_site_reads(
                     return Err("a stack-relative trace read requires 1..4096 bytes".to_owned());
                 }
                 Ok(SiteRead::Stack { sp, bytes })
+            }
+            SiteRead::Register { register, offset, bytes, indirect } => {
+                if register > 13 || !(1..=4096).contains(&bytes) {
+                    return Err("a register-relative trace read requires r0-r12 or sp and 1..4096 bytes".to_owned());
+                }
+                Ok(SiteRead::Register { register, offset, bytes, indirect })
             }
         }).collect::<Result<Vec<_>, String>>()?;
         Ok((address, ranges))
@@ -1947,6 +1962,22 @@ impl TraceSites {
                             }
                             (address as u64, bytes)
                         }
+                        SiteRead::Register { register: index, offset, bytes, indirect } => {
+                            let base = register(session, *core, arm::Register::R(index))?;
+                            let mut address = i64::from(base) + i64::from(offset);
+                            if address < 0 || address + 4 > 1i64 << 32 {
+                                return Err("register-relative trace read exceeds the guest address space".into());
+                            }
+                            if indirect {
+                                let mut word = [0; 4];
+                                session.board.read_physical(address as u64, &mut word)?;
+                                address = i64::from(u32::from_le_bytes(word));
+                            }
+                            if address + bytes as i64 > 1i64 << 32 {
+                                return Err("register-relative trace read exceeds the guest address space".into());
+                            }
+                            (address as u64, bytes)
+                        }
                     };
                     let mut bytes = vec![0; count];
                     session.board.read_physical(resolved, &mut bytes)?;
@@ -1954,7 +1985,12 @@ impl TraceSites {
                     match *read {
                         SiteRead::Absolute(_) => memory.push(bytes),
                         SiteRead::Stack { sp, .. } => stack_memory.push(StackRead {
-                            kind: StackReadKind::Sp, sp, address: format!("{resolved:#x}"), bytes,
+                            kind: StackReadKind::Sp, sp: Some(sp), register: None, offset: None,
+                            address: format!("{resolved:#x}"), bytes,
+                        }),
+                        SiteRead::Register { register, offset, .. } => stack_memory.push(StackRead {
+                            kind: StackReadKind::Register, sp: None, register: Some(register), offset: Some(offset),
+                            address: format!("{resolved:#x}"), bytes,
                         }),
                     }
                 }

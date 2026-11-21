@@ -796,7 +796,7 @@ osdInputs observations = do
         pure (M.insert index buffer buffers,Nothing,Just (start,index),count+1)
     | otherwise = Right (buffers,pending,indices,count)
 
-data ReadRange = AbsoluteRange Word32 Int | StackRange Int Int deriving (Eq, Show)
+data ReadRange = AbsoluteRange Word32 Int | StackRange Int Int | RegisterRange Int Int Int Bool deriving (Eq, Show)
 
 data DeclarationScope = AllDrawers | RetainedTreePicker deriving (Eq)
 
@@ -845,6 +845,8 @@ validateDeclarations scope config role = J.withObject "render receipt" $ \fields
     _ -> fail "render declaration address requires eight hex digits"
   range = J.withObject "render trace range" $ \fields -> do
     stack <- fields J..:? "sp"
-    case stack of
-      Just offset -> StackRange offset <$> fields J..: "bytes"
-      Nothing -> AbsoluteRange <$> (fields J..: "address" >>= hex) <*> fields J..: "length"
+    register <- fields J..:? "register"
+    case (stack, register) of
+      (Just offset, _) -> StackRange offset <$> fields J..: "bytes"
+      (Nothing, Just index) -> RegisterRange index <$> fields J..: "offset" <*> fields J..: "bytes" <*> fields J..:? "indirect" J..!= False
+      (Nothing, Nothing) -> AbsoluteRange <$> (fields J..: "address" >>= hex) <*> fields J..: "length"

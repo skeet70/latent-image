@@ -70,6 +70,38 @@ def frame_sites: if frame_enabled then [
   ["006d80f0", "frame-display-registration"],
   ["006d7f30", "frame-display-post"]
 ] + (if frame_record != null then [["runtime:rb_render_frame_scanout_bridge", "frame-owned-display-registration"]] else [] end) else [] end;
+
+# Stage-0 submission observation (FrameSubmission.hs), enabled by `--argjson submission true`: the retained OpenVG
+# and EGL entries VGLIB's render 0x6d724c calls, with the arrays their pointer arguments name, and the vector-engine
+# job boundary: each 104-byte payload at graphics_send_resource_signal 0x892054 and its result at 0x8920ac, each
+# 112-byte command task 72 dispatches at 0x8929f4, and the interrupt status 0x992934 when 0x892718 wakes.
+def submission_enabled: $ARGS.named.submission == true;
+def register_read($register; $bytes): {"register": $register, "offset": 0, "bytes": $bytes};
+def submission_sites: if submission_enabled then [
+  ["00858c04", "vg-set-integer"],
+  ["00858b78", "vg-set-float"],
+  ["00858c90", "vg-set-vector", {"reads": [register_read(2; 32)]}],
+  ["00858d24", "vg-set-integers", {"reads": [register_read(2; 16)]}],
+  ["0085a1b0", "vg-clear"],
+  ["00858748", "vg-load-identity"],
+  ["008587c4", "vg-load-matrix", {"reads": [register_read(0; 36)]}],
+  ["008588cc", "vg-multiply-matrix", {"reads": [register_read(0; 36)]}],
+  ["00858950", "vg-translate"],
+  ["00858af4", "vg-rotate"],
+  ["008589dc", "vg-scale"],
+  ["0085afbc", "vg-set-paint"],
+  ["0085ab88", "vg-draw-path"],
+  ["0085b930", "vg-draw-image"],
+  ["008586d8", "vg-finish"],
+  ["00858e60", "vg-get-integer"],
+  ["0088bf94", "egl-make-current", {"reads": [{"register": 13, "offset": 0, "bytes": 44, "indirect": true}]}],
+  ["0088d620", "egl-copy-buffers"],
+  ["00887280", "egl-get-error"],
+  ["00892054", "vg-job-submit", {"reads": [register_read(0; 104)]}],
+  ["008920ac", "vg-job-submit-return"],
+  ["008929f4", "vg-job-dispatch", {"reads": [register_read(0; 112)]}],
+  ["00892728", "vg-job-completion", {"reads": [["00992934", 4]]}]
+] else [] end;
 def frame_capture_reads: if frame_enabled then
   [["frame-display-record", "0095a69c", 20]]
   + (if frame_record != null then [["frame-record", (frame_record | hex8), 120]] else [] end)
@@ -99,7 +131,7 @@ def engine_sites($role; $name): [
   ["00bfad04", "menu-seek", {"lr": true}],
   ["0063270c", "menu-event-post"]
 ] + (if $role == "owned" then [["runtime:rb_menu_engine_guard_failure", "menu-engine-guard-failure"]]
-     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name) + frame_sites;
+     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name) + frame_sites + submission_sites;
 def presented_handoff:
   if length == 0 then . else .[-1] |= (if length == 4 then . + [{completion:"presented-frame"}] else .[4].completion = "presented-frame" end) end;
 def render_trajectory:
