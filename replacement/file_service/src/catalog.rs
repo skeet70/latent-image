@@ -163,12 +163,12 @@ pub trait Port {
 pub fn select_groups<P: Port>(port: &mut P) -> u32 {
     let mask = GroupMask(port.word(groups::MASK));
     let callback = Callback(port.word(CALLBACK));
-    let count = u32::from(port.group_count()) + u32::from(cfg!(file_service_control_catalog_group_bound_inclusive));
+    let count = u32::from(port.group_count());
     let below = !u32::MAX.checked_shl(count).unwrap_or(0);
     let status = if mask.0 & below == 0 {
         NOT_FOUND
     } else {
-        port.set_group_mask(mask);
+        port.set_group_mask(if cfg!(file_service_control_catalog_group_mask_trimmed) { GroupMask(mask.0 & below) } else { mask });
         port.rebuild_catalog(false, RebuildMode(0));
         0
     };
@@ -233,9 +233,9 @@ fn find_in_catalog<P: Port>(port: &mut P, selectors: FindSelectors, record: u32)
 pub fn complete_request<P: Port>(port: &mut P) -> u32 {
     let callback = Callback(port.word(CALLBACK));
     let raw = port.complete_request();
-    let status = if cfg!(file_service_control_catalog_complete_untranslated) { raw.0 } else { port.translate(raw) };
+    let status = port.translate(raw);
     port.complete_status(callback, status);
-    0
+    if cfg!(file_service_control_catalog_complete_returns_status) { status } else { 0 }
 }
 
 /// The file-index resolution worker at 0x719614 (code 0x2c10): stores the found directory's

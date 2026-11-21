@@ -18,10 +18,10 @@ FILE_SERVICE_CONTROLS = [
     "write_index_unstored",
     "flagged_close_unmarked",
     # catalog
-    "catalog_group_bound_inclusive",
+    "catalog_group_mask_trimmed",
     "catalog_rebuild_selection_kept",
     "catalog_find_mark_kept",
-    "catalog_complete_untranslated",
+    "catalog_complete_returns_status",
     "catalog_resolve_totals_inclusive",
 ]
 
