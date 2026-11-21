@@ -13,7 +13,7 @@ use fujimod_xm1::guest::RouteKey;
 use fujimod_xm1::machine::{Machine, RunOutcome};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use scanout_pair_laws::*;
-use scanout_pair_route::{Presenting, bind_frame};
+use scanout_pair_route::{Binding, Presenting, bind_frame};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -477,12 +477,12 @@ impl Run<'_> {
         self.advance(KEY_HOLD)
     }
 
-    fn checkpoint(&mut self, label: String) -> Result<(), String> {
+    fn checkpoint(&mut self, label: String, binding: Binding) -> Result<(), String> {
         let replay = match &self.inputs.schedule {
             None => None,
             Some(Schedule { waits, .. }) => Some(*waits.get(self.checkpoints.len()).ok_or("the stock route has fewer checkpoints")?),
         };
-        let (waits, frame_sha256) = bind_frame(self, replay)?;
+        let (waits, frame_sha256) = bind_frame(self, binding, replay)?;
         let machine = &self.machine;
         let engine = selected_engine([machine.word(u64::from(SELECTION + 0x10))?, machine.word(u64::from(SELECTION + 0x28))?]);
         let checkpoint = Checkpoint { label, waits, menu: menu(machine)?, frame_sha256, front: front_state(machine, engine)? };
@@ -493,26 +493,27 @@ impl Run<'_> {
     /// The natural no-card route of the general-heap pair, then four rows down and back up the shooting menu.
     fn route(&mut self) -> Result<(), String> {
         self.advance(80_000_000)?;
-        self.checkpoint("setup".into())?;
+        self.checkpoint("setup".into(), Binding::Frame)?;
         for (number, key) in std::iter::repeat_n(RouteKey::Up, 12).chain([RouteKey::Ok, RouteKey::Ok]).enumerate() {
             self.key(key)?;
-            self.checkpoint(format!("setup-{number}"))?;
+            self.checkpoint(format!("setup-{number}"), Binding::Frame)?;
         }
         self.advance(40_000_000)?;
         self.key(RouteKey::Ok)?;
         self.advance(90_000_000)?;
-        self.checkpoint("shooting-menu".into())?;
+        self.checkpoint("shooting-menu".into(), Binding::Frame)?;
         for (number, key) in std::iter::repeat_n(RouteKey::Down, 4).chain(std::iter::repeat_n(RouteKey::Up, 4)).enumerate() {
             self.key(key)?;
-            self.checkpoint(format!("shooting-{number}"))?;
+            self.checkpoint(format!("shooting-{number}"), Binding::Frame)?;
         }
         self.advance(40_000_000)?;
-        self.checkpoint("final".into())
+        self.checkpoint("final".into(), Binding::FrameBetweenCalls)
     }
 }
 
 impl Presenting for Run<'_> {
     fn presented(&mut self) -> Result<Option<String>, String> { Ok(self.machine.frame()?.map(|bytes| sha256(&bytes))) }
+    fn open_calls(&self) -> usize { self.observer.open.iter().map(Vec::len).sum() }
     fn wait(&mut self) -> Result<(), String> { self.advance(FRAME_WAIT) }
 }
 
