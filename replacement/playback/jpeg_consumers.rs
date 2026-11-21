@@ -1,6 +1,5 @@
 use super::*;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{fence, Ordering};
 
 #[repr(transparent)]
 struct RecordPixels(u16);
@@ -335,7 +334,7 @@ const FRAME_TASK: *mut FrameTask = 0x015b_0ccc as *mut FrameTask;
 const RECORD_NOTIFICATION_ENTRY: CallbackWord = CallbackWord(0x00e8_eb18);
 const DEVELOP_COMPLETION_EVENT: EventBits = EventBits(0x10);
 
-/// Job4 and the record notification are the only accessors of 0x015b0ccc. Bit 31 is set from publication until the notification runs; the kernel uses only bits 0..15 of a task word.
+/// Job4 and the record notification are the only accessors of 0x015b0ccc. Bit 31 is set from publication until the notification runs; the kernel uses only bits 0..15 of a task word. Kernel flag services take the flag lock through 0x000439d8/0x00043a14, which issue data memory barriers, so the notification's clear is visible before its signal.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 struct FrameTask(u32);
@@ -347,7 +346,6 @@ impl FrameTask {
 }
 
 unsafe fn record_completed() -> bool {
-    fence(Ordering::SeqCst);
     !unsafe { read_volatile(FRAME_TASK) }.is_awaiting()
 }
 
@@ -410,7 +408,6 @@ pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> Develop
 pub unsafe extern "C" fn xm1_playback_jpeg_record_notification() {
     let task = unsafe { read_volatile(FRAME_TASK) }.task();
     unsafe { write_volatile(FRAME_TASK, FrameTask(task.0)) };
-    fence(Ordering::SeqCst);
     unsafe { xm1_jpeg_task_notify(task, DEVELOP_COMPLETION_EVENT) };
 }
 
