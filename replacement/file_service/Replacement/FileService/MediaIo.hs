@@ -475,6 +475,7 @@ scenarios bytes =
   [ capacity "geometry" env [(0, callbackStub)]
   , capacity "geometry-large" env {envGeometry = (0x1000, 1)} [(0, callbackStub)]
   , capacity "units" env {envFlag = (0, 1), envUnits = 0x3a0} [(0, callbackStub)]
+  , capacity "units-silent" env {envFlag = (0, 1), envUnits = 0x3a0} []
   , capacity "units-overflow" env {envFlag = (0, 1), envUnits = 0x4000} [(0, callbackStub)]
   , capacity "flag-failed" env {envFlag = (0x102, 1)} [(0, callbackStub)]
   , capacity "no-context" env {envContext = False} [(0, callbackStub)]

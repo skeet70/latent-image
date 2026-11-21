@@ -23,7 +23,7 @@ FILE_SERVICE_CONTROLS = [
     "query_raw_status",
     "pages_range_inclusive",
     "pages_keep_state",
-    "read_redirect_unrounded",
+    "read_redirect_keeps_position",
 ]
 
 def file_service_suffixes():

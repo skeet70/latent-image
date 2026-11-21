@@ -299,11 +299,13 @@ fn read_local<P: Port>(port: &mut P, record: &LocalRecord) -> (u32, u32) {
     if refused != LocalStatus(0) {
         return (LOCAL_FAILED, length);
     }
-    let buffer = if cfg!(file_service_control_read_redirect_unrounded) { buffer } else { buffer + (buffer & 1) };
+    let buffer = buffer + (buffer & 1);
     let length = if record.position.wrapping_add(length) > size { size.wrapping_sub(record.position) } else { length };
     if port.local_read(record, buffer, length) != LocalStatus(0) {
         return (LOCAL_FAILED, length);
     }
-    port.local_position(length.wrapping_add(record.position));
+    if !cfg!(file_service_control_read_redirect_keeps_position) {
+        port.local_position(length.wrapping_add(record.position));
+    }
     (0, length)
 }
