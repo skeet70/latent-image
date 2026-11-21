@@ -2,7 +2,7 @@
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
   ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith, constructorInitializer
-  , stockDemand, stockDemandConditions, suppliedOf, depthsIn, indirectOf, stockCodeOfEvidence, composedSegments, ownedOf
+  , stockDemand, stockDemandConditions, suppliedOf, depthsIn, indirectOf, taskIndirectOf, stockCodeOfEvidence, composedSegments, ownedOf
   , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded, fatalReportCycle, refusalCycle
   , kernelSlotSupplied
   ) where
@@ -38,6 +38,8 @@ import qualified Replacement.Task1Actor.Artifact as T1
 import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
+import qualified Replacement.StartupArtifact.CallbackTargets as CT
+import qualified Replacement.StartupArtifact.CallbackDeclarations as CD
 import qualified Replacement.StartupArtifact.StackBounds as SB
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
@@ -764,7 +766,21 @@ indirectOf evidence = do
   stores <- either (const Nothing) Just (I.originalStores (targetOf (evidenceCanonical evidence) LoaderB))
   let tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
   either (const Nothing) Just (SB.indirectTargetsOf (composedSegments evidence) (concatMap pieceCarriers (evidencePieces evidence))
-    [DA.clearInterval] (SB.rootSlotTargets rootA tableA rootB tableB))
+    [DA.clearInterval] (SB.rootSlotTargets rootA tableA rootB tableB) M.empty)
+
+-- | `indirectOf` with the declared register-branch target sets the composition's bytes close (S9),
+-- and the declarations they leave open. Image 5's BSS, from segment 5's table entry, holds 0 before
+-- its first store.
+taskIndirectOf :: JoinEvidence -> Maybe (SS.IndirectTargets, [(Word32, CT.OpenReason)])
+taskIndirectOf evidence = do
+  indirect <- indirectOf evidence
+  bss <- case [(U.segBss segment, U.segBss segment + U.segBssLen segment) | segment <- U.partSegments (evidenceParts evidence), U.segId segment == 5] of
+    [range] -> Just range
+    _ -> Nothing
+  let plain = either (const Nothing) (\(PlainImage (Guest load) bytes) -> Just (load, bytes)) (plainImage (evidenceParts evidence))
+      checked = CT.declaredSites (SB.segmentsOf (evidenceCanonical evidence) plain) (composedSegments evidence) (ownedOf evidence)
+        [DA.clearInterval, bss] CD.declarations
+  pure (indirect {SS.callbackSites = M.union (SS.callbackSites indirect) (CT.closedSites checked)}, CT.openSites checked)
 
 -- | Owned entries with proved depths, before the wrapper: the record-2 critical pair, idle and root.
 baseSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth

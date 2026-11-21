@@ -92,8 +92,9 @@ written instruction = case instruction of
   A32.BranchExchange _ True _ -> [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
   _ -> []
 
--- | Explicit and implicit LDRD/LDREXD destinations and admitted system-transfer destinations.
--- Transfer-base writeback is excluded.
+-- | Registers the word writes under `Strict`: `written`, the second register of @ldrd@ and @ldrexd@, and the
+-- destination of the stack-neutral rejected classes (@mrc@, @mrs Rt, spsr@, @ldrex@/@strex@, @swp@, @vmrs@,
+-- @muls@/@mlas@). Transfer-base writeback is excluded.
 writes :: Word32 -> Word32 -> [A32.Reg]
 writes address word = case A32.decode address word of
   instruction@(A32.Load _ A32.Dual _ (A32.Reg n) _ _ _) -> written instruction ++ [A32.Reg (n + 1)]
@@ -105,6 +106,7 @@ writes address word = case A32.decode address word of
     | otherwise -> destination
   A32.Rejected A32.SystemRegister | word .&. 0x0fbf0fff == 0x010f0000 -> destination
   A32.Rejected _ | word .&. 0x0fb00ff0 == 0x01000090 -> destination
+  A32.Rejected A32.Unadmitted | flagMultiply word -> [A32.Reg (fromIntegral ((word `shiftR` 16) .&. 0xf))]
   instruction -> written instruction
   where
     rt = fromIntegral ((word `shiftR` 12) .&. 0xf)
@@ -112,6 +114,11 @@ writes address word = case A32.decode address word of
 
 doubleExclusiveLoad :: Word32 -> Bool
 doubleExclusiveLoad word = word .&. 0x0ff00fff == 0x01b00f9f
+
+-- | @muls@/@mlas@ with no operand in r11, SP or PC.
+flagMultiply :: Word32 -> Bool
+flagMultiply word = word .&. 0x0fd000f0 == 0x00100090 && all (`notElem` [11, 13, 15]) [field 19 16, field 15 12, field 11 8, field 3 0]
+  where field high low = (word `shiftR` low) .&. ((2 :: Word32) ^ (high - low + 1) - 1)
 
 always :: A32.Cond -> Bool
 always (A32.Cond c) = c == 14
@@ -164,6 +171,7 @@ classify strictness address word = case A32.decode address word of
   A32.Rejected (A32.Coprocessor coprocessor) | coprocessor `elem` [10, 11] ->
     if strictness == Strict then strictVfp else permissiveVfp
   A32.Rejected A32.UndefinedEncoding -> if strictness == Strict then Refuse UnadmittedEncoding else Stop
+  A32.Rejected A32.Unadmitted | strictness == Strict && flagMultiply word -> Neutral
   A32.Rejected reason | strictness == Strict -> strictRejected reason
   A32.LoadMultiple cond base A32.IncrementAfter True regs
     | strictness == Strict && base == A32.sp -> if always cond then Release (4 * fromIntegral (length regs)) else Refuse UnaccountedSpWrite

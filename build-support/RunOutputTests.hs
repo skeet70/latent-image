@@ -294,6 +294,64 @@ runTests input = do
       work <- doesPathExist (directory </> "work" </> "big.bin")
       check work "the work budget lost the run's work"
 
+    fixture parent "digest-order" $ \workspace -> do
+      (status, _, errors) <- execTool executable workspace [] "order"
+        (shell
+          (unlines
+            [ "cd \"$XM1_RUN_WORK\""
+            , "mkdir -p a a.b/c"
+            , "printf one > a/x; printf two > a-c; printf three > ab; printf four > a.b/c/y; printf five > a.b/z"
+            , "find . -type f | sed 's|^\\./||' | LC_ALL=C sort | while read -r f; do printf '%s  %s\\n' \"$(sha256sum < \"$f\" | cut -c1-64)\" \"$f\"; done | sha256sum | cut -c1-64 > \"$XM1_RUN_RESULT/expected\""
+            ]))
+      check (status == ExitSuccess) ("the digest-order run exited " ++ show status ++ ": " ++ errors)
+      directory <- onlyRun workspace
+      record <- readRecord directory
+      expected <- BC.unpack . BC.strip <$> B.readFile (directory </> "result" </> "expected")
+      check (recordWorkSha256 record == expected) ("the work digest " ++ recordWorkSha256 record ++ " is not the digest of the sorted file list " ++ expected)
+
+    fixture parent "many-files" $ \workspace -> do
+      let peak = workspace </> "peak"
+          directories = 40 :: Int
+          perDirectory = 100 :: Int
+          script = unlines
+            [ "i=0"
+            , "while [ $i -lt " ++ show directories ++ " ]; do"
+            , "  mkdir \"$XM1_RUN_WORK/d$i\"; j=0"
+            , "  while [ $j -lt " ++ show perDirectory ++ " ]; do printf '%s' \"$i.$j\" > \"$XM1_RUN_WORK/d$i/f$j\"; j=$((j+1)); done"
+            , "  i=$((i+1))"
+            , "done"
+            , "status() { sed -n \"s/^$1:[[:space:]]*\\([0-9]*\\) kB$/\\1/p\" /proc/$PPID/status; }"
+            , "sample() { set -- /proc/$PPID/fd/*; printf '%s %s\\n' \"$#\" \"$(status VmRSS)\" >> \"$XM1_RUN_RESULT/samples\"; }"
+            , "sleep 1; sample; sleep 4; sample"
+            , "p=$PPID"
+            , "(h=; while v=$(sed -n 's/^VmHWM:[[:space:]]*\\([0-9]*\\) kB$/\\1/p' /proc/$p/status 2>/dev/null) && [ -n \"$v\" ]; do h=$v; done; printf '%s\\n' \"$h\" > \"$TEST_PEAK.tmp\" && mv \"$TEST_PEAK.tmp\" \"$TEST_PEAK\") < /dev/null > /dev/null 2>&1 &"
+            ]
+      environment <- cleanEnvironment [("XM1_RUN_POLL_MICROS", "1000"), ("TEST_PEAK", peak)]
+      outcome <- timeout 120_000_000 $ readCreateProcessWithExitCode
+        (proc "sh" ["-c", "ulimit -n 128 && exec \"$@\"", "sh", executable, "exec", "--label", "many-files", "--", "sh", "-c", script])
+          {cwd = Just workspace, env = Just environment}
+        ""
+      (status, _, errors) <- case outcome of
+        Nothing -> ioError (userError "the many-files run did not finish")
+        Just value -> pure value
+      check (status == ExitSuccess) ("the many-files run under 128 descriptors exited " ++ show status ++ ": " ++ errors)
+      directory <- onlyRun workspace
+      record <- readRecord directory
+      check (recordOutcome record == "passed") "the many-files run was not recorded passed"
+      check (recordWorkFileCount record == fromIntegral (directories * perDirectory)) "the many-files run recorded the wrong work file count"
+      check (recordWorkBytes record == sum [fromIntegral (length (show i ++ "." ++ show j)) | i <- [0 .. directories - 1], j <- [0 .. perDirectory - 1]]) "the many-files run recorded the wrong work bytes"
+      samples <- map (map readMaybe . words) . lines . BC.unpack <$> B.readFile (directory </> "result" </> "samples")
+      (earlyDescriptors, earlyResident, lateDescriptors, lateResident) <- case samples of
+        [[Just a, Just b], [Just c, Just d]] -> pure (a, b, c, d :: Integer)
+        _ -> ioError (userError ("unreadable samples: " ++ show samples))
+      check (lateDescriptors == earlyDescriptors) ("open descriptors changed across polls: " ++ show earlyDescriptors ++ " then " ++ show lateDescriptors)
+      check (lateResident <= earlyResident + 16 * 1024) ("resident memory grew across polls: " ++ show earlyResident ++ " kB then " ++ show lateResident ++ " kB")
+      peakText <- waitForFile peak 100
+      peakResident <- case readMaybe (BC.unpack (BC.strip peakText)) :: Maybe Integer of
+        Just value -> pure value
+        Nothing -> ioError (userError ("unreadable peak: " ++ show peakText))
+      check (peakResident <= lateResident + 32 * 1024) ("closing the run raised peak memory to " ++ show peakResident ++ " kB from " ++ show lateResident ++ " kB while polling")
+
 fixture :: FilePath -> String -> (FilePath -> IO ()) -> IO ()
 fixture parent name action = do
   let raw = parent </> name
@@ -408,3 +466,13 @@ waitForChild workspace attempts = do
     Nothing
       | attempts <= 0 -> pure Nothing
       | otherwise -> threadDelay 100_000 >> waitForChild workspace (attempts - 1)
+
+waitForFile :: FilePath -> Int -> IO B.ByteString
+waitForFile path attempts = do
+  present <- doesPathExist path
+  if present
+    then B.readFile path
+    else
+      if attempts <= 0
+        then ioError (userError ("timed out waiting for " ++ path))
+        else threadDelay 100_000 >> waitForFile path (attempts - 1)

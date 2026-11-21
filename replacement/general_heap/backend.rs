@@ -126,6 +126,7 @@ impl Heap {
 
     /// # Safety
     /// `payload`, when present, must point to readable arena memory.
+    #[inline(never)]
     pub unsafe fn free(&mut self, payload: Option<NonNull<u8>>) -> Result<(), HeapError> {
         let Some(payload) = payload else { return Ok(()); };
         let (raw, _) = self.stock_origin(payload)?;
@@ -136,18 +137,21 @@ impl Heap {
         Ok(())
     }
 
+    #[inline(never)]
     pub(crate) unsafe fn allocate_stock(&mut self, request: StockRequest) -> Result<NonNull<u8>, HeapError> {
         let raw = self.core.allocate(request.layout).ok_or(HeapError::OutOfMemory)?;
         Self::write_header(raw, request);
         Ok(NonNull::new_unchecked(raw.as_ptr().add(PREFIX_BYTES)))
     }
 
+    #[inline(never)]
     pub(crate) unsafe fn calloc_stock(&mut self, request: StockRequest) -> Result<NonNull<u8>, HeapError> {
         let payload = self.allocate_stock(request)?;
         ptr::write_bytes(payload.as_ptr(), 0, ((request.tag & !3) - 4) as usize);
         Ok(payload)
     }
 
+    #[inline(never)]
     pub(crate) unsafe fn resize_stock(&mut self, old: Option<NonNull<u8>>, request: StockRequest) -> Result<NonNull<u8>, HeapError> {
         let Some(old) = old else { return self.allocate_stock(request); };
         let (raw, _) = self.stock_origin(old)?;

@@ -61,32 +61,43 @@ Results: the owned ABI matches stock at 94 steps and differs only as declared at
 
 ## Stack headroom
 
-`J7HeapCanonicalTests` walks stock bytes with `StockStack`. Entry demands including the retained lock/wait chain are owned/stock 536/504 at malloc `0x89cda4`, 472/464 at free `0x89cdc4`, 536/496 at `_malloc_r` `0x89cde4` and 472/456 at `_free_r` `0x89e560`: the owned frames add 32, 8, 40 and 16 bytes. Realloc 544, trim 456 and calloc 536 have no bounded stock counterpart in this walk.
+`J7HeapCanonicalTests` walks stock bytes with `StockStack` on the J6 composition and checks, entry by entry, that each owned entry's demand including callees is at most its stock counterpart's (stock dominance). Demands in bytes, including the retained lock/wait chain:
+
+| Entry | Stock | Owned |
+| --- | --- | --- |
+| malloc `0x89cda4` | 504 | 464 |
+| `_malloc_r` `0x89cde4` | 496 | 464 |
+| free `0x89cdc4` | 464 | 432 |
+| `_free_r` `0x89e560` | 456 | 432 |
+| realloc `0x89da3c` | 552 | 464 |
+| `_realloc_r` `0x89da64` | 544 | 464 |
+| trim `0x89e464` | 432 | 432 |
+| calloc `0xbf1c1c` | 512 | 464 |
+| `_calloc_r` `0xbf1c44` | 504 | 464 |
+
+The deepest owned path is the retained lock `0x72b164` (408 bytes) called from the core entry's own frame: 56 bytes for malloc, realloc and calloc (six saved registers and a 32-byte request area), 24 for free and trim. The bridge, `with_heap` and lock acquisition are inlined into the core entries; the heap operations they call (`allocate_stock`, `calloc_stock`, `resize_stock`, `free`) are not inlined, so their frames are never below the lock call.
 
 The walker now follows the constructs the earlier task walks stopped at. `0x4a960` is a kernel lock release whose lock address the routine spilled to `[r11, #-0x28]`; the walker tracks words a frame stores and reloads until a frame address is copied or a callee may write that far above its entry SP. `0x4360c` is the kernel abort's `svc #0x1010`; each loader's SVC handler stores 64 bytes on the task stack and calls its exception reporter `0x40cac`/`0xd0cac`, both checked from loader bytes. The reporter's hook (`0x4004f114`/`0x400df0d4`) holds only the image entry's mode-2 return `0x69cc6c` (S7: each hook's only store is its setter, called only after the loader's mode-2 call). `0x72b694` and `0x892c38` call words at fixed addresses; a word every scanned store writes with a constant, or with the argument a setter's every caller in stock or owned code passes, holds its image value, 0 inside the cold-boot clear `[0x89ec00,0xbf1a00)`, or those constants (S6), and a possibly zero word is called only after a zero test of its register. `0x829a0c` holds `0x72b210` or `0x72b318`, `0x890f14` holds `0x890ee8` and the diagnostic hook `0x89f794` holds 0 or `0xed4a8c`; with the owned image-5 initializer composed (J9), its own call of setter `0x69cf84` passes `0xed4a8c`. A path ends after a call when no path of the callee returns, as after a call of `0x43604`, whose `svc #0x1010` is followed by `b .`.
 
 No published heap-calling task has an established whole-task bound. Under S1-S7, tasks 1, 2, 3, 4, 7, 35, 43, 55, 56, 62, 64, 73 and 80 (stacks 0xc00-0x1400) reach the kernel abort `0x4d978`, whose fatal report recurses: SVC `0x43604`, reporter `0x40cac`, diagnostic callback `0x69cc6c`, hook `0xed4a8c`, `0xed468c`, `0x6ab794`, `0x6fb7c8` and `0x4d978` again; a report nested in a report has no static bound. Task 33 (0x1000) stops at `0x7250cc`, a call through the message-trace word `0x4089ea94` that a setter fills from its argument. Task 36 (0xc00) stops at `0xd80e68`, a USB state-table record field indexed by RAM state. Task 72 (0xc00) stops at `0x892c00`, a callback array in an object. Root and plain producer targets that reached the abort refuse at the same recursion. The only bounded task demands remain root 104 (856 of 1024 bytes) and the task-60 producers (672/520 of 3040), under S1-S5.
 
-S8 takes the fatal report as terminal: a nonzero SVC starts a report after which the task does not resume normal operation, so a bound under S8 covers the paths before the report. Under S1-S8 every task walk passes the abort and stops at a register branch. The constructs below are read from the instruction words before each branch.
+S8 takes the fatal report as terminal: a nonzero SVC starts a report after which the task does not resume normal operation, so a bound under S8 covers the paths before the report. S9 adds declared register-branch target sets (`Replacement/StartupArtifact/CallbackTargets.hs`, data in `CallbackDeclarations.hs`, checked by `callback-targets-tests`): each declaration names its images by SHA-256 and the code allowed to write the words it reads, and a site closes only when every scanned store lies there with a known value and no table word it reads is written. On both the stock (J6) and owned (J7) compositions the check closes the message-trace site `0x7250cc` ({`0x723330`, `0x726478`}), task 55's `0x106cfcc` and task 62's `0x106444c`/`0x1064464`. It leaves task 35's `0xed1494` and the seven state-chart dispatchers open, on a store of unknown value into an index or state word or a dispatcher caller passing a non-constant machine.
 
-| Task | Entry | Stack | Refused at (S1-S8) |
-| --- | --- | --- | --- |
-| 1 | `0xc22f60` | 0xc00 | `0x6f16e0`, the argument callback under storage read `0x6a8f1c` |
-| 2 | `0xec2668` | 0x1000 | `0xec09b4`, a callback table indexed by a sign-extended byte id |
-| 3 | `0xe00a80` | 0x1000 | `0xdf7594`, the same callback-table construct |
-| 4 | `0x1215480` | 0x1000 | `0x11e8ca0`, a register call in the plain image |
-| 7 | `0xecc058` | 0xc00 | `0xec9bf8`, the same callback-table construct |
-| 33 | `0x1109130` | 0x1000 | `0x7250cc`, the message-trace word, as under S1-S7 |
-| 35 | `0xed2ce0` | 0xc00 | `0x7250cc`, the message-trace word |
-| 36 | `0xd81218` | 0xc00 | `0xd80e68`, the USB state table, as under S1-S7 |
-| 43 | `0xf01bc8` | 0x1000 | `0xefcb58`, a table indexed by a register value |
-| 55 | `0x106ceec` | 0xc00 | `0x106d000`, a callback loaded from an object's first word |
-| 56 | `0x1071ca4` | 0x1400 | `0x10724b8`, a callback at object offset `0x2698` |
-| 62 | `0x1064224` | 0x1000 | `0x106444c`, an object callback |
-| 64 | `0x1054cf4` | 0xc00 | `0x10548ec`, a table indexed by a register value |
-| 72 | `0x892110` | 0xc00 | `0x892c00`, the object callback array, as under S1-S7 |
-| 73 | `0x6d7540` | 0x1000 | `0x6d6fec`, a callback list walked from a constant address |
-| 80 | `0x69f0e0` | 0xc00 | `0x89bf08`, `bx lr` with lr reloaded from `[sp, #4]` |
+Per-task whole bounds are not the acceptance criterion: several stock tasks have none from bytes. Each walk's stop under S1-S9, with what lies behind it (byte research, including target sets the walker does not consume):
+
+| Task | Entry | Stack | Stop | Behind it |
+| --- | --- | --- | --- | --- |
+| 1 | `0xc22f60` | 0xc00 | `0x6f16e0`, argument 6 of `0x6f1440` | {`0x6ae500`, `0x73b924`} through two struct-field hops; then recursion `0x6334dc`↔`0x633594`, bounded only by consecutive failures of `[0x829a0c]` |
+| 2, 3, 4, 7, 43, 64 | `0xec2668`, `0xe00a80`, `0x1215480`, `0xecc058`, `0xf01bc8`, `0x1054cf4` | 0x1000, 0x1000, 0x1000, 0xc00, 0x1000, 0xc00 | state-chart dispatchers `0xec09b4`, `0xdf7594`, `0x11e8ca0`, `0xec9bf8`, `0xefcb58`, `0x10548ec` | 129, 1564, 1414, 73, 787 and 25 actions; actions that post events re-enter the dispatcher, a recursion with no static bound (2, 3, 4, 64) |
+| 33 | `0x1109130` | 0x1000 | `0x89becc`, a divmod wrapper's `push {sp, lr}` | then a computed `ldr pc` at `0x118d0b8` |
+| 35 | `0xed2ce0` | 0xc00 | `0xed1494` | 18 handlers; then 16 completion callbacks passed as arguments (`0x70f744`-`0x71c448`) |
+| 36 | `0xd81218` | 0xc00 | `0xd80e68`, USB chart | 119 actions, then about 100 further open branches |
+| 55, 56, 73 | `0x106ceec`, `0x1071ca4`, `0x6d7540` | 0xc00, 0x1400, 0x1000 | `0x106d000`, `0x10724b8`, `0x6d6fec` | callbacks taken from message payloads; senders with computed channels are not excluded |
+| 62 | `0x1064224` | 0x1000 | `0x106444c`, closed by its declaration | the walker refuses there because the set holds the list terminator's 0 and a compare of the event after the zero test forgets it; no further open branch |
+| 72 | `0x892110` | 0xc00 | `0x892c00` | callback arrays in client-built graphics commands |
+| 80 | `0x69f0e0` | 0xc00 | `0x89bf08`, the divmod wrapper | `0x6a1c44` calls word `0x95b074`, 0 until a setter runs, without a zero test |
+
+The criterion is stock dominance: each owned allocator entry that replaces a stock entry has a worst-case depth, callees included, no greater than the stock entry's, so a stack-safe stock execution stays stack-safe. All nine entries meet it; trim equals stock.
 
 The one-level fatal path is unmeasured: with fatal reports excluded the abort `0x4d978` is bounded, but the reporter `0x40cac` stops at `0x6f16e0`.
 
@@ -101,6 +112,6 @@ The one-level fatal path is unmeasured: with fatal reports excluded the abort `0
 - Qualify `general-heap-fixed-image` at the `0x00a9fa00` ceiling with card-backed capture, saved-image playback and Wi-Fi heap demand. The current fixed-placement scenarios cover only cardless inputs.
 - Check DMA-loaded instruction visibility and later MPU changes on the camera before promoting the fixed-range image.
 - Close interior jumps into retired carriers after sealing, when guards no longer bind a fetch to an entry or pending invocation.
-- Close task-stack headroom. Owned entry demands exceed stock by 32 (malloc), 8 (free), 40 (`_malloc_r`) and 16 (`_free_r`) bytes. Under S1-S7 thirteen published tasks reach the recursive fatal report through the kernel abort `0x4d978`, and tasks 33, 36 and 72 stop at an argument-filled callback word, a RAM-indexed state table and an object callback array. Under S8 all sixteen stop at the register branches the [stack-headroom table](#stack-headroom) names, and the reporter `0x40cac` stops at `0x6f16e0`; bounds need closed target sets for those branches. The census also lacks image-6 Wi-Fi tasks and any heap caller outside the published tables.
+- Close task-stack headroom. Under S1-S7 thirteen published tasks reach the recursive fatal report through the kernel abort `0x4d978`, and tasks 33, 36 and 72 stop at an argument-filled callback word, a RAM-indexed state table and an object callback array. Under S8 all sixteen stop at the register branches the [stack-headroom table](#stack-headroom) names, and the reporter `0x40cac` stops at `0x6f16e0`; bounds need closed target sets for those branches. The census also lacks image-6 Wi-Fi tasks and any heap caller outside the published tables.
 
 The current no-card scenario does not claim a captured image or playback rendering. The [capability inventory](replacement-inventory-baseline.md#2-coarse-capability-outline) separately records blocked emulator playback/RAW conversion and incomplete sensor-backed capture. The final-pass scenarios must use their supported device routes as those frontiers close, not bypass heap calls or synthesize successful captures.

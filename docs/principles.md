@@ -14,6 +14,8 @@ Evidence labels distinguish reported leads, source inspection, static inference,
 
 The goal is a complete, better replacement firmware, implemented as clean Rust from intended behavior. Stock compatibility belongs at interfaces with retained consumers, not in owned internals. The [compatibility and redesign policy](../spec/11-incremental-firmware-replacement.md#compatibility-and-redesign) records corrections and dependencies as that edge moves. Reclaimed flash is an optional benefit, not a completion requirement.
 
+When hardware evidence is missing, first look for an exact boundary where owned code can reuse stock's hardware behavior: submit the same work to the same device path and qualify the owned side by equality of what it submits. A software substitute for a hardware function is a deliberate product choice, never a way around incomplete emulator modeling.
+
 The X-M1 core is inferred to be Cortex-R4F-class ([E-CPU-PROFILE](../reports/firmware-extraction.md#cpu-profile)); the native runner emulates Unicorn's Cortex-R5F, the closest available model. No fixture, stock case, payload or expected result may depend on behavior an R4F lacks or reports differently: A32 SDIV/UDIV, multiprocessing extensions and MPIDR, R5F ID-register values, a 16-region MPU, or R5 TCM/cache register semantics. The runner rejects each such feature it can reach; admitting one requires X-M1 evidence first.
 
 ## Implementation and build

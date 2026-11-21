@@ -3210,34 +3210,34 @@
 },
 {
   "id": "E-GENERAL-HEAP-ABI-QUALIFICATION-150",
-  "claim": "At the retained stock ABI entries, called one at a time from a natural no-card seed (task {{seed_task}} entering the free core entry 0x89e560 with the lock free, after the menu route and one Up press), the owned general heap matches executed stock bytes at {{owned_compared}} of {{steps}} directed steps and differs only by the declared corrections at the other {{owned_corrections}}. The steps cover {{operations}} calls: zero-size, shrink, grow, same-chunk and zero resize, failed resize preserving bytes, calloc zeroing over reused memory, capacity rejection, exhaustion with {{exhaustion}} successes of 128 KiB before and after coalescence, a refused fragmented request and trim. Executed stock oversized resize leaks {{stock_leak}} recursive depth per call while owned stays balanced; stock calloc of a wrapped product returns {{stock_wrapped}} where owned returns {{owned_wrapped}}; stock trim returned {{stock_trim}}. The Rust GlobalAlloc front end, after the admitted tape, matches stock at {{front_compared}} steps with inapplicable requests {{front_inapplicable}}. Journal controls are refused on target {{owned_controls}} times for the owned ABI and {{front_controls}} for the front end; the executed traffic mutant is refused with {{mutant_error}}. Each role makes {{calls}} harness calls. The J7 canonical stack test passes {{j7_checks}} checks, pinning owned and stock heap entry demands and the refused whole-task walks with and without the fatal report (S8).",
+  "claim": "At the retained stock ABI entries, called one at a time from a natural no-card seed (task {{seed_task}} entering the free core entry 0x89e560 with the lock free, after the menu route and one Up press), the owned general heap matches executed stock bytes at {{owned_compared}} of {{steps}} directed steps and differs only by the declared corrections at the other {{owned_corrections}}. The steps cover {{operations}} calls: zero-size, shrink, grow, same-chunk and zero resize, failed resize preserving bytes, calloc zeroing over reused memory, capacity rejection, exhaustion with {{exhaustion}} successes of 128 KiB before and after coalescence, a refused fragmented request and trim. Executed stock oversized resize leaks {{stock_leak}} recursive depth per call while owned stays balanced; stock calloc of a wrapped product returns {{stock_wrapped}} where owned returns {{owned_wrapped}}; stock trim returned {{stock_trim}}. The Rust GlobalAlloc front end, after the admitted tape, matches stock at {{front_compared}} steps with inapplicable requests {{front_inapplicable}}. Journal controls are refused on target {{owned_controls}} times for the owned ABI and {{front_controls}} for the front end; the executed traffic mutant is refused with {{mutant_error}}. Each role makes {{calls}} harness calls. The J7 canonical stack test passes {{j7_checks}} checks, including one per heap entry that the owned entry's demand with callees is at most its stock counterpart's, and pins the refused whole-task walks with and without the fatal report (S8).",
   "scope": "Whole general-heap artifact behind the retained A32 entries malloc 0x89cda4, free 0x89cdc4, realloc 0x89da3c, calloc 0xbf1c1c and trim 0x89e464, called under the board harness on core 0 with interrupt delivery off from one natural no-card seed per role on the current FujiMod model; uncontended single-task calls, not cross-core contention, interrupt context or silicon timing.",
-  "notes": "Allocation addresses and movement on grow are not compared. One loader word differs from the decoded loader at the seed in both roles and is bound for fetches only. Stock trim did not release backing, so the trim correction is observed only as equal zero returns. Over-alignment has no stock counterpart and is covered by the host suite. The front end has no operation for zero-size, null-free, trim or overflowing calloc. The J7 canonical log records owned/stock entry demands and that whole-task walks of all 16 published-stack tasks refuse under S1-S7 and, with the fatal report excluded (S8), stop at the register branches the report names, so per-task heap headroom is unestablished (reports/general-heap-cutover.md#stack-headroom). Natural callers of realloc, calloc and trim remain unreached.",
+  "notes": "Allocation addresses and movement on grow are not compared. One loader word differs from the decoded loader at the seed in both roles and is bound for fetches only. Stock trim did not release backing, so the trim correction is observed only as equal zero returns. Over-alignment has no stock counterpart and is covered by the host suite. The front end has no operation for zero-size, null-free, trim or overflowing calloc. The J7 canonical log records owned/stock demands of all nine heap entries and that whole-task walks of all 16 published-stack tasks refuse under S1-S7 and, with the fatal report excluded (S8), stop at the register branches the report names, so per-task heap headroom is unestablished (reports/general-heap-cutover.md#stack-headroom). Natural callers of realloc, calloc and trim remain unreached.",
   "artifacts": [
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-controls.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-mutant.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/stock.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/owned.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/mutant-owned.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/front-end.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014250Z-abi-stock/result/abi-journal.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014256Z-abi-owned/result/abi-journal.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014303Z-abi-mutant-owned/result/abi-journal.json",
-    "private-data/scratch/HeapCoverage/runs/20261119T014309Z-abi-front-end/result/abi-journal.json",
-    "private-data/scratch/HeapStackHeadroom/runs/20261119T034345Z-stack-headroom-gate/result/startup-artifact-j7-heap-canonical-tests.log"
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-controls.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-mutant.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/stock.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/owned.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/mutant-owned.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/front-end.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261120T233721Z-abi-stock/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003655Z-abi-owned/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003719Z-abi-mutant-owned/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003726Z-abi-front-end/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T012620Z-dominance-gate2/result/startup-artifact-j7-heap-canonical-tests.log"
   ],
   "facts": [
     {
       "name": "firmware_sha256",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/journals/stock.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/stock.json",
       "pointer": [
         "update_sha256"
       ]
     },
     {
       "name": "seed_task",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "seeds",
         "0",
@@ -3246,7 +3246,7 @@
     },
     {
       "name": "steps",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "steps"
@@ -3254,7 +3254,7 @@
     },
     {
       "name": "owned_compared",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "compared"
@@ -3262,7 +3262,7 @@
     },
     {
       "name": "owned_corrections",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "corrections"
@@ -3271,7 +3271,7 @@
     },
     {
       "name": "operations",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "operations"
@@ -3279,7 +3279,7 @@
     },
     {
       "name": "exhaustion",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "first_exhaustion_successes"
@@ -3287,7 +3287,7 @@
     },
     {
       "name": "stock_leak",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "corrections",
@@ -3298,7 +3298,7 @@
     },
     {
       "name": "stock_wrapped",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "corrections",
@@ -3309,7 +3309,7 @@
     },
     {
       "name": "owned_wrapped",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "corrections",
@@ -3320,7 +3320,7 @@
     },
     {
       "name": "stock_trim",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "owned_abi",
         "corrections",
@@ -3331,7 +3331,7 @@
     },
     {
       "name": "front_compared",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "rust_front_end",
         "compared"
@@ -3339,7 +3339,7 @@
     },
     {
       "name": "front_inapplicable",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "rust_front_end",
         "inapplicable"
@@ -3347,35 +3347,35 @@
     },
     {
       "name": "owned_controls",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-controls.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-controls.json",
       "pointer": [
         "owned_abi_refused"
       ]
     },
     {
       "name": "front_controls",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-controls.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-controls.json",
       "pointer": [
         "rust_front_end_refused"
       ]
     },
     {
       "name": "mutant_error",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-mutant.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-mutant.json",
       "pointer": [
         "error"
       ]
     },
     {
       "name": "calls",
-      "path": "private-data/scratch/HeapCoverage/runs/20261119T014310Z-abi-compare/result/abi-qualification.json",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
       "pointer": [
         "calls"
       ]
     },
     {
       "name": "j7_checks",
-      "path": "private-data/scratch/HeapStackHeadroom/runs/20261119T034345Z-stack-headroom-gate/result/startup-artifact-j7-heap-canonical-tests.log",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T012620Z-dominance-gate2/result/startup-artifact-j7-heap-canonical-tests.log",
       "operation": "decimal-between",
       "prefix": "startup-artifact-j7-heap-canonical-tests: ",
       "suffix": " checks passed"
@@ -3813,19 +3813,20 @@
   }
   ,{
   "id": "E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150",
-  "claim": "The 20-hook artifact qualifies ({{lifecycle_qualified}}): {{lifecycle_comparisons}} retained caller comparisons plus {{lifecycle_builder_comparisons}} builder and develop comparisons (26 stock/owned comparisons), with {{lifecycle_controls}} IRQ omissions, {{lifecycle_first_completion_controls}} first-completion defects, {{lifecycle_builder_controls}} relocated original-builder defects, {{lifecycle_lifecycle_controls}} lifecycle memory defects and {{lifecycle_develop_controls}} develop entry defects returned and rejected (20 controls). It owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore, plus develop job4 0x00e8fee4, record notification 0x00e8eb18 and clear-record release 0x00d989f8; retained transaction entries={{lifecycle_retained_entries}}. Develop cases cover job4 setup failure, attached completion, sixteen-row packing with a preset pitch and a null plane, and IRQ-delivered record notification; the develop controls omit job4, omit the notification and release without clearing the record. The historical eight-hook consumer artifact qualifies ({{consumer_qualified}}): {{facade_pairs}} retained Playback facade/IRQ pairs plus {{builder_pairs}} builder pairs, including actual develop job4 and notification; returned controls are {{irq_controls}} IRQ omissions, {{builder_controls}} relocated original-builder instruction defects and {{completion_controls}} first-completion defects (11 pairs/14 controls total). Whole ordinary builder d98904..d989f8 and first completion 121fec8..121ff20 cover signed selector/default/7/8 mapping, strict packing byte1, the 101-byte minimum record, requirements forwarding, callback gates, synchronous setup failure and completion reentry. Earlier device cohort separately qualified {{current_pairs}} retained caller pairs and {{device_pairs}} nonpolling device-service CPU pairs, with returned programming-omission rejection={{program_omission}}. Historical transaction cohort separately qualified ({{qualified}}): {{pairs}} original/owned retained requirements/submit/completion/restart/finish pairs and {{controls}} returned IRQ-omission controls. These earlier cohorts retain their original artifact scopes; the historical device matrix was not replayed on the whole-lifecycle artifact.",
+  "claim": "The 20-hook artifact with a record-specific develop job4 wait and stock's hardware stop on cancel-all qualifies ({{lifecycle_qualified}}): {{lifecycle_comparisons}} retained caller comparisons plus {{lifecycle_builder_comparisons}} builder and develop comparisons (26 stock/owned comparisons), with {{lifecycle_controls}} IRQ omissions, {{lifecycle_first_completion_controls}} first-completion defects, {{lifecycle_builder_controls}} relocated original-builder defects, {{lifecycle_lifecycle_controls}} lifecycle memory defects and {{lifecycle_develop_controls}} develop entry defects returned and rejected (20 controls). Under the same all-bits cancel-all wake, stock and owned job4 submit the same reset/IRQ-release/resource-release/lock-signal sequence and leave equal memory, differing only in the returned status: {{lifecycle_develop_cancel_comparisons}}. {{lifecycle_develop_wake_cases}} owned-only wake cases pass (an unrelated wake followed by the record completion, and completion during the 0x10 clear), and {{lifecycle_develop_wake_controls}} stock job4 run under the same unrelated wake releases with the completion bytes unwritten and is rejected. It owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore, plus develop job4 0x00e8fee4, record notification 0x00e8eb18 and clear-record release 0x00d989f8; retained transaction entries={{lifecycle_retained_entries}}. Develop cases cover job4 setup failure, attached completion, sixteen-row packing with a preset pitch and a null plane, and IRQ-delivered record notification; the develop controls omit job4, omit the notification and release without clearing the record. The historical eight-hook consumer artifact qualifies ({{consumer_qualified}}): {{facade_pairs}} retained Playback facade/IRQ pairs plus {{builder_pairs}} builder pairs, including actual develop job4 and notification; returned controls are {{irq_controls}} IRQ omissions, {{builder_controls}} relocated original-builder instruction defects and {{completion_controls}} first-completion defects (11 pairs/14 controls total). Whole ordinary builder d98904..d989f8 and first completion 121fec8..121ff20 cover signed selector/default/7/8 mapping, strict packing byte1, the 101-byte minimum record, requirements forwarding, callback gates, synchronous setup failure and completion reentry. Earlier device cohort separately qualified {{current_pairs}} retained caller pairs and {{device_pairs}} nonpolling device-service CPU pairs, with returned programming-omission rejection={{program_omission}}. Historical transaction cohort separately qualified ({{qualified}}): {{pairs}} original/owned retained requirements/submit/completion/restart/finish pairs and {{controls}} returned IRQ-omission controls. These earlier cohorts retain their original artifact scopes; the historical device matrix was not replayed on the whole-lifecycle artifact.",
   "scope": "{{lifecycle_scope}} Earlier eight-hook consumer scope: {{consumer_scope}} Synchronous failure/lifetime boundary: {{failure_lifetime}} Nine builder controls execute relocated original-source mutants with the owned transaction, not mutated owned Rust stores. Develop controls replace the linked owned entry with a return, or the clear-record entry with a tail branch to owned release. Device/resource/kernel/IRQ/cache/timer/nested-critical and task-event notify/wait providers remain conditional. Earlier device scope: {{device_scope}} Historical transaction scope: {{native_scope}} No native polling, DMA, pixels, physical IRQ timing, allocation/resource/lifetime/unload or general media ownership claim. Preparation and application-mode evidence remains separate.",
-  "notes": "Native register images are ordinary RAM, not a JPEG MMIO-read/device or polling model. The installed source-length omission is a preparation-prefix counterexample, not completed PLAY or absent-IRQ acceptance. No physical pixels, whole playback or natural application-mode acceptance. Construction precedes lock9 acquisition; the builder's only caller is job4 and job4's only caller is 0x00e93700 in all three images. From bytes, job4 runs only on task 0xb: sole subsystem-4 sender 0x00e92000 has one caller 0x00e6e4fc, which targets the special background triple 0x00e8a540 (task 0xb), and task 0xb's loop 0x00ea17d0 completes each job before its next receive. Job4's task-event wait is satisfied by any event 0x10; cancel-all-waits 0x00e937dc sends all bits to worker tasks and other 0x10 senders use RAM task words, so record/request, subscriber and IRQ quiescence remain open. The native wait stub returns without delivering completion. Runtime/ELF, qualifier, runner, manifest/metadata, SDK and consumed frozen stock sources are bound by the lifecycle artifact selectors. Second completion, restart and finish remain conditional native evidence, not natural PLAY observations.",
+  "notes": "Native register images are ordinary RAM, not a JPEG MMIO-read/device or polling model. The installed source-length omission is a preparation-prefix counterexample, not completed PLAY or absent-IRQ acceptance. No physical pixels, whole playback or natural application-mode acceptance. Construction precedes lock9 acquisition; the builder's only caller is job4 and job4's only caller is 0x00e93700 in all three images, which discards job4's result. From bytes, job4 runs only on task 0xb: sole subsystem-4 sender 0x00e92000 has one caller 0x00e6e4fc, which targets the special background triple 0x00e8a540 (task 0xb), and task 0xb's loop 0x00ea17d0 completes each job before its next receive. The kernel wait is satisfied by any event 0x10, and 0x10 can reach task 0xb from stale arbitration/allocator waiter entries, the armed image4 gate, never-cleared registrations written by 0x00e53d00 and completion-callback races; owned job4 re-waits after those, clearing only 0x10 through 0x007246f0. On a target that can be task 0xb, bit 0x40 comes only from cancel-all 0x00e937dc's 0xffffffff broadcast, which owned job4 treats as cancellation; whether any framework handle's +0x34 names task 0xb is not established. On cancel the owned reset is the qualified owned replica of stock's channel9 reset service; that it quiesces the decoder and its DMA rests on stock's own sequence and is otherwise unmeasured. Kernel event-flag semantics are not executed natively. The facts file is derived by the inline command recorded in its run.json. Runtime/ELF, qualifier, runner, manifest/metadata, SDK and consumed frozen stock sources are bound by the lifecycle artifact selectors. Second completion, restart and finish remain conditional native evidence, not natural PLAY observations.",
   "artifacts": [
-    "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/e2e-result.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/result.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/runtime.bin",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/kernel.elf",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/experiment.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/ram-push-manifest.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/observations.jsonl",
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json",
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/run.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/runtime.bin",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/kernel.elf",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/experiment.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/ram-push-manifest.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/observations.jsonl",
     "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
     "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
     "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
@@ -3835,26 +3836,29 @@
     "private-data/scratch/PlaybackMediaClosure/runs/20261116T223544Z-playback-jpeg-consumer-native-admitted-controls/run.json"
   ],
   "facts": [
-    {"name": "lifecycle_qualified", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["qualified"]},
-    {"name": "lifecycle_comparisons", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["comparisons"], "operation": "length"},
-    {"name": "lifecycle_builder_comparisons", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["builder_comparisons"], "operation": "length"},
-    {"name": "lifecycle_controls", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["controls"], "operation": "length"},
-    {"name": "lifecycle_first_completion_controls", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["first_completion_controls"], "operation": "length"},
-    {"name": "lifecycle_builder_controls", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["builder_controls"], "operation": "length"},
-    {"name": "lifecycle_lifecycle_controls", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["lifecycle_controls"], "operation": "length"},
-    {"name": "lifecycle_develop_controls", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["develop_controls"], "operation": "length"},
-    {"name": "lifecycle_retained_entries", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["retained_entries"]},
-    {"name": "lifecycle_runtime_sha256", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["runtime_sha256"]},
-    {"name": "lifecycle_elf_sha256", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["elf_sha256"]},
-    {"name": "lifecycle_qualifier_sha256", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["qualifier_sha256"]},
-    {"name": "lifecycle_runner_sha256", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["runner_sha256"]},
-    {"name": "lifecycle_manifest_sha256", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["manifest_sha256"]},
-    {"name": "lifecycle_metadata_sha256", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["metadata_sha256"]},
-    {"name": "lifecycle_source_rev", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["source_rev"]},
-    {"name": "lifecycle_scope", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["scope"]},
-    {"name": "lifecycle_consumed_source_fixtures", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json", "pointer": ["consumed_source_fixtures"]},
-    {"name": "lifecycle_sdk", "path": "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json", "pointer": ["dependencies", "sdk"]},
-    {"name": "lifecycle_runner", "path": "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json", "pointer": ["dependencies", "native_runner"]},
+    {"name": "lifecycle_qualified", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["qualified"]},
+    {"name": "lifecycle_comparisons", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["comparisons"], "operation": "length"},
+    {"name": "lifecycle_builder_comparisons", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["builder_comparisons"], "operation": "length"},
+    {"name": "lifecycle_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["controls"], "operation": "length"},
+    {"name": "lifecycle_first_completion_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["first_completion_controls"], "operation": "length"},
+    {"name": "lifecycle_builder_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["builder_controls"], "operation": "length"},
+    {"name": "lifecycle_lifecycle_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["lifecycle_controls"], "operation": "length"},
+    {"name": "lifecycle_develop_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_controls"], "operation": "length"},
+    {"name": "lifecycle_develop_cancel_comparisons", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_cancel_comparisons"]},
+    {"name": "lifecycle_develop_wake_cases", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_wake_cases"], "operation": "length"},
+    {"name": "lifecycle_develop_wake_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_wake_controls"], "operation": "length"},
+    {"name": "lifecycle_retained_entries", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["retained_entries"]},
+    {"name": "lifecycle_runtime_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["runtime_sha256"]},
+    {"name": "lifecycle_elf_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["elf_sha256"]},
+    {"name": "lifecycle_qualifier_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["qualifier_sha256"]},
+    {"name": "lifecycle_runner_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["runner_sha256"]},
+    {"name": "lifecycle_manifest_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["manifest_sha256"]},
+    {"name": "lifecycle_metadata_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["metadata_sha256"]},
+    {"name": "lifecycle_source_rev", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["source_rev"]},
+    {"name": "lifecycle_scope", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["scope"]},
+    {"name": "lifecycle_consumed_source_fixtures", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["consumed_source_fixtures"]},
+    {"name": "lifecycle_sdk", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["dependencies", "sdk"]},
+    {"name": "lifecycle_runner", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["dependencies", "native_runner"]},
     {
       "name": "qualified",
       "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
@@ -4078,17 +4082,18 @@
   "id": "E-PLAYBACK-JPEG-TRANSACTION-INSTALLED-150",
   "claim": "The whole-lifecycle and develop-consumer artifact has {{lifecycle_hooks}} hooks and {{lifecycle_publications}} publication words; install/menu/back checks={{lifecycle_install}}, with all {{lifecycle_restored}} old words restored on rollback. Natural constructor-prefix and PLAY epochs qualify ({{lifecycle_observed}}): preparation observes develop job4, builder, acquire, IRQ, record notification, release and clear-record release, then PLAY observes requirements initialization, prefix preservation, reset, submit, first completion, timer cancel and complete owned cancel/restore 0x0122026c..0x01220294. Guards exclude 33 whole original body extents; bounded guard results={{lifecycle_guards}}. Independent frozen stock source/output/final PNG equality={{lifecycle_equal}}, rendering photograph963-3095; released driver/completion equality and raw request differences={{lifecycle_handbacks}}. Original card unchanged={{lifecycle_card_unchanged}}. The historical eight-hook artifact installs and traverses menu/back with checks {{current_install}}, restoring {{current_restored}} publication words on rollback; the historical six-hook negative installed with checks {{negative_install}} and restored {{negative_restored}} words. Prepared/native/installed runtime and ELF bytes agree ({{prepared_runtime_equal}}). Natural preparation observes builder/acquire/IRQ/release once each in {{prefix_records}} guard records; two fixture PLAY jobs observe acquire/IRQ/release/first-completion twice each in {{play_records}} guard records. The distinct guarded epochs exclude {{excluded_bodies}} original body extents, with {{protected_count}} protected writes and {{body_fetch_count}} original-body fetches. Six complete {{allocation}}-byte snapshots are identical ({{snapshots_equal}}); upload differences per snapshot={{current_scalar_differences}} completed-installer ABI7 scalar bytes, with all {{publications}} publication words exact ({{current_publications_exact}}). Complete independent stock sources, decoded outputs and final PNG compare byte-equal ({{current_source_output_png_equal}}), rendering photograph963-3095. Released 528-byte drivers compare equal ({{current_driver_equal}}); 176-byte request differences={{current_request_differences}} retain raw timer offsets92/93. Independent-reference pixel differences={{current_reference_diff}} bytes; pre-press frame stability={{current_frame_stability}}. The source-length omission remains outcome {{negative_outcome}}, exit {{negative_exit}}, before PLAY: {{negative_matching_writes}} matching programming writes omit the {{negative_expected_length}}-byte length store at 0xfff63110; start is rejected and the strict model reports '{{negative_failure}}'. Historical six-hook artifact: six-hook install={{install}}, menu/back={{trajectory}}, rollback={{unload_check}}, restoring {{restored}} words in {{allocation}} bytes with {{publications}} publications. Historical PLAY completes {{jobs}} jobs, independent source/output/PNG equality={{source_output_png_equal}}, with equal released 528-byte drivers. Preview {{preview_source}} source bytes produce {{preview_output}} bytes; full {{full_source}} source bytes produce {{full_output}} bytes. Historical request offsets={{preview_offsets}}/{{full_offsets}}, stock timers={{preview_stock_timer}}/{{full_stock_timer}}, owned timers={{preview_owned_timer}}/{{full_owned_timer}}, reference differences={{preview_reference_diff}}/{{full_reference_diff}} bytes. Historical runtime before/after differences={{runtime_diff}}, upload differences={{scalar_diff}} completed ABI7 scalar bytes, publication differences={{publication_diff}}. Historical source/acquire/IRQ/release/restart fetches={{source_fetches}}/{{acquire_fetches}}/{{irq_fetches}}/{{release_fetches}}/{{restart_fetches}}, original-body fetches={{original_fetches}}, protected writes={{protected_writes}}. Historical observer exit {{observer_exit}} did not pass run-output: wrapper exit {{wrapper_exit}}, outcome {{wrapper_outcome}}, reason {{wrapper_reason}}.",
   "scope": "Whole-lifecycle installed nominal channel9 reset/program/start/status/event read-and-ACK/endpoint services execute under the existing full-system JPEG model, with two fixture PLAY completions and IRQ/result/release handback. Native high-level device boundaries remain conditional. Allocation equality covers [0x00a81d00,0x00a89d00) and publications, not all RAM. Passive inspection media-state equality={{inspection_before_equal}}/{{inspection_after_equal}} applies within each inspection, not across all PLAY SD activity. Historical integrated-preparation pair={{integrated_pair}}, pre-press frame stability={{frame_stability}}, whole-playback acceptance={{whole_playback}} remain separate limitations. Native cohorts are E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150. Older source/layout/tail provenance is E-FUJIMOD-XM1-PLAY-JPEG-150; earlier preparation cohorts are E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150. Actual PLAY executes whole owned cancel/restore 0x0122026c..0x01220294; 0x01220288 is an interior observation, not the extent. Second completion, restart and finish remain conditional native only. Natural constructor prefix is distinct from the two fixture PLAY jobs. No code-state writes were made by the host observer; protected-write guards cover CPU, host and model-bus writes in declared ranges, not all guest RAM. No allocation/resource/lifetime or general media ownership claim.",
-  "notes": "The explicit emulator-only source-length omission fails naturally before PLAY; absent IRQ/result/release is not completed-PLAY negative acceptance. Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of USB disconnect signaling and natural application-mode ownership. Pixel-reference disagreements are counterexamples, not a tolerance. No broad diagnostic, physical-pixel, browsing, whole-playback, capture/save continuation, retirement or unload acceptance. Menu/back rollback retains allocation until power-off. All 20 lifecycle-artifact defect controls are native; no whole-lifecycle full-system negative is claimed. Develop job4, its record notification and clear-record release are owned; task-event notify/wait, the develop framework caller 0x00e936a8 and the overlay47 clear-record caller 0x01238160 remain retained. Job4 construction runs only on task 0xb (byte-level: sole sender 0x00e92000/0x00e6e4fc to the special background triple 0x00e8a540). A record-specific completion wait, static request/subscriber lifetime and IRQ quiescence remain open; cancel-all-waits 0x00e937dc and RAM-targeted 0x10 senders are not excluded from task 0xb. Earlier compile failures and incorrect --installed invocation failures remain at preparation/invocation scope, not installed PLAY acceptance.",
+  "notes": "The explicit emulator-only source-length omission fails naturally before PLAY; absent IRQ/result/release is not completed-PLAY negative acceptance. Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of USB disconnect signaling and natural application-mode ownership. Pixel-reference disagreements are counterexamples, not a tolerance. No broad diagnostic, physical-pixel, browsing, whole-playback, capture/save continuation, retirement or unload acceptance. Menu/back rollback retains allocation until power-off. All 20 lifecycle-artifact defect controls are native; no whole-lifecycle full-system negative is claimed. Develop job4, its record notification and clear-record release are owned; task-event notify/wait, the develop framework caller 0x00e936a8 and the overlay47 clear-record caller 0x01238160 remain retained. Job4 construction runs only on task 0xb (byte-level: sole sender 0x00e92000/0x00e6e4fc to the special background triple 0x00e8a540). The installed artifact carries the record-specific wait and the stock reset/release on cancel-all; preparation observes clear-record release after the notification, and the receipt does not record whether any unrelated 0x10 wake preceded it, so cancel-all and unrelated-wake paths have native coverage only. Source/output/PNG equality, handbacks and guards come from the stop-facts run, whose run.json records the full inline derivation. Static request/subscriber lifetime and IRQ quiescence remain open; reset quiescence rests on stock's sequence and is otherwise unmeasured. Earlier compile failures and incorrect --installed invocation failures remain at preparation/invocation scope, not installed PLAY acceptance.",
   "artifacts": [
-    "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop-native/result.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/e2e-result.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/result.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/runtime.bin",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/kernel.elf",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/experiment.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/ram-push-manifest.json",
-    "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/observations.jsonl",
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json",
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/run.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/runtime.bin",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/kernel.elf",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/experiment.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/ram-push-manifest.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/observations.jsonl",
     "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
     "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/result.json",
     "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/stock-play/result.json",
@@ -4107,17 +4112,17 @@
     "private-data/scratch/PlaybackMediaClosure/runs/20261116T222438Z-playback-jpeg-consumer-owned-play/run.json"
   ],
   "facts": [
-    {"name": "lifecycle_install", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/e2e-result.json", "pointer": ["checks"]},
-    {"name": "lifecycle_restored", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/e2e-result.json", "pointer": ["mailbox", "rollback", "restored"]},
-    {"name": "lifecycle_epochs", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/result.json", "pointer": ["owned_playback", "epochs"]},
-    {"name": "lifecycle_observed", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/result.json", "pointer": ["owned_playback", "qualification_entries_observed"]},
-    {"name": "lifecycle_card_unchanged", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop-play/result.json", "pointer": ["card_original_unchanged"]},
-    {"name": "lifecycle_hooks", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/experiment.json", "pointer": ["hooks"], "operation": "length"},
-    {"name": "lifecycle_publications", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/relinked/ram-push-manifest.json", "pointer": ["publications"], "operation": "length"},
-    {"name": "lifecycle_equal", "path": "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json", "pointer": ["source_output_png_equal"]},
-    {"name": "lifecycle_handbacks", "path": "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json", "pointer": ["stock_handbacks"]},
-    {"name": "lifecycle_guards", "path": "private-data/scratch/JpegDevelopConsumers/runs/20261118T211909Z-jpeg-develop-facts/result/develop-facts.json", "pointer": ["guards"]},
-    {"name": "lifecycle_firmware", "path": "private-data/scratch/JpegDevelopConsumers/inputs/develop/install/e2e-result.json", "pointer": ["emulator_start", "inputs", "installed_dat"]},
+    {"name": "lifecycle_install", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json", "pointer": ["checks"]},
+    {"name": "lifecycle_restored", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json", "pointer": ["mailbox", "rollback", "restored"]},
+    {"name": "lifecycle_epochs", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json", "pointer": ["owned_playback", "epochs"]},
+    {"name": "lifecycle_observed", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json", "pointer": ["owned_playback", "qualification_entries_observed"]},
+    {"name": "lifecycle_card_unchanged", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json", "pointer": ["card_original_unchanged"]},
+    {"name": "lifecycle_hooks", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/experiment.json", "pointer": ["hooks"], "operation": "length"},
+    {"name": "lifecycle_publications", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/ram-push-manifest.json", "pointer": ["publications"], "operation": "length"},
+    {"name": "lifecycle_equal", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["source_output_png_equal"]},
+    {"name": "lifecycle_handbacks", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["stock_handbacks"]},
+    {"name": "lifecycle_guards", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["guards"]},
+    {"name": "lifecycle_firmware", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json", "pointer": ["emulator_start", "inputs", "installed_dat"]},
     {
       "name": "install",
       "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",

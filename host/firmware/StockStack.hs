@@ -91,6 +91,9 @@ data Condition
   | -- | A nonzero SVC starts a fatal report after which the task does not resume normal operation;
     -- a bound under it covers the paths before the report (S8).
     FatalReportExcluded
+  | -- | A declared register-branch target set holds: the words it reads are written only by the
+    -- direct stores its check scans, and words in image 5's BSS hold 0 before their first store (S9).
+    DeclaredTargetsClosed
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | Code addresses [low, high).
@@ -393,6 +396,18 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                     continueWith memo (addConditions (S.singleton FatalReportExcluded) best') []
                 | Just targets <- supervisorTargets word -> callTo memo targets $ \memo' best'' reach returns ->
                     continueWith memo' best'' (afterReturn returns [(next, offset, frame, Machine M.empty M.empty (exposed reach) Nothing)])
+              -- @ldm<c> sp!, {..., lr}@ then @bx<c> lr@: a return when the condition holds, which restores
+              -- the link the entry's frame saved; otherwise the path continues past both.
+              Refuse UnaccountedSpWrite
+                | A32.LoadMultiple cond base A32.IncrementAfter True regs <- instruction word
+                , base == A32.sp && cond /= A32.Cond 14 && A32.pc `notElem` regs && A32.sp `notElem` regs && A32.lr `elem` regs
+                , Just (A32.BranchExchange cond' False link) <- A32.decode next <$> codeWord code next
+                , cond' == cond && link == A32.lr ->
+                    let restored = case slots of
+                          Slots held -> M.lookup (offset - 4 * (length regs - 1)) held == Just EntryLink
+                          Escaped -> False
+                     in if any fst (outcomes cond) && (offset /= 4 * length regs || not restored) then (Left (UnbalancedReturn address), memo)
+                        else continueWith memo (if any fst (outcomes cond) then returned best' else best') [(next + 4, offset, frame, m) | (False, m) <- outcomes cond]
               Refuse reason -> (Left (Refusal address reason), memo)
               Stop -> continueWith memo best' []
               where
@@ -409,8 +424,12 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                   Just (targets, conditions) -> callTo memo [(offset, target) | target <- targets] $ \memo' best'' _ returns ->
                     let tail' = if any fst (outcomes cond) && returns == Returns then returned best'' else best''
                      in continueWith memo' (addConditions conditions tail') [(next, offset, frame, m) | (False, m) <- outcomes cond]
+            -- A declared or premised site's set; a zero in it is not called on a path that assumes the
+            -- register compared unequal to zero.
             resolve register = case M.lookup address (callbackSites indirect) of
-              Just site -> Just (callbackTargets site, S.singleton (callbackCondition site))
+              Just site
+                | 0 `notElem` callbackTargets site || nonzero register -> Just (filter (/= 0) (callbackTargets site), S.singleton (callbackCondition site))
+                | otherwise -> Nothing
               Nothing -> case M.lookup register registers of
                 Just (SlotPointer slot) -> case M.lookup (SlotOffset slot) (rootSlots indirect) of
                   Just targets@(_ : _) -> Just (targets, S.singleton SlotWordsFixed)
@@ -420,12 +439,12 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                   case [methods | ContextLocks kernel methods <- contextLocks indirect, inRange kernel address] of
                     [LockMethods acquire release] -> Just (if method `elem` [0xc, 0x18] then acquire else release, S.singleton ContextLocksFixed)
                     _ -> Nothing
-                -- A zero value is not called on a path that assumes the register compared unequal to zero.
                 Just (WordAt word) -> case loadedWords indirect word of
-                  Just values | 0 `notElem` values || (tested == Just register && decided (A32.Cond 0) flags == Just False) ->
+                  Just values | 0 `notElem` values || nonzero register ->
                     Just (filter (/= 0) values, S.singleton LoadedWordsClosed)
                   _ -> Nothing
                 _ -> Nothing
+            nonzero register = tested == Just register && decided (A32.Cond 0) flags == Just False
             -- An SVC with a nonzero comment calls its kernel's reporter below the handler's frame.
             supervisorTargets word
               | word .&. 0x0f000000 /= 0x0f000000 || word .&. 0x00ffffff == 0 = Nothing
@@ -441,7 +460,8 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                 Just (ModeBits mode) -> Just mode
                 _ -> Nothing
             -- The bound of an @ldrls pc, [pc, rN, lsl #2]@ table: the nearest earlier flag-setting
-            -- instruction or write of rN, within four and with no branch between, is @cmp rN, #k@.
+            -- instruction or write of rN, within four and with no branch between, is @cmp rN, #k@, or
+            -- @cmp rN, rM@ with the nearest earlier write of rM within four more @mov@/@movw rM, #k@.
             tableBound cond index
               | cond /= A32.Cond 9 = Nothing
               | otherwise = guardAt 1
@@ -453,9 +473,22 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
                       Nothing -> Nothing
                       Just w -> case A32.decode (address - 4 * back) w of
                         A32.DataProcessing (A32.Cond 14) A32.CMP True _ rn (A32.Immediate k) | rn == index -> Just (k + 1)
+                        A32.DataProcessing (A32.Cond 14) A32.CMP True _ rn (A32.ShiftedImmediate rm A32.LSL 0)
+                          | rn == index && rm /= index -> (+ 1) <$> constantAt rm (back + 1) (back + 4)
                         candidate
                           | setsFlags candidate || index `elem` writes (address - 4 * back) w || isBranch candidate -> Nothing
                           | otherwise -> guardAt (back + 1)
+                constantAt :: A32.Reg -> Word32 -> Word32 -> Maybe Word32
+                constantAt register back limit
+                  | back > limit = Nothing
+                  | otherwise = case codeWord code (address - 4 * back) of
+                      Nothing -> Nothing
+                      Just w -> case A32.decode (address - 4 * back) w of
+                        A32.MoveWide (A32.Cond 14) rd k | rd == register -> Just k
+                        A32.DataProcessing (A32.Cond 14) A32.MOV _ rd _ (A32.Immediate k) | rd == register -> Just k
+                        candidate
+                          | register `elem` writes (address - 4 * back) w || isBranch candidate -> Nothing
+                          | otherwise -> constantAt register (back + 1) limit
             atOffset value = Result (StackDepth (fromIntegral value)) [] [entry] S.empty S.empty (Above 0) NeverReturns
 
     clobber registers = foldr M.delete registers [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
