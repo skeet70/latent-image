@@ -11,6 +11,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
+import Numeric (showHex)
 import System.Directory (createDirectory, doesPathExist, getTemporaryDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
@@ -47,12 +48,22 @@ backendReturn site address r0 =
     , "registers" .= object ["r0" .= r0], "observation" .= object ["site" .= site, "reads" .= ([] :: [Value])]
     ]
 
--- | One role's component calls: fs_close of a handle, local_record into the caller's frame and
--- entry_update of an 11-byte name.
-data Role = Role {closeHandle :: T.Text, localRecordResult :: T.Text, entryName :: T.Text}
+-- | One role's component calls: fs_close of a handle, local_record into the caller's frame,
+-- entry_update of an 11-byte name, and a divide at the role's own call site, whose enclosing
+-- function's return the bridge also records.
+data Role = Role {closeHandle :: T.Text, localRecordResult :: T.Text, entryName :: T.Text, divideSite :: Int, divisor :: T.Text}
 
 stockRole :: Role
-stockRole = Role "0x5" "0xa19d6c" "44534346333039374a50470018547200"
+stockRole = Role "0x5" "0xa19d6c" "44534346333039374a50470018547200" 0x712800 "0x200"
+
+divideHit :: T.Text -> Int -> [(T.Text, T.Text)] -> Value
+divideHit kind site registers =
+  object
+    [ "site" .= (kind <> ":" <> hex site), "address" .= hex site, "lr" .= ("0x711830" :: T.Text), "task" .= task
+    , "registers" .= object [K.fromText r .= v | (r, v) <- registers], "observation" .= object ["reads" .= ([] :: [Value])]
+    ]
+  where
+    hex = T.pack . ("0x" ++) . flip showHex ""
 
 calls :: Role -> [Value]
 calls role =
@@ -62,6 +73,10 @@ calls role =
   , backendReturn 0x7111c4 "0x711810" (localRecordResult role)
   , backendEntry "entry_update" "0x714940" "0x711820" [("r0", "0x4"), ("r2", "0x1"), ("r3", "0x1")] [entryName role, "0000000001000000"]
   , backendReturn 0x714940 "0x711820" "0x0"
+  , divideHit "divide-call" (divideSite role) [("r0", "0x1fff"), ("r1", divisor role)]
+  , divideHit "divide-return" (divideSite role + 4) [("r0", "0xf")]
+  , backendReturn (divideSite role) "0x711830" "0x0"
+  , backendReturn (divideSite role + 4) "0x711830" "0x0"
   ]
 
 writeRole :: FilePath -> T.Text -> Int -> Role -> IO ()
@@ -97,9 +112,10 @@ main = do
   writeFile symbols "00ba0020 0 NOTYPE __fixed_body_start\n00bc0000 0 NOTYPE __fixed_body_end\n"
   writeRole (root </> "stock") "stock" noiseHits stockRole
   let cases =
-        [ ("stack-and-unread-name-bytes", noiseHits, stockRole {localRecordResult = "0xa19d40", entryName = "44534346333039374a50470000000000"}, ExitSuccess, "equal")
-        , ("close-handle", 0, stockRole {closeHandle = "0x6"}, ExitFailure 1, "different")
-        , ("read-name-byte", 0, stockRole {entryName = "44534346333039384a50470018547200"}, ExitFailure 1, "different")
+        [ ("stack-and-unread-name-bytes", noiseHits, stockRole {localRecordResult = "0xa19d40", entryName = "44534346333039374a50470000000000", divideSite = 0xba1000}, ExitSuccess, "equal")
+        , ("close-handle", 0, stockRole {closeHandle = "0x6", divideSite = 0xba1000}, ExitFailure 1, "different")
+        , ("read-name-byte", 0, stockRole {entryName = "44534346333039384a50470018547200", divideSite = 0xba1000}, ExitFailure 1, "different")
+        , ("divisor", 0, stockRole {divisor = "0x400", divideSite = 0xba1000}, ExitFailure 1, "different")
         ]
   failures <- fmap concat . sequence $
     [ do

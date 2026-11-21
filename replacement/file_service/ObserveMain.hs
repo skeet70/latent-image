@@ -30,13 +30,14 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits (shiftL, shiftR, (.|.))
+import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.IORef
 import Data.List (isPrefixOf, sort, sortOn)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -77,6 +78,7 @@ data Inputs = Inputs
   , inputBridge :: FilePath
   , inputOutput :: FilePath
   , inputRoute :: [CrawlKey]
+  , inputBody :: Maybe FilePath
   }
 
 entries :: [Entry]
@@ -147,7 +149,6 @@ backends =
   , (0x7004b0, Backend "find_first_entry" ["r3"] [readSpec (register 0) 32, readSpec (register 1) 16, readSpec (register 2) 80])
   , (0x70e664, Backend "fill_memory" ["r1", "r2"] [])
   , (0x70e650, Backend "little_endian" ["r0"] [])
-  , (0x4d978, Backend "divide" ["r0", "r1"] [])
   , (0x71d214, Backend "format_timestamp" ["r2"] [readSpec (register 1) 4])
   , (0x70ec84, Backend "device_for_letter" ["r0"] [])
   , (0x71f4b8, Backend "volume_record" ["r0"] [])
@@ -262,6 +263,27 @@ readWorkers image = do
   need (length workers == 34) "the media task's worker table does not hold 34 rows"
   pure workers
 
+-- | The owned body's load address in `OWNED_FIXED`.
+ownedBodyBase :: Word32
+ownedBodyBase = 0xba0020
+
+-- | The A32 `bl 0x4d978` instructions inside EXTENT of BYTES loaded at BASE.
+divideCalls :: Word32 -> B.ByteString -> Span -> [Word32]
+divideCalls base bytes (Span (Address start) (Address end)) =
+  [ a
+  | a <- [max base start, max base start + 4 .. end - 4]
+  , let offset = fromIntegral (a - base)
+  , offset + 4 <= B.length bytes
+  , let w = foldr (\i acc -> acc `shiftL` 8 .|. fromIntegral (B.index bytes (offset + i))) 0 [0 .. 3] :: Word32
+  , w `shiftR` 28 /= 0xf && (w `shiftR` 24) .&. 0xf == 0xb
+  , let imm = w .&. 0xffffff
+        displacement = (if imm .&. 0x800000 /= 0 then imm .|. 0xff000000 else imm) `shiftL` 2
+  , a + 8 + displacement == 0x4d978
+  ]
+
+noCapture :: Value
+noCapture = object ["entry" .= ([] :: [Value]), "returns" .= ([] :: [Value])]
+
 -- * Observation
 
 parseInputs :: [String] -> IO Inputs
@@ -269,7 +291,7 @@ parseInputs arguments = do
   pairs <- collect arguments
   let values = M.fromList pairs
       names = ["role", "update", "image4", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
-  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
+  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route", "body"]) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card, --route and --body"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
@@ -282,7 +304,7 @@ parseInputs arguments = do
       { inputRole = role, inputUpdate = values M.! "update", inputImage4 = values M.! "image4"
       , inputRun = values M.! "run", inputRom = values M.! "boot-rom", inputNand = values M.! "adjustment-nand"
       , inputCard = M.lookup "card" values, inputBridge = values M.! "bridge", inputOutput = values M.! "output"
-      , inputRoute = keys
+      , inputRoute = keys, inputBody = M.lookup "body" values
       }
   where
     collect [] = pure []
@@ -400,6 +422,7 @@ observe :: Inputs -> FilePath -> (K.Key -> Value -> IO ()) -> IO ()
 observe inputs directory record = do
   let named = [("update", inputUpdate inputs), ("image4", inputImage4 inputs), ("run", inputRun inputs), ("boot-rom", inputRom inputs)
               ,("adjustment-nand", inputNand inputs), ("bridge", inputBridge inputs)] ++ [("card", card) | Just card <- [inputCard inputs]]
+              ++ [("body", body) | Just body <- [inputBody inputs]]
   paths <- M.fromList <$> mapM (\(name, path) -> (,) name <$> makeAbsolute path) named
   bindings <- forM (M.toList paths) $ \(name, path) -> do
     digest <- sha256File path
@@ -409,11 +432,20 @@ observe inputs directory record = do
   record "schema" (Number 1)
   record "role" (String (roleName (inputRole inputs)))
   record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer, "sha256" .= sha256Hex observerDigest]]))
-  workers <- B.readFile (paths M.! "image4") >>= readWorkers
+  image4 <- B.readFile (paths M.! "image4")
+  workers <- readWorkers image4
+  calls <- case (inputRole inputs, M.lookup "body" paths) of
+    (Stock, Nothing) -> pure (concat [divideCalls image4Base image4 extent | extent <- retired])
+    (Owned, Just path) -> do
+      owned <- B.readFile path
+      pure (divideCalls ownedBodyBase owned (Span (Address ownedBodyBase) (Address (ownedBodyBase + fromIntegral (B.length owned)))))
+    _ -> ioError (userError "--body is required for the owned role and refused for stock")
+  record "divide_calls" (A.toJSON (map hexWord calls))
   let sites =
         [(entryAddress e, "fs:" ++ entryName e, entryCapture (entryName e)) | e <- entries]
           ++ [(workerAddress w, "worker:" ++ hexWord (workerCode w), workerCapture) | w <- workers]
           ++ [(Address a, "backend:" ++ backendName b, backendCapture b) | (a, b) <- backends]
+          ++ concat [[(Address a, "divide-call:" ++ hexWord a, noCapture), (Address (a + 4), "divide-return:" ++ hexWord a, noCapture)] | a <- calls]
       writes = map spanValue writeSpans
       fetches = map spanValue fetchSpans
       spec =
@@ -695,6 +727,10 @@ event body hit = do
       | "backend:" `isPrefixOf` label, Just backend <- M.lookup address backendSites, not (external body lr) ->
           Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf (backendArguments backend) hit, "reads" .= backendReadsOf backend hit] ++ common)) (object []))
       | "backend:" `isPrefixOf` label -> Nothing
+      | "divide-call:" `isPrefixOf` label ->
+          Just (Event "backend" "divide" True (object (["kind" .= ("backend" :: T.Text), "name" .= ("divide" :: T.Text), "arguments" .= registersOf ["r0", "r1"] hit, "reads" .= ([] :: [Value])] ++ common)) (object []))
+      | "divide-return:" `isPrefixOf` label ->
+          Just (Event "backend-return" "divide" True (object (["kind" .= ("backend-return" :: T.Text), "name" .= ("divide" :: T.Text), "result" .= registersOf ["r0"] hit] ++ common)) (object []))
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
           case M.lookup site backendSites of
@@ -739,17 +775,25 @@ backendReadsOf backend hit
     captured = [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
     terminated bytes = scanl (\open b -> open && b /= 0) True (take (length bytes - 1) bytes)
 
--- | The hits that are events, decoded one line at a time; the others are dropped as read.
+-- | The hits that are events, decoded one line at a time; the others are dropped as read. The
+-- returns the bridge records for the divide call and return sites are the enclosing function's,
+-- so they are dropped too.
 loadEvents :: Span -> FilePath -> IO [Event]
 loadEvents body directory = do
   bytes <- BL.readFile (directory </> "hits.jsonl")
-  reverse <$> foldM keep [] (filter (not . BL.null) (BLC.lines bytes))
+  reverse . snd <$> foldM keep (S.empty, []) (filter (not . BL.null) (BLC.lines bytes))
   where
-    keep kept line = case A.eitherDecode line of
+    keep (divideSites, kept) line = case A.eitherDecode line of
       Left problem -> ioError (userError problem)
-      Right hit -> case event body hit of
-        Nothing -> pure kept
-        Just e -> rnf (eventValue e) `seq` rnf (eventDead e) `seq` rnf (eventKind e, eventName e, eventExternal e) `seq` pure (e : kept)
+      Right hit
+        | Just label <- textOf (field "site" hit), any (`isPrefixOf` label) ["divide-call:", "divide-return:"], Just address <- hexValue (field "address" hit) ->
+            retain (S.insert address divideSites) kept (event body hit)
+        | textOf (field "site" hit) == Just "call-return", Just site <- hexValue (field "site" (field "observation" hit)), S.member site divideSites ->
+            pure (divideSites, kept)
+        | otherwise -> retain divideSites kept (event body hit)
+    retain divideSites kept Nothing = pure (divideSites, kept)
+    retain divideSites kept (Just e) =
+      rnf (eventValue e) `seq` rnf (eventDead e) `seq` rnf (eventKind e, eventName e, eventExternal e) `seq` pure (divideSites, e : kept)
 
 loadJson :: FilePath -> IO Value
 loadJson path = B.readFile path >>= either (ioError . userError) pure . A.eitherDecodeStrict'
@@ -820,7 +864,7 @@ compareMain stockDir ownedDir symbols output = do
       ownedRole = field "role" ownedReceipt == String (roleName Owned)
       equal = behaviorEqual && (not ownedRole || ownedFetches == 0)
       sharedInputs receipt = case field "inputs" receipt of
-        Object fields -> Object (KM.delete "update" fields)
+        Object fields -> Object (KM.delete "update" (KM.delete "body" fields))
         other -> other
   BL.writeFile output $ A.encode $ object
     [ "schema" .= (1 :: Int)
