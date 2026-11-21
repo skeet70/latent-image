@@ -71,6 +71,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-passive-af-retention.patch",
     "//build-support:fujimod-preservation-evidence.patch",
     "//build-support:fujimod-observation-backing-tests.patch",
+    "//build-support:fujimod-output-clock.patch",
     "//build-support:fujimod-owned-nand-pages.patch",
     "//build-support:fujimod-rprofile-byte-exclusives.patch",
     "//build-support:fujimod-timer-upcount.patch",

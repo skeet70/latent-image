@@ -427,7 +427,7 @@ completeStep emulator pulse step = case stepCompletion step of
 
 press :: Emulator -> Maybe KeyPulse -> Step -> IO ()
 press emulator pulse step = do
-  forM_ (stepIdle step) (emulatorIdle emulator)
+  beforePress emulator step
   (_, actual) <- completeStep emulator pulse step
   require (actual == stepExpected step)
     ("menu trajectory after " ++ stepKey step ++ ": expected " ++ show (stepExpected step) ++ ", got " ++ show actual)
@@ -435,12 +435,17 @@ press emulator pulse step = do
 presses :: Emulator -> Maybe KeyPulse -> [Step] -> IO ()
 presses emulator pulse = mapM_ (press emulator pulse)
 
+beforePress :: Emulator -> Step -> IO ()
+beforePress emulator step = do
+  forM_ (stepOutputClock step) (emulatorOutputClock emulator)
+  forM_ (stepIdle step) (emulatorIdle emulator)
+
 -- | Presses every step and records the key presses, expected and actual state and wall seconds
 -- without requiring the state.
 observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
 observe emulator pulse = mapM $ \step -> do
   let MenuState em es ec = stepExpected step
-  forM_ (stepIdle step) (emulatorIdle emulator)
+  beforePress emulator step
   started <- getMonotonicTime
   (pressed, MenuState am as ac) <- completeStep emulator pulse step
   ended <- getMonotonicTime
@@ -914,7 +919,7 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
       "modal observation requires the retained-film-route physical-key trajectory"
   either (ioError . userError) pure (checkAfOwnershipRoute (isJust (afOwnershipPlanFile given)) (beforeUnload trajectories) (afterUnload trajectories))
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
-                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) || stepCompletion step /= PacketCompletion ]
+                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) || isJust (stepOutputClock step) || stepCompletion step /= PacketCompletion ]
   case emulationRuntime given of
     RetainedRuntime | not (null settleCaps) ->
       ioError (userError "step timing and presented-frame completion require the FujiMod bridge")

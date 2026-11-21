@@ -1,11 +1,11 @@
 # Value-package pair inputs over the controlled-RTC trajectory inventory; run as
-#   jq --arg role stock|owned [--arg route close-pop|change-stall|change-complete|change-late --arg receipt_source SOURCE]
+#   jq --arg role stock|owned [--arg route close-pop|change-stall|change-complete|change-late-KIND --arg receipt_source SOURCE]
 #      -f value.jq TRAJECTORY
 # Every route declares stock's IMAGE SIZE arm and stock's menu notification 0x00d5b350 and, in the
 # owned role, the seam that replaces the arm. With --arg route, applied to picker-260.ROLE.json, it
 # renders that IMAGE SIZE route on that picker's segment template: close-pop closes the unchanged
-# picker; change-stall, change-complete and change-late change the selection and observe the 0x4010
-# submission and its completion (reports/owned-menu-engine-design.md#image-size-changed-selection).
+# picker; change-stall, change-complete and change-late-close/-confirm/-back change the selection and
+# observe the 0x4010 submission and its completion (reports/owned-menu-engine-design.md#image-size-changed-selection).
 def value_sites($role): [["00d51b58", "stock-value-size-arm"], ["00d5b350", "value-notify", {"lr": true}]]
   + (if $role == "owned" then [["runtime:rb_menu_value_size_apply", "owned-value-apply"]]
      elif $role == "stock" then [] else error("role must be stock or owned") end);
@@ -95,16 +95,18 @@ def change($kind):
           observed("other-reopen"; [["ok",1,260,0]]),
           observed("other-leave"; [["back",1,5,5]]),
           ($segments[] | select(.phase == "close-menu"))]
-    elif $kind == "late" then
-      .entry = "IMAGE SIZE changed under a run document whose pipeline schedule completes 0x4010 only after a key that arrives while it is pending. DOWN submits; a half-press arrives while the submission is pending; twelve RIGHTs, each after a 90,000,000-instruction idle, span the board time at which the schedule first completes the pair in both roles; a half-press then closes the menu, and a reopen and a restore elsewhere follow. Landings after the first DOWN are observed, not asserted."
+    elif ($kind | startswith("late-")) then
+      ({"late-close": "half-press", "late-confirm": "ok", "late-back": "back"}[$kind]
+        // error("late kind must be late-close, late-confirm or late-back")) as $key
+      | .entry = "IMAGE SIZE changed under the qualifier's run document, whose output clock keeps the 0x4010 submission pending, then released by the route: DOWN submits; \($key) arrives while it is pending; the next step sets the output banks' fixed transfer clock to 200000 ticks (a shared route-relative scenario input, not X-M1 timing), the completion follows during its idle, and \($key) is pressed again. A restore elsewhere follows. Landings after the first DOWN are observed, not asserted."
       | .before_unload = $segments[0:$route] + [
           ($template | .steps = [["ok",1,5,2],["down",1,5,3]] | .reads += change_reads),
           segment("value-open"; [["ok",1,246,0]]),
           observed("value-change"; [["down",1,246,1]]),
-          observed("value-close-pending"; [["half-press",1,246,1]]),
-          observed("value-wait"; [range(12) | ["right",1,246,1,{"idle_instructions": 90000000}]]),
-          observed("value-close-completed"; [["half-press",1,246,1]]),
-          observed("value-reopen"; [["ok",1,5,3]]),
+          observed("value-key-pending"; [[$key,1,246,1]]),
+          observed("value-release"; [[$key,1,246,1,{"output_clock_ticks": 200000, "idle_instructions": 20000000}]])]
+        + (if $key == "half-press" then [observed("value-reopen"; [["ok",1,5,3]])] else [] end)
+        + [
           observed("other-route"; [["down",1,5,4],["down",1,5,5]]),
           observed("other-open"; [["ok",1,260,0]]),
           observed("other-move"; [["down",1,260,1]]),
@@ -112,11 +114,11 @@ def change($kind):
           observed("other-reopen"; [["ok",1,260,0]]),
           observed("other-leave"; [["back",1,5,5]]),
           ($segments[] | select(.phase == "close-menu"))]
-    else error("change kind must be stall, complete or late") end;
+    else error("change kind must be stall, complete, late-close, late-confirm or late-back") end;
 (if $ARGS.named.route == "close-pop" then close_pop
  elif $ARGS.named.route == "change-stall" then change("stall")
  elif $ARGS.named.route == "change-complete" then change("complete")
- elif $ARGS.named.route == "change-late" then change("late")
+ elif ($ARGS.named.route // "" | startswith("change-late-")) then change($ARGS.named.route | ltrimstr("change-"))
  elif $ARGS.named.route == null then .
- else error("route must be close-pop, change-stall, change-complete, change-late or absent") end)
+ else error("route must be close-pop, change-stall, change-complete, change-late-close, change-late-confirm, change-late-back or absent") end)
 | .trace_sites += value_sites($role)

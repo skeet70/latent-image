@@ -79,6 +79,8 @@ module EmulatorUsb
   , emulatorDisplayHalfPress
   , emulatorIdle
   , emulatorIdleTicks
+  , OutputClockTicks (..)
+  , emulatorOutputClock
   , emulatorLocalUiDrain
   , emulatorUiState
   , NandExportLabel
@@ -925,6 +927,14 @@ emulatorIdle emulator instructions = Object <$> rpc emulator (object ["command" 
 -- | Runs the guest for the given board ticks with no input; the reply is undecoded.
 emulatorIdleTicks :: Emulator -> Tick -> IO Value
 emulatorIdleTicks emulator ticks = Object <$> rpc emulator (object ["command" .= String "idle-ticks", "ticks" .= tickValue ticks])
+
+-- | The output banks' fixed transfer clock in board ticks.
+newtype OutputClockTicks = OutputClockTicks Word64 deriving (Eq, Show)
+
+-- | Sets the output banks' shared fixed transfer clock from their next armed frame on; the reply is undecoded.
+emulatorOutputClock :: Emulator -> OutputClockTicks -> IO Value
+emulatorOutputClock emulator (OutputClockTicks ticks) =
+  Object <$> rpc emulator (object ["command" .= String "output-clock", "node" .= String "image_output_0", "ticks" .= ticks])
 
 -- | Observes current local UI and render drain within the board-tick cap.
 emulatorLocalUiDrain :: Emulator -> Tick -> IO Value

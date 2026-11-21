@@ -4,7 +4,7 @@
 #
 #   run-value-change.sh ROUTE SCHEDULE RUN_DOCUMENT INPUTS TRAJECTORIES OUTPUT
 #
-# ROUTE is change-stall, change-complete or change-late; SCHEDULE labels RUN_DOCUMENT in the receipt. INPUTS holds
+# ROUTE is change-stall, change-complete or change-late-close/-confirm/-back; SCHEDULE labels RUN_DOCUMENT in the receipt. INPUTS holds
 # firmware.DAT, adjustment.nand, engine.a and retired.json; TRAJECTORIES holds picker-260.stock.json
 # and picker-260.owned.json. Run from the repository root under `run-output exec`, outside an
 # emulator slot, after building //emulation:xm1-viewer and
@@ -12,7 +12,7 @@
 set -euo pipefail
 (( $# == 6 )) || { sed -n '2,11p' "$0" >&2; exit 2; }
 route=$1 schedule=$2 run_document=$3 inputs=$4 trajectories=$5 output=$6
-case "$route" in change-stall|change-complete|change-late) ;; *) printf 'route must be change-stall, change-complete or change-late\n' >&2; exit 2 ;; esac
+case "$route" in change-stall|change-complete|change-late-close|change-late-confirm|change-late-back) ;; *) printf 'unknown route: %s\n' "$route" >&2; exit 2 ;; esac
 viewer=bazel-bin/emulation/xm1-viewer
 checker=bazel-bin/replacement/modal_runtime/menu-value-change-check
 correspondence=replacement/menu_value/callback-correspondence.json
