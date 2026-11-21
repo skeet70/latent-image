@@ -93,11 +93,14 @@ entries =
       ]
   ]
 
--- | The owned handle workers, traced as worker sites; their entry words are veneers.
-ownedWorkers :: [(Word32, String)]
-ownedWorkers =
-  [ (0x7115a4, "open_worker"), (0x7116e4, "write_worker"), (0x711768, "close_worker")
-  , (0x711840, "close_entry_worker"), (0x71eca4, "seek_worker"), (0x71f134, "release_worker")
+-- | The entries of the 34 owned request workers, all of the worker table; their entry words are
+-- veneers.
+workerVeneers :: [Word32]
+workerVeneers =
+  [ 0x7115a4, 0x7116e4, 0x711768, 0x711840, 0x7118fc, 0x7119b0, 0x711b50, 0x711bc8, 0x711ea4
+  , 0x711f58, 0x7120d8, 0x7122dc, 0x7123b4, 0x712580, 0x712700, 0x7127e0, 0x715a58, 0x715de4
+  , 0x718a8c, 0x718de4, 0x719098, 0x719614, 0x71a834, 0x71a8a0, 0x71b8c0, 0x71b9b0, 0x71ded4
+  , 0x71e3a4, 0x71e550, 0x71e828, 0x71e8c4, 0x71eca4, 0x71edbc, 0x71f134
   ]
 
 retired :: [Span]
@@ -108,6 +111,9 @@ retired =
       , (0x71d450, 0x71d66c), (0x71ddf0, 0x71ded4), (0x71ea34, 0x71eba0), (0x71eca4, 0x71edbc)
       , (0x71ef18, 0x71f078), (0x71f078, 0x71f418), (0x71fde4, 0x71fe2c), (0x71fe7c, 0x71ff3c)
       , (0x721108, 0x721744), (0x7217f0, 0x721834)
+      , (0x7118fc, 0x712890), (0x715a58, 0x715b34), (0x715de4, 0x715f0c), (0x718a8c, 0x71985c)
+      , (0x71a834, 0x71a93c), (0x71b8c0, 0x71b9e8), (0x71ded4, 0x71df20), (0x71e3a4, 0x71e6f0)
+      , (0x71e828, 0x71e960), (0x71edbc, 0x71ef18)
       ]
   ]
 
@@ -182,7 +188,7 @@ inside (Span (Address s) (Address e)) a = s <= a && a < e
 fetchSpans :: [Span]
 fetchSpans = concatMap split retired
   where
-    veneers = [a | Entry (Address a) _ <- entries] ++ map fst ownedWorkers
+    veneers = [a | Entry (Address a) _ <- entries] ++ workerVeneers
     split (Span (Address s) (Address e)) = go s (sort [v | v <- veneers, s <= v, v < e])
       where
         go from [] = [Span (Address from) (Address e) | from < e]
