@@ -5815,7 +5815,7 @@
         "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/gate.json",
         "pointer": [
           "owned_callback_words_in_stock_terms",
-          1
+          "1"
         ]
       },
       {
@@ -5866,7 +5866,7 @@
         "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
         "pointer": [
           "owned_callback_words_in_stock_terms",
-          3
+          "3"
         ]
       }
     ]

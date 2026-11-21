@@ -238,6 +238,11 @@ Scope: Host/emulator observation-only evidence, with historical and corrected ru
 <!-- /evidence-record E-MENU-HANDOFF-PRESERVATION-150 -->
 
 <!-- evidence-record E-MENU-VALUE-CHANGED-SELECTION-150 -->
+
+E-MENU-VALUE-CHANGED-SELECTION-150: IMAGE SIZE's changed selection submits and completes identically in the stock and owned roles. Natural route (schedule production, source 60ab624392e7fcdd506fd7e5d48f9adabc8d0d7e): after DOWN inside the IMAGE SIZE picker both roles submit the same 0x4010 header and payload with callback word 0x00f3a834 and the submission stays pending; half-press, OK, a second DOWN and BACK each leave picker (1,246,1) with no further submission; the pending block, callback cell, pipeline state, token bitmaps, live settings and menu block agree in all 9 segments (pass true, terminal equal true), and both roles' unloads are refused at controller 74 state 0x18. Completion inputs (labelled schedule output-clock-200000, source 7a6c0d6190992fed8a9fb4bbfdd620a0a2f486da): completion before Close, completion before OK confirmation, Close right after DOWN, and a restore elsewhere through picker 260 BACK give equal events, landings and reads in all 24 segments with callback word 0x00f3a834 (pass true), equal ordered settings writes (true) and equal terminals (true). The merged value matrix at source 09682627e211340997fcd581fc48bf66bf9d3d58, archive ee5f49a26a79764593881aaa5d2585b70fcba12176f4e9b191cb68276cf57b85 and trajectory inventory 8b02169c330bce4ae7f3b8093505d1874a90076c551b90ade0e7bf86b471b6d8 is qualified: 138 of 138 roles complete, 0 failed, 69 pairs, internal builds at --jobs=1.
+
+Scope: X-M1 1.50 cardless RAM-push value package under the controlled-RTC run document plus one labelled alternative pipeline schedule (output-clock-200000) used only as a shared scenario input, not X-M1 timing. Stock drawing. No owned renderer, changed image dimensions, camera or hardware acceptance.
+
 <!-- /evidence-record E-MENU-VALUE-CHANGED-SELECTION-150 -->
 
 ## Time services
