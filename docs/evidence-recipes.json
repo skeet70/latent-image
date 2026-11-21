@@ -5668,136 +5668,77 @@
   },
   {
     "id": "E-MENU-VALUE-CHANGED-SELECTION-150",
-    "claim": "IMAGE SIZE's changed selection submits and completes identically in the stock and owned roles. Natural route (schedule {{stall_schedule}}, source {{stall_source}}): after DOWN inside the IMAGE SIZE picker both roles submit the same 0x4010 header and payload with callback word {{stall_callback}} and the submission stays pending; half-press, OK, a second DOWN and BACK each leave picker (1,246,1) with no further submission; the pending block, callback cell, pipeline state, token bitmaps, live settings and menu block agree in all {{stall_segments}} segments (pass {{stall_pass}}, terminal equal {{stall_terminal_equal}}), and both roles' unloads are refused at controller 74 state 0x18. Completion inputs (labelled schedule {{complete_schedule}}, source {{complete_source}}): completion before Close, completion before OK confirmation, Close right after DOWN, and a restore elsewhere through picker 260 BACK give equal events, landings and reads in all {{complete_segments}} segments with callback word {{complete_callback}} (pass {{complete_pass}}), equal ordered settings writes ({{complete_settings_writes_equal}}) and equal terminals ({{complete_terminal_equal}}). The merged value matrix at source {{matrix_source}}, archive {{owned_archive}} and trajectory inventory {{trajectory_inventory}} is {{matrix_status}}: {{completed_roles}} of {{required_roles}} roles complete, {{failed_roles}} failed, {{required_pairs}} pairs, internal builds at --jobs={{bazel_jobs}}.",
-    "scope": "X-M1 1.50 cardless RAM-push value package under the controlled-RTC run document plus one labelled alternative pipeline schedule ({{complete_schedule}}) used only as a shared scenario input, not X-M1 timing. Stock drawing. No owned renderer, changed image dimensions, camera or hardware acceptance.",
-    "notes": "Stock invokes the pipeline completion callback only with status 0 (all.c 0x01029188, 0x01029430), so failure completion is not a contract-permitted input. Cancellation in the source is the callback cell overwritten by a later 0x4010 or cleared without invocation by pipeline init 0x010287c8 ([0x016fe9bc,0x016fea28); decompiled callers task entry 0x01028b04 and 0x01028a90, reached from 0x01039580 through capture handlers 0x00f01c48/0x00f01ccc). Both roles refuse the second DOWN while pending, so overwrite is unreachable; a clear without invocation would leave Menu pending as in the stall case (source reading, not exercised), and no natural input on this route reaches pipeline init, so no case feeds it. The input-phase-200000 schedule was not run.",
+    "claim": "IMAGE SIZE's changed selection submits and completes identically in the stock and owned roles. Natural route (schedule {{stall_schedule}}, source {{stall_source}}): after DOWN inside the IMAGE SIZE picker both roles submit the same 0x4010 header and payload with callback word {{stall_callback}} and the submission stays pending; half-press, OK, a second DOWN and BACK each leave picker (1,246,1) with no further submission; all {{stall_segments}} segments agree (pass {{stall_pass}}, terminal equal {{stall_terminal_equal}}) and both roles' unloads are refused at controller 74 state 0x18. Completion within the submitting DOWN (labelled schedule {{complete_schedule}}, source {{complete_source}}): completion before a half-press Close, an OK confirmation and a restore elsewhere through picker 260 BACK agree in all {{complete_segments}} segments with callback word {{complete_callback}} (pass {{complete_pass}}), equal ordered settings writes ({{complete_settings_writes_equal}}) and equal terminals ({{complete_terminal_equal}}). Key while pending, then completion (scenario {{close_schedule}}: the production document holds the submission, a route step sets the output clock to 200000 ticks): half-press Close at source {{close_source}}, OK confirmation at {{confirm_source}} and BACK at {{back_source}} each post {{close_pending_events}}, {{confirm_pending_events}} and {{back_pending_events}} events in {{close_pending_phase}}, and the next segment, {{close_release_phase}}, starts with {{close_release_first}}, {{confirm_release_first}} and {{back_release_first}}; all {{close_segments}}, {{confirm_segments}} and {{back_segments}} segments agree (pass {{close_pass}}, {{confirm_pass}}, {{back_pass}}).",
+    "scope": "X-M1 1.50 cardless RAM-push value package under the controlled-RTC run document. The completion schedules, output-clock-200000 from boot and the route-step release to 200000 ticks (fujimod-output-clock.patch), are shared scenario inputs, not X-M1 timing or the production model. Stock drawing. No owned renderer, changed image dimensions, camera or hardware acceptance.",
+    "notes": "Stock invokes the pipeline completion callback only with status 0 (all.c 0x01029188, 0x01029430), so failure completion is not a contract-permitted input. Cancellation in the source is the callback cell overwritten by a later 0x4010 or cleared without invocation by pipeline init 0x010287c8 ([0x016fe9bc,0x016fea28); decompiled callers task entry 0x01028b04 and 0x01028a90, reached from 0x01039580 through capture handlers 0x00f01c48/0x00f01ccc). Both roles refuse the second DOWN while pending, so overwrite is unreachable; a clear without invocation would leave Menu pending as in the stall case (source reading, not exercised), and no natural input on this route reaches pipeline init. Slow output-clock drift was probed and rejected as the late-completion input: the lock breaks at one board time, which the roles reach about 925M instructions apart in route terms, beyond the modal watch's 1,048,576-record bound. The input-phase-200000 schedule was not run.",
     "artifacts": [
-      "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/review-packet.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/host-build-verdicts.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/measurement.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/change-stall.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/change-stall.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/stock-e2e-lifecycle-failure.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/owned-e2e-lifecycle-failure.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/change-complete.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/change-complete.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/stock-e2e-modal-settings-writes.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/owned-e2e-modal-settings-writes.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/change-stall.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/change-stall.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/change-complete.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/change-complete.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/change-late-close.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/change-late-close.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/change-late-confirm.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/change-late-confirm.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/change-late-back.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/change-late-back.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/stock-e2e-modal-settings-writes.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/owned-e2e-modal-settings-writes.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/stock-e2e-lifecycle-failure.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/owned-e2e-lifecycle-failure.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
       "replacement/menu_value/callback-correspondence.json",
+      "build-support/fujimod-output-clock.patch",
       "private-data/scratch/MenuValueFix/inputs/value-schedules/output-clock-200000.json"
     ],
     "facts": [
       {
         "name": "firmware_sha256",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
         "pointer": [
           "inputs",
           "firmware"
         ]
       },
       {
-        "name": "matrix_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "source",
-          "head"
-        ]
-      },
-      {
-        "name": "owned_archive",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "inputs",
-          "owned_archive"
-        ]
-      },
-      {
-        "name": "trajectory_inventory",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "inputs",
-          "trajectory_inventory"
-        ]
-      },
-      {
-        "name": "matrix_status",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "status"
-        ]
-      },
-      {
-        "name": "required_pairs",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "execution",
-          "required_pairs"
-        ]
-      },
-      {
-        "name": "required_roles",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "execution",
-          "required_roles"
-        ]
-      },
-      {
-        "name": "completed_roles",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "execution",
-          "completed_roles"
-        ]
-      },
-      {
-        "name": "failed_roles",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "execution",
-          "failed_roles"
-        ]
-      },
-      {
-        "name": "bazel_jobs",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052501Z-image-size-qualify7-2/result/terminal.json",
-        "pointer": [
-          "resources",
-          "bazel_jobs"
-        ]
-      },
-      {
         "name": "stall_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "stall_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "stall_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "stall_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -5805,43 +5746,43 @@
       },
       {
         "name": "stall_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
       },
       {
         "name": "stall_callback",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T052034Z-image-size-gate-stall-production-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
         "pointer": [
           "owned_callback_words_in_stock_terms",
-          "1"
+          "0"
         ]
       },
       {
         "name": "complete_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "complete_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "complete_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "complete_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -5849,24 +5790,469 @@
       },
       {
         "name": "complete_settings_writes_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
         "pointer": [
           "settings_writes_equal"
         ]
       },
       {
         "name": "complete_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
       },
       {
         "name": "complete_callback",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T051522Z-image-size-gate-complete-output200k-2/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
         "pointer": [
           "owned_callback_words_in_stock_terms",
-          "3"
+          "0"
+        ]
+      },
+      {
+        "name": "close_source",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/verdict.json",
+        "pointer": [
+          "source"
+        ]
+      },
+      {
+        "name": "close_schedule",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/verdict.json",
+        "pointer": [
+          "schedule"
+        ]
+      },
+      {
+        "name": "close_pass",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "close_segments",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "segments"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "close_pending_phase",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "segments",
+          "5",
+          "phase"
+        ]
+      },
+      {
+        "name": "close_pending_events",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "segments",
+          "5",
+          "stock_events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "close_release_phase",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "segments",
+          "6",
+          "phase"
+        ]
+      },
+      {
+        "name": "close_release_first",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "segments",
+          "6",
+          "stock_events",
+          "0",
+          "event"
+        ]
+      },
+      {
+        "name": "close_terminal_equal",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "pointer": [
+          "terminal_equal"
+        ]
+      },
+      {
+        "name": "confirm_source",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/verdict.json",
+        "pointer": [
+          "source"
+        ]
+      },
+      {
+        "name": "confirm_schedule",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/verdict.json",
+        "pointer": [
+          "schedule"
+        ]
+      },
+      {
+        "name": "confirm_pass",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "confirm_segments",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "segments"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "confirm_pending_phase",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "segments",
+          "5",
+          "phase"
+        ]
+      },
+      {
+        "name": "confirm_pending_events",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "segments",
+          "5",
+          "stock_events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "confirm_release_phase",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "segments",
+          "6",
+          "phase"
+        ]
+      },
+      {
+        "name": "confirm_release_first",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "segments",
+          "6",
+          "stock_events",
+          "0",
+          "event"
+        ]
+      },
+      {
+        "name": "confirm_terminal_equal",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "pointer": [
+          "terminal_equal"
+        ]
+      },
+      {
+        "name": "back_source",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/verdict.json",
+        "pointer": [
+          "source"
+        ]
+      },
+      {
+        "name": "back_schedule",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/verdict.json",
+        "pointer": [
+          "schedule"
+        ]
+      },
+      {
+        "name": "back_pass",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "back_segments",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "segments"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "back_pending_phase",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "segments",
+          "5",
+          "phase"
+        ]
+      },
+      {
+        "name": "back_pending_events",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "segments",
+          "5",
+          "stock_events"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "back_release_phase",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "segments",
+          "6",
+          "phase"
+        ]
+      },
+      {
+        "name": "back_release_first",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "segments",
+          "6",
+          "stock_events",
+          "0",
+          "event"
+        ]
+      },
+      {
+        "name": "back_terminal_equal",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "pointer": [
+          "terminal_equal"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "E-MENU-VALUE-CUTOVER-150",
+    "claim": "The value package's 69-pair matrix is the qualifier's one current matrix, for the menu cutover and for the time-services owned base. Menu cutover at source {{menu_source}}, archive {{owned_archive}}, trajectory inventory {{trajectory_inventory}} and SDK {{sdk}}: {{menu_status}}, {{menu_completed}} of {{menu_required}} roles complete over {{menu_pairs}} pairs ({{menu_executed}} executed, {{menu_reused}} reused, {{menu_failed}} failed), internal builds at --jobs={{menu_jobs}}, {{menu_seconds}} seconds. Time-services owned base {{time_base}} at source {{time_source}} with archive {{time_archive}}: {{time_status}}, {{time_passed}} of {{time_pairs}} pairs pass and {{time_completed}} roles complete ({{time_executed}} executed, {{time_reused}} stock roles reused from the menu cohort, {{time_failed}} failed), {{time_seconds}} seconds.",
+    "scope": "X-M1 1.50 cardless RAM-push controlled-RTC matrix: the value archive over increment 7 with the owned IMAGE SIZE apply, stock drawing, two emulator slots at 2 GiB. Owned renderer, changed selection (E-MENU-VALUE-CHANGED-SELECTION-150), full native and hardware remain separate.",
+    "notes": "The time-services cohort copies the menu cohort's stock roles, whose execution identity excludes the owned base; the render comparison reads their receipts at the menu run's original work path, which was restored as a symlink to the kept cohort for that run only. A first time-services attempt without it (image-size-qualify-time7) failed render-compare on the missing path, not on a comparison. E-MENU-ENGINE-CUTOVER-150 keeps the earlier engine-only matrix.",
+    "artifacts": [
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/review-packet.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/host-build-verdicts.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/measurement.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/role-summaries.jsonl",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/review-packet.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/host-build-verdicts.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/stdout.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/measurement.json",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/pairs.jsonl",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/role-summaries.jsonl",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/input-sha256.txt",
+      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/seed-cohort.txt"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "inputs",
+          "firmware"
+        ]
+      },
+      {
+        "name": "menu_source",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "menu_status",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "owned_archive",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "trajectory_inventory",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "inputs",
+          "trajectory_inventory"
+        ]
+      },
+      {
+        "name": "sdk",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "tools",
+          "sdk_store"
+        ]
+      },
+      {
+        "name": "menu_pairs",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "execution",
+          "required_pairs"
+        ]
+      },
+      {
+        "name": "menu_completed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      },
+      {
+        "name": "menu_required",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "execution",
+          "required_roles"
+        ]
+      },
+      {
+        "name": "menu_executed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "execution",
+          "executed_roles"
+        ]
+      },
+      {
+        "name": "menu_reused",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "execution",
+          "reused_roles"
+        ]
+      },
+      {
+        "name": "menu_failed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "execution",
+          "failed_roles"
+        ]
+      },
+      {
+        "name": "menu_jobs",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "pointer": [
+          "resources",
+          "bazel_jobs"
+        ]
+      },
+      {
+        "name": "menu_seconds",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/measurement.json",
+        "pointer": [
+          "wall_seconds"
+        ]
+      },
+      {
+        "name": "time_status",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "time_source",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "time_base",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_base_firmware"
+        ]
+      },
+      {
+        "name": "time_archive",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "time_passed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/stdout.json",
+        "pointer": [
+          "passed_pairs"
+        ]
+      },
+      {
+        "name": "time_pairs",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "execution",
+          "required_pairs"
+        ]
+      },
+      {
+        "name": "time_completed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      },
+      {
+        "name": "time_executed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "execution",
+          "executed_roles"
+        ]
+      },
+      {
+        "name": "time_reused",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "execution",
+          "reused_roles"
+        ]
+      },
+      {
+        "name": "time_failed",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "pointer": [
+          "execution",
+          "failed_roles"
+        ]
+      },
+      {
+        "name": "time_seconds",
+        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/measurement.json",
+        "pointer": [
+          "wall_seconds"
         ]
       }
     ]
