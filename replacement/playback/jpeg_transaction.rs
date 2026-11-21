@@ -247,33 +247,12 @@ unsafe fn finish() {
     }
 }
 
-unsafe fn reclaim() {
-    unsafe { finish() };
-    let resource = unsafe { read_volatile(RESOURCE) };
-    if resource.0 != 0 {
-        unsafe {
-            xm1_jpeg_resource_release(resource);
-            write_volatile(RESOURCE, ResourceHandle(0));
-        }
-    }
-}
-
-/// A token still registered when lock 9 is granted belongs to a cancelled develop decode whose completion released the lock without finishing the device.
-unsafe fn lock() {
-    if unsafe { xm1_jpeg_wait(TRANSACTION_LOCK, WaitDeadline::Forever).0 } != 0 { fatal(); }
-    if unsafe { read_volatile(IRQ_TOKEN).0 } != 0 { unsafe { reclaim() }; }
-}
-
-unsafe fn unlock() {
-    match unsafe { xm1_jpeg_signal(TRANSACTION_LOCK).0 } { 0 | -43 => (), _ => fatal() }
-}
-
 /// # Safety
 /// The address must name a four-byte-aligned writable 0x54-byte request that remains live through release. Nonzero callbacks must implement void(void).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_acquire(address: u32) {
     let request = address as *mut Request;
-    unsafe { lock() };
+    if unsafe { xm1_jpeg_wait(TRANSACTION_LOCK, WaitDeadline::Forever).0 } != 0 { fatal(); }
     if unsafe { read_volatile(RESOURCE).0 } == 0
         && unsafe { xm1_jpeg_resource_acquire(RESOURCE).0 } != 0 { fatal(); }
     if unsafe { configure(request).0 } != 0 {
@@ -304,10 +283,15 @@ pub unsafe extern "C" fn xm1_playback_jpeg_restart(address: u32) {
 /// The caller must own lock 9. Reset and interrupt release must stop the current device transaction before its request storage is reused.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_release() {
-    unsafe {
-        reclaim();
-        unlock();
+    unsafe { finish() };
+    let resource = unsafe { read_volatile(RESOURCE) };
+    if resource.0 != 0 {
+        unsafe {
+            xm1_jpeg_resource_release(resource);
+            write_volatile(RESOURCE, ResourceHandle(0));
+        }
     }
+    match unsafe { xm1_jpeg_signal(TRANSACTION_LOCK).0 } { 0 | -43 => (), _ => fatal() }
 }
 
 /// # Safety
