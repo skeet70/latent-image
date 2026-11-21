@@ -128,8 +128,8 @@ pub trait Port {
     /// The active media-state context's device; none without a context.
     fn device(&self) -> Option<Device>;
     fn capacity(&self) -> Sectors;
-    /// Sets the word at 0x910208 to all ones.
-    fn reset_page_state(&mut self);
+    /// Sets the attach-state word at 0x910208 to all ones.
+    fn reset_attach_state(&mut self);
 
     fn lookup(&mut self, tag: u32) -> FileIndex;
     /// Translates a raw result, reporting it when the translation reports.
@@ -251,7 +251,7 @@ pub fn transfer<P: Port>(port: &mut P, direction: Direction) -> u32 {
     };
     let status = port.translate(raw);
     if !cfg!(file_service_control_pages_keep_state) {
-        port.reset_page_state();
+        port.reset_attach_state();
     }
     port.complete_status(callback, status);
     status

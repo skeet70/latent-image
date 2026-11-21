@@ -7,6 +7,8 @@ const TAGS: u32 = 0x9101c0;
 const SEQUENCE: u32 = 0x910200;
 pub(crate) const TAG_SEMAPHORE: u32 = 0x3c;
 pub(crate) const FOREVER: u32 = 0xffff_ffff;
+/// The word the attach worker compares with -1 and the page workers set to all ones.
+pub(crate) const ATTACH_STATE: u32 = 0x910208;
 
 extern "C" {
     pub(crate) fn file_service_semaphore_wait(semaphore: u32, timeout: u32) -> i32;

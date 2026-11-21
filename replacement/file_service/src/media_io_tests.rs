@@ -31,7 +31,7 @@ struct Fake {
     payload: Vec<u8>,
     context: bool,
     capacity: u32,
-    page_state: u32,
+    attach_state: u32,
     map: Vec<(u32, u32)>,
     raw: RawStatus,
     geometry: Geometry,
@@ -52,7 +52,7 @@ impl Fake {
             payload: vec![0; 0x40],
             context: true,
             capacity: 0x100,
-            page_state: 0,
+            attach_state: 0,
             map: vec![(0x41, 3)],
             raw: RawStatus(0),
             geometry: Geometry { low: 0x1234_5000, high: 0 },
@@ -105,8 +105,8 @@ impl Port for Fake {
     fn capacity(&self) -> Sectors {
         Sectors(self.capacity)
     }
-    fn reset_page_state(&mut self) {
-        self.page_state = u32::MAX;
+    fn reset_attach_state(&mut self) {
+        self.attach_state = u32::MAX;
     }
     fn lookup(&mut self, tag: u32) -> FileIndex {
         FileIndex(self.map.iter().find(|pair| pair.0 == tag).map_or(0, |pair| pair.1))
@@ -270,14 +270,14 @@ fn pages_request(first: u32, count: u32) -> Fake {
 }
 
 #[test]
-fn a_page_transfer_up_to_the_capacity_reaches_the_device_and_resets_the_page_state() {
+fn a_page_transfer_up_to_the_capacity_reaches_the_device_and_resets_the_attach_state() {
     for direction in [Direction::Read, Direction::Write] {
         let mut port = pages_request(0xfe, 2);
         port.raw = RawStatus(13);
         assert_eq!(transfer(&mut port, direction), translated(13));
         let pages = Pages { first: Sectors(0xfe), count: Sectors(2), buffer: 0xd00000 };
         assert_eq!(port.events, vec![Event::Transfer(direction, DEVICE, pages), Event::Complete(CALLBACK_WORD, translated(13), None)]);
-        assert_eq!(port.page_state, u32::MAX);
+        assert_eq!(port.attach_state, u32::MAX);
     }
 }
 
@@ -287,7 +287,7 @@ fn a_page_transfer_past_the_capacity_or_of_no_sectors_refuses_with_nineteen() {
         let mut port = pages_request(first, count);
         assert_eq!(transfer(&mut port, Direction::Read), translated(19));
         assert_eq!(port.events, vec![Event::Complete(CALLBACK_WORD, translated(19), None)]);
-        assert_eq!(port.page_state, u32::MAX);
+        assert_eq!(port.attach_state, u32::MAX);
     }
 }
 
@@ -297,7 +297,7 @@ fn a_page_transfer_without_a_context_refuses_with_two() {
     port.context = false;
     assert_eq!(transfer(&mut port, Direction::Write), translated(2));
     assert!(port.events.is_empty());
-    assert_eq!(port.page_state, u32::MAX);
+    assert_eq!(port.attach_state, u32::MAX);
 }
 
 fn read_request(blocking: bool) -> Fake {

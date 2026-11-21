@@ -6,13 +6,12 @@ use crate::completion::RawStatus;
 use crate::handles::FileIndex;
 use crate::media_io::{self, Device, Direction, Geometry, LocalRecord, LocalStatus, Pages, Pattern, Port, Sectors, Step};
 use crate::requests::Callback;
-use crate::stock::{read_byte, read_half, read_word, write_word};
+use crate::stock::{read_byte, read_half, read_word, write_word, ATTACH_STATE};
 use crate::workers::Offset;
 
 const CONTEXT: u32 = 0x910204;
 const CONTEXT_DEVICE: u32 = 0x114;
 const CONTEXT_CAPACITY: u32 = 0x16c50;
-const PAGE_STATE: u32 = 0x910208;
 const GEOMETRY_BYTES: usize = 68;
 const GEOMETRY_LOW: usize = 0x14;
 const GEOMETRY_HIGH: usize = 0x18;
@@ -82,8 +81,8 @@ impl Port for StockStorage {
         Sectors(read_word(read_word(CONTEXT) + CONTEXT_CAPACITY))
     }
 
-    fn reset_page_state(&mut self) {
-        write_word(PAGE_STATE, u32::MAX)
+    fn reset_attach_state(&mut self) {
+        write_word(ATTACH_STATE, u32::MAX)
     }
 
     fn lookup(&mut self, tag: u32) -> FileIndex {

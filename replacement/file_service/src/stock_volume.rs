@@ -3,12 +3,13 @@
 //! services.
 
 use crate::requests::Callback;
-use crate::stock::{file_service_copy_memory, file_service_fill_memory, read_byte, read_word, write_byte, write_half, write_word};
+use crate::stock::{
+    file_service_copy_memory, file_service_fill_memory, read_byte, read_word, write_byte, write_half, write_word, ATTACH_STATE,
+};
 use crate::volume::{self, Context, Field, Letter, Port, Residue, Volume};
 use crate::workers::Offset;
 
 const CONTEXT: u32 = 0x910204;
-const ATTACH_STATE: u32 = 0x910208;
 const DEFAULTS: u32 = 0x814558;
 const DEFAULTS_BYTES: u32 = 216;
 
