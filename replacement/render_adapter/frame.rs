@@ -46,8 +46,8 @@ const OSD_SCANOUT_REGISTER: u32 = 0xfff6_e0b4;
 #[repr(C)]
 struct OneShotRequest { callback: unsafe extern "C" fn(), retention: u32, order: u32, phase: u32 }
 /// `0x6d80f0`'s one-shot request `{0x6d7f30, 0, 2, 0}` (`I4:6d8104-6d8118`) with the owned delivery. Registration
-/// copies the request (`I4:6c73d0-6c7424`).
-static ONE_SHOT: OneShotRequest = OneShotRequest { callback: rb_render_frame_scanout_delivery, retention: 0, order: 2, phase: 0 };
+/// copies the request and rewrites its phase in place, so the request must be writable.
+static mut ONE_SHOT: OneShotRequest = OneShotRequest { callback: rb_render_frame_scanout_delivery, retention: 0, order: 2, phase: 0 };
 /// Registration's handle output, written under the interrupt lock and never read.
 static mut ONE_SHOT_HANDLE: u32 = 0;
 
@@ -173,7 +173,7 @@ unsafe extern "C" {
     fn xm1_kernel_critical_enter() -> u32;
     fn xm1_kernel_critical_exit(saved: u32);
     /// Called directly, without a trampoline frame, from the interrupt-context bridge and delivery.
-    fn rb_render_stock_6c7318(request: *const u32, handle: *mut u32) -> i32;
+    fn rb_render_stock_6c7318(request: *mut u32, handle: *mut u32) -> i32;
     fn rb_render_stock_6d7f30() -> i32;
 }
 
@@ -274,7 +274,7 @@ pub unsafe extern "C" fn rb_render_frame_complete(waited: i32) {
 pub unsafe extern "C" fn rb_render_frame_scanout_bridge() {
     let register = ScanoutAddress::new(word(OSD_SCANOUT_REGISTER));
     let token = unsafe { xm1_kernel_critical_enter() };
-    let registered = unsafe { rb_render_stock_6c7318(&raw const ONE_SHOT as *const u32, &raw mut ONE_SHOT_HANDLE) } >= 0;
+    let registered = unsafe { rb_render_stock_6c7318(&raw mut ONE_SHOT as *mut u32, &raw mut ONE_SHOT_HANDLE) } >= 0;
     unsafe { (*(&raw mut LATCH)).commit_pass(register, registered); }
     unsafe { xm1_kernel_critical_exit(token); }
 }

@@ -251,10 +251,13 @@ impl TestScanlines {
 #[derive(Clone, Copy)]
 struct SampleRow { first: i32, end: i32, shift: u32, y: f64 }
 impl SampleRow {
+    #[inline(always)]
     fn x(self, index: i32) -> f64 {
         let size = 1 << self.shift;
         (index >> self.shift) as f64 + ((index & (size - 1)) as f64 + 0.5) / size as f64
     }
+    /// An index near the first sample at or right of `x`.
+    fn index_near(self, x: f64) -> i32 { (x * f64::from(1 << self.shift)) as i32 }
     fn point(self, index: i32) -> Point { Point { x: self.x(index), y: self.y } }
 }
 
@@ -265,6 +268,31 @@ fn prefix_end(mut low: i32, mut high: i32, holds: impl Fn(i32) -> bool) -> i32 {
         if holds(middle) { low = middle + 1 } else { high = middle }
     }
     low
+}
+
+/// [`prefix_end`] searched outward from `guess` in doubling steps before bisecting, for the same predicate.
+fn prefix_end_near(mut low: i32, mut high: i32, guess: i32, holds: impl Fn(i32) -> bool) -> i32 {
+    if low >= high { return low; }
+    let probe = guess.clamp(low, high - 1);
+    let mut step = 1;
+    if holds(probe) {
+        low = probe + 1;
+        while low < high {
+            let probe = low + (step - 1).min(high - 1 - low);
+            if !holds(probe) { high = probe; break; }
+            low = probe + 1;
+            step = step.saturating_mul(2);
+        }
+    } else {
+        high = probe;
+        while low < high {
+            let probe = high - step.min(high - low);
+            if holds(probe) { low = probe + 1; break; }
+            high = probe;
+            step = step.saturating_mul(2);
+        }
+    }
+    prefix_end(low, high, holds)
 }
 
 /// The indices in `[low, high)` where `holds` is true, for a predicate true on a prefix or a suffix of that range.
@@ -388,7 +416,7 @@ fn for_each_edge(path: FlattenedPath<'_>, mut edge: impl FnMut(Point, Point)) {
 
 /// A sample is inside when the edges it lies left of wind around it under `rule`: an edge rising through the sample's
 /// y counts +1 when the sample is left of it, a falling edge -1. Along a sample row each edge's test is monotone in x,
-/// so the samples it counts are a prefix found by bisection.
+/// so the samples it counts are a prefix, searched from the sample nearest the edge's crossing.
 #[cfg(not(render_reference))]
 pub fn fill(path: FlattenedPath<'_>, rule: FillRule, clip: ClipBounds, grid: SampleGrid, scanlines: &mut Scanlines<'_>, sink: &mut impl CoverageSink) -> Result<(), VectorError> {
     if scanlines.crossings.len() < path.vertices.len() { return Err(VectorError::WorkspaceTooSmall); }
@@ -399,7 +427,8 @@ pub fn fill(path: FlattenedPath<'_>, rule: FillRule, clip: ClipBounds, grid: Sam
         for_each_edge(path, |a, b| {
             let rising = a.y <= row.y && row.y < b.y;
             if !rising && !(b.y <= row.y && row.y < a.y) { return; }
-            let end = prefix_end(row.first, row.end, |index| {
+            let crossing = a.x + (row.y - a.y) * (b.x - a.x) / (b.y - a.y);
+            let end = prefix_end_near(row.first, row.end, row.index_near(crossing), |index| {
                 let side = b.sub(a).cross(row.point(index).sub(a));
                 if rising { side > 0.0 } else { side < 0.0 }
             });

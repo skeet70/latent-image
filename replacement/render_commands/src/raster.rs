@@ -398,29 +398,35 @@ impl<'a> Surface<'a> {
     fn scaled_image(&mut self, dest: SceneRect, source: PixelSource<'_>, clip: Bounds) {
         let columns = ImageAxis::new(dest.x(), dest.width(), source.width(), clip.left, clip.right);
         let rows = ImageAxis::new(dest.y(), dest.height(), source.height(), clip.top, clip.bottom);
-        for y in rows.first..rows.end {
-            let (row0, row1, v) = rows.texels(y);
-            let row_cover = rows.cover(y);
-            for x in columns.first..columns.end {
-                let (column0, column1, u) = columns.texels(x);
-                let texels = [source.rgba(column0, row0), source.rgba(column1, row0), source.rgba(column0, row1), source.rgba(column1, row1)];
-                if texels.iter().all(|texel| texel.map_or(true, |texel| texel.alpha == 0)) { continue; }
-                let mut sum = [0.0f64; 4];
-                for (texel, weight) in texels.into_iter().zip([(1.0 - u) * (1.0 - v), u * (1.0 - v), (1.0 - u) * v, u * v]) {
-                    let Some(texel) = texel else { continue };
-                    let alpha = f64::from(texel.alpha) * weight;
-                    sum[0] += f64::from(texel.red) * alpha;
-                    sum[1] += f64::from(texel.green) * alpha;
-                    sum[2] += f64::from(texel.blue) * alpha;
-                    sum[3] += alpha;
+        let bytes = source.bytes();
+        let channels = match source.order() { PixelOrder::Rgba => [0, 1, 2, 3], PixelOrder::Abgr => [3, 2, 1, 0] };
+        let mut chunk = [ImageSample::EMPTY; IMAGE_COLUMNS];
+        let mut left = columns.first;
+        while left < columns.end {
+            let count = ((columns.end - left) as usize).min(IMAGE_COLUMNS);
+            for index in 0..count { chunk[index] = columns.sample(left + index as i64, 4); }
+            // Texel columns grow with x, so the chunk reads only source bytes `[low, high + 4)` of a texel row.
+            let (low, high) = (chunk[0].first, chunk[count - 1].second);
+            for y in rows.first..rows.end {
+                let row = rows.sample(y, source.stride());
+                if transparent(bytes, row.first + low, row.first + high, channels[3])
+                    && (row.weight == 0.0 || transparent(bytes, row.second + low, row.second + high, channels[3])) { continue; }
+                for index in 0..count {
+                    let column = &chunk[index];
+                    let mut sum = [0.0f64; 4];
+                    accumulate(&mut sum, bytes, row.first + column.first, channels, column.complement, row.complement);
+                    accumulate(&mut sum, bytes, row.first + column.second, channels, column.weight, row.complement);
+                    accumulate(&mut sum, bytes, row.second + column.first, channels, column.complement, row.weight);
+                    accumulate(&mut sum, bytes, row.second + column.second, channels, column.weight, row.weight);
+                    if sum[3] == 0.0 { continue; }
+                    let pixel_alpha = (sum[3] + 0.5).min(255.0) as u8;
+                    let coverage = (column.cover * row.cover * 255.0 + 0.5) as u8;
+                    let pixel_alpha = if coverage == 255 { pixel_alpha } else { multiply(pixel_alpha, coverage) };
+                    let colour = Rgba { red: straight(sum[0], sum[3]), green: straight(sum[1], sum[3]), blue: straight(sum[2], sum[3]), alpha: pixel_alpha };
+                    self.blend(left as usize + index, y as usize, colour);
                 }
-                if sum[3] == 0.0 { continue; }
-                let straight = |value: f64| (value / sum[3] + 0.5).min(255.0) as u8;
-                let alpha = (sum[3] + 0.5).min(255.0) as u8;
-                let coverage = (columns.cover(x) * row_cover * 255.0 + 0.5) as u8;
-                let alpha = if coverage == 255 { alpha } else { multiply(alpha, coverage) };
-                self.blend(x as usize, y as usize, Rgba { red: straight(sum[0]), green: straight(sum[1]), blue: straight(sum[2]), alpha });
             }
+            left += count as i64;
         }
     }
     /// Replaces the complete frame, clearing previous pixels to transparent first.
@@ -638,44 +644,57 @@ impl<'a> Surface<'a> {
         if source.alpha == 0 { return; }
         let index = (y * self.width + x) * 4;
         if source.alpha == 255 {
-            let bytes = self.opaque_bytes(source);
-            self.pixels[index..index + 4].copy_from_slice(&bytes);
+            self.put(index, self.opaque_bytes(source));
             return;
         }
-        let [red, green, blue, alpha] = self.channels();
-        let destination = &mut self.pixels[index..index + 4];
         let sa = source.alpha as u32;
-        let da = destination[alpha] as u32;
-        let inverse = 255 - sa;
-        let denominator = sa * 255 + da * inverse;
-        for (channel, input) in [(red, source.red), (green, source.green), (blue, source.blue)] {
-            let numerator = input as u32 * sa * 255 + destination[channel] as u32 * da * inverse;
-            destination[channel] = ((numerator + denominator / 2) / denominator) as u8;
-        }
-        destination[alpha] = ((denominator + 127) / 255) as u8;
+        let da = self.pixels[index + self.channels()[3]] as u32;
+        self.mix(index, source, sa * 255, da * (255 - sa));
+    }
+    /// Sets the pixel at byte `index` to `source` and its current colour weighted `source_weight` and
+    /// `destination_weight`, with alpha their sum over 255; the sum is nonzero.
+    #[inline(always)]
+    fn mix(&mut self, index: usize, source: Rgba, source_weight: u32, destination_weight: u32) {
+        let [red, green, blue, alpha] = self.channels();
+        let denominator = source_weight + destination_weight;
+        let half = denominator / 2;
+        let pixels = &mut *self.pixels;
+        pixels[index + red] = quotient(source.red as u32 * source_weight + pixels[index + red] as u32 * destination_weight + half, denominator) as u8;
+        pixels[index + green] = quotient(source.green as u32 * source_weight + pixels[index + green] as u32 * destination_weight + half, denominator) as u8;
+        pixels[index + blue] = quotient(source.blue as u32 * source_weight + pixels[index + blue] as u32 * destination_weight + half, denominator) as u8;
+        pixels[index + alpha] = ((denominator + 127) / 255) as u8;
+    }
+    /// Writes one pixel's bytes at byte `index`.
+    #[inline(always)]
+    fn put(&mut self, index: usize, bytes: [u8; 4]) {
+        self.pixels[index + 3] = bytes[3];
+        self.pixels[index] = bytes[0];
+        self.pixels[index + 1] = bytes[1];
+        self.pixels[index + 2] = bytes[2];
     }
     fn blend_span(&mut self, left: usize, right: usize, y: usize, source: Rgba) {
         if source.alpha != 255 {
             for x in left..right { self.blend(x, y, source); }
             return;
         }
-        let bytes = self.opaque_bytes(source);
         let row = y * self.width * 4;
-        for pixel in self.pixels[row + left * 4..row + right * 4].chunks_exact_mut(4) { pixel.copy_from_slice(&bytes); }
+        let (start, end) = (row + left * 4, row + right * 4);
+        if start >= end { return; }
+        self.put(start, self.opaque_bytes(source));
+        let mut filled = start + 4;
+        while filled < end {
+            let length = (filled - start).min(end - filled);
+            self.pixels.copy_within(start..start + length, filled);
+            filled += length;
+        }
     }
     fn source_coverage(&mut self, x: usize, y: usize, source: Rgba, coverage: u8) {
         if coverage == 0 { return; }
         let index = (y * self.width + x) * 4;
-        let [red, green, blue, alpha] = self.channels();
-        let destination = &mut self.pixels[index..index + 4];
         let source_weight = source.alpha as u32 * coverage as u32;
-        let destination_weight = destination[alpha] as u32 * (255 - coverage as u32);
-        let denominator = source_weight + destination_weight;
-        if denominator == 0 { destination.fill(0); return; }
-        for (channel, input) in [(red, source.red), (green, source.green), (blue, source.blue)] {
-            destination[channel] = ((input as u32 * source_weight + destination[channel] as u32 * destination_weight + denominator / 2) / denominator) as u8;
-        }
-        destination[alpha] = ((denominator + 127) / 255) as u8;
+        let destination_weight = self.pixels[index + self.channels()[3]] as u32 * (255 - coverage as u32);
+        if source_weight + destination_weight == 0 { self.put(index, [0; 4]); return; }
+        self.mix(index, source, source_weight, destination_weight);
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -683,8 +702,8 @@ pub enum PaintBlend { Source, SourceOver }
 
 enum PreparedPaint<'a> {
     Solid(Rgba),
-    Linear { x: f64, y: f64, dx: f64, dy: f64, length_squared: f64, ramp: Ramp<'a> },
-    Radial { fx: f64, fy: f64, relative_x: f64, relative_y: f64, radius_squared: f64, ramp: Ramp<'a> },
+    Linear { x: f64, y: f64, dx: f64, dy: f64, length_squared: f64, ramp: PreparedRamp<'a> },
+    Radial { fx: f64, fy: f64, relative_x: f64, relative_y: f64, radius_squared: f64, ramp: PreparedRamp<'a> },
 }
 impl<'a> PreparedPaint<'a> {
     fn new(file: Gvff<'a>, index: PaintIndex, recolour: Option<Recolour>) -> Result<Self, RasterError> {
@@ -698,7 +717,7 @@ impl<'a> PreparedPaint<'a> {
                 previous = Some(offset);
             }
             if previous.is_none() { return Err(RasterError::InvalidPaint); }
-            Ok(ramp)
+            Ok(PreparedRamp::new(ramp))
         };
         match paint {
             Paint::Solid { rgba } => {
@@ -737,11 +756,11 @@ impl<'a> PreparedPaint<'a> {
     fn sample(&self, x: f64, y: f64) -> Rgba {
         match *self {
             Self::Solid(colour) => colour,
-            Self::Linear { x: start_x, y: start_y, dx, dy, length_squared, ramp } => {
+            Self::Linear { x: start_x, y: start_y, dx, dy, length_squared, ref ramp } => {
                 let parameter = if length_squared == 0.0 { 1.0 } else { ((x - start_x) * dx + (y - start_y) * dy) / length_squared };
-                sample_ramp(ramp, parameter)
+                ramp.sample(parameter)
             }
-            Self::Radial { fx, fy, relative_x, relative_y, radius_squared, ramp } => {
+            Self::Radial { fx, fy, relative_x, relative_y, radius_squared, ref ramp } => {
                 let vx = x - fx;
                 let vy = y - fy;
                 let a = vx * vx + vy * vy;
@@ -749,10 +768,81 @@ impl<'a> PreparedPaint<'a> {
                 let c = (relative_x * relative_x + relative_y * relative_y - radius_squared).min(0.0);
                 let root = -b + libm::sqrt((b * b - a * c).max(0.0));
                 let parameter = if a == 0.0 { 0.0 } else if root <= 0.0 { 1.0 } else { a / root };
-                sample_ramp(ramp, parameter)
+                ramp.sample(parameter)
             }
         }
     }
+}
+
+/// Most stops a ramp prepares; a longer ramp is parsed from the file at every sample.
+const RAMP_STOPS: usize = 4;
+
+/// A ramp stop with its colour premultiplied and as straight bytes.
+#[derive(Clone, Copy)]
+struct PreparedStop { offset: f32, premultiplied: [f64; 4], straight: Rgba }
+impl PreparedStop {
+    const EMPTY: Self = Self { offset: 0.0, premultiplied: [0.0; 4], straight: Rgba { red: 0, green: 0, blue: 0, alpha: 0 } };
+    fn new(stop: RampStop) -> Self {
+        let value = |index: usize| f64::from(stop.rgba[index].value());
+        let unit = |index: usize| value(index).clamp(0.0, 1.0);
+        let alpha = unit(3);
+        Self {
+            offset: stop.offset.value(),
+            premultiplied: [unit(0) * alpha, unit(1) * alpha, unit(2) * alpha, alpha],
+            straight: Rgba { red: unit_byte(value(0)), green: unit_byte(value(1)), blue: unit_byte(value(2)), alpha: unit_byte(value(3)) },
+        }
+    }
+}
+
+/// The stops of a validated, nonempty ramp.
+#[derive(Clone, Copy)]
+enum PreparedRamp<'a> { Prepared { stops: [PreparedStop; RAMP_STOPS], count: usize }, File(Ramp<'a>) }
+impl<'a> PreparedRamp<'a> {
+    fn new(ramp: Ramp<'a>) -> Self {
+        let stops = ramp.stops();
+        if stops.len() > RAMP_STOPS { return Self::File(ramp); }
+        let mut prepared = [PreparedStop::EMPTY; RAMP_STOPS];
+        let mut count = 0;
+        for stop in stops {
+            prepared[count] = PreparedStop::new(stop);
+            count += 1;
+        }
+        Self::Prepared { stops: prepared, count }
+    }
+    // Paint initialization 0x840554 sets parameter 0x1a07 to one; GVFF leaves it unchanged.
+    fn sample(&self, parameter: f64) -> Rgba {
+        let parameter = parameter.clamp(0.0, 1.0);
+        match self {
+            Self::Prepared { stops, count } => {
+                let mut left = &stops[0];
+                if parameter < f64::from(left.offset) { return left.straight; }
+                for right in &stops[1..*count] {
+                    if parameter < f64::from(right.offset) { return interpolate(left, right, parameter); }
+                    left = right;
+                }
+                left.straight
+            }
+            Self::File(ramp) => {
+                let mut stops = ramp.stops();
+                let mut left = stops.next().unwrap();
+                if parameter < f64::from(left.offset.value()) { return PreparedStop::new(left).straight; }
+                for right in stops {
+                    if parameter < f64::from(right.offset.value()) { return interpolate(&PreparedStop::new(left), &PreparedStop::new(right), parameter); }
+                    left = right;
+                }
+                PreparedStop::new(left).straight
+            }
+        }
+    }
+}
+
+/// The colour at `parameter` between two stops, blended in premultiplied space and returned to straight alpha.
+fn interpolate(left: &PreparedStop, right: &PreparedStop, parameter: f64) -> Rgba {
+    let fraction = (parameter - f64::from(left.offset)) / f64::from(right.offset - left.offset);
+    let mix = |index: usize| left.premultiplied[index] + (right.premultiplied[index] - left.premultiplied[index]) * fraction;
+    let alpha = mix(3);
+    let channel = |index: usize| if alpha != 0.0 { mix(index) / alpha } else { mix(index) };
+    Rgba { red: unit_byte(channel(0)), green: unit_byte(channel(1)), blue: unit_byte(channel(2)), alpha: unit_byte(alpha) }
 }
 
 pub struct PaintCoverage<'surface, 'pixels, 'asset> {
@@ -781,13 +871,21 @@ impl super::vector_raster::CoverageSink for PaintCoverage<'_, '_, '_> {
         }
     }
     fn cover_span(&mut self, left: i32, right: i32, y: i32, coverage: u8) {
-        let PreparedPaint::Solid(paint) = &self.paint else {
-            for x in left..right { self.cover(x, y, coverage); }
-            return;
-        };
         if y < 0 || y as usize >= self.surface.height || coverage == 0 { return; }
-        let (left, right, y) = (left.max(0) as usize, (right.max(0) as usize).min(self.surface.width), y as usize);
-        let mut colour = *paint;
+        let (left, right) = (left.max(0), right.min(self.surface.width as i32));
+        if left >= right { return; }
+        let mut colour = match self.paint {
+            PreparedPaint::Solid(paint) => paint,
+            // With no x extent each sample's x term is a signed zero, which leaves the ramp parameter's value, and so
+            // the colour, the same along the row.
+            PreparedPaint::Linear { dx, .. } if dx == 0.0 =>
+                self.paint.sample(self.placement.unmap_x(f64::from(left) + 0.5), self.placement.unmap_y(f64::from(y) + 0.5)),
+            _ => {
+                for x in left..right { self.cover(x, y, coverage); }
+                return;
+            }
+        };
+        let (left, right, y) = (left as usize, right as usize, y as usize);
         colour.alpha = multiply(colour.alpha, self.opacity.0);
         match self.blend {
             PaintBlend::SourceOver => {
@@ -855,38 +953,62 @@ impl ImageAxis {
         let high = (pixel as f64 + 1.0).min(self.end_edge);
         (high - low).max(0.0)
     }
-}
-
-fn stop_premultiplied(stop: RampStop) -> [f64; 4] {
-    let values = stop.rgba.map(|value| f64::from(value.value()).clamp(0.0, 1.0));
-    [values[0] * values[3], values[1] * values[3], values[2] * values[3], values[3]]
-}
-// Paint initialization 0x840554 sets parameter 0x1a07 to one; GVFF leaves it unchanged.
-fn sample_ramp(ramp: Ramp<'_>, parameter: f64) -> Rgba {
-    let mut stops = ramp.stops();
-    let mut left = stops.next().unwrap();
-    let parameter = parameter.clamp(0.0, 1.0);
-    if parameter < f64::from(left.offset.value()) { return rgba_from_floats(left.rgba.map(|value| f64::from(value.value()))); }
-    for right in stops {
-        if parameter < f64::from(right.offset.value()) {
-            let fraction = (parameter - f64::from(left.offset.value())) / f64::from(right.offset.value() - left.offset.value());
-            let left = stop_premultiplied(left);
-            let right = stop_premultiplied(right);
-            let mut result: [f64; 4] = core::array::from_fn(|index| left[index] + (right[index] - left[index]) * fraction);
-            let alpha = result[3];
-            if alpha != 0.0 { for channel in &mut result[..3] { *channel /= alpha; } }
-            return rgba_from_floats(result);
-        }
-        left = right;
+    /// Pixel `pixel`'s texels as byte offsets, `stride` bytes per texel step, with their weights and cover.
+    fn sample(&self, pixel: i64, stride: usize) -> ImageSample {
+        let (first, second, weight) = self.texels(pixel);
+        ImageSample { first: usize::from(first) * stride, second: usize::from(second) * stride, weight, complement: 1.0 - weight, cover: self.cover(pixel) }
     }
-    rgba_from_floats(left.rgba.map(|value| f64::from(value.value())))
-}
-fn rgba_from_floats(values: [f64; 4]) -> Rgba {
-    let values = values.map(|value| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-    Rgba { red: values[0], green: values[1], blue: values[2], alpha: values[3] }
 }
 
+/// Columns of a scaled image sampled once per pass over its rows.
+const IMAGE_COLUMNS: usize = 8;
+
+/// One pixel's position along an [`ImageAxis`]: byte offsets of its two texels, the second texel's weight, one minus
+/// that weight, and the share of the pixel the destination covers.
+#[derive(Clone, Copy)]
+struct ImageSample { first: usize, second: usize, weight: f64, complement: f64, cover: f64 }
+impl ImageSample {
+    const EMPTY: Self = Self { first: 0, second: 0, weight: 0.0, complement: 0.0, cover: 0.0 };
+}
+
+fn rgba_from_floats(values: [f64; 4]) -> Rgba {
+    Rgba { red: unit_byte(values[0]), green: unit_byte(values[1]), blue: unit_byte(values[2]), alpha: unit_byte(values[3]) }
+}
+/// A unit-interval channel as a byte, rounded.
+#[inline(always)]
+fn unit_byte(value: f64) -> u8 { (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 }
+
+/// Whether every texel whose bytes start in `[first, last]` has zero alpha at byte offset `alpha`.
+fn transparent(bytes: &[u8], first: usize, last: usize, alpha: usize) -> bool {
+    let mut at = first;
+    while at <= last {
+        if bytes[at + alpha] != 0 { return false; }
+        at += 4;
+    }
+    true
+}
+/// Adds the texel at byte `at`, premultiplied and weighted by `column_weight * row_weight`, to `sum` (red, green,
+/// blue, alpha). A texel with zero alpha or zero weight would add +0 to every sum.
+#[inline(always)]
+fn accumulate(sum: &mut [f64; 4], bytes: &[u8], at: usize, [red, green, blue, alpha]: [usize; 4], column_weight: f64, row_weight: f64) {
+    let texel_alpha = bytes[at + alpha];
+    if texel_alpha == 0 { return; }
+    let weight = column_weight * row_weight;
+    if weight == 0.0 { return; }
+    let texel_alpha = f64::from(texel_alpha) * weight;
+    sum[0] += f64::from(bytes[at + red]) * texel_alpha;
+    sum[1] += f64::from(bytes[at + green]) * texel_alpha;
+    sum[2] += f64::from(bytes[at + blue]) * texel_alpha;
+    sum[3] += texel_alpha;
+}
+/// A premultiplied channel sum returned to straight alpha.
+#[inline(always)]
+fn straight(value: f64, alpha: f64) -> u8 { (value / alpha + 0.5).min(255.0) as u8 }
 fn multiply(a: u8, b: u8) -> u8 { ((a as u16 * b as u16 + 127) / 255) as u8 }
+/// `numerator / denominator` for a nonzero denominator. The f64 quotient of two integers below 2^53 never rounds up to
+/// the next integer, so truncating it is exact; the guest has no integer divide instruction.
+#[inline(always)]
+fn quotient(numerator: u32, denominator: u32) -> u32 { (f64::from(numerator) / f64::from(denominator)) as u32 }
 #[derive(Clone, Copy)]
 struct Bounds { left: usize, top: usize, right: usize, bottom: usize }
 impl Bounds {
