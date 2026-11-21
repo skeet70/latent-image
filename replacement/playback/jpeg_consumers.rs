@@ -1,5 +1,6 @@
 use super::*;
 use core::mem::MaybeUninit;
+use core::sync::atomic::{fence, Ordering};
 
 #[repr(transparent)]
 struct RecordPixels(u16);
@@ -330,17 +331,34 @@ struct DevelopPlane {
 pub enum DevelopJobStatus { Complete = 0, RecordFailed = 8 }
 
 const DEVELOP_RECORD: *mut DecodeRecord = 0x015b_0bf8 as *mut DecodeRecord;
-const FRAME_TASK: *mut TaskWord = 0x015b_0ccc as *mut TaskWord;
+const FRAME_TASK: *mut FrameTask = 0x015b_0ccc as *mut FrameTask;
 const RECORD_NOTIFICATION_ENTRY: CallbackWord = CallbackWord(0x00e8_eb18);
 const DEVELOP_COMPLETION_EVENT: EventBits = EventBits(0x10);
+
+/// Job4 and the record notification are the only accessors of 0x015b0ccc. Bit 31 is set from publication until the notification runs; the kernel uses only bits 0..15 of a task word.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct FrameTask(u32);
+impl FrameTask {
+    const AWAITING: u32 = 1 << 31;
+    fn awaiting(task: TaskWord) -> Self { Self(task.0 | Self::AWAITING) }
+    fn is_awaiting(self) -> bool { self.0 & Self::AWAITING != 0 }
+    fn task(self) -> TaskWord { TaskWord(self.0 & !Self::AWAITING) }
+}
+
+unsafe fn record_completed() -> bool {
+    fence(Ordering::SeqCst);
+    !unsafe { read_volatile(FRAME_TASK) }.is_awaiting()
+}
 
 unsafe extern "C" {
     fn xm1_jpeg_task_notify(task: TaskWord, bits: EventBits) -> ServiceResult;
     fn xm1_jpeg_current_wait(bits: EventBits, observed: *mut EventBits, timeout: WaitDeadline) -> ServiceResult;
+    fn xm1_jpeg_current_retain(bits: EventBits) -> ServiceResult;
 }
 
 /// # Safety
-/// The operand must cover 0x7fc readable bytes and a nonzero plane 0x34 writable bytes. Event 0x10 of the current task must be signalled only by this request's completion. Record construction precedes lock 9 acquisition and must not race another constructor.
+/// The operand must cover 0x7fc readable bytes and a nonzero plane 0x34 writable bytes, and its task word must have bit 31 clear. Record construction precedes lock 9 acquisition and must not race another constructor.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> DevelopJobStatus {
     let operand = address as *const DevelopOperand;
@@ -371,10 +389,15 @@ pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> Develop
     write_field!(record, develop_61, RecordByte(0));
     write_field!(record, develop_04, RecordHalf(0));
     unsafe {
-        write_volatile(FRAME_TASK, read_field!(operand, task));
+        write_volatile(FRAME_TASK, FrameTask::awaiting(read_field!(operand, task)));
         xm1_playback_jpeg_build_request(record as u32);
         let mut observed = MaybeUninit::<EventBits>::uninit();
-        xm1_jpeg_current_wait(DEVELOP_COMPLETION_EVENT, observed.as_mut_ptr(), WaitDeadline::Forever);
+        loop {
+            xm1_jpeg_current_wait(DEVELOP_COMPLETION_EVENT, observed.as_mut_ptr(), WaitDeadline::Forever);
+            if record_completed() { break; }
+            xm1_jpeg_current_retain(EventBits(!DEVELOP_COMPLETION_EVENT.0));
+            if record_completed() { break; }
+        }
         xm1_playback_jpeg_clear_record_release();
     }
     if read_field!(record, failed).0 != 0 { DevelopJobStatus::RecordFailed } else { DevelopJobStatus::Complete }
@@ -385,7 +408,9 @@ pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> Develop
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub unsafe extern "C" fn xm1_playback_jpeg_record_notification() {
-    let task = unsafe { read_volatile(FRAME_TASK) };
+    let task = unsafe { read_volatile(FRAME_TASK) }.task();
+    unsafe { write_volatile(FRAME_TASK, FrameTask(task.0)) };
+    fence(Ordering::SeqCst);
     unsafe { xm1_jpeg_task_notify(task, DEVELOP_COMPLETION_EVENT) };
 }
 
