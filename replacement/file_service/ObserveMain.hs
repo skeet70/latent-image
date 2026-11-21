@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | file-service-observe observe --role stock|owned --update DAT --image4 ID4 --run JSON
---     --boot-rom ROM --adjustment-nand NAND [--card IMG] --bridge BRIDGE --output NEW_DIR
+--     --boot-rom ROM --adjustment-nand NAND [--card IMG] [--chunk-ticks N] --bridge BRIDGE --output NEW_DIR
 --   file-service-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the 29 file-service entries and
 -- the media task's request workers, a write watch over the result slot, mediamsg session and
 -- open set, and a fetch watch over the retired extents minus the entry veneer words. After
 -- attach it presses PLAY and the playback route keys, idles a fixed budget after each, and
--- captures the screen.
+-- captures the screen. The budget is in instructions, or in board ticks with --chunk-ticks.
 --
 -- compare: the calls whose return address lies outside the retired extents and the owned body
 -- (`__fixed_body_start` to `__fixed_body_end` in OWNED_SYMBOLS) are the component's interface.
@@ -38,6 +38,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32, Word8)
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.WatchObservation (Tick (..))
 import EmulatorUsb
 import Numeric (readHex, showHex)
 import System.Directory (createDirectory, doesPathExist, makeAbsolute)
@@ -71,6 +72,7 @@ data Inputs = Inputs
   , inputCard :: Maybe FilePath
   , inputBridge :: FilePath
   , inputOutput :: FilePath
+  , inputChunkTicks :: Maybe Tick
   }
 
 entries :: [Entry]
@@ -191,16 +193,21 @@ parseInputs arguments = do
   pairs <- collect arguments
   let values = M.fromList pairs
       names = ["role", "update", "image4", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
-  need (length pairs == M.size values && M.keys (M.delete "card" values) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card"
+  need (length pairs == M.size values && M.keys (M.delete "card" (M.delete "chunk-ticks" values)) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --chunk-ticks"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
+  chunkTicks <- case M.lookup "chunk-ticks" values of
+    Nothing -> pure Nothing
+    Just text | [(ticks, "")] <- reads text, ticks > 0 -> pure (Just (Tick ticks))
+    Just _ -> ioError (userError "--chunk-ticks must be a positive board-tick count")
   pure
     Inputs
       { inputRole = role, inputUpdate = values M.! "update", inputImage4 = values M.! "image4"
       , inputRun = values M.! "run", inputRom = values M.! "boot-rom", inputNand = values M.! "adjustment-nand"
       , inputCard = M.lookup "card" values, inputBridge = values M.! "bridge", inputOutput = values M.! "output"
+      , inputChunkTicks = chunkTicks
       }
   where
     collect [] = pure []
@@ -352,7 +359,7 @@ observe inputs directory record = do
   BL.writeFile specPath (A.encode spec <> "\n")
   record "workers" (A.toJSON [object ["code" .= workerCode w, "address" .= a] | w <- workers, let Address a = workerAddress w])
   record "route" (A.toJSON (map crawlKeyWire route))
-  record "budget" (object ["settle_chunks" .= settleChunks, "final_chunks" .= finalChunks, "chunk_instructions" .= chunkInstructions])
+  record "budget" (object (["settle_chunks" .= settleChunks, "final_chunks" .= finalChunks] ++ maybe ["chunk_instructions" .= chunkInstructions] (\t -> ["chunk_ticks" .= tickValue t]) (inputChunkTicks inputs)))
   steps <- newIORef []
   cursor <- newIORef (0 :: Int)
   withBinaryFile (directory </> "hits.jsonl") WriteMode $ \hits -> do
@@ -368,7 +375,9 @@ observe inputs directory record = do
             Number total | end < truncate total -> drain emulator
             _ -> pure end
         idle emulator count = replicateM count $ do
-          ran <- emulatorBridgeCommand emulator (object ["command" .= ("idle" :: T.Text), "instructions" .= chunkInstructions])
+          ran <- case inputChunkTicks inputs of
+            Nothing -> emulatorBridgeCommand emulator (object ["command" .= ("idle" :: T.Text), "instructions" .= chunkInstructions])
+            Just ticks -> emulatorIdleTicks emulator ticks
           media <- emulatorBridgeCommand emulator (object ["command" .= ("media-state" :: T.Text)])
           pure (object ["idle" .= ran, "media" .= media])
         saveSteps = BL.writeFile (directory </> "steps.json") . A.encode . reverse =<< readIORef steps

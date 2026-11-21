@@ -112,6 +112,7 @@ haskell_binary(
     deps = [
         "//emulation:case-sha256",
         "//emulation:emulator-usb",
+        "//emulation:watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
