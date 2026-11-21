@@ -452,13 +452,13 @@ Scope: Emulated X-M1 1.50 stock DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122d
 
 ## Property-service public native cohort
 
-[Property service](settings-storage.md#property-service); the full cohort's only failing control is replaced by `c-gate-read`.
+[Property service](settings-storage.md#property-service); the full cohort on the kept-word native view holds all controls, including `c-gate-read`.
 
 <!-- evidence-record E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150 -->
 
-E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150: The full native public-entry cohort of the trapped property image (owned image4 c7f0aa63a66010260c5a48b56b8bc5c6cc60f481e248c28515e4c3d6f8d0200a) matches stock on pass 2 for 79168 cases with 0 failing; the independent model disagrees on 0 of 79168 owned-id stock cases (649 ids); wrappers fail 0 of 1947 and entry adapters 0 of 18300. Of its 49 controls only c-gate-byte does not hold. That control is replaced by c-gate-read, which patches the owned setter's literal gate address: the id-0x49 rerun with every control fails it on 240 of 320 cases (holds: true), pass 2 matches 2246 cases with 0 failing and the oracle verdict is passed=true on the same owned image4 c7f0aa63a66010260c5a48b56b8bc5c6cc60f481e248c28515e4c3d6f8d0200a.
+E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150: The full native public-entry cohort of the property image on its retirement-admitted native image4 view (4180f0729572f1bb3f24930eb9feca2e8573b4b12911e5888fa83cbc1c4920b5, 7 kept words; owned image4 c7f0aa63a66010260c5a48b56b8bc5c6cc60f481e248c28515e4c3d6f8d0200a) passes (true): pass 2 matches stock for 79168 cases with 0 failing; the independent model disagrees on 0 of 79168 owned-id stock cases (649 ids); wrappers fail 0 of 1947 and entry adapters 0 of 18300. All 49 controls hold (0 failing), including c-gate-read, which patches the owned setter's literal gate address and fails 240 of 320 cases (holds: true).
 
-Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, stock image4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, user-ARM native profile (native-only scope, not the camera, not a DAT retirement). The full cohort is projected from its results.json.gz after its recorded digest check; its run never closed (unjudged). The rerun covers only id 0x49 plus every control.
+Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, stock image4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, user-ARM native profile (native-only scope, not the camera, not a DAT retirement). Projected from the cohort run's results.json.gz after its recorded digest check.
 
 <!-- /evidence-record E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150 -->
 
@@ -470,7 +470,7 @@ Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26a
 
 E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150: The public property stager admits retirement of the stock getter and setter bodies without --unadmitted-retirement (retirement.admitted true, 0 unresolved references, 9 named MMIO-sink dependencies whose coinciding retired words stay stock). On the staged DAT f6c64c4f6695942fbd5825cd2ee30d7fde2667cc3e77cab93ab96d1856c3f97a, the natural pair over 109 routes qualifies both roles (retained qualified, owned qualified) and compares equal; one checker run refuses 10/10 refusal controls for the retained role and 10/10 for the owned role (peak RSS 4826176 and 4155116 KiB), and the setter-entry guest control ends refused-at-restored-arm. On the settings/record-store image composed over the admitted property image (DAT a8ce2ce238b0e4febb702bd3001314f8fc8fa2a5137bd34af2a9ac6e19caaf5c), the 35-step lifecycle matrix qualifies both roles (retained qualified, owned qualified) and compares equal over 41 routes; the owned observation guards 26158 retired-body words and records 0 guard hits (retained 0), and 7 of the 7 kept words are unguarded.
 
-Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, full-system natural pair on the IMAGE SIZE-excluded route file (109 routes) and the settings-storage lifecycle matrix, one observation per role each. Retirement admission is the static reference frontier over image4, image5, plain, both loaders, image2 and image3; computed addresses are outside it. Not the camera, not a native cohort on the kept-word image.
+Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, full-system natural pair on the IMAGE SIZE-excluded route file (109 routes) and the settings-storage lifecycle matrix, one observation per role each. Retirement admission is the static reference frontier over image4, image5, plain, both loaders, image2 and image3; computed addresses are outside it. Not the camera. The native cohort on the kept-word view is E-PROPERTY-SERVICE-PUBLIC-NATIVE-COHORT-150.
 
 <!-- /evidence-record E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150 -->
 
