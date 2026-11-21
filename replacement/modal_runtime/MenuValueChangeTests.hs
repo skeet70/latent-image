@@ -76,6 +76,17 @@ passes table stock owned = fst (compareRoles table stock owned)
 stockRole :: RoleRecord
 stockRole = role stockCallback (completion stockCallback) finished
 
+-- Adds an IMAGE SIZE apply hit at `site` to the DOWN segment.
+withApply :: Site -> RoleRecord -> RoleRecord
+withApply site record = record { roleSegments = map addApply (roleSegments record) }
+ where
+  addApply s
+    | segmentPhase s == "value-change" = s { segmentHits = hit site (0, 0, 0, 0) [] : segmentHits s }
+    | otherwise = s
+
+ownedCallbacks :: Correspondence -> RoleRecord -> RoleRecord -> [CallbackRef]
+ownedCallbacks table stock owned = verdictCallbacks (snd (compareRoles table stock owned))
+
 document :: [Value] -> Value
 document callbacks = object ["schema" .= (1 :: Int), "callbacks" .= callbacks]
 
@@ -115,6 +126,13 @@ cases =
   , ("an owned word declared twice is refused"
     , isLeft (parseCorrespondence (document [entry "0x00f3a834" "0x00a9c120", entry "0x00f3a80c" "0x00a9c120"])))
   , ("a short callback word is refused", isLeft (parseCorrespondence (document [entry "0xf3a834" "0x00a9c120"])))
+  , ("an owned apply against stock's arm passes"
+    , passes none (withApply (ValueSite StockValueArm) stockRole) (withApply (ValueSite ValueApply) stockRole))
+  , ("the owned role entering stock's replaced arm fails"
+    , not (passes none (withApply (ValueSite StockValueArm) stockRole) (withApply (ValueSite StockValueArm) stockRole)))
+  , ("owned callback words are reported in stock terms"
+    , let reported = ownedCallbacks declared stockRole (role ownedCallback (completion ownedCallback) finished)
+      in StockCallback stockCallback `elem` reported && StockCallback ownedCallback `notElem` reported)
   ]
 
 main :: IO ()

@@ -59,7 +59,7 @@ Scope: Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and o
 
 ## Menu engine cutover
 
-`menu-engine-qualify-bounded` runs the engine-only stock/owned matrix ([design](../reports/owned-menu-engine-design.md#engine-only-cutover-qualification)): the increment-7 archive and its 68 pairs, for the menu cutover and for the time-services `--owned-base` qualification alike.
+`menu-engine-qualify-bounded` runs one stock/owned matrix ([design](../reports/owned-menu-engine-design.md#cutover-qualification)): the value package archive `ee5f49a2` (the increment-7 engine with the owned IMAGE SIZE apply) and its 69 pairs, for the menu cutover and for the time-services `--owned-base` qualification alike. E-MENU-ENGINE-CUTOVER-150 records the earlier engine-only 68-pair matrix; E-MENU-VALUE-CUTOVER-150 records the current one.
 
 <!-- evidence-record E-MENU-ENGINE-CUTOVER-150 -->
 
@@ -265,7 +265,7 @@ Use `time-observer schedule STOCK_SUMMARY OUTPUT` for ADC replay across images. 
 
 The current timing policy admits each run's serviced-tick count against a 30,000-board-tick period with a fixed two-tick endpoint bound, then checks equal board-time spans and at most one period of first-notify phase difference. The tick-channel tail bound is fixed independently of the observed count difference. Successful delay returns carry compared elapsed serviced ticks; the dedicated task-9 callback at `0x6b7a4c` carries exact stable cadence. Shared callback targets are excluded because multiple timers can invoke the same code word. Public timer and delay lifecycle calls delimit stable cadence claims.
 
-Run `menu-engine-qualify-bounded --root DIR --owned-base DAT SHA256 execute` on the time-services-over-RC0 DAT. It reuses admitted completed roles and archives unfinished role output once, after acquiring the emulator slot. A recorded completion that fails admission is refused, not automatically replayed.
+Run `menu-engine-qualify-bounded --root DIR --owned-base DAT SHA256 execute` on the time-services-over-RC0 DAT. It runs the value-package matrix with the owned role booted from that DAT (E-MENU-VALUE-CUTOVER-150). It reuses admitted completed roles and archives unfinished role output once, after acquiring the emulator slot. A recorded completion that fails admission is refused, not automatically replayed.
 
 A sampled instruction patch is not automatically a known-wrong control. Require a mutated-site fetch and establish its caller-visible effect on the exercised input; report unused reference copies, input-masked changes and missing fetch evidence separately. Startup publication mutations need the cold-boot stream. The timing control also has measured delay durations, not just an event-count difference. A watch refusal is a failed observation, never a passing firmware result.
 

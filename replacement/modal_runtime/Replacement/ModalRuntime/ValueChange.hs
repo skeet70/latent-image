@@ -44,7 +44,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Word (Word32)
 import Numeric (readHex, showHex)
 import Replacement.ModalRuntime.MenuEnginePair
-  ( Hit (..), ObservationReader (..), Residency (..), Site (..), ValueSite (..), readObservationReader )
+  ( Hit (..), ObservationReader (..), Residency (..), Role (..), Site (..), ValueSite (..), readObservationReader )
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 
@@ -117,6 +117,8 @@ data Event
   | TokenReleased { tokenBitmap :: B.ByteString }
   | Notified { notifiedKind :: Word32, notifiedNode :: Word32, notifiedId :: Word32, notifiedClass :: Word32 }
   | ValueApplied
+  | ReplacedArmEntered
+    -- ^ The owned role entered stock's IMAGE SIZE arm `0x00d51b58`, which its seam replaces.
   deriving (Eq, Show)
 
 data SegmentRecord = SegmentRecord
@@ -177,8 +179,10 @@ readView table label bytes =
 payloadCallbackOffset :: Int
 payloadCallbackOffset = 0x28
 
-segmentEvents :: Correspondence -> [Hit] -> [Event]
-segmentEvents table = mapMaybe event
+-- | A segment's Menu events. Callback words are given in stock terms through the correspondence;
+-- the identity correspondence leaves them as recorded.
+segmentEvents :: Correspondence -> Role -> [Hit] -> [Event]
+segmentEvents table role = mapMaybe event
  where
   callback = stockView table
   first hit = let (value, _, _, _) = hitRegisters hit in value
@@ -204,7 +208,7 @@ segmentEvents table = mapMaybe event
     OtherSite "menu-token-release" -> Just (TokenReleased (B.concat (hitMemory hit)))
     ValueSite ValueNotify -> let (a, b, c, d) = hitRegisters hit in Just (Notified a b c d)
     ValueSite ValueApply -> Just ValueApplied
-    ValueSite StockValueArm -> Just ValueApplied
+    ValueSite StockValueArm -> Just (case role of StockRole -> ValueApplied; OwnedRole -> ReplacedArmEntered)
     _ -> Nothing
   littleEndian value = B.pack [fromIntegral (value `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
 
@@ -226,7 +230,7 @@ data Verdict = Verdict
   , verdictProblems :: [String]
   , verdictSettingsWrites :: Maybe Bool
   , verdictTerminal :: Bool
-  , verdictCallbacks :: [Word32]
+  , verdictCallbacks :: [CallbackRef]
   }
   deriving (Eq, Show)
 
@@ -258,8 +262,8 @@ compareRoles table stock owned = (verdictPasses verdict, verdict)
         , let left = lookup label (segmentReads a)
               right = lookup label (segmentReads b)
         , left /= Nothing || right /= Nothing ]
-    , verdictStockEvents = segmentEvents identity (segmentHits a)
-    , verdictOwnedEvents = segmentEvents table (segmentHits b)
+    , verdictStockEvents = segmentEvents identity StockRole (segmentHits a)
+    , verdictOwnedEvents = segmentEvents table OwnedRole (segmentHits b)
     }
   verdict = Verdict
     { verdictSegments = segments
@@ -269,16 +273,13 @@ compareRoles table stock owned = (verdictPasses verdict, verdict)
         (Nothing, Nothing) -> Nothing
         _ -> Just False
     , verdictTerminal = roleTerminal stock == roleTerminal owned && roleTerminal stock /= NoTerminal
-    , verdictCallbacks = sort (foldr collect [] (concatMap (segmentEvents identity . segmentHits) ownedSegments))
+    , verdictCallbacks = foldr collect [] (concatMap verdictOwnedEvents segments)
     }
   collect event acc = case event of
-    Submitted word -> raw word : acc
-    Received _ word prior _ _ -> raw word : raw prior : acc
-    Completed word -> raw word : acc
+    Submitted word -> word : acc
+    Received _ word prior _ _ -> word : prior : acc
+    Completed word -> word : acc
     _ -> acc
-  raw ref = case ref of
-    StockCallback word -> word
-    MisplacedStockWord word -> word
 
 parseSteps :: J.Value -> J.Parser [Landing]
 parseSteps = J.withObject "e2e observation" $ \fields -> do
@@ -381,11 +382,15 @@ eventValue event = case event of
   Notified kind node identity class_ -> J.object
     ["event" .= ("notified" :: T.Text), "kind" .= hexWord kind, "node" .= hexWord node, "id" .= hexWord identity, "class" .= hexWord class_]
   ValueApplied -> J.object ["event" .= ("value-applied" :: T.Text)]
+  ReplacedArmEntered -> J.object ["event" .= ("replaced-arm-entered" :: T.Text)]
  where
   hex bytes = concatMap (\byte -> let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits) (B.unpack bytes)
-  ref callback = case callback of
-    StockCallback word -> hexWord word
-    MisplacedStockWord word -> "misplaced stock word " ++ hexWord word
+  ref = callbackText
+
+callbackText :: CallbackRef -> String
+callbackText callback = case callback of
+  StockCallback word -> hexWord word
+  MisplacedStockWord word -> "misplaced stock word " ++ hexWord word
 
 verdictValue :: (Bool, Verdict) -> J.Value
 verdictValue (passed, verdict) = J.object
@@ -394,7 +399,7 @@ verdictValue (passed, verdict) = J.object
   , "problems" .= verdictProblems verdict
   , "settings_writes_equal" .= verdictSettingsWrites verdict
   , "terminal_equal" .= verdictTerminal verdict
-  , "owned_callback_words_in_stock_terms" .= map hexWord (verdictCallbacks verdict)
+  , "owned_callback_words_in_stock_terms" .= map callbackText (verdictCallbacks verdict)
   , "segments" .= map segmentValue (verdictSegments verdict)
   ]
  where
