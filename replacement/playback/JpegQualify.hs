@@ -315,7 +315,7 @@ services selected role = [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []]
     bits outcome=case outcome of Decoded->0x10;DecodedPriority->0x01020010;Limit->0x20000;DeviceError->8;NeedInput->0x1000000;IgnoredInput->0x1000000
 
 scope :: String
-scope = "Source-bound channel9 CPU comparisons over actual publication bytes. Exact20 owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore, plus develop job4, its record notification and clear-record release, in addition to the prior transaction and builder. Exact17 packages keep job4, notification and clear-record release retained. Caller observations include source-prefix bytes, final request/resource state, subscriber snapshots, the develop record, plane and returned job status. Completion reentry reaches the published entry after critical leave. Native device-service, resource, IRQ registry, cache, timer, critical and develop task-event notify/wait/retain providers are conditional boundaries; a scripted wait return applies the notification's frame-task effect, or, in owned-only wake cases, returns without it before the scripted completion. Polling and device acceptance require the separate full-system model run. No native pixels, IRQ timing, kernel event-flag semantics, natural USB transition, construction serialization, quiescence, capture, retirement or unload claim."
+scope = "Source-bound channel9 CPU comparisons over actual publication bytes. Exact20 owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore, plus develop job4, its record notification and clear-record release, in addition to the prior transaction and builder. Exact17 packages keep job4, notification and clear-record release retained. Caller observations include source-prefix bytes, final request/resource state, subscriber snapshots, the develop record, plane and returned job status. Completion reentry reaches the published entry after critical leave. Native device-service, resource, IRQ registry, cache, timer, critical, lock and develop task-event notify/wait/retain providers are conditional boundaries; a scripted wait writes its observed pattern and either applies the notification's frame-task effect or, in owned-only wake cases, returns an unrelated or all-bits cancel-all pattern before the scripted completion. Owned-only cancel cases also script completion at the abandon critical section, the device completion IRQ after Cancelled, and job4 reentry whose lock wait applies the hand-over. Polling and device acceptance require the separate full-system model run. No native pixels, IRQ timing, kernel event-flag semantics, natural USB transition, construction serialization, hardware quiescence, capture, retirement or unload claim."
 
 execute :: FilePath -> FilePath -> P.Package -> E.Elf -> Address -> B.ByteString -> [(Address,B.ByteString)] -> [Block] -> Scenario -> Role -> IO Observation
 execute runner output package elf base@(Address baseWord) runtime publications stock selected role = do
@@ -418,13 +418,13 @@ runNative runner output ident blocks calls expected defect = do
 
 data PlaneInput = MissingPlane | DefaultPitch | PresetPitch deriving (Eq, Show)
 data CompletionFlag = FlagFailed | FlagClear deriving (Eq, Show)
-data Wake = Delivered | ForeignThenDelivered | ForeignDuringRetain deriving (Eq, Show)
+data Wake = Delivered | ForeignThenDelivered | ForeignDuringRetain | CancelAll | CompletionDuringCancel | CancelThenCompletion | ReenteredBeforeCompletion deriving (Eq, Show)
 data BuilderCaller = DirectBuilder | NotifiedBuilder | DevelopJob4 PlaneInput CompletionFlag Wake deriving (Eq, Show)
 data RecordMode = Mode7 | Mode8 | Mode5 | ModeNegative deriving (Eq, Show)
 data RecordPacking = PackingZero | PackingOne | PackingOther deriving (Eq, Show)
 data BuilderCase = BuilderCase CaseName BuilderCaller Scenario RecordMode RecordPacking
 data BuilderDefect = MissingMode | MissingPacking | MissingWidth | MissingHeight | MissingSource | MissingCount | MissingDestination | MissingClear | MissingCallback deriving (Eq, Show)
-data ConsumerDefect = OmittedJob4 | OmittedNotification | ReleaseWithoutClear | UncheckedWake deriving (Eq, Show)
+data ConsumerDefect = OmittedJob4 | OmittedNotification | ReleaseWithoutClear | UncheckedWake | ReleaseOnCancel deriving (Eq, Show)
 data BuilderControl = SourceMutation BuilderDefect | RuntimeDefect ConsumerDefect deriving (Eq, Show)
 newtype SourceOffset = SourceOffset Int
 data BuilderMutation = BuilderMutation SourceOffset B.ByteString
@@ -447,6 +447,7 @@ consumerDefectName selected = CaseName $ case selected of
   OmittedNotification -> "omitted-notification"
   ReleaseWithoutClear -> "release-without-clear"
   UncheckedWake -> "unchecked-wake"
+  ReleaseOnCancel -> "release-on-cancel"
 
 controlSuffix :: Maybe BuilderControl -> String
 controlSuffix control = case control of
@@ -470,6 +471,12 @@ job4SetupFailureCase = BuilderCase (CaseName "develop-job4-setup-failed") (Devel
 job4CompleteCase = BuilderCase (CaseName "develop-job4-attached-complete") (DevelopJob4 DefaultPitch FlagClear Delivered) preview Mode5 PackingZero
 job4ForeignWakeCase = BuilderCase (CaseName "develop-job4-foreign-wake") (DevelopJob4 DefaultPitch FlagClear ForeignThenDelivered) preview Mode5 PackingZero
 job4RetainCompletionCase = BuilderCase (CaseName "develop-job4-completion-during-retain") (DevelopJob4 DefaultPitch FlagClear ForeignDuringRetain) preview Mode5 PackingZero
+
+job4CancelCase, job4CancelCompletionCase, job4CancelHandoffCase, job4CancelReentryCase :: BuilderCase
+job4CancelCase = BuilderCase (CaseName "develop-job4-cancel-all") (DevelopJob4 DefaultPitch FlagClear CancelAll) preview Mode5 PackingZero
+job4CancelCompletionCase = BuilderCase (CaseName "develop-job4-completion-during-cancel") (DevelopJob4 DefaultPitch FlagClear CompletionDuringCancel) preview Mode5 PackingZero
+job4CancelHandoffCase = BuilderCase (CaseName "develop-job4-cancelled-completion-handoff") (DevelopJob4 DefaultPitch FlagClear CancelThenCompletion) preview Mode5 PackingZero
+job4CancelReentryCase = BuilderCase (CaseName "develop-job4-reentered-before-cancelled-completion") (DevelopJob4 DefaultPitch FlagClear ReenteredBeforeCompletion) preview Mode5 PackingZero
 
 builderCases :: [BuilderCase]
 builderCases =
@@ -511,7 +518,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       directRecord=replace 0 (halfwords [height,width]) . wordsAt [(0xc,0x4383cc00),(0x10,sourceAddress),(0x14,sourceBytes),(0x3c,completed),(0x40,0x110200)]
         . byteAt 0x34 recordMode . byteAt 0x64 (builderPacking packing) $ B.replicate recordSize 0xa5
       recordBefore=case job of
-        Just(_,flag)->wordsAt [(0x40,0x110200)] . byteAt 0x36 (if flag==FlagClear then 0 else 0xa5) $ B.replicate recordSize 0xa5
+        Just(_,flag)->wordsAt [(0x40,0x110200),(0xd4,0)] . byteAt 0x36 (if flag==FlagClear then 0 else 0xa5) $ B.replicate recordSize 0xa5
         Nothing->if route==NotifiedBuilder then wordsAt [(0xd4,taskWord)] directRecord else directRecord
       presetPitch=width*2+64
       pitch=case job of Just(PresetPitch,_)->presetPitch;_->width*2
@@ -530,17 +537,25 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       setupRequest=wordsAt [(0x10,outputWidth),(0x14,outputHeight),(0x24,0),(0x28,if attachment selected==Refused then 3 else 0),(0x2c,0),(0x30,0)] requestBefore
       finalRequest=if irqRuns then wordsAt [(0x24,finalProduced selected),(0x30,0x87654321)] setupRequest else setupRequest
       initialState=wordsAt [(0,0),(4,0),(0x198,0),(0x19c,0)] (B.replicate 0x210 0xa5)
-      finalState=if constructs then replace 0x1a0 configurationBytes . replace 8 finalRequest $ wordsAt [(0,0),(4,0),(0x198,0x14c56f8),(0x19c,0)] initialState else initialState
       wake=developWake route
-      finalRecord=if irqRuns || wake/=Delivered then byteAt 0x35 1 . byteAt 0x36 0 $ recordReady else recordReady
+      retainedDecode=wake==CancelAll
+      rerun=wake `elem` [CancelThenCompletion,ReenteredBeforeCompletion]
+      finalState=if constructs then replace 0x1a0 configurationBytes . replace 8 finalRequest
+        $ wordsAt [(0,0),(4,if retainedDecode then 0x1e123456 else 0),(0x198,0x14c56f8),(0x19c,if retainedDecode then 0x76123456 else 0)] initialState else initialState
+      finalRecord
+        | retainedDecode = wordsAt [(0xd4,taskWord .|. 0xc0000000)] recordReady
+        | irqRuns || wake/=Delivered = byteAt 0x35 1 . byteAt 0x36 0 $ recordReady
+        | otherwise = recordReady
       jobResult=case job of Just(_,FlagFailed) | constructs -> 8;_->0
+      cancelled=1
       finalConsumer=case job of
-        Just _->assemble [if notificationRuns then 1 else 0,jobResult]
-        Nothing->if route==NotifiedBuilder then assemble [1,0] else assemble [1,statusWord(completionStatus selected)]
+        Just _->assemble [if notificationRuns then 1 else 0,if retainedDecode || rerun then cancelled else jobResult,if rerun then jobResult else 0]
+        Nothing->if route==NotifiedBuilder then assemble [1,0,0] else assemble [1,statusWord(completionStatus selected),0]
       callbackCode=assemble $ load R1 0x2000100 ++ [0xe5910000,0xe2800001,0xe5810000] ++ load R1 0x14c56f8
         ++ [0xe5910028] ++ load R1 0x2000100 ++ [0xe5810004,0xe12fff1e]
+      job4Into offset=load R0 0x2002000 ++ call (Address 0xe8fee4) ++ load R1 0x2000100 ++ [0xe5810000 .|. offset]
       entry=assemble $ [0xe92d4010] ++ (case job of
-        Just _->load R0 0x2002000 ++ call (Address 0xe8fee4) ++ load R1 0x2000100 ++ [0xe5810004]
+        Just _->job4Into 4 ++ (if wake==CancelThenCompletion then call (Address 0xd99570) else []) ++ (if rerun then job4Into 8 else [])
         Nothing->load R0 recordBase ++ call (Address 0xd98904) ++ [word|irqRuns,word<-call (Address 0xd99570)] ++ call (Address 0xd989f8))
         ++ [0xe3a0005a,0xe8bd8010]
       producerBytes=B.take 304(B.drop (0xe8fee4-0xbf1a00) image5)
@@ -548,31 +563,49 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       code kind' address bytes=Block kind' (Address address) ReadExecute bytes [(Address address,B.length bytes)]
       deviceTargets=[(C.bodyStart body,target)|role/=Original,(selectedService,target,_)<-P.deviceServices(Just package),let(body,_)=C.jpegDeviceContract selectedService]
       mappedCalls=[Service (maybe address Address(lookup original deviceTargets)) inputs outputs memoryReads memoryWrites|Service address@(Address original) inputs outputs memoryReads memoryWrites<-calls]
-      calls=if not constructs || control==Just(RuntimeDefect OmittedJob4) then [] else
-        [service 0x724b68 [(R0,9),(R1,0xffffffff)] [] []
-        ,service 0x65a3cc [(R0,0x14c56f4)] [] [Relative R0(assemble[0x1e123456])]
+      lockWait effects=service 0x724b68 [(R0,9),(R1,0xffffffff)] [] effects
+      acquireAfterLock=
+        [service 0x65a3cc [(R0,0x14c56f4)] [] [Relative R0(assemble[0x1e123456])]
         ,service 0x65a478 [] [] [],service 0x65a58c [(R0,0x14c5890)] [] []
         ,Service (Address 0x64e918) [(R0,0x48),(R1,0xd99570),(R2,0x14c588c)] [(R0,if attachment selected==Attached then 0 else 0x86540003)] []
           [Relative R2(assemble[0x76123456])|attachment selected==Attached]]
         ++ (if attachment selected==Attached then [service 0x42634 [(R0,0),(R1,0)] [] [],service 0x65a548 [] [] []] else [])
-        ++ (if irqRuns then [service 0x65ab20 [] [] [Relative R0(assemble[0x10])],service 0x65ab50 [(R0,0x10)] [] []
-          ,service 0x65abd8 [] [] [Relative R0(assemble[0x87654321])],service 0x65ac08 [(R0,0x87654321)] [] []
-          ,service 0x65a9e4 [(R0,0x14c571c)] [] [Relative R0(let Address endpointWord=endpoint selected in assemble[endpointWord])]] else [])
-        ++ [service 0x724558 [(R0,taskWord),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]|notificationRuns,control/=Just(RuntimeDefect OmittedNotification)]
-        ++ waits
-        ++ [service 0x65a478 [] [] []]
+      deviceCompletion=[service 0x65ab20 [] [] [Relative R0(assemble[0x10])],service 0x65ab50 [(R0,0x10)] [] []
+        ,service 0x65abd8 [] [] [Relative R0(assemble[0x87654321])],service 0x65ac08 [(R0,0x87654321)] [] []
+        ,service 0x65a9e4 [(R0,0x14c571c)] [] [Relative R0(let Address endpointWord=endpoint selected in assemble[endpointWord])]]
+      unlock=service 0x724c00 [(R0,9)] [] []
+      reclaim=[service 0x65a478 [] [] [],service 0x64eb20 [(R0,0x76123456)] [] [],service 0x65a424 [(R0,0x1e123456)] [] []]
+      release=[service 0x65a478 [] [] []]
         ++ [service 0x64eb20 [(R0,0x76123456)] [] []|attachment selected==Attached]
-        ++ [service 0x65a424 [(R0,0x1e123456)] [] [],service 0x724c00 [(R0,9)] [] []]
+        ++ [service 0x65a424 [(R0,0x1e123456)] [] [],unlock]
+      developOwnedRole=role/=Original && all (P.ownsEntry package) C.developEntries
+      ownedCritical=[entry'|developOwnedRole,entry'<-critical]
+      calls=if not constructs || control==Just(RuntimeDefect OmittedJob4) then [] else
+        [lockWait []] ++ acquireAfterLock
+        ++ (if irqRuns then deviceCompletion else [])
+        ++ (if notificationRuns && control/=Just(RuntimeDefect OmittedNotification)
+          then ownedCritical++[service 0x724558 [(R0,taskWord),(R1,0x10)] [] [Absolute consumerAddress(assemble[1,0])]] else [])
+        ++ completion
       frameTaskDelivered=Absolute (Address 0x15b0ccc) (assemble[taskWord])
       recordCompleted=[frameTaskDelivered,Absolute (Address 0x15b0c2d) (B.pack[1,0])]
-      wait=service 0x7243a8 [(R0,0x10),(R2,0xffffffff)] []
+      wait observed effects=service 0x7243a8 [(R0,if developOwnedRole then 0x50 else 0x10),(R2,0xffffffff)] [] (Relative R1(assemble[observed]):effects)
       retain=service 0x7246f0 [(R0,0xffffffef)] []
-      waits=case wake of
-        _ | job==Nothing -> []
-        Delivered -> [wait [frameTaskDelivered]]
-        _ | control==Just(RuntimeDefect UncheckedWake) -> [wait []]
-        ForeignThenDelivered -> [wait [],retain [],wait recordCompleted]
-        ForeignDuringRetain -> [wait [],retain recordCompleted]
+      unrelated=0x14
+      cancelAll=0xffffffff
+      criticalAround effects=[Service (Address 0x7235d8) [] [(R0,0x77)] [] effects,service 0x7236b0 [(R0,0x77)] [] []]
+      completion=case wake of
+        _ | job==Nothing -> release
+        Delivered -> wait 0x10 [frameTaskDelivered]:release
+        _ | control==Just(RuntimeDefect UncheckedWake) -> wait unrelated []:release
+        _ | control==Just(RuntimeDefect ReleaseOnCancel) -> wait cancelAll []:release
+        ForeignThenDelivered -> [wait unrelated [],retain [],wait 0x10 recordCompleted]++release
+        ForeignDuringRetain -> [wait unrelated [],retain recordCompleted]++release
+        CancelAll -> wait cancelAll []:critical
+        CompletionDuringCancel -> wait cancelAll []:criticalAround recordCompleted++release
+        CancelThenCompletion -> wait cancelAll []:critical++deviceCompletion++critical++[unlock]
+          ++ [lockWait []]++reclaim++acquireAfterLock++[wait 0x10 recordCompleted]++release
+        ReenteredBeforeCompletion -> wait cancelAll []:critical
+          ++ [lockWait [frameTaskDelivered]]++reclaim++[unlock,lockWait []]++acquireAfterLock++[wait 0x10 recordCompleted]++release
       originalBuilder=B.take 236(B.drop (0xd98904-0xbf1a00) image5)
       noStore=assemble[0xe1a00000]
       mutation selectedDefect=case selectedDefect of
@@ -608,7 +641,7 @@ executeBuilder runner output package elf base@(Address baseWord) runtime publica
       finalPlane=if constructs then wordsAt [(0x20,width*height*2),(0x24,pitch),(0x28,width*2),(0x2c,height),(0x30,0x100000)] plane else plane
       blocks=map publish stock++[Block Runtime base ReadExecute image runtimeFunctions,Block Driver driverAddress ReadWrite initialState []
         ,Block Playback requestAddress ReadWrite initialPlayback [],Block RecordMemory (Address recordBase) ReadWrite recordBefore []
-        ,Block Consumer consumerAddress ReadWrite (assemble[0,0]) [],Block Stack (Address 0x2200000) ReadWrite (B.replicate 0x4000 0) []
+        ,Block Consumer consumerAddress ReadWrite (assemble[0,0,0]) [],Block Stack (Address 0x2200000) ReadWrite (B.replicate 0x4000 0) []
         ,code Caller 0x110000 entry,code FirstConsumer 0x110100 callbackCode,code SecondConsumer 0x110200 (assemble[0xe12fff1e])
         ,publish (code Producer 0xe8fee4 producerBytes),publish (code Signal 0xe8eb18 signalBytes),Block Exit exitAddress ReadExecute (assemble[0xe12fff1e]) []]
         ++ (if job/=Nothing then [Block DevelopOperand (Address 0x2002000) ReadOnly operand [],Block DevelopPlane (Address 0x2001000) ReadWrite plane []] else [])
@@ -744,16 +777,15 @@ main = do
       pure(object ["case" .= label,"defect" .= show defect,"returned_consumer_defect_rejected" .= True
         ,"receipt" .= (label++"-owned-"++defectLabel++"-result.json")])
     else pure []
-  developWakeCases<-if developOwned then forM [job4ForeignWakeCase,job4RetainCompletionCase] $ \selected->do
-      let BuilderCase (CaseName label) _ _ _ _=selected
+  developWakeCases<-if developOwned then forM [job4ForeignWakeCase,job4RetainCompletionCase,job4CancelCase,job4CancelCompletionCase,job4CancelHandoffCase,job4CancelReentryCase] $ \selected@(BuilderCase (CaseName label) route _ _ _)->do
       _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Owned Nothing
-      pure(object ["case" .= label,"owned_waits_for_record_completion" .= True,"owned_receipt" .= (label++"-owned-result.json")])
+      pure(object ["case" .= label,"wake" .= show(developWake route),"owned_receipt" .= (label++"-owned-result.json")])
     else pure []
-  developWakeControls<-if developOwned then forM [job4ForeignWakeCase] $ \selected->do
+  developWakeControls<-if developOwned then forM [(job4ForeignWakeCase,UncheckedWake),(job4CancelCase,ReleaseOnCancel)] $ \(selected,defect)->do
       let BuilderCase (CaseName label) _ _ _ _=selected
-          CaseName defectLabel=consumerDefectName UncheckedWake
-      _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Original(Just(RuntimeDefect UncheckedWake))
-      pure(object ["case" .= label,"defect" .= show UncheckedWake,"stock_release_before_completion_rejected" .= True
+          CaseName defectLabel=consumerDefectName defect
+      _<-executeBuilder runner output parsed elf base runtime publications stock image5 selected Original(Just(RuntimeDefect defect))
+      pure(object ["case" .= label,"defect" .= show defect,"stock_control_rejected" .= True
         ,"receipt" .= (label++"-stock-"++defectLabel++"-result.json")])
     else pure []
   deviceCpu<-if not consumers && P.deviceOwnership parsed==P.OwnedJpegDevice

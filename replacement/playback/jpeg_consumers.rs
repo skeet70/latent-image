@@ -325,28 +325,64 @@ struct DevelopPlane {
     layout: PlaneLayout,
 }
 
+/// Caller 0x00e93700 discards the result.
 #[derive(Clone, Copy)]
 #[repr(i32)]
-pub enum DevelopJobStatus { Complete = 0, RecordFailed = 8 }
+pub enum DevelopJobStatus { Complete = 0, Cancelled = 1, RecordFailed = 8 }
 
 const DEVELOP_RECORD: *mut DecodeRecord = 0x015b_0bf8 as *mut DecodeRecord;
 const FRAME_TASK: *mut FrameTask = 0x015b_0ccc as *mut FrameTask;
 const RECORD_NOTIFICATION_ENTRY: CallbackWord = CallbackWord(0x00e8_eb18);
 const DEVELOP_COMPLETION_EVENT: EventBits = EventBits(0x10);
+/// Only cancel-all 0x00e937dc, which sets every bit, sets bit 0x40 on task 0xb.
+const CANCEL_ALL_EVENT: EventBits = EventBits(0x40);
 
-/// Job4 and the record notification are the only accessors of 0x015b0ccc. Bit 31 is set from publication until the notification runs; the kernel uses only bits 0..15 of a task word. Kernel flag services take the flag lock through 0x000439d8/0x00043a14, which issue data memory barriers, so the notification's clear is visible before its signal.
+/// Job4 and the record notification are the only writers of 0x015b0ccc; the kernel uses only bits 0..15 of a task word. Bit 31 is set from publication until the notification runs. Bit 30 marks a decode whose job4 returned Cancelled; its notification hands lock 9 over instead of signalling. Kernel flag services take the flag lock through 0x000439d8/0x00043a14, which issue data memory barriers, so the notification's clear is visible before its signal.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 struct FrameTask(u32);
 impl FrameTask {
     const AWAITING: u32 = 1 << 31;
+    const ABANDONED: u32 = 1 << 30;
     fn awaiting(task: TaskWord) -> Self { Self(task.0 | Self::AWAITING) }
+    fn abandoned(self) -> Self { Self(self.0 | Self::ABANDONED) }
     fn is_awaiting(self) -> bool { self.0 & Self::AWAITING != 0 }
-    fn task(self) -> TaskWord { TaskWord(self.0 & !Self::AWAITING) }
+    fn is_abandoned(self) -> bool { self.0 & Self::ABANDONED != 0 }
+    fn task(self) -> TaskWord { TaskWord(self.0 & !(Self::AWAITING | Self::ABANDONED)) }
 }
+
+enum Wake { Completed, Cancelled }
 
 unsafe fn record_completed() -> bool {
     !unsafe { read_volatile(FRAME_TASK) }.is_awaiting()
+}
+
+/// Leaves lock 9, the IRQ registration, the resource and the output buffer with the running decode. The record descriptor is detached so the decode leaves the record's completion bytes unwritten, as stock clear-record release does.
+unsafe fn abandon() -> Wake {
+    let state = unsafe { xm1_jpeg_critical_enter() };
+    let frame = unsafe { read_volatile(FRAME_TASK) };
+    let wake = if frame.is_awaiting() {
+        unsafe {
+            write_volatile(FRAME_TASK, frame.abandoned());
+            write_volatile(RECORD, RecordAddress(0));
+        }
+        Wake::Cancelled
+    } else {
+        Wake::Completed
+    };
+    unsafe { xm1_jpeg_critical_leave(state) };
+    wake
+}
+
+unsafe fn await_record() -> Wake {
+    loop {
+        let mut observed = EventBits(0);
+        unsafe { xm1_jpeg_current_wait(EventBits(DEVELOP_COMPLETION_EVENT.0 | CANCEL_ALL_EVENT.0), &mut observed, WaitDeadline::Forever) };
+        if unsafe { record_completed() } { return Wake::Completed; }
+        if observed.0 & CANCEL_ALL_EVENT.0 != 0 { return unsafe { abandon() }; }
+        unsafe { xm1_jpeg_current_retain(EventBits(!DEVELOP_COMPLETION_EVENT.0)) };
+        if unsafe { record_completed() } { return Wake::Completed; }
+    }
 }
 
 unsafe extern "C" {
@@ -356,7 +392,7 @@ unsafe extern "C" {
 }
 
 /// # Safety
-/// The operand must cover 0x7fc readable bytes and a nonzero plane 0x34 writable bytes, and its task word must have bit 31 clear. Record construction precedes lock 9 acquisition and must not race another constructor.
+/// The operand must cover 0x7fc readable bytes and a nonzero plane 0x34 writable bytes, and its task word must have bits 30 and 31 clear. Record construction precedes lock 9 acquisition and must not race another constructor. After Cancelled, the plane's destination stays with the decode until its record notification.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> DevelopJobStatus {
     let operand = address as *const DevelopOperand;
@@ -387,28 +423,32 @@ pub unsafe extern "C" fn xm1_playback_jpeg_develop_job4(address: u32) -> Develop
     write_field!(record, develop_61, RecordByte(0));
     write_field!(record, develop_04, RecordHalf(0));
     unsafe {
+        if read_volatile(FRAME_TASK).is_abandoned() {
+            lock();
+            unlock();
+        }
         write_volatile(FRAME_TASK, FrameTask::awaiting(read_field!(operand, task)));
         xm1_playback_jpeg_build_request(record as u32);
-        let mut observed = MaybeUninit::<EventBits>::uninit();
-        loop {
-            xm1_jpeg_current_wait(DEVELOP_COMPLETION_EVENT, observed.as_mut_ptr(), WaitDeadline::Forever);
-            if record_completed() { break; }
-            xm1_jpeg_current_retain(EventBits(!DEVELOP_COMPLETION_EVENT.0));
-            if record_completed() { break; }
-        }
+        if let Wake::Cancelled = await_record() { return DevelopJobStatus::Cancelled; }
         xm1_playback_jpeg_clear_record_release();
     }
     if read_field!(record, failed).0 != 0 { DevelopJobStatus::RecordFailed } else { DevelopJobStatus::Complete }
 }
 
 /// # Safety
-/// The frame task word must name a live task.
+/// The frame task word must name a live task. An abandoned decode's notification must run where lock 9 may be signalled; 0x00724c00 selects the interrupt-context service itself.
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub unsafe extern "C" fn xm1_playback_jpeg_record_notification() {
-    let task = unsafe { read_volatile(FRAME_TASK) }.task();
-    unsafe { write_volatile(FRAME_TASK, FrameTask(task.0)) };
-    unsafe { xm1_jpeg_task_notify(task, DEVELOP_COMPLETION_EVENT) };
+    let state = unsafe { xm1_jpeg_critical_enter() };
+    let frame = unsafe { read_volatile(FRAME_TASK) };
+    unsafe { write_volatile(FRAME_TASK, FrameTask(frame.task().0)) };
+    unsafe { xm1_jpeg_critical_leave(state) };
+    if frame.is_abandoned() {
+        unsafe { unlock() };
+    } else {
+        unsafe { xm1_jpeg_task_notify(frame.task(), DEVELOP_COMPLETION_EVENT) };
+    }
 }
 
 /// # Safety
