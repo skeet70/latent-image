@@ -325,16 +325,19 @@ options = go Nothing False Nothing
 writeRenderReceipt :: Maybe FramePublication -> FilePath -> [ObservationReader] -> IO ()
 writeRenderReceipt publication directory segments = do
   fronts <- either fail pure =<< osdInputsReader publication segments
+  producers <- if all (\segment -> "main-shadow" `notElem` map fst (readerReads segment)) segments then pure []
+    else either fail pure =<< mainProducerInputsReader segments
   labels <- fmap concat $ forM (zip [0 :: Int ..] segments) $ \(index,segment) -> do
     bytes <- B.readFile (directory </> ("e2e-observation-" ++ show index ++ ".json"))
     label <- either fail pure (J.eitherDecodeStrict' bytes >>= J.parseEither (J.withObject "observation" (\fields -> fields J..:? "capture" :: J.Parser (Maybe String))))
-    pure [(name,input) | Just name <- [label], Just input <- [lookup (readerPhase segment) fronts]]
+    pure [(name,(input,lookup (readerPhase segment) producers)) | Just name <- [label], Just input <- [lookup (readerPhase segment) fronts]]
   value <- B.readFile (directory </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
   annotated <- either fail pure (J.parseEither (J.withObject "e2e result" $ \fields -> do
     captures <- fields J..: "menu_receipts" :: J.Parser [J.Value]
     updated <- forM captures $ J.withObject "capture" $ \capture -> do
       label <- capture J..: "label"
-      input <- maybe (fail "capture lacks complete OSD front inputs") pure (lookup label labels)
-      pure (J.Object (KM.insert "osd_front" input capture))
+      (input,producer) <- maybe (fail "capture lacks complete OSD front inputs") pure (lookup label labels)
+      when (not (null producers) && producer == Nothing) (fail "capture lacks main producer inputs")
+      pure (J.Object (maybe id (KM.insert "main_producer") producer (KM.insert "osd_front" input capture)))
     pure (J.Object (KM.insert "menu_receipts" (J.toJSON updated) fields))) value)
   BL.writeFile (directory </> "e2e-result-render.json") (J.encode annotated <> "\n")

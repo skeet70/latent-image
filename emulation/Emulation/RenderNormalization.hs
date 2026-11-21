@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.RenderNormalization
-  ( NativeState, parseNativeState, nativeValue, OsdFront, parseOsdFront
+  ( NativeState, parseNativeState, nativeValue, OsdFront, parseOsdFront, MainProducer, parseMainProducer
   , CaptureLabel(..), SourcePlanes, parseSourcePlanes, sourceExtent
   , Rectangle, parseRectangles, normalize ) where
 
@@ -13,6 +13,7 @@ import Data.Aeson.Types (Parser, withObject, (.:), parseJSON)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import FujiAF.JSON (encodeCanonical)
@@ -20,18 +21,24 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (readHex)
 
 newtype CaptureLabel = CaptureLabel T.Text deriving (Eq, Ord)
-newtype Address = Address Integer deriving (Eq)
+newtype Address = Address Integer deriving (Eq, Ord)
 data Step = Field K.Key | Index Int deriving (Eq)
 newtype NativeState = NativeState (Value, [( [Step], Address)])
 data FrontIndex = First | Second deriving Eq
 newtype IncrementCount = IncrementCount Integer
 data OsdFront = OsdFront FrontIndex Address Address IncrementCount
+newtype ForeignWrites = ForeignWrites Integer deriving Eq
+-- | One role's main-plane producer facts at a capture: the physical addresses in the retained live-view producer's
+-- output-1 pool records, and the count of main-plane shadow writes since the route's baseline that the retained
+-- producer did not make.
+data MainProducer = MainProducer [Address] ForeignWrites
 newtype Coordinate = Coordinate Int
 data Rectangle = Rectangle Coordinate Coordinate Coordinate Coordinate
-data NormalizationRule = MainRelocation | OsdRotation | Clock
+data NormalizationRule = MainRelocation | MainRotation | OsdRotation | Clock
 
 ruleName :: NormalizationRule -> T.Text
 ruleName MainRelocation = "main-plane"
+ruleName MainRotation = "main-producer"
 ruleName OsdRotation = "osd-front"
 ruleName Clock = "clock"
 
@@ -88,6 +95,15 @@ parseOsdFront = withObject "OSD front input" $ \fields -> do
   case buffers of
     [a,b] | a /= b -> pure (OsdFront index a b (IncrementCount increments))
     _ -> fail "OSD requires two distinct buffer addresses"
+
+parseMainProducer :: Value -> Parser MainProducer
+parseMainProducer = withObject "main producer input" $ \fields -> do
+  pool <- fields .: "pool" >>= mapM address
+  writes <- fields .: "foreign_writes" :: Parser Integer
+  unless (writes >= 0) (fail "foreign write count out of range")
+  case pool of
+    [] -> fail "main producer pool is empty"
+    _ -> pure (MainProducer (map physical pool) (ForeignWrites writes))
 
 parseRectangles :: Value -> Parser (M.Map CaptureLabel Rectangle)
 parseRectangles = withObject "clock exclusions by capture label" $ \fields -> M.fromList <$> mapM entry (KM.toList fields)
@@ -155,24 +171,34 @@ frontNumber Second = 1
 physical :: Address -> Address
 physical (Address n) = Address (n .&. 0x3fffffff)
 
-normalize :: Maybe Rectangle -> Maybe OsdFront -> Maybe OsdFront
+normalize :: Maybe Rectangle -> (Maybe OsdFront, Maybe MainProducer) -> (Maybe OsdFront, Maybe MainProducer)
   -> (NativeState, NativeState, SourcePlanes, Value, B.ByteString, B.ByteString)
   -> (NativeState, NativeState, SourcePlanes, Value, B.ByteString, B.ByteString)
   -> ([(K.Key, Bool)], [Value])
-normalize rectangle leftFront rightFront (lf, ls, lp, lx, lb, lpng) (rf, rs, rp, rx, rb, rpng) =
+normalize rectangle (leftFront, leftProducer) (rightFront, rightProducer) (lf, ls, lp, lx, lb, lpng) (rf, rs, rp, rx, rb, rpng) =
   ([ ("png_bytewise_equal", if clockApplied then pixelOutside else lpng == rpng)
    , ("source_planes_bytewise_equal", sourceEqual)
    , ("native_frame_state_equal", stripped lf == stripped rf)
    , ("native_scanout_state_equal", stripped ls == stripped rs)
    , ("source_planes_equal", planeMetadata leftPlanes == planeMetadata rightPlanes)
    , ("pixels_equal", if clockApplied then pixelOutside && pixelShape lx == pixelShape rx else lx == rx)
-   ], fieldRecords ++ planeRecords ++ clockRecords)
+   ], fieldRecords ++ planeRecords ++ rotationRecords ++ clockRecords)
   where
     SourcePlanes leftPlanes _ = lp
     SourcePlanes rightPlanes _ = rp
     paired = zip leftPlanes rightPlanes
     mainEqual = not (null mains) && all (\(a,b) -> slice lb a == slice rb b) mains
     mains = [(a,b) | (a@(Plane MainPlane _ _ _ _),b@(Plane MainPlane _ _ _ _)) <- paired]
+    -- The main plane may show another buffer of the retained producer's pool when neither role made a main-plane
+    -- shadow write outside that producer and every main-plane address of both roles is a pool member.
+    mainRotated = case (leftProducer, rightProducer) of
+      (Just (MainProducer pool (ForeignWrites 0)), Just (MainProducer other (ForeignWrites 0))) ->
+        S.fromList pool == S.fromList other && not (null mains)
+          && all ((`elem` pool) . physical) ([x | state <- [lf,ls,rf,rs], (path,x) <- addresses state, path `elem` mainPaths]
+            ++ concat [[a,b] | (Plane _ _ _ a _, Plane _ _ _ b _) <- mains])
+      _ -> False
+    mainAllowed = mainEqual || mainRotated
+    mainRule = if mainEqual then MainRelocation else MainRotation
     osdAllowed = case (leftFront, rightFront) of
       (Just a@(OsdFront _ a0 a1 _), Just b@(OsdFront _ b0 b1 _)) ->
         a0 == b0 && a1 == b1 && fst (front a) /= fst (front b) && relation a ls && relation b rs
@@ -182,23 +208,27 @@ normalize rectangle leftFront rightFront (lf, ls, lp, lx, lb, lpng) (rf, rs, rp,
     osdAddress value = case leftFront of
       Just (OsdFront _ a b _) -> value `elem` [a, b, physical a, physical b]
       Nothing -> False
-    permitted path a b = (path `elem` mainPaths && mainEqual) ||
+    permitted path a b = (path `elem` mainPaths && mainAllowed) ||
       (path `elem` osdPaths && osdAllowed && osdAddress a && osdAddress b)
     changed a b = [(path,x,y) | (path,x) <- addresses a, Just y <- [lookup path (addresses b)],
       get path (nativeValue a) /= get path (nativeValue b), permitted path x y]
     changes = changed lf rf ++ changed ls rs
     stripped state = encodeCanonical (foldr (remove . (\(path,_,_) -> path)) (nativeValue state) changes)
-    fieldRecords = [record (if path `elem` mainPaths then MainRelocation else OsdRotation) (prefix <> "." <> pathName path)
+    fieldRecords = [record (if path `elem` mainPaths then mainRule else OsdRotation) (prefix <> "." <> pathName path)
       (maybe Null id (get path (nativeValue a))) (maybe Null id (get path (nativeValue b)))
       | (prefix,a,b) <- [("native_frame_state",lf,rf),("native_scanout_state",ls,rs)], (path,_,_) <- changed a b]
     pathName = T.intercalate "." . map (\step -> case step of Field key -> K.toText key; Index index -> T.pack (show index))
-    planeAllowed kind a b = a /= b && ((kind == MainPlane && mainEqual) || (kind == GraphicsPlane && osdAllowed && osdAddress a && osdAddress b))
+    planeAllowed kind a b = a /= b && ((kind == MainPlane && mainAllowed) || (kind == GraphicsPlane && osdAllowed && osdAddress a && osdAddress b))
     planeMetadata ps = encodeCanonical (Array (V.fromList [if any (matches p) paired then remove [Field "native_source_address"] value else value | p@(Plane _ _ _ _ value) <- ps]))
     matches (Plane k o n _ _) (Plane k1 o1 n1 a _, Plane k2 o2 n2 b _) = k == k1 && k1 == k2 && o == o1 && o1 == o2 && n == n1 && n1 == n2 && planeAllowed k a b
-    planeRecords = [record (if kind == MainPlane then MainRelocation else OsdRotation) ("source_planes." <> T.pack (show index) <> ".native_source_address") (number a) (number b)
+    planeRecords = [record (if kind == MainPlane then mainRule else OsdRotation) ("source_planes." <> T.pack (show index) <> ".native_source_address") (number a) (number b)
       | (index,(Plane kind _ _ a _, Plane other _ _ b _)) <- zip [0 :: Int ..] paired, kind == other, planeAllowed kind a b]
+    rotationRecords = [record MainRotation ("source_planes." <> T.pack (show index) <> ".sha256") (bytesHash lb a) (bytesHash rb b)
+      | mainRotated, (index,(a@(Plane MainPlane _ _ _ _), b@(Plane MainPlane _ _ _ _))) <- zip [0 :: Int ..] paired, slice lb a /= slice rb b]
+    bytesHash bytes plane = String (T.pack (sha256Hex (sha256 (slice bytes plane))))
     number (Address n) = Number (fromInteger n)
-    sourceEqual = length leftPlanes == length rightPlanes && and [if clockApplied && kind == GraphicsPlane && other == GraphicsPlane then outsideBytes a b else slice lb a == slice rb b
+    sourceEqual = length leftPlanes == length rightPlanes && and [if clockApplied && kind == GraphicsPlane && other == GraphicsPlane then outsideBytes a b
+        else slice lb a == slice rb b || (mainRotated && kind == MainPlane && other == MainPlane)
       | (a@(Plane kind _ _ _ _),b@(Plane other _ _ _ _)) <- paired]
     clockApplied = case rectangle of
       Just _ -> any (\(a,b) -> slice lb a /= slice rb b) [(a,b) | (a@(Plane GraphicsPlane _ _ _ _),b@(Plane GraphicsPlane _ _ _ _)) <- paired]
@@ -234,9 +264,12 @@ normalize rectangle leftFront rightFront (lf, ls, lp, lx, lb, lpng) (rf, rs, rp,
     record rule field a b = object (["rule" .= ruleName rule, "field" .= field, "reference" .= a, "candidate" .= b]
       ++ case rule of
         MainRelocation -> []
+        MainRotation -> ["main_producer" .= object ["reference" .= producerValue leftProducer, "candidate" .= producerValue rightProducer]]
         Clock -> []
         OsdRotation -> ["osd_front" .= object ["reference" .= frontValue leftFront, "candidate" .= frontValue rightFront]])
     frontValue Nothing = Null
     frontValue (Just input@(OsdFront initial a b (IncrementCount increments))) = object
       ["front_byte" .= (if initial == First then 0 :: Int else 1), "buffers" .= [number a,number b], "increments" .= increments,
        "capture_front_byte" .= frontNumber (fst (front input))]
+    producerValue Nothing = Null
+    producerValue (Just (MainProducer pool (ForeignWrites writes))) = object ["pool" .= map number pool, "foreign_writes" .= writes]

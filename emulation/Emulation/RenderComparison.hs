@@ -11,7 +11,7 @@ import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
-import Emulation.RenderNormalization (CaptureLabel(..), SourcePlanes, parseSourcePlanes, sourceExtent, NativeState, Rectangle, parseNativeState, OsdFront, parseOsdFront, parseRectangles, normalize)
+import Emulation.RenderNormalization (CaptureLabel(..), SourcePlanes, parseSourcePlanes, sourceExtent, NativeState, Rectangle, parseNativeState, OsdFront, parseOsdFront, MainProducer, parseMainProducer, parseRectangles, normalize)
 import FujiAF.JSON (decodeStrict, decodeStrictIntegers, encodeCanonical)
 import System.Directory (canonicalizePath)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
@@ -28,10 +28,10 @@ newtype PixelMetadata = PixelMetadata Value deriving Eq
 
 data ArtifactReference = ArtifactReference ArtifactPath Sha256 (Maybe ByteCount)
 data Artifact = Artifact ArtifactPath Sha256 ByteCount B.ByteString
-data Capture = Capture CaptureLabel ArtifactReference ArtifactReference ArtifactReference (Maybe OsdFront)
+data Capture = Capture CaptureLabel ArtifactReference ArtifactReference ArtifactReference (Maybe OsdFront) (Maybe MainProducer)
 data Receipt = Receipt Artifact [Capture]
 data Scanout = Scanout NodeName ScanoutInstance Instructions PixelMetadata ArtifactReference ArtifactReference SourcePlanes NativeObject NativeObject
-data LoadedCapture = LoadedCapture CaptureLabel Artifact Artifact Artifact Scanout (Maybe OsdFront)
+data LoadedCapture = LoadedCapture CaptureLabel Artifact Artifact Artifact Scanout (Maybe OsdFront) (Maybe MainProducer)
 
 data PairResult = PairResult CaptureLabel LoadedCapture LoadedCapture [(K.Key, Bool)] [Value]
 
@@ -103,7 +103,7 @@ parseReceipt = withObject "e2e receipt" $ \fields -> do
   require (schema == 1) "unsupported e2e receipt schema"
   captures <- fields .: "menu_receipts" >>= mapM capture
   require (not (null captures)) "receipt has no captures"
-  let labels = [label | Capture label _ _ _ _ <- captures]
+  let labels = [label | Capture label _ _ _ _ _ <- captures]
   require (M.size (M.fromList [(label, ()) | label <- labels]) == length labels) "duplicate capture label"
   pure captures
   where
@@ -113,7 +113,8 @@ parseReceipt = withObject "e2e receipt" $ \fields -> do
       (metadata, source) <- fields .: "scanout_evidence" >>= withObject "scanout evidence" (\evidence ->
         (,) <$> (evidence .: "metadata" >>= artifactReference) <*> (evidence .: "source_bytes" >>= artifactReference))
       front <- traverse parseOsdFront (KM.lookup "osd_front" fields)
-      pure (Capture label png metadata source front)
+      producer <- traverse parseMainProducer (KM.lookup "main_producer" fields)
+      pure (Capture label png metadata source front producer)
 
 failComparison :: String -> IO a
 failComparison = ioError . userError
@@ -147,7 +148,7 @@ loadReceipt path = do
   Receipt artifact <$> parseDocument decodeStrict parseReceipt artifact
 
 loadCapture :: Artifact -> Capture -> IO LoadedCapture
-loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef metadataRef sourceRef front) = do
+loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef metadataRef sourceRef front producer) = do
   let base = takeDirectory receiptPath
   png <- verifyArtifact base pngRef
   metadata@(Artifact (ArtifactPath metadataPath) _ _ _) <- verifyArtifact base metadataRef
@@ -158,16 +159,16 @@ loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef me
   unless (sameArtifact png boundPng && sameArtifact source boundSource)
     (failComparison (metadataPath ++ ": receipt and scanout artifact references differ"))
   unless (sourceExtent planes == sourceSize) (failComparison (metadataPath ++ ": source plane extent differs from source bytes"))
-  pure (LoadedCapture label png source metadata scanout front)
+  pure (LoadedCapture label png source metadata scanout front producer)
 
 pair :: Maybe Rectangle -> LoadedCapture -> LoadedCapture -> PairResult
 pair rectangle left@(LoadedCapture label (Artifact _ _ _ leftPng) (Artifact _ _ _ leftSource) _
-    (Scanout leftNode leftInstance _ (PixelMetadata leftPixels) _ _ leftPlanes (NativeObject leftFrame) (NativeObject leftScanout)) leftFront)
+    (Scanout leftNode leftInstance _ (PixelMetadata leftPixels) _ _ leftPlanes (NativeObject leftFrame) (NativeObject leftScanout)) leftFront leftProducer)
     right@(LoadedCapture _ (Artifact _ _ _ rightPng) (Artifact _ _ _ rightSource) _
-    (Scanout rightNode rightInstance _ (PixelMetadata rightPixels) _ _ rightPlanes (NativeObject rightFrame) (NativeObject rightScanout)) rightFront) =
+    (Scanout rightNode rightInstance _ (PixelMetadata rightPixels) _ _ rightPlanes (NativeObject rightFrame) (NativeObject rightScanout)) rightFront rightProducer) =
   PairResult label left right (checks ++ [("node_equal", leftNode == rightNode), ("instance_equal", leftInstance == rightInstance)]) records
   where
-    (checks, records) = normalize rectangle leftFront rightFront
+    (checks, records) = normalize rectangle (leftFront, leftProducer) (rightFront, rightProducer)
       (leftFrame, leftScanout, leftPlanes, leftPixels, leftSource, leftPng)
       (rightFrame, rightScanout, rightPlanes, rightPixels, rightSource, rightPng)
 
@@ -176,7 +177,7 @@ artifactValue (Artifact (ArtifactPath path) digest' (ByteCount size) _) = object
   ["path" .= path, "sha256" .= sha256Hex digest', "bytes" .= size]
 
 captureArtifacts :: LoadedCapture -> Value
-captureArtifacts (LoadedCapture _ png source metadata _ _) = object
+captureArtifacts (LoadedCapture _ png source metadata _ _ _) = object
   ["png" .= artifactValue png, "source_bytes" .= artifactValue source, "metadata" .= artifactValue metadata]
 
 pairPassed :: PairResult -> Bool
@@ -190,7 +191,7 @@ pairValue result@(PairResult (CaptureLabel label) left right checks records) = o
    ,"artifacts" .= object ["reference" .= captureArtifacts left, "candidate" .= captureArtifacts right]]
    ++ [key .= equal | (key, equal) <- checks])
   where
-    clock (LoadedCapture _ _ _ _ (Scanout _ _ (Instructions instructions) _ _ _ _ _ _) _) = instructions
+    clock (LoadedCapture _ _ _ _ (Scanout _ _ (Instructions instructions) _ _ _ _ _ _) _ _) = instructions
     before = clock left
     after = clock right
 
@@ -213,7 +214,7 @@ compareRenderReceiptsWithExclusions referencePath candidatePath outputPath exclu
     Just path -> readArtifact (ArtifactPath path) >>= parseDocument decodeStrictIntegers parseRectangles
   Receipt referenceArtifact referenceCaptures <- loadReceipt referencePath
   Receipt candidateArtifact candidateCaptures <- loadReceipt candidatePath
-  let label (Capture name _ _ _ _) = name
+  let label (Capture name _ _ _ _ _) = name
       candidates = M.fromList [(label capture, capture) | capture <- candidateCaptures]
   unless (M.keysSet candidates == M.keysSet (M.fromList [(label capture, ()) | capture <- referenceCaptures]))
     (failComparison "capture label sets differ")

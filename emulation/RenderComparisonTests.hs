@@ -181,6 +181,12 @@ normalizationCases = do
       at ["native_frame_state_equal"] entry == Bool False &&
       at ["native_scanout_state_equal"] entry == Bool False &&
       at ["normalizations"] entry == toJSON ([] :: [Value])) (captures result))
+  producerCase "main producer rotation across pool buffers" True (relocateMain . mainState) (producer [4096,8192] 0) (producer [8192,4096] 0) 5
+  producerCase "main producer rotation with equal addresses and changed bytes" True mainState (producer [4096,8192] 0) (producer [4096,8192] 0) 1
+  producerCase "main producer refuses a main-plane shadow write from another writer" False (relocateMain . mainState) (producer [4096,8192] 0) (producer [4096,8192] 1) 0
+  producerCase "main producer refuses an address outside the pool records" False (relocateMain . mainState) (producer [4096,12288] 0) (producer [4096,12288] 0) 0
+  producerCase "main producer refuses differing pools" False (relocateMain . mainState) (producer [4096,8192] 0) (producer [4096,8192,12288] 0) 0
+  producerCase "main producer refuses a role without producer input" False (relocateMain . mainState) (producer [4096,8192] 0) id 0
   addressCase "OSD rotation" True "osd-front" (osdState 4096) (osdState 8192) planeBytes planeBytes (frontInput 0 0) (frontInput 0 1)
   addressCase "OSD address outside buffer pair" False "" (osdState 4096)
     (fixOsdRegister "0x2000" . osdState 12288) planeBytes planeBytes (frontInput 0 0) (frontInput 0 1)
@@ -241,6 +247,18 @@ normalizationCases = do
           _ -> error "fixture instances required") (scanout "0xfff6e0b4" text))
       . set "source_planes" (toJSON [object ["kind" .= ("graphics" :: T.Text), "layer" .= (1 :: Int), "channel" .= (0 :: Int), "native_source_address" .= (addr :: Int), "offset" .= (0 :: Int), "bytes" .= (4 :: Int)]])
       where text = if addr == 4096 then "0x1000" else if addr == 8192 then "0x2000" else "0x3000"
+    producer :: [Int] -> Int -> [Value] -> [Value]
+    producer pool writes = map (set "main_producer" (object ["pool" .= pool, "foreign_writes" .= writes]))
+    producerCase name expected rightState leftInputs rightInputs recordCount = withTemporary $ \directory -> do
+      before <- fixture (directory </> "before") pngBytes planeBytes 100 mainState leftInputs
+      after <- fixture (directory </> "after") pngBytes (B.pack [1,2,3,5]) 100 rightState rightInputs
+      let output = directory </> "comparison.json"
+      equal <- compareRenderReceipts before after output
+      check name (equal == expected)
+      result <- readJSON output
+      forM_ (captures result) $ \entry -> check (name ++ " records the main-producer fields")
+        (length (records entry) == recordCount && all (\entry' -> at ["rule"] entry' == String "main-producer"
+          && at ["main_producer", "reference", "foreign_writes"] entry' == toJSON (0 :: Int)) (records entry))
     addressCase name expected rule leftState rightState leftBytes rightBytes leftInputs rightInputs = withTemporary $ \directory -> do
       before <- fixture (directory </> "before") pngBytes leftBytes 100 leftState leftInputs
       after <- fixture (directory </> "after") pngBytes rightBytes 100 rightState rightInputs

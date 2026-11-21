@@ -62,6 +62,12 @@ def frame_step_reads: [
   [(frame_objects[0] + 28 | hex8), 4], [(frame_objects[1] + 28 | hex8), 4],
   ["0096bc10", 4]
 ] + (if frame_record != null then [[(frame_record | hex8), 120]] else [] end);
+# The live-view main plane (RenderPair.mainProducerInputs): the retained mode setter 0x6cffbc (r0 the source, lr its
+# caller) and its shadow store `str r2, [r3, #0x3c]` at 0x6c9b20 (r3 = 0x96b9bc + 420 * engine, r2 the stored word).
+def main_sites: [
+  ["006cffbc", "main-backing-set", {"lr": true}],
+  ["006c9b20", "main-shadow-store", {"lr": true}]
+];
 def frame_sites: if frame_enabled then [
   ["006d7920", "frame-step-entry", {"lr": true, "reads": frame_step_reads}],
   ["006d6f08", "frame-dispatch-return", {"reads": frame_step_reads}],
@@ -69,7 +75,7 @@ def frame_sites: if frame_enabled then [
   ["006c9cf4", "frame-item-configuration", {"lr": true}],
   ["006d80f0", "frame-display-registration"],
   ["006d7f30", "frame-display-post"]
-] + (if frame_record != null then [["runtime:rb_render_frame_scanout_bridge", "frame-owned-display-registration"]] else [] end) else [] end;
+] + main_sites + (if frame_record != null then [["runtime:rb_render_frame_scanout_bridge", "frame-owned-display-registration"]] else [] end) else [] end;
 
 # Stage-0 submission observation (FrameSubmission.hs), enabled by `--argjson submission true`: the retained OpenVG
 # and EGL entries VGLIB's render 0x6d724c calls, with the arrays their pointer arguments name, and the vector-engine
@@ -105,8 +111,10 @@ def submission_sites: if submission_enabled then [
   ["008929f4", "vg-job-dispatch", {"reads": [register_read(0; 112)]}],
   ["00892728", "vg-job-completion", {"reads": [["00992934", 4]]}]
 ] else [] end;
+# `main-shadow` is engine 1's main-plane source shadow 0x96bb9c; `main-producer-pool` is the live-view producer's
+# seven output-1 pool records of 0x18 bytes at 0x16fed28, each beginning with its buffer address.
 def frame_capture_reads: if frame_enabled then
-  [["frame-display-record", "0095a69c", 20]]
+  [["frame-display-record", "0095a69c", 20], ["main-shadow", "0096bb9c", 4], ["main-producer-pool", "016fed28", 168]]
   + (if frame_record != null then [["frame-record", (frame_record | hex8), 120]] else [] end)
   else [] end;
 def render_reads: (if render_enabled then render_capture_reads else [] end) + frame_capture_reads;

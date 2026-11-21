@@ -9,7 +9,7 @@ module Replacement.ModalRuntime.RenderPair
   , foldRenderDraws, collectDrawsReader, compareDrawsReader, compareDrawsReaderRole, discoveredBanksReader, discoveredBanksReaderRole
   , checkRenderCoverageReader, checkRenderStackObservationsReader
   , checkRetainedRenderStackObservationsReader
-  , osdInputsReader
+  , osdInputsReader, mainProducerInputsReader
   ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
@@ -711,6 +711,66 @@ osdInputsReader publication readers = do
               Nothing -> Right (buffers,ending,increments)
               Just (start,lastFront) | lastFront == ending -> Right (buffers,start,increments)
                                      | otherwise -> Left "OSD end byte disagrees with last increment"
+
+-- | Callers of the retained mode setter 0x6cffbc in the live-view producer (id5 0xdbbe74, 0xec5eb0, 0xeeb640),
+-- named by their return addresses.
+producerSetterReturns :: [Word32]
+producerSetterReturns = [0xdbbe78, 0xec5eb4, 0xeeb644]
+
+-- | The setter's call of 0x6c9b00, whose `str r2, [r3, #0x3c]` is the `main-shadow-store` site.
+setterStoreReturn :: Word32
+setterStoreReturn = 0x6cfffc
+
+-- | Engine 1's saved-register block `0x96b9bc + 420`; its `+0x3c` word is the main-plane source shadow.
+engineOneSaved :: Word32
+engineOneSaved = 0x96bb60
+
+data MainFold = MainFold
+  { pendingSets :: M.Map Int (Bool, Word32)
+  , accountedShadow :: Maybe Word32
+  , foreignWrites :: Integer }
+
+-- | A `main-backing-set` hit opens a setter call on its core, attributed to the producer when its caller is one of
+-- `producerSetterReturns`; an engine-1 `main-shadow-store` is the producer's when it closes such a call with the
+-- same 30-bit source. Every other engine-1 shadow store counts as a foreign write.
+mainHit :: MainFold -> Hit -> Either String MainFold
+mainHit fold hit = case site hit of
+  "main-backing-set" -> do
+    let (value,_,_,_) = hitRegisters hit
+    Right fold {pendingSets = M.insert (hitCore hit) (hitLr hit `elem` map Just producerSetterReturns, value) (pendingSets fold)}
+  "main-shadow-store" -> do
+    let (_,_,stored,base) = hitRegisters hit
+        pending = M.lookup (hitCore hit) (pendingSets fold)
+        producer = hitLr hit == Just setterStoreReturn && case pending of
+          Just (True, value) -> value .&. 0x3fffffff == stored .&. 0x3fffffff
+          _ -> False
+        closed = fold {pendingSets = M.delete (hitCore hit) (pendingSets fold)}
+    Right $ if base /= engineOneSaved then closed
+      else closed {accountedShadow = Just stored, foreignWrites = foreignWrites fold + if producer then 0 else 1}
+  _ -> Right fold
+
+-- | Per observation, the retained producer's output-1 pool (`main-producer-pool`, the nonzero first word of each
+-- 0x18-byte record) and the foreign main-plane writes since the first observation. The first observation's
+-- `main-shadow` seeds the accounted value; a later shadow that differs from the last accounted store is a foreign
+-- write.
+mainProducerInputsReader :: [ObservationReader] -> IO (Either String [(T.Text,J.Value)])
+mainProducerInputsReader readers = go (MainFold M.empty Nothing 0) True readers []
+ where
+  go _ _ [] acc = pure (Right acc)
+  go fold first (reader:rest) acc = do
+    folded <- readerFoldHits reader mainHit fold
+    case (folded, readNamedReader "main-shadow" 4 reader, readNamedReader "main-producer-pool" 168 reader) of
+      (Left problem, _, _) -> pure (Left problem)
+      (_, Left problem, _) -> pure (Left problem)
+      (_, _, Left problem) -> pure (Left problem)
+      (Right after, Right shadowBytes, Right poolBytes) -> case (word shadowBytes 0, mapM (word poolBytes) [0,0x18..0x90]) of
+        (Right shadow, Right records) -> do
+          let unaccounted = not first && accountedShadow after /= Just shadow
+              settled = after {accountedShadow = Just shadow, foreignWrites = foreignWrites after + if unaccounted then 1 else 0}
+              pool = [address .&. 0x3fffffff | address <- records, address /= 0]
+          if null pool then pure (Left "main producer pool has no buffer") else
+            go settled False rest (acc ++ [(readerPhase reader, J.object ["pool" J..= pool, "foreign_writes" J..= foreignWrites settled])])
+        _ -> pure (Left "short main producer read")
 
 discoveredBanks :: RenderConfig -> [Draw] -> Either String [Int]
 discoveredBanks config draws = fmap (sort . nub . concat) $ forM draws $ \draw -> do

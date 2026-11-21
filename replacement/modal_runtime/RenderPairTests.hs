@@ -351,5 +351,24 @@ main = do
   check "streaming render-frame OSD accepts the owned publication pair" (ownedFront == earlyFront)
   bufferDrift <- osdInputsReader Nothing (map readerFor [beforeDraw,osd,endingOne [handoff 0x4228d000,increment 1]])
   check "later buffer replacement refuses streaming front evidence" (not (passes bufferDrift))
+  let pool = B.concat [le address <> B.replicate 20 0 | address <- [0x43386000,0x4342ec00,0x434d7800,0x43580400,0,0,0]]
+      mainObservation phase shadow hits = readerFor ((observation hits) {observationPhase = phase, observationReads = [("main-shadow",le shadow),("main-producer-pool",pool)]})
+      setter caller value = (hit "main-backing-set") {hitRegisters = (value,0,0,0),hitLr = Just caller}
+      store caller base value = (hit "main-shadow-store") {hitRegisters = (1,value,value,base),hitLr = Just caller}
+      produced = [setter 0xeeb644 0x434d7800,store 0x6cfffc 0x96bb60 0x434d7800]
+      input phase writes = (phase :: T.Text,J.object ["pool" J..= ([0x3386000,0x342ec00,0x34d7800,0x3580400] :: [Word32]),"foreign_writes" J..= (writes :: Int)])
+      inputs writes = [input "baseline" 0,input "capture" writes]
+      producerRun hits shadow = mainProducerInputsReader [mainObservation "baseline" 0x4342ec00 [],mainObservation "capture" shadow hits]
+      foreignAt writes = Right (inputs writes)
+  rotated <- producerRun produced 0x434d7800
+  check "main shadow stores through the producer's setter calls are not foreign" (rotated == Right (inputs 0))
+  otherCaller <- producerRun [setter 0xaa2000 0x434d7800,store 0x6cfffc 0x96bb60 0x434d7800] 0x434d7800
+  check "a setter call from outside the producer is a foreign main-plane write" (otherCaller == foreignAt 1)
+  direct <- producerRun [store 0xaa2000 0x96bb60 0x434d7800] 0x434d7800
+  check "a shadow store outside the setter is a foreign main-plane write" (direct == foreignAt 1)
+  untraced <- producerRun [] 0x434d7800
+  check "a shadow change without a traced store is a foreign main-plane write" (untraced == foreignAt 1)
+  engineZero <- producerRun (produced ++ [store 0xaa2000 0x96b9bc 0x40000000]) 0x434d7800
+  check "engine-0 shadow stores are not main-plane writes" (engineZero == Right (inputs 0))
   provenanceCases
   putStrLn "render pair synthetic receipts pass"
