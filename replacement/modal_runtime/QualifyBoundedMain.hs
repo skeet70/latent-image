@@ -653,10 +653,22 @@ buildAndTest q = do
   checkStorageBudget (qualRoot q)
   freezeTools q
 
+newtype BuildJobs = BuildJobs Int
+
+buildJobsFromEnvironment :: IO BuildJobs
+buildJobsFromEnvironment = do
+  configured <- lookupEnv "MENU_BOUNDED_QUAL_BUILD_JOBS"
+  case configured of
+    Nothing -> pure (BuildJobs 2)
+    Just text -> case readMaybe text of
+      Just count | count > 0 -> pure (BuildJobs count)
+      _ -> failH ("MENU_BOUNDED_QUAL_BUILD_JOBS is not a positive integer: " ++ text)
+
 runHostBuild :: Qualification -> [String] -> BuildPhase -> [String] -> FilePath -> IO VerdictLine
 runHostBuild q baseArguments phase targets logPath = do
+  BuildJobs jobs <- buildJobsFromEnvironment
   let arguments = ["shell", "--", "host-build"] ++ baseArguments
-        ++ [buildCommand phase, "--lockfile_mode=off", "--jobs=2", "--local_test_jobs=1"]
+        ++ [buildCommand phase, "--lockfile_mode=off", "--jobs=" ++ show jobs, "--local_test_jobs=1"]
         ++ ["--test_output=errors" | CheckTargets <- [phase]]
         ++ targets
       blocked predicate detail code = do
