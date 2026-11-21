@@ -61,6 +61,7 @@ import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMis
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (isAbsolute, makeRelative, splitDirectories, takeDirectory, takeFileName, (</>))
+import System.IO (IOMode (ReadMode), withBinaryFile)
 import System.IO.Error (isAlreadyExistsError, isDoesNotExistError)
 import System.Posix.Files (FileStatus, deviceID, fileBlocks, fileID, fileSize, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setFdOption)
@@ -399,15 +400,16 @@ measureChildren root excluded = do
       Left _ -> pure (seen, total, children)
       Right entry -> do
         (next, bytes) <- measureEntry seen excluded path entry
-        pure (next, total + bytes, (name, bytes) : children)
+        let !total' = total + bytes
+        pure (next, total', (name, bytes) : children)
 
 measureEntry :: Set.Set (DeviceID, FileID) -> Set.Set FilePath -> FilePath -> FileStatus -> IO (Set.Set (DeviceID, FileID), Integer)
 measureEntry seen excluded path status
   | Set.member path excluded = pure (seen, 0)
   | otherwise = do
       let key = (deviceID status, fileID status)
-          own = if Set.member key seen then 0 else allocatedBytes status
-          next = Set.insert key seen
+          !own = if Set.member key seen then 0 else allocatedBytes status
+          !next = Set.insert key seen
       if isDirectory status && not (isSymbolicLink status)
         then do
           names <- listDirectory path `catch` missingDirectory
@@ -421,7 +423,8 @@ measureEntry seen excluded path status
       Left _ -> pure (current, total)
       Right entry -> do
         (next, bytes) <- measureEntry current excluded child entry
-        pure (next, total + bytes)
+        let !total' = total + bytes
+        pure (next, total')
   missingDirectory problem = if isDoesNotExistError problem then pure [] else throwIO problem
 
 missingRoot :: IOException -> IO [FilePath]
@@ -639,48 +642,59 @@ measureWork work = do
   if not present
     then pure (WorkDigest 0 0 (hexText (SHA.finalize SHA.init)) [])
     else do
-      relatives <- regularFiles work
-      entries <- forM (sort relatives) $ \relative -> do
-        let path = work </> relative
-        status <- getSymbolicLinkStatus path
-        digest <- SHA.hashlazy <$> BL.readFile path
-        pure (relative, fromIntegral (fileSize status), hexText digest)
-      let content =
-            [ hex ++ "  " ++ relative ++ "\n"
-            | (relative, _, hex) <- entries
-            ]
-          combined = SHA.finalize (foldl (\context line -> SHA.update context (TE.encodeUtf8 (T.pack line))) SHA.init content)
-          files = [WorkFile relative bytes hex | (relative, bytes, hex) <- entries, bytes >= 1024 * 1024]
-      pure
-        ( WorkDigest
-            (fromIntegral (length entries))
-            (sum [bytes | (_, bytes, _) <- entries])
-            (hexText combined)
-            files
-        )
-
-regularFiles :: FilePath -> IO [FilePath]
-regularFiles root = go ""
+      WorkTally count bytes context files <- foldRegularFiles add (WorkTally 0 0 SHA.init []) work
+      pure (WorkDigest count bytes (hexText (SHA.finalize context)) (reverse files))
  where
-  go relative = do
+  add (WorkTally count bytes context files) relative size = do
+    hex <- hexText <$> hashFile (work </> relative)
+    let line = TE.encodeUtf8 (T.pack (hex ++ "  " ++ relative ++ "\n"))
+        files' = if size >= 1024 * 1024 then WorkFile relative size hex : files else files
+    pure $! WorkTally (count + 1) (bytes + size) (SHA.update context line) files'
+
+data WorkTally = WorkTally !Integer !Integer !SHA.Ctx ![WorkFile]
+
+hashFile :: FilePath -> IO B.ByteString
+hashFile path = withBinaryFile path ReadMode (go SHA.init)
+ where
+  go !context handle = do
+    chunk <- B.hGetSome handle 65536
+    if B.null chunk
+      then pure (SHA.finalize context)
+      else go (SHA.update context chunk) handle
+
+data TreeEntry = TreeDirectory !FilePath | TreeFile !FilePath !Integer | TreeOther
+
+-- | Visits regular files under @root@ in the order of their sorted relative paths, holding one
+-- directory listing per level.
+foldRegularFiles :: (a -> FilePath -> Integer -> IO a) -> a -> FilePath -> IO a
+foldRegularFiles visit initial root = go initial ""
+ where
+  go accumulator relative = do
     let directory = if null relative then root else root </> relative
     names <- listDirectory directory
-    fmap concat $ forM names $ \name -> do
+    entries <- forM names $ \name -> do
       let childRelative = if null relative then name else relative </> name
       status <- getSymbolicLinkStatus (root </> childRelative)
-      if isDirectory status && not (isSymbolicLink status)
-        then go childRelative
-        else pure [childRelative | isRegularFile status]
+      pure $! classify childRelative status
+    foldM step accumulator (sortOn orderKey entries)
+  classify childRelative status
+    | isDirectory status && not (isSymbolicLink status) = TreeDirectory childRelative
+    | isRegularFile status = TreeFile childRelative (fromIntegral (fileSize status))
+    | otherwise = TreeOther
+  -- A directory sorts as its name plus '/', which places it where its descendants' full paths sort.
+  orderKey (TreeDirectory childRelative) = childRelative ++ "/"
+  orderKey (TreeFile childRelative _) = childRelative
+  orderKey TreeOther = ""
+  step accumulator (TreeDirectory childRelative) = go accumulator childRelative
+  step accumulator (TreeFile childRelative size) = visit accumulator childRelative size
+  step accumulator TreeOther = pure accumulator
 
 treeFileSize :: FilePath -> IO Integer
 treeFileSize root = do
   present <- doesDirectoryExist root
   if not present
     then pure 0
-    else do
-      relatives <- regularFiles root
-      sizes <- forM relatives $ \relative -> fromIntegral . fileSize <$> getSymbolicLinkStatus (root </> relative)
-      pure (sum sizes)
+    else foldRegularFiles (\total _ size -> pure $! total + size) 0 root
 
 hexText :: B.ByteString -> String
 hexText = concatMap hexByte . B.unpack
