@@ -378,7 +378,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "50e978d88ee720480c30f6eafe4d729a18355f2bd94ae455c9ef56379c77d8cb"
+      "expected_sha256": "fa0622cb7acc5de33b16c1f8138fb2056f1c32ed1f0092a280632c414d3626c2"
     },
     {
       "id": "//replacement/abi:pilot-image",

@@ -57,6 +57,14 @@ Scope: Emulated X-M1 1.50 replay of the finite admitted R1 renderer cohort and o
 
 <!-- /evidence-record E-RENDER-R1-MAIN-COHORT-150 -->
 
+<!-- evidence-record E-RENDER-FRAME-R1-COHORT-150 -->
+
+E-RENDER-FRAME-R1-COHORT-150: With the owned VGLIB stage-0 frame step submitting to the retained OpenVG client (render-frame archive edfe1a0db1eeaa6d88dfbd656e88632124ed5598389fccf8d6ce84f74e974600), 66 of the 67 R1 render pairs pass in full and the failing ones are ["picker-488"]. Stage-0 submission is equal in 67 pairs: 2284 owned frame steps of 2569 compared, 2369348 OpenVG and EGL calls and 21314 vector-engine jobs. Presentation passes in 67 pairs. Over the owned frame steps the owned step takes a mean 4513896 guest instructions per frame, entry to dispatcher return on both cores, against 4163259 for stock on the same frames (108.4%).
+
+Scope: Emulated X-M1 1.50 replay of the 67 admitted R1 render routes on the combined RC0 and fixed-bank scanout candidate (DAT e935b1e1c028f3d84d32467d35d0f5cda1ffcb1310a21800d4a53ff8bb56e484), stock role against the render-frame package role, compared by frame-presentation-check, frame-submission-check and run-render-pairs.sh check. Pixels on the owned path are the stock vector engine's; the comparison is of submitted work, not of a CPU raster.
+
+<!-- /evidence-record E-RENDER-FRAME-R1-COHORT-150 -->
+
 ## Menu engine cutover
 
 `menu-engine-qualify-bounded` runs the engine-only stock/owned matrix ([design](../reports/owned-menu-engine-design.md#engine-only-cutover-qualification)): the increment-7 archive and its 68 pairs, for the menu cutover and for the time-services `--owned-base` qualification alike.

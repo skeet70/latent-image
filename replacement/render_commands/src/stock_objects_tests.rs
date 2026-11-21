@@ -154,9 +154,9 @@ fn free_members_are_listed_but_not_live() {
     assert_eq!(live, [1, 3]);
 }
 
-// Captured pool: first `render-pane-return` hit (line 59) of
-// private-data/scratch/BasicKernelRequal/runs/20261114T130148Z-basic-render-current/work/pairs/runs/picker-15-owned/e2e-observation-3.trace-hits.jsonl
-// (phase owned-picker-keys, sha256 b845550c5ad828f71892b47ffece0dfa63c9ddcc88a97ee0b18293cc3cd0154e).
+// Captured pool: first `render-pane-return` hit (line 59) of the BasicKernelRequal run 20261114T130148Z-basic-render-current,
+// picker-15 owned role, `e2e-observation-3.trace-hits.jsonl` (phase owned-picker-keys, sha256
+// b845550c5ad828f71892b47ffece0dfa63c9ddcc88a97ee0b18293cc3cd0154e).
 // `memory[3]` is the 152 list bytes at 0x015e748c; `memory[6..]` the pool at 0x015e7538. Only list members are kept.
 const CAPTURED_LISTS: &str = "0000000000000000000000000000000000000000000000000000000000000000381d6001381d60010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b4ad6401ecbf6401e0166501e0166501387f6501387f650138e9650138e96501";
 const CAPTURED_OBJECTS: &[(u8, u8, &str)] = &[
