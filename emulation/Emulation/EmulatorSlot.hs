@@ -140,15 +140,15 @@ reexecInSlot policy arguments = do
           unless (any (\line -> reverse (take (length unit) (reverse line)) == unit) (lines groups)) $
             ioError (userError "admission scope does not contain this process")
           scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
-          (Slot slot, pinned) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
+          (Slot slot, pinned, reservation) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
             acquired <- acquire directory (executionClass policy) (slotCount policy) (Just scope)
-            _ <- reserveMemory (memoryMax policy) scope
+            (_, reserved) <- reserveMemory scope
             pinned <- pinExecutable directory executable running
-            pure (acquired, pinned)
+            pure (acquired, pinned, reserved)
           hPutStrLn stderr ("verification admission: class=" ++ show (executionClass policy)
             ++ " memory_max_bytes=" ++ show (memoryMaxBytes (memoryMax policy))
             ++ " memory_swap_max_bytes=" ++ show (memorySwapMaxBytes (memorySwapMax policy))
-            ++ " reserved_memory_bytes=" ++ show (memoryMaxBytes (memoryMax policy)))
+            ++ " reserved_memory_bytes=" ++ show (Host.reservationBytes reservation))
           hFlush stderr
           checkStorageBudget storage
           unsetEnv "XM1_ADMISSION_SCOPE"
@@ -158,6 +158,8 @@ reexecInSlot policy arguments = do
           setEnv "XM1_ADMISSION_OWNER" (show pid)
           setEnv "XM1_ADMISSION_CLASS" (show (executionClass policy))
           unsetEnv admissionInheritanceVariable
+          key <- slotMemoryKey (executionClass policy) arguments
+          Host.startPeakRecorder key scope
           executeFile pinned False arguments Nothing
         Nothing -> do
           scoped <- userScopeAvailable
@@ -170,10 +172,13 @@ reexecInSlot policy arguments = do
                   MemorySwapMax swap = memorySwapMax policy
               program <- getProgName
               setEnv runProgramVariable program
+              key <- slotMemoryKey (executionClass policy) arguments
+              reservation <- Host.expectedReservation key (memoryMax policy)
               setEnv "XM1_ADMISSION_SCOPE" unit
               executeFile "systemd-run" True
                 ([ "--user", "--scope", "--quiet", "--collect", "--unit=" ++ unit
                  , "--property=MemoryMax=" ++ memory
+                 , "--property=MemoryHigh=" ++ show (Host.reservationBytes reservation)
                  , "--property=MemorySwapMax=" ++ swap, "--property=OOMPolicy=stop"
                  ] ++ ["--property=CPUWeight=1000" | executionClass policy == NativeVerification]
                    ++ ["--", pinned] ++ arguments) Nothing
@@ -196,6 +201,16 @@ reexecInSlot policy arguments = do
               hPutStrLn stderr ("No systemd user session: " ++ show (executionClass policy) ++ " slot " ++ show slot ++ " runs without the " ++ memory ++ " memory cap")
               hFlush stderr
               executeFile pinned False arguments Nothing
+
+-- | The class and @XM1_RUN_LABEL@, or the class, program and arguments when no
+-- label is set.
+slotMemoryKey :: ExecutionClass -> [String] -> IO Host.MemoryKey
+slotMemoryKey execution arguments = do
+  configured <- lookupEnv "XM1_RUN_LABEL"
+  exported <- lookupEnv runProgramVariable
+  program <- getProgName
+  let name = maybe program id exported
+  pure (Host.memoryKey (unwords (classPrefix execution : maybe (name : arguments) pure configured)))
 
 -- | A child runs inside the slot its parent already holds when the parent's
 -- grant names that parent and the child's purpose, the child's parent is that

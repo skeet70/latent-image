@@ -200,6 +200,23 @@ unitImports =
   , Retained "file_service_sleep" 0x7240c8
   , Retained "file_service_wake" 0x724144
   , Retained "file_service_ticks" 0x7257a8
+  , Retained "file_service_cache_release" 0x71e9ec
+  , Retained "file_service_parse_path" 0x7160b8
+  , Retained "file_service_directory_slot" 0x715f0c
+  , Retained "file_service_split_path" 0x71543c
+  , Retained "file_service_directory_number" 0x712dac
+  , Retained "file_service_make_directory" 0x716184
+  , Retained "file_service_fs_open" 0x701634
+  , Retained "file_service_register_written" 0x71565c
+  , Retained "file_service_fs_write" 0x6ff000
+  , Retained "file_service_fs_seek" 0x6ff138
+  , Retained "file_service_fs_close" 0x6ffff4
+  , Retained "file_service_fs_close_named" 0x6ffdcc
+  , Retained "file_service_fs_close_entry" 0x6ffb10
+  , Retained "file_service_fs_release" 0x6ffc68
+  , Retained "file_service_media_refresh" 0x71d66c
+  , Retained "file_service_after_written_close" 0x71141c
+  , Retained "file_service_rescan" 0x71985c
   , Retained "scanout_enter_critical" 0x7235d8
   , Retained "scanout_leave_critical" 0x7236b0
   , Retained "scanout_yield" 0x723ce8

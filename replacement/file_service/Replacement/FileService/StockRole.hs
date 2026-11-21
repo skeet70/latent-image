@@ -2,7 +2,7 @@
 -- the file service's retired image-4 extents left stock.
 module Replacement.FileService.StockRole
   ( Publication (..)
-  , retiredRegion
+  , retiredRegions
   , retiredExtents
   , stockRolePublications
   ) where
@@ -15,11 +15,11 @@ import Replacement.FileService.Native (Extent (..), extentContains, hexWord)
 data Publication = Publication {publicationAddress :: Word32, publicationOld :: Word32, publicationNew :: Word32}
   deriving (Eq, Show)
 
--- | retired-memory.ld's RETIRED region.
-retiredRegion :: Extent
-retiredRegion = Extent 0x71bc2c 0x721834
+-- | retired-memory.ld's RETIRED_WORKERS and RETIRED regions.
+retiredRegions :: [Extent]
+retiredRegions = [Extent 0x7115a4 0x7118fc, Extent 0x71bc2c 0x721834]
 
--- | The linked sections retired.ld places in 'retiredRegion'.
+-- | The linked sections retired.ld places in 'retiredRegions'.
 retiredExtents :: E.Elf -> [Extent]
 retiredExtents elf =
   [ Extent (E.sectionAddress section) (E.sectionAddress section + E.sectionSize section)
@@ -27,10 +27,10 @@ retiredExtents elf =
   , E.sectionAllocated section
   , E.sectionType section == 1
   , E.sectionSize section > 0
-  , extentContains retiredRegion (E.sectionAddress section)
+  , any (`extentContains` E.sectionAddress section) retiredRegions
   ]
 
--- | The rows outside 'retiredRegion', in order. Refused when no row lies in a retired extent or
+-- | The rows outside 'retiredRegions', in order. Refused when no row lies in a retired extent or
 -- a row in the region lies outside every retired extent.
 stockRolePublications :: [Extent] -> [Publication] -> Either String [Publication]
 stockRolePublications extents rows
@@ -39,6 +39,6 @@ stockRolePublications extents rows
       Left ("publication " ++ hexWord (publicationAddress row) ++ " lies in the retired region outside every retired extent")
   | otherwise = Right kept
   where
-    inRegion = extentContains retiredRegion . publicationAddress
+    inRegion row = any (`extentContains` publicationAddress row) retiredRegions
     dropped = filter inRegion rows
     kept = filter (not . inRegion) rows

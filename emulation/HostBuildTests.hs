@@ -11,7 +11,7 @@ import Data.Char (isDigit)
 import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import GHC.IO.Encoding (setForeignEncoding)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute, renameFile)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeDirectory, (</>))
@@ -34,7 +34,9 @@ fakeBazel = unlines
   , "  if [ \"$hierarchy\" = 0 ]; then"
   , "    read -r memory < \"/sys/fs/cgroup$group/memory.max\""
   , "    read -r swap < \"/sys/fs/cgroup$group/memory.swap.max\""
+  , "    read -r high < \"/sys/fs/cgroup$group/memory.high\""
   , "    echo \"memory $FAKE_NAME $memory $swap\" >> \"$FAKE_LOG\""
+  , "    echo \"high $FAKE_NAME $high\" >> \"$FAKE_LOG\""
   , "  fi"
   , "done < /proc/self/cgroup"
   , "while [ ! -e \"$FAKE_RELEASE\" ]; do sleep 0.1; done"
@@ -100,9 +102,17 @@ run binary = do
   writeFile (bin </> "bazel") fakeBazel
   setFileMode (bin </> "bazel") 0o755
   writeFile logFile ""
-  environment <- testEnvironment home bin logFile
+  let hostInfo = root </> "meminfo"
+      smallHostInfo = root </> "meminfo-small-host"
+  writeMeminfo hostInfo (64 * gib) (64 * gib)
+  writeMeminfo smallHostInfo (24 * gib) (24 * gib)
+  environment <- (("XM1_HOST_MEMINFO", hostInfo) :) <$> testEnvironment home bin logFile
   let release name = root </> ("release-" ++ name)
-      start name extra = spawn binary root (("FAKE_NAME", name) : ("FAKE_RELEASE", release name) : extra ++ environment)
+      named name extra =
+        let overrides = ("FAKE_NAME", name) : ("FAKE_RELEASE", release name) : extra
+        in overrides ++ filter ((`notElem` map fst overrides) . fst) environment
+      startTargets name extra targets = spawnArgs binary root (named name extra) ("build" : targets)
+      start name extra = startTargets name extra ["//fake:target"]
       started name = any (("start " ++ name ++ " ") `isPrefixOf`) . lines <$> readFile' logFile
       startedPid name = do
         entries <- lines <$> readFile' logFile
@@ -128,7 +138,7 @@ run binary = do
     , ("maximum-swap", [("XM1_HOST_BUILD_MEMORY_MAX", "2G"), ("XM1_HOST_BUILD_SWAP_MAX", "32G"), ("XM1_HOST_MEMORY_BUDGET", "4G")], "2147483648", "34359738368")
     ] $ \(name, overrides, memory, swap) -> do
       writeFile (release name) ""
-      invocation <- start name overrides
+      invocation <- startTargets name overrides ["//memory:" ++ name]
       code <- waitForProcess (invocationProcess invocation)
       errors <- invocationStderr invocation
       entries <- lines <$> readFile' logFile
@@ -149,6 +159,81 @@ run binary = do
       _ <- invocationStderr invocation
       ran <- started name
       expect (name ++ " refuses a build before bazel runs") (code /= ExitSuccess && not ran)
+  let admitted name overrides = do
+        writeFile (release name) ""
+        invocation <- startTargets name overrides ["//budget:" ++ name]
+        code <- waitForProcess (invocationProcess invocation)
+        _ <- invocationStderr invocation
+        ran <- started name
+        pure (code == ExitSuccess && ran)
+  overrideAtDefault <- admitted "budget-at-default" [("XM1_HOST_MEMORY_BUDGET", show (56 * gib))]
+  overrideAboveDefault <- admitted "budget-above-default" [("XM1_HOST_MEMORY_BUDGET", show (56 * gib + token))]
+  overrideBounded <- expect "XM1_HOST_MEMORY_BUDGET may equal but not exceed MemTotal less the 8 GiB host reserve"
+    (overrideAtDefault && not overrideAboveDefault)
+  atBudget <- admitted "scope-at-default-budget"
+    [("XM1_HOST_MEMINFO", smallHostInfo), ("XM1_HOST_BUILD_MEMORY_MAX", show (16 * gib)), ("XM1_HOST_BUILD_SWAP_MAX", "0")]
+  overBudget <- admitted "scope-over-default-budget"
+    [("XM1_HOST_MEMINFO", smallHostInfo), ("XM1_HOST_BUILD_MEMORY_MAX", show (16 * gib + token)), ("XM1_HOST_BUILD_SWAP_MAX", "0")]
+  defaultReserve <- expect "on a 24 GiB host the default budget admits a 16 GiB scope and refuses one token more"
+    (atBudget && not overBudget)
+
+  let historyCase name = do
+        writeFile (release name) ""
+        invocation <- startTargets name [("XM1_HOST_BUILD_MEMORY_MAX", "2G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")] ["//history:repeat"]
+        code <- waitForProcess (invocationProcess invocation)
+        errors <- invocationStderr invocation
+        entries <- lines <$> readFile' logFile
+        pure (\reserved -> code == ExitSuccess && ("memory " ++ name ++ " 2147483648 0") `elem` entries
+          && ("high " ++ name ++ " " ++ reserved) `elem` entries
+          && ("\"reserved_memory_bytes\":" ++ reserved ++ ",") `isInfixOf` errors)
+  firstRun <- historyCase "history-first"
+  firstReservesCap <- expect "the first run of a key reserves its RAM cap and sets it as MemoryHigh" (firstRun "2147483648")
+  repeatRun <- historyCase "history-repeat"
+  repeatReservesEstimate <- expect "a repeat key reserves 1.25 times its recorded peak in whole tokens, under the same RAM cap"
+    (repeatRun "268435456")
+
+  let shortInfo = root </> "meminfo-short"
+  writeMeminfo shortInfo (64 * gib) (9 * gib)
+  writeFile (release "short") ""
+  short <- startTargets "short" [("XM1_HOST_MEMINFO", shortInfo), ("XM1_HOST_BUILD_MEMORY_MAX", "2G")] ["//available:short"]
+  threadDelay 2_000_000
+  shortEarly <- started "short"
+  laneA <- startTargets "lane-a" [] ["//available:lane-a"]
+  laneB <- startTargets "lane-b" [] ["//available:lane-b"]
+  lanesFree <- (&&) <$> waitFor (started "lane-a") <*> waitFor (started "lane-b")
+  shortStillWaiting <- not <$> started "short"
+  writeFile (release "lane-a") ""
+  writeFile (release "lane-b") ""
+  let settled invocation = do
+        code <- timeout 20_000_000 (waitForProcess (invocationProcess invocation))
+        errors <- maybe (pure "still running") (const (invocationStderr invocation)) code
+        pure (code, errors)
+  (laneCodes, laneErrors) <- unzip <$> mapM settled [laneA, laneB]
+  writeMeminfo shortInfo (64 * gib) (64 * gib)
+  (shortCode, shortErr) <- settled short
+  availableGate <- expect "admission waits while MemAvailable less the 8 GiB reserve is short and re-checks it"
+    (not shortEarly && shortCode == Just ExitSuccess && "waiting for host RAM" `isInfixOf` shortErr)
+  laneless <- expect "a build waiting for memory holds no build lane"
+    (lanesFree && shortStillWaiting && all (== Just ExitSuccess) laneCodes)
+  unless (availableGate && laneless) (putStrLn (unlines (shortErr : laneErrors)))
+
+  let orderInfo = root </> "meminfo-order"
+      orderBudget = [("XM1_HOST_MEMINFO", orderInfo), ("XM1_HOST_MEMORY_BUDGET", "4G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")]
+  writeMeminfo orderInfo (64 * gib) (9 * gib)
+  writeFile (release "order-large") ""
+  large <- startTargets "order-large" (("XM1_HOST_BUILD_MEMORY_MAX", "4G") : orderBudget) ["//order:large"]
+  threadDelay 1_000_000
+  small <- startTargets "order-small" (("XM1_HOST_BUILD_MEMORY_MAX", "2G") : orderBudget) ["//order:small"]
+  threadDelay 2_000_000
+  neitherEarly <- not <$> ((||) <$> started "order-large" <*> started "order-small")
+  writeMeminfo orderInfo (64 * gib) (64 * gib)
+  smallFirst <- waitFor (started "order-small")
+  threadDelay 2_000_000
+  largeHeld <- not <$> started "order-large"
+  writeFile (release "order-small") ""
+  orderCodes <- map fst <$> mapM settled [small, large]
+  smallestFirst <- expect "when both fit, the smaller waiting reservation is admitted first"
+    (neitherEarly && smallFirst && largeHeld && all (== Just ExitSuccess) orderCodes)
 
   first <- start "first" []
   firstStarted <- waitFor (started "first")
@@ -345,12 +430,9 @@ run binary = do
   _ <- waitForProcess legacy
   legacyCompatible <- expect "a legacy whole-file lock blocks both build lanes"
     (legacyPid /= Nothing && not legacyEarly && legacyCode == ExitSuccess)
-  pure (and ([storageRefused, invalidReserveRefused, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
+  pure (and ([storageRefused, invalidReserveRefused, overrideBounded, defaultReserve, firstReservesCap, repeatReservesEstimate, availableGate, laneless, smallestFirst, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
 
 data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
-
-spawn :: FilePath -> FilePath -> [(String, String)] -> IO Invocation
-spawn binary root environment = spawnWith CreatePipe binary root environment ["build", "//fake:target"]
 
 spawnArgs :: FilePath -> FilePath -> [(String, String)] -> [String] -> IO Invocation
 spawnArgs binary root environment arguments = spawnWith CreatePipe binary root environment arguments
@@ -437,6 +519,17 @@ readFile' path = do
   text <- readFile path
   length text `seq` pure text
 
+gib, token :: Integer
+gib = 1024 * 1024 * 1024
+token = 256 * 1024 * 1024
+
+-- | A meminfo file for @XM1_HOST_MEMINFO@, replaced atomically.
+writeMeminfo :: FilePath -> Integer -> Integer -> IO ()
+writeMeminfo path total available = do
+  writeFile (path ++ ".tmp") (unlines
+    ["MemTotal: " ++ show (total `div` 1024) ++ " kB", "MemAvailable: " ++ show (available `div` 1024) ++ " kB"])
+  renameFile (path ++ ".tmp") path
+
 -- | Fake bazel first on PATH, a private HOME for the lock, and the user
 -- manager's bus so systemd-run is reachable from the pruned test environment.
 testEnvironment :: FilePath -> FilePath -> FilePath -> IO [(String, String)]
@@ -447,7 +540,7 @@ testEnvironment home bin logFile = do
       path = maybe bin ((bin ++ ":") ++) (lookup "PATH" inherited)
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
-      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE", "XM1_HOST_MEMORY_BUDGET",
+      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE", "XM1_HOST_MEMORY_BUDGET", "XM1_HOST_MEMINFO",
         "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX",
         "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
   pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile) : ("XM1_STORAGE_MIN_FREE", "1")
