@@ -1015,6 +1015,8 @@ pub(crate) mod tests {
             "published_enter": format!("{:#010x}", branch_to_zero(ENTER)),
             "after_wait": {"pc": format!("{OWNED_WAIT:#010x}"), "word": "0xe1a04000"},
             "finish": {"pc": format!("{OWNED_FINISH:#010x}"), "word": "0xe1a00004"},
+            "hand_off_return": {"pc": "0x006d8200", "word": "0xe8bd8010"},
+            "front_store": {"pc": "0x006d8300", "word": "0xe5c32160"},
         })).unwrap()
     }
 

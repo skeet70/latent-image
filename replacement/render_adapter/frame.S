@@ -43,10 +43,47 @@ rb_render_frame_finish:
     pop {r4, r5, r6, r7, r8, r11, pc}
 .size rb_render_frame_entry, .-rb_render_frame_entry
 
+@ The hand-off 0x6d76ec. Its return address rb_render_frame_hand_off_return is the owned counterpart of the stock
+@ hand-off callers 0x6d7b3c/0x6d7c24/0x6d7d10 for the FujiMod bridge, which checks the word there.
+.section .text.rb_render_call_6d76ec,"ax",%progbits
+.balign 4
+.global rb_render_call_6d76ec
+.type rb_render_call_6d76ec,%function
+rb_render_call_6d76ec:
+    push {r4, lr}
+    movw r12, #:lower16:0x6d76ec
+    movt r12, #:upper16:0x6d76ec
+    blx r12
+.global rb_render_frame_hand_off_return
+rb_render_frame_hand_off_return:
+    pop {r4, pc}
+.size rb_render_call_6d76ec, .-rb_render_call_6d76ec
+
+@ The front-byte advance I4:6d7d30-6d7d58; returns the new front byte. rb_render_frame_front_store (r2 = the
+@ incremented byte) is the owned counterpart of the store at 0x6d7d44 for the FujiMod bridge, which checks its word.
+.section .text.rb_render_frame_advance_front,"ax",%progbits
+.balign 4
+.global rb_render_frame_advance_front
+.type rb_render_frame_advance_front,%function
+rb_render_frame_advance_front:
+    movw r3, #0x2098
+    movt r3, #0x8e
+    ldrb r2, [r3, #0x160]
+    add r2, r2, #1
+    uxtb r2, r2
+.global rb_render_frame_front_store
+rb_render_frame_front_store:
+    strb r2, [r3, #0x160]
+    cmp r2, #1
+    movhi r2, #0
+    strbhi r2, [r3, #0x160]
+    mov r0, r2
+    bx lr
+.size rb_render_frame_advance_front, .-rb_render_frame_advance_front
+
 RB_RENDER_CALL rb_render_call_6d9478, 0x6d9478, 0
 RB_RENDER_CALL rb_render_call_6d9494, 0x6d9494, 0
 RB_RENDER_CALL rb_render_call_6499d0, 0x6499d0, 0
-RB_RENDER_CALL rb_render_call_6d76ec, 0x6d76ec, 0
 RB_RENDER_CALL rb_render_call_6cfc68, 0x6cfc68, 0
 RB_RENDER_CALL rb_render_call_7243a8, 0x7243a8, 0
 RB_RENDER_CALL rb_render_call_723ce8, 0x723ce8, 0

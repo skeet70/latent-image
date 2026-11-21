@@ -65,7 +65,13 @@ renderFramePresentation = do
   scratch <- maybe getTemporaryDirectory pure =<< lookupEnv "TEST_TMPDIR"
   let site :: String -> String -> Value
       site pc word = object ["pc" .= pc, "word" .= word]
-      sites = object ["after_wait" .= site "0x04010a40" "0xe1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]
+      ownedSites =
+        [ ("after_wait", site "0x04010a40" "0xe1a04000"), ("finish", site "0x04010b04" "0xe1a00004")
+        , ("hand_off_return", site "0x04010c10" "0xe8bd8010"), ("front_store", site "0x04010c40" "0xe5c32160") ]
+      -- The owned sites with `changes` applied: `Nothing` drops a site, `Just` replaces it.
+      sitesWith changes = object
+        [name .= value | (name, base) <- ownedSites, Just value <- [maybe (Just base) id (lookup name changes)]]
+      sites = sitesWith []
       record presentation = object $
         [ "symbol" .= String "rb_render_frame_record", "address" .= String "0x04012000", "bytes" .= (120 :: Int)
         , "layout" .= (1 :: Int), "scanout_latch" .= object ["bridge" .= String "0x04013000", "delivery" .= String "0x04013100"] ]
@@ -86,6 +92,7 @@ renderFramePresentation = do
         try (Viewer.renderFramePresentation ownership directory) :: IO (Either IOException (Maybe E2E.PresentationSites))
       expected = E2E.PresentationSites 0xea4cd0c6
         (E2E.PresentationInstruction 0x04010a40 0xe1a04000) (E2E.PresentationInstruction 0x04010b04 0xe1a00004)
+        (E2E.PresentationInstruction 0x04010c10 0xe8bd8010) (E2E.PresentationInstruction 0x04010c40 0xe5c32160)
       bridgeSettings configured = E2E.E2ESettings
         { E2E.relinkMode = E2E.UnreviewedRelink E2E.EnforceAllowlist
         , E2E.bootMode = E2E.FreshBoot
@@ -122,7 +129,7 @@ renderFramePresentation = do
         _ : value : _ -> decodeStrict (BC.pack value)
         _ -> Nothing
   check "the FujiMod bridge receives the derived presentation sites"
-    (sent == Just (object ["published_enter" .= String "0xea4cd0c6", "after_wait" .= site "0x04010a40" "0xe1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]))
+    (sent == Just (object (("published_enter" .= String "0xea4cd0c6") : [name .= value | (name, value) <- ownedSites])))
   (_, unconfigured) <- bridge (bridgeSettings Nothing)
   check "an unconfigured bridge receives no presentation sites" ("--presentation-sites" `notElem` unconfigured)
   retainedBridge <- try (bridge ((bridgeSettings (Just expected)) { E2E.emulationRuntime = E2E.RetainedRuntime }))
@@ -139,10 +146,12 @@ renderFramePresentation = do
   let malformed =
         [ ("missing-record", Nothing, manifest [frame])
         , ("missing-presentation", Just (record (Nothing :: Maybe Value)), manifest [frame])
-        , ("missing-finish", Just (record (Just (object ["after_wait" .= site "0x04010a40" "0xe1a04000"]))), manifest [frame])
-        , ("unprefixed-pc", Just (record (Just (object ["after_wait" .= site "04010a40" "0xe1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]))), manifest [frame])
-        , ("wide-word", Just (record (Just (object ["after_wait" .= site "0x04010a40" "0x1e1a04000", "finish" .= site "0x04010b04" "0xe1a00004"]))), manifest [frame])
-        , ("numeric-pc", Just (record (Just (object ["after_wait" .= object ["pc" .= (0x04010a40 :: Int), "word" .= String "0xe1a04000"], "finish" .= site "0x04010b04" "0xe1a00004"]))), manifest [frame])
+        , ("missing-finish", Just (record (Just (sitesWith [("finish", Nothing)]))), manifest [frame])
+        , ("missing-hand-off-return", Just (record (Just (sitesWith [("hand_off_return", Nothing)]))), manifest [frame])
+        , ("missing-front-store", Just (record (Just (sitesWith [("front_store", Nothing)]))), manifest [frame])
+        , ("unprefixed-pc", Just (record (Just (sitesWith [("after_wait", Just (site "04010a40" "0xe1a04000"))]))), manifest [frame])
+        , ("wide-word", Just (record (Just (sitesWith [("after_wait", Just (site "0x04010a40" "0x1e1a04000"))]))), manifest [frame])
+        , ("numeric-pc", Just (record (Just (sitesWith [("after_wait", Just (object ["pc" .= (0x04010a40 :: Int), "word" .= String "0xe1a04000"]))]))), manifest [frame])
         , ("unpublished-entry", Just (record (Just sites)), manifest [engine])
         , ("twice-published-entry", Just (record (Just sites)), manifest [frame, frame])
         , ("foreign-entry-word", Just (record (Just sites)), manifest [publication "0x006d7920" "0xe92d41f0" "0xea4cd0c6"]) ]

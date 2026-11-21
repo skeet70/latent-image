@@ -14,7 +14,7 @@ use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, enc
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, SCANNED_HOLD, key_pulse};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
-use fujimod_xm1::presentation::OwnedSites;
+use fujimod_xm1::presentation::{OwnedPublication, OwnedSites, OWNED_FRONT_STORE, OWNED_HAND_OFF_RETURN};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
 use fujimod_xm1::reset_observation::{ResetObserver, Spec as ResetObservationSpec};
@@ -594,16 +594,25 @@ const DISPLAY_WAIT: u64 = 60_000_000;
 /// The store entry the render pair arms as `render-osd-buffer`; its callers hand off the stage-0 buffers.
 const PUBLICATION_SITE: u32 = 0x006d_76ec;
 
-fn eligible_publication(hit: &Hit) -> bool {
+fn hex_word(text: &str) -> Option<u32> { u32::from_str_radix(text.trim_start_matches("0x"), 16).ok() }
+
+/// A stage-0 hand-off from a stock caller or, with the render-frame package's sites, from its owned hand-off.
+fn eligible_publication(hit: &Hit, owned: Option<OwnedPublication>) -> bool {
     hit.site == "render-osd-buffer"
-        && u32::from_str_radix(hit.lr.trim_start_matches("0x"), 16)
-            .is_ok_and(|caller| matches!(caller, 0x006d_7b3c | 0x006d_7c24 | 0x006d_7d10))
+        && hex_word(&hit.lr).is_some_and(|caller| matches!(caller, 0x006d_7b3c | 0x006d_7c24 | 0x006d_7d10)
+            || owned.is_some_and(|owned| caller == owned.hand_off_return))
 }
 
-fn publication_pair<'a>(hits: &'a [Hit], start: usize, after: u64) -> Option<(&'a Hit, &'a Hit)> {
+/// The front-byte store at `0x006d7d44` or, with the render-frame package's sites, its owned front store.
+fn front_increment(hit: &Hit, owned: Option<OwnedPublication>) -> bool {
+    hit.site == "render-osd-increment"
+        || owned.is_some_and(|owned| hex_word(&hit.address) == Some(owned.front_store))
+}
+
+fn publication_pair(hits: &[Hit], start: usize, after: u64, owned: Option<OwnedPublication>) -> Option<(&Hit, &Hit)> {
     let hits = hits.get(start..)?;
-    let buffer = hits.iter().find(|hit| eligible_publication(hit) && hit.instructions > after)?;
-    let increment = hits.iter().find(|hit| hit.site == "render-osd-increment" && hit.instructions >= buffer.instructions)?;
+    let buffer = hits.iter().find(|hit| eligible_publication(hit, owned) && hit.instructions > after)?;
+    let increment = hits.iter().find(|hit| front_increment(hit, owned) && hit.instructions >= buffer.instructions)?;
     Some((buffer, increment))
 }
 
@@ -1182,16 +1191,38 @@ impl Server {
         }
     }
 
-    fn publication_armed(&self) -> bool {
-        self.bridge.machine.traces.sites.get(&PUBLICATION_SITE).is_some_and(|label| label == "render-osd-buffer")
+    /// Whether a display key awaits a stage-0 publication. With the render-frame package's sites the trajectory
+    /// must arm both `render-osd-buffer` and the owned front store, or neither.
+    fn publication_armed(&self) -> Result<bool, String> {
+        let sites = &self.bridge.machine.traces.sites;
+        let buffer = sites.get(&PUBLICATION_SITE).is_some_and(|label| label == "render-osd-buffer");
+        let Some(owned) = self.presentation_sites.map(OwnedSites::publication) else { return Ok(buffer) };
+        match (buffer, sites.contains_key(&owned.front_store)) {
+            (armed, front) if armed == front => Ok(armed),
+            _ => Err("an owned render-frame trajectory must arm both render-osd-buffer and the owned front store".into()),
+        }
+    }
+
+    /// Refuses an owned publication site whose instruction differs from the word the package declared.
+    fn check_owned_publication_words(&mut self, owned: OwnedPublication) -> Result<(), String> {
+        for (pc, expected) in [(owned.hand_off_return, OWNED_HAND_OFF_RETURN), (owned.front_store, OWNED_FRONT_STORE)] {
+            let mut word = [0; 4];
+            self.bridge.machine.session.board.read_physical(u64::from(pc), &mut word)?;
+            if u32::from_le_bytes(word) != expected {
+                return Err(format!("owned publication site {pc:#010x} differs from its render-frame instruction"));
+            }
+        }
+        Ok(())
     }
 
     fn await_publication(&mut self, start: usize, after: u64, budget: u64)
         -> Result<(Hit, Hit, fujimod_xm1::presentation::Acknowledgement), String> {
+        let owned = self.presentation_sites.map(OwnedSites::publication);
         let mut waited = 0;
         loop {
-            let found = publication_pair(&self.bridge.machine.traces.hits, start, after)
+            let found = publication_pair(&self.bridge.machine.traces.hits, start, after, owned)
                 .map(|(buffer, increment)| (buffer.clone(), increment.clone(), increment.instructions));
+            if let Some(owned) = owned.filter(|_| found.is_some()) { self.check_owned_publication_words(owned)?; }
             if let Some((buffer, increment, commit)) = found {
                 while self.bridge.machine.instructions() <= commit {
                     if waited >= budget {
@@ -1218,7 +1249,7 @@ impl Server {
         let started = Instant::now();
         let before = self.bridge.machine.instructions();
         let publication_start = self.bridge.machine.traces.hits.len();
-        let publication_armed = matches!(completion, DisplayCompletion::AcknowledgedFrame) && self.publication_armed();
+        let publication_armed = matches!(completion, DisplayCompletion::AcknowledgedFrame) && self.publication_armed()?;
         let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
             .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
             .and_then(|settle| self.await_display_plane(completion).map(|(waited, acknowledgement)| (settle, waited, acknowledgement)));
@@ -2235,16 +2266,18 @@ mod tests {
 
     #[test]
     fn presentation_sites_argument_admits_the_viewer_encoding_and_refuses_malformed_text() {
-        let viewer = r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":"0xea4cd0c6"}"#;
-        assert!(presentation_sites(viewer).is_ok());
+        const OWNED: &str = r#""after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"front_store":{"pc":"0x04010c40","word":"0xe5c32160"},"hand_off_return":{"pc":"0x04010c10","word":"0xe8bd8010"}"#;
+        let viewer = format!(r#"{{{OWNED},"published_enter":"0xea4cd0c6"}}"#);
+        assert!(presentation_sites(&viewer).is_ok());
         for text in [
-            "",
-            "{}",
-            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"}}"#,
-            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":"0xe92d49f0"}"#,
-            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":3930902726}"#,
+            String::new(),
+            "{}".into(),
+            format!("{{{OWNED}}}"),
+            format!(r#"{{{OWNED},"published_enter":"0xe92d49f0"}}"#),
+            format!(r#"{{{OWNED},"published_enter":3930902726}}"#),
+            r#"{"after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"finish":{"pc":"0x04010b04","word":"0xe1a00004"},"published_enter":"0xea4cd0c6"}"#.into(),
         ] {
-            assert!(presentation_sites(text).is_err(), "{text}");
+            assert!(presentation_sites(&text).is_err(), "{text}");
         }
     }
 
@@ -3099,6 +3132,26 @@ mod tests {
         let increment = hits.iter().find(|hit| hit.site == "render-osd-increment").expect("publication increment site was not executed");
         assert!(increment.instructions >= buffer.instructions);
         std::fs::remove_dir_all(&server.output).unwrap();
+    }
+
+    #[test]
+    fn display_key_refuses_an_owned_trajectory_missing_either_publication_site() {
+        let sites = presentation_sites(concat!(
+            r#"{"published_enter":"0xea4cd0c6","after_wait":{"pc":"0x04010a40","word":"0xe1a04000"},"#,
+            r#""finish":{"pc":"0x04010b04","word":"0xe1a00004"},"hand_off_return":{"pc":"0x04010c10","word":"0xe8bd8010"},"#,
+            r#""front_store":{"pc":"0x04010c40","word":"0xe5c32160"}}"#)).unwrap();
+        for armed in [json!({"0x006d76ec": "render-osd-buffer"}), json!({"0x04010c40": "frame-owned-osd-increment"})] {
+            let mut server = server(&[0xeafffffe]);
+            server.presentation_sites = Some(sites);
+            server.handle(request(json!({"command": "trace-sites", "sites": armed}))).unwrap();
+            let mut output = Vec::new();
+            server.serve_io(b"{\"command\":\"display-key\",\"key\":\"back\"}\n".as_slice(), &mut output).unwrap();
+            let result: Value = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice(line).unwrap()).last().unwrap();
+            assert_eq!(result["ok"], false, "{result}");
+            assert!(result["message"].as_str().unwrap().contains("must arm both render-osd-buffer and the owned front store"), "{result}");
+            std::fs::remove_dir_all(&server.output).unwrap();
+        }
     }
 
     #[test]

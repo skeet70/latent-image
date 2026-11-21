@@ -172,6 +172,7 @@ unsafe extern "C" {
     fn rb_render_call_6d9494();
     fn rb_render_call_6499d0(group: u32, index: u32, value: u32) -> i32;
     fn rb_render_call_6d76ec(geometry: u32, address: u32, mode: u32, result: u32);
+    fn rb_render_frame_advance_front() -> u8;
     fn rb_render_call_6cfc68(vector: u32);
     fn rb_render_call_723ce8(ticks: u32) -> i32;
     fn rb_render_call_88bf94(display: u32, draw: u32, read: u32, context: u32, attributes: *const u32) -> u32;
@@ -220,12 +221,6 @@ fn render_stage_index(mode: u32) -> u32 {
 /// `render_next_buffer` (`I4:6d701c-6d7030`): integer `front+1` when at most 1, else 0.
 fn render_next_buffer(front: u8) -> BufferIndex {
     if u32::from(front) + 1 <= 1 { BufferIndex::Second } else { BufferIndex::First }
-}
-
-/// Front-byte advance after the hand-off (`I4:6d7d38-6d7d58`).
-fn advanced_front(front: u8) -> u8 {
-    let next = front.wrapping_add(1);
-    if next > 1 { 0 } else { next }
 }
 
 /// A begun frame whose visits occupy `VISITS[..visits]`.
@@ -473,8 +468,7 @@ fn commit(state: &mut FrameState, prepared: Prepared) -> i32 {
         }
         None => hand_off(address),
     }
-    let front = advanced_front(unsafe { read_volatile(FRONT as *const u8) });
-    unsafe { write_volatile(FRONT as *mut u8, front); }
+    let front = unsafe { rb_render_frame_advance_front() };
     state.owned_front = Some(front);
     unsafe { rb_render_call_6499d0(OPTION_GROUP, OPTION_INDEX, word(OPTION_RESTORE)); }
     set_word(CALLBACK_VECTOR, rb_render_frame_scanout_bridge as usize as u32);

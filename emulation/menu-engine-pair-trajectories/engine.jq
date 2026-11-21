@@ -131,7 +131,9 @@ def engine_sites($role; $name): [
   ["00bfad04", "menu-seek", {"lr": true}],
   ["0063270c", "menu-event-post"]
 ] + (if $role == "owned" then [["runtime:rb_menu_engine_guard_failure", "menu-engine-guard-failure"]]
-     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name) + frame_sites + submission_sites;
+     elif $role == "stock" then [] else error("role must be stock or owned") end) + render_sites($role; $name) + frame_sites + submission_sites
+  # The owned frame step's front store (r2 = the incremented byte), its counterpart of render-osd-increment.
+  + (if render_enabled and frame_record != null then [["runtime:rb_render_frame_front_store", "frame-owned-osd-increment"]] else [] end);
 def presented_handoff:
   if length == 0 then . else .[-1] |= (if length == 4 then . + [{completion:"presented-frame"}] else .[4].completion = "presented-frame" end) end;
 def render_trajectory:

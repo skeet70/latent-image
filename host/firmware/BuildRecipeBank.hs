@@ -1226,10 +1226,14 @@ emitRamPush extension variant base plan specPath linkedDir rc0Id4Path rc0Id5Path
           H.failH "ram-push: render frame record leaves the engine data region or changed size"
         afterWait <- linked symbols "rb_render_frame_after_wait"
         finish <- linked symbols "rb_render_frame_finish"
+        handOffReturn <- linked symbols "rb_render_frame_hand_off_return"
+        frontStore <- linked symbols "rb_render_frame_front_store"
         bridge <- linked symbols "rb_render_frame_scanout_bridge"
         delivery <- linked symbols "rb_render_frame_scanout_delivery"
-        -- `mov r4, r0` and `mov r0, r4`, the words the FujiMod presented-frame tracker checks.
-        let presentationSites = [("after_wait", afterWait, 0xe1a04000), ("finish", finish, 0xe1a00004 :: Word32)]
+        -- `mov r4, r0`, `mov r0, r4`, `pop {r4, pc}` and `strb r2, [r3, #0x160]`, the words the FujiMod bridge checks.
+        let presentationSites =
+              [ ("after_wait", afterWait, 0xe1a04000), ("finish", finish, 0xe1a00004)
+              , ("hand_off_return", handOffReturn, 0xe8bd8010), ("front_store", frontStore, 0xe5c32160 :: Word32) ]
         forM_ presentationSites $ \(name, address, expected) ->
           unless (ELF.wordAt elf address == Just expected) $
             H.failH ("ram-push: render frame " ++ name ++ " site differs from its tracked instruction")

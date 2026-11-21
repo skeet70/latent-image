@@ -185,12 +185,14 @@ data PresentationInstruction = PresentationInstruction
   , presentationWord :: Word32
   } deriving (Eq, Show)
 
--- | The branch a render-frame package publishes over stock 0x006d7920, and its owned
--- AfterWait and Finish instructions.
+-- | The branch a render-frame package publishes over stock 0x006d7920, its owned AfterWait and
+-- Finish instructions, and its owned stage-0 hand-off return and front-byte store.
 data PresentationSites = PresentationSites
   { publishedEnter :: Word32
   , ownedAfterWait :: PresentationInstruction
   , ownedFinish :: PresentationInstruction
+  , ownedHandOffReturn :: PresentationInstruction
+  , ownedFrontStore :: PresentationInstruction
   } deriving (Eq, Show)
 
 -- | The sites from a render-frame package directory's `render-frame-record.json` `presentation`
@@ -208,9 +210,11 @@ readPresentationSites directory = do
 
 parsePresentationSites :: B.ByteString -> B.ByteString -> Either String PresentationSites
 parsePresentationSites recordDocument manifestDocument = do
-  (waitSite, finishSite) <- eitherDecodeStrict' recordDocument >>= parseEither (withObject "render frame record" $ \fields ->
-    fields .: "presentation" >>= withObject "render frame presentation" (\sites ->
-      (,) <$> (sites .: "after_wait" >>= ownedSite) <*> (sites .: "finish" >>= ownedSite)))
+  sites <- eitherDecodeStrict' recordDocument >>= parseEither (withObject "render frame record" $ \fields ->
+    fields .: "presentation" >>= withObject "render frame presentation" (\owned ->
+      (\waitSite finishSite handOffSite frontSite branch -> PresentationSites branch waitSite finishSite handOffSite frontSite)
+        <$> (owned .: "after_wait" >>= ownedSite) <*> (owned .: "finish" >>= ownedSite)
+        <*> (owned .: "hand_off_return" >>= ownedSite) <*> (owned .: "front_store" >>= ownedSite)))
   rows <- eitherDecodeStrict' manifestDocument >>= parseEither (withObject "RAM-push manifest" $ \fields ->
     fields .: "publications" >>= mapM (withObject "publication" $ \row ->
       (,,) <$> (row .: "address" >>= packageWord) <*> (row .: "old" >>= packageWord) <*> (row .: "new" >>= packageWord)))
@@ -219,7 +223,7 @@ parsePresentationSites recordDocument manifestDocument = do
     [_] -> Left "the 0x006d7920 publication does not replace the stock word 0xe92d49f0"
     [] -> Left "the manifest publishes nothing at 0x006d7920"
     _ -> Left "the manifest publishes 0x006d7920 more than once"
-  pure (PresentationSites branch waitSite finishSite)
+  pure (sites branch)
   where
     ownedSite = withObject "presentation instruction" $ \fields ->
       PresentationInstruction <$> (fields .: "pc" >>= packageWord) <*> (fields .: "word" >>= packageWord)
@@ -234,7 +238,9 @@ presentationSitesArguments configured =
   [ "--presentation-sites", C.unpack (BL.toStrict (encode (object
     [ "published_enter" .= hexAddress (publishedEnter configured)
     , "after_wait" .= siteJson (ownedAfterWait configured)
-    , "finish" .= siteJson (ownedFinish configured) ]))) ]
+    , "finish" .= siteJson (ownedFinish configured)
+    , "hand_off_return" .= siteJson (ownedHandOffReturn configured)
+    , "front_store" .= siteJson (ownedFrontStore configured) ]))) ]
   where siteJson owned = object ["pc" .= hexAddress (presentationPc owned), "word" .= hexAddress (presentationWord owned)]
 
 -- | A bank Rust archive built with the owned controller-75 table, and the

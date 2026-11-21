@@ -40,34 +40,53 @@ pub struct OwnedInstruction { pub pc: HexWord, pub word: HexWord }
 const OWNED_AFTER_WAIT: u32 = 0xe1a0_4000;
 /// `mov r0, r4`, after the owned unlock.
 const OWNED_FINISH: u32 = 0xe1a0_0004;
+/// `pop {r4, pc}`, the owned hand-off call's return address.
+pub const OWNED_HAND_OFF_RETURN: u32 = 0xe8bd_8010;
+/// `strb r2, [r3, #0x160]`, the stock word at `0x006d7d44`.
+pub const OWNED_FRONT_STORE: u32 = 0xe5c3_2160;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OwnedSitesFields { published_enter: HexWord, after_wait: OwnedInstruction, finish: OwnedInstruction }
+struct OwnedSitesFields {
+    published_enter: HexWord, after_wait: OwnedInstruction, finish: OwnedInstruction,
+    hand_off_return: OwnedInstruction, front_store: OwnedInstruction,
+}
 
-/// The render-frame package's branch published over stock Enter, and its owned AfterWait and Finish instructions.
+/// The render-frame package's branch published over stock Enter, its owned AfterWait and Finish instructions, and
+/// its owned stage-0 publication sites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "OwnedSitesFields")]
-pub struct OwnedSites { published_enter: u32, after_wait: u32, finish: u32 }
+pub struct OwnedSites { published_enter: u32, after_wait: u32, finish: u32, publication: OwnedPublication }
+
+/// The owned counterparts of the stock stage-0 hand-off callers `0x006d7b3c`/`0x006d7c24`/`0x006d7d10` (the
+/// hand-off's return address) and of the front-byte store `0x006d7d44` (r2 = the incremented byte).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnedPublication { pub hand_off_return: u32, pub front_store: u32 }
+
 impl TryFrom<OwnedSitesFields> for OwnedSites {
     type Error = &'static str;
     fn try_from(fields: OwnedSitesFields) -> Result<Self, &'static str> {
-        let OwnedSitesFields { published_enter: HexWord(published_enter), after_wait, finish } = fields;
+        let OwnedSitesFields { published_enter: HexWord(published_enter), after_wait, finish, hand_off_return, front_store } = fields;
         if published_enter >> 24 != 0xea { return Err("published presentation entry is not an A32 B"); }
         if after_wait.word.0 != OWNED_AFTER_WAIT { return Err("owned presentation wait is not mov r4, r0"); }
         if finish.word.0 != OWNED_FINISH { return Err("owned presentation finish is not mov r0, r4"); }
-        let (after_wait, finish) = (after_wait.pc.0, finish.pc.0);
-        if after_wait % 4 != 0 || finish % 4 != 0 { return Err("owned presentation site is not word-aligned"); }
-        if after_wait == finish || Site::at(after_wait).is_some() || Site::at(finish).is_some() {
+        if hand_off_return.word.0 != OWNED_HAND_OFF_RETURN { return Err("owned hand-off return is not pop {r4, pc}"); }
+        if front_store.word.0 != OWNED_FRONT_STORE { return Err("owned front store is not strb r2, [r3, #0x160]"); }
+        let pcs = [after_wait.pc.0, finish.pc.0, hand_off_return.pc.0, front_store.pc.0];
+        if pcs.iter().any(|pc| pc % 4 != 0) { return Err("owned presentation site is not word-aligned"); }
+        let repeated = pcs.iter().enumerate().any(|(index, pc)| pcs[..index].contains(pc));
+        if repeated || pcs.iter().any(|pc| Site::at(*pc).is_some()) {
             return Err("owned presentation sites overlap");
         }
-        Ok(Self { published_enter, after_wait, finish })
+        let publication = OwnedPublication { hand_off_return: hand_off_return.pc.0, front_store: front_store.pc.0 };
+        Ok(Self { published_enter, after_wait: after_wait.pc.0, finish: finish.pc.0, publication })
     }
 }
 impl OwnedSites {
     fn owned(self) -> [(Site, u32, u32); 2] {
         [(Site::AfterWait, self.after_wait, OWNED_AFTER_WAIT), (Site::Finish, self.finish, OWNED_FINISH)]
     }
+    pub fn publication(self) -> OwnedPublication { self.publication }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Core { Primary, Secondary }
@@ -297,7 +316,17 @@ mod tests {
 
     fn configuration(published: &str, wait: (&str, &str), finish: (&str, &str)) -> serde_json::Value {
         serde_json::json!({"published_enter": published, "after_wait": {"pc": wait.0, "word": wait.1},
-            "finish": {"pc": finish.0, "word": finish.1}})
+            "finish": {"pc": finish.0, "word": finish.1},
+            "hand_off_return": {"pc": "0x04001100", "word": "0xe8bd8010"},
+            "front_store": {"pc": "0x04001140", "word": "0xe5c32160"}})
+    }
+    fn with_site(mut value: serde_json::Value, name: &str, site: Option<(&str, &str)>) -> serde_json::Value {
+        let fields = value.as_object_mut().unwrap();
+        match site {
+            Some((pc, word)) => { fields.insert(name.into(), serde_json::json!({"pc": pc, "word": word})); }
+            None => { fields.remove(name); }
+        }
+        value
     }
     fn owned_tracker() -> Tracker {
         let value = configuration("0xea012345", ("0x04001000", "0xe1a04000"), ("0x4001080", "0xe1a00004"));
@@ -363,9 +392,15 @@ mod tests {
         assert!(configured.site(0x006d_7da4, MOV_R4_R0).is_err());
     }
     #[test]
+    fn the_owned_publication_sites_are_the_configured_addresses() {
+        let sites: OwnedSites = serde_json::from_value(configuration("0xea012345", ("0x04001000", "0xe1a04000"), ("0x04001080", "0xe1a00004"))).unwrap();
+        assert_eq!(sites.publication(), OwnedPublication { hand_off_return: 0x0400_1100, front_store: 0x0400_1140 });
+    }
+    #[test]
     fn malformed_owned_site_configurations_are_refused() {
         let wait = ("0x04001000", "0xe1a04000");
         let finish = ("0x04001080", "0xe1a00004");
+        let valid = configuration("0xea012345", wait, finish);
         for value in [
             configuration("0xe92d49f0", wait, finish),
             configuration("ea012345", wait, finish),
@@ -376,11 +411,18 @@ mod tests {
             configuration("0xea012345", wait, ("0x04001000", "0xe1a00004")),
             configuration("0xea012345", ("0x006d7da4", "0xe1a04000"), finish),
             configuration("0xea012345", wait, ("0x006d7920", "0xe1a00004")),
-            serde_json::json!({"published_enter": "0xea012345", "after_wait": {"pc": wait.0, "word": wait.1}}),
-            serde_json::json!({"published_enter": "0xea012345", "after_wait": {"pc": wait.0, "word": wait.1},
-                "finish": {"pc": finish.0, "word": finish.1}, "extra": 1}),
+            with_site(valid.clone(), "finish", None),
+            with_site(valid.clone(), "hand_off_return", None),
+            with_site(valid.clone(), "front_store", None),
+            with_site(valid.clone(), "hand_off_return", Some(("0x04001100", "0xe8bd8000"))),
+            with_site(valid.clone(), "front_store", Some(("0x04001140", "0xe5c32161"))),
+            with_site(valid.clone(), "front_store", Some(("0x04001100", "0xe5c32160"))),
+            with_site(valid.clone(), "front_store", Some(("0x04001142", "0xe5c32160"))),
+            with_site(valid.clone(), "hand_off_return", Some(("0x006d7df4", "0xe8bd8010"))),
+            with_site(valid.clone(), "extra", Some(("0x04001200", "0xe1a00000"))),
         ] {
             assert!(serde_json::from_value::<OwnedSites>(value.clone()).is_err(), "{value}");
         }
+        assert!(serde_json::from_value::<OwnedSites>(valid).is_ok());
     }
 }
