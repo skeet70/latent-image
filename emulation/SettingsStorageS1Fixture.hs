@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module SettingsStorageS1Fixture
-  ( s1ApplicationHits, s1ReplayFrame, s1Mutations, s1ComparisonMutations
+  ( s1ApplicationHits, s1ReplayFrame, s1Mutations, s1ComparisonMutations, s1ResidueMutation, s1UntracedDequeueCaller
   ) where
 
 import Data.Aeson (Value(..), toJSON)
@@ -19,22 +19,11 @@ import SettingsStorageFixtureWire
 s1ReplayFrame :: B.ByteString
 s1ReplayFrame = littleWords [7,0,0] <> B.pack [12..79]
 
+-- | The observed SHOOTING MENU half press: an action other than 161 enqueues the retained frame.
 s1ApplicationHits :: Role -> [Value]
 s1ApplicationHits role =
-  [ at S1ActionEntry [] top 0xbfb0cc [s1ReplayFrame]
-  , at S1GuardCall [0x53] action 0xbfb0cc []
-  , at S1GuardResult [0] action 0xc77ba0 []
-  , at S1RequestCall [2,0x1d] action 0xc77ba0 []
-  , at S1DispatchCall [] action 0xc77bb8 []
-  , at S1DispatchResult [2] action 0xc77bbc []
-  , at S1FlagCall [1] action 0xc77bbc []
-  , at S1FlagReturn [1,0,0xda84,frame] action 0xc77be8 [littleWords [1]]
-  , at S1ReplayCall [0,0,0xda84,frame] action 0xc77be8 []
-  , at S1FrameCopyCall [slot,frame,0x50,5] replay 15 [s1ReplayFrame,B.pack [1,0]]
+  [ at S1FrameCopyCall [slot,frame,0x50,5] replay 15 [s1ReplayFrame,B.pack [1,0]]
   , at S1FrameCopyReturn [slot+0x50,frame+0x50,0x50,0] replay 0xd34ed4 []
-  , at S1ReplayReturn [slot+0x50,frame+0x50,0x1401,0x1501] action 0xc77bf0 []
-  , at S1ActionReturnInstruction [2,frame+0x50,0x1401,0x1501] action 0xc77bf0 []
-  , at S1ActionReturned [2,frame+0x50,0x1401,0] top 0xc77bf0 []
   , at S1DequeueEntry [frame,queue] dequeue 0xd3ab20 [B.pack [0,0,1,0]]
   , at S1DequeueCopyCall [frame,slot,0x50,5] copying 0xd3ab20 []
   , at S1DequeueCopyReturn [frame+0x50,slot+0x50,0x50,0] copying 0xd34f6c [s1ReplayFrame]
@@ -70,8 +59,7 @@ s1ApplicationHits role =
           | current == S1DequeueCopyReturn = [(4,frame),(11,dequeue-4),(12,frame+0x50)]
           | current `elem` [S1DequeueCopyCall,S1DequeueSuccess,S1DequeueReturnInstruction] = [(4,frame),(11,dequeue-4)]
           | current `elem` [S1ApplicationKeyTest,S1ApplicationQualifierTest,S1ApplicationEventStore,S1ApplicationDispatch] = [(11,router+12)]
-          | current `elem` [S1FlagCall,S1FlagReturn,S1ReplayCall,S1ReplayReturn,S1ActionReturnInstruction] = [(4,2),(11,action+12)]
-          | current `elem` [S1GuardCall,S1GuardResult,S1RequestCall,S1DispatchCall,S1DispatchResult,S1ApplicationGuardCall,S1ApplicationGuardResult,S1ApplicationRouterCall,S1ApplicationRouterReturn] = [(11,action+12)]
+          | current `elem` [S1ApplicationGuardCall,S1ApplicationGuardResult,S1ApplicationRouterCall,S1ApplicationRouterReturn] = [(11,action+12)]
           | otherwise = []
 
 frame, queue, slot :: Word32
@@ -81,10 +69,7 @@ slot = queue + 0x50
 
 s1Mutations :: [(String,TraceMutation)]
 s1Mutations =
-  [ ("s1-action161-guard-rejected", argument S1GuardResult 0 1)
-  , ("s1-action161-status-rejected", argument S1DispatchResult 0 0)
-  , ("s1-action161-return-status", argument S1ActionReturned 0 0)
-  , ("s1-flag-not-set", memory S1FlagReturn [littleWords [0]])
+  [ ("s1-enqueue-absent", removeSite S1FrameCopyCall . removeSite S1FrameCopyReturn)
   , ("s1-source-exit-only", takeWhile (not . isSite S1DequeueEntry))
   , ("s1-replay-copy-length", argument S1FrameCopyCall 2 79)
   , ("s1-replay-copy-source", argument S1FrameCopyCall 1 (frame + 4))
@@ -95,7 +80,7 @@ s1Mutations =
   , ("s1-dequeue-success-absent", removeSite S1DequeueSuccess)
   , ("s1-dequeue-return-failure", argument S1DequeueReturned 0 0)
   , ("s1-dequeue-success-order", swapSites S1DequeueSuccess S1DequeueCopyReturn)
-  , ("s1-dequeue-before-replay", moveBefore S1DequeueEntry S1ReplayCall)
+  , ("s1-dequeue-before-replay", moveBefore S1DequeueEntry S1FrameCopyCall)
   , ("s1-application-guard-rejected", argument S1ApplicationGuardResult 0 0)
   , ("s1-application-key", argument S1ApplicationKeyTest 3 8)
   , ("s1-application-qualifier", argument S1ApplicationQualifierTest 3 0x80)
@@ -113,14 +98,25 @@ s1Mutations =
 s1ComparisonMutations :: [(String,TraceMutation)]
 s1ComparisonMutations =
   [ ("s1-m74-state", memory S1ApplicationDispatch [s1ReplayFrame,B.pack [4,0],B.pack [0,0]])
-  , ("s1-replay-tail-cross-role",
-      memory S1ActionEntry [changedFrameByte 79]
-      . memory S1FrameCopyCall [changedFrameByte 79,B.pack [1,0]]
-      . memory S1DequeueCopyReturn [changedFrameByte 79]
-      . memory S1ApplicationRouterCall [changedFrameByte 79,B.pack [3,0]]
-      . memory S1ApplicationDispatch [changedFrameByte 79,B.pack [3,0],B.pack [0,0]])
-  , ("s1-entry-tail-cross-role", memory S1ActionEntry [changedFrameByte 79])
+  , ("s1-posted-word1-cross-role", everyFrameCopy 4)
   ]
+
+-- | One role's frame differing only at residue byte 0x20, in every copy.
+s1ResidueMutation :: TraceMutation
+s1ResidueMutation = everyFrameCopy 0x20
+
+everyFrameCopy :: Int -> TraceMutation
+everyFrameCopy index =
+  memory S1FrameCopyCall [changedFrameByte index,B.pack [1,0]]
+  . memory S1DequeueCopyReturn [changedFrameByte index]
+  . memory S1ApplicationRouterCall [changedFrameByte index,B.pack [3,0]]
+  . memory S1ApplicationDispatch [changedFrameByte index,B.pack [3,0],B.pack [0,0]]
+
+-- | Two dequeue entries from stock's second caller, whose return 0xd3ad78 is not a traced site.
+s1UntracedDequeueCaller :: TraceMutation
+s1UntracedDequeueCaller hits = case break (isSite S1DequeueEntry) hits of
+  (before,entry:after) -> let other = wireField ["lr"] (toJSON (hex 0xd3ad78)) entry in before ++ [other,other,entry] ++ after
+  _ -> error "S1 trace has no dequeue entry"
 
 changedFrameByte :: Int -> B.ByteString
 changedFrameByte index = B.take index s1ReplayFrame <> B.singleton (B.index s1ReplayFrame index `xor` 1) <> B.drop (index+1) s1ReplayFrame

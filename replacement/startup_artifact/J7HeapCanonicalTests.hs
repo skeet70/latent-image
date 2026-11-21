@@ -30,7 +30,7 @@ import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers, contractValue, record5Media)
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
-import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets, composedSegments, ownedOf, fatalReportCycle, indirectOf, stockCodeOfEvidence, refusalCycle)
+import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets, composedSegments, ownedOf, fatalReportCycle, indirectOf, taskIndirectOf, stockCodeOfEvidence, refusalCycle)
 import qualified Replacement.StartupArtifact.StackBounds as SB
 import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.PlainLoad.Admission as PLA
@@ -301,11 +301,23 @@ main = do
   ok "the callback words task 33 and task 72 call close: 0x829a0c holds 0x72b210 or 0x72b318, 0x890f14 holds 0x890ee8"
     (closed 0x829a0c == Just [0x72b210, 0x72b318] && closed 0x890f14 == Just [0x890ee8])
   ok "the message-trace callback word 0x4089ea94 stays open" (closed 0x4089ea94 == Nothing)
+  -- Published task stacks: replacement/task_constructors/src.rs and reports/replacement-inventory-baseline.md task33/72/73 rows.
+  let tasks :: [(Int, Word32, Integer)]
+      tasks = [ (1,0xc22f60,0xc00), (2,0xec2668,0x1000), (3,0xe00a80,0x1000), (4,0x1215480,0x1000), (7,0xecc058,0xc00)
+              , (33,0x1109130,0x1000), (35,0xed2ce0,0xc00), (36,0xd81218,0xc00), (43,0xf01bc8,0x1000), (55,0x106ceec,0xc00)
+              , (56,0x1071ca4,0x1400), (62,0x1064224,0x1000), (64,0x1054cf4,0xc00), (72,0x892110,0xc00), (73,0x6d7540,0x1000)
+              , (80,0x69f0e0,0xc00) ]
+      heapEntries = [0x89cda4, 0x89cde4, 0x89cdc4, 0x89e560, 0x89da3c, 0x89da64, 0x89e464, 0xbf1c1c, 0xbf1c44]
+      -- The declared target sets the composition's bytes close; the others name why they stay open.
+      declaredClosed evidence' = do
+        (declared, open) <- maybe (H.failH "no task indirect targets") pure (taskIndirectOf evidence')
+        putStrLn ("declared sites open: " ++ show [(showHex site "", reason) | (site, reason) <- open])
+        pure ([site | (site, SS.CallbackSite _ SS.DeclaredTargetsClosed) <- M.toList (SS.callbackSites declared)], map fst open)
   case suppliedOf evidence of
     Nothing -> H.failH "suppliedOf refused on the J7 composition"
     Just supplied -> do
       let depthOf entry = (\(SS.StackDepth bytes) -> toInteger bytes) <$> M.lookup entry supplied
-          owned = [(0x89cda4, 536), (0x89cde4, 536), (0x89cdc4, 472), (0x89e560, 472), (0x89da3c, 544), (0x89da64, 544), (0x89e464, 456), (0xbf1c1c, 536), (0xbf1c44, 536)]
+          owned = [(0x89cda4, 464), (0x89cde4, 464), (0x89cdc4, 432), (0x89e560, 432), (0x89da3c, 464), (0x89da64, 464), (0x89e464, 432), (0xbf1c1c, 464), (0xbf1c44, 464)]
       putStrLn ("heap supplied depths: " ++ show [(entry, depthOf entry) | (entry, _) <- owned])
       let report name entries' = do
             results <- maybe (H.failH ("no depths for " ++ name)) pure (depthsIn evidence supplied entries')
@@ -328,13 +340,7 @@ main = do
       ok "heap-composed J6 owned supplies retain their pinned demands"
         (all (\(entry, bytes) -> depthOf entry == Just bytes)
           [(0x69cbf0,8),(0x69d160,16),(0x7235d8,128),(0x7236b0,128),(0x725dd8,456),(0x726098,40)])
-      -- Published task stacks: replacement/task_constructors/src.rs and reports/replacement-inventory-baseline.md task33/72/73 rows.
-      let tasks :: [(Int, Word32, Integer)]
-          tasks = [ (1,0xc22f60,0xc00), (2,0xec2668,0x1000), (3,0xe00a80,0x1000), (4,0x1215480,0x1000), (7,0xecc058,0xc00)
-                  , (33,0x1109130,0x1000), (35,0xed2ce0,0xc00), (36,0xd81218,0xc00), (43,0xf01bc8,0x1000), (55,0x106ceec,0xc00)
-                  , (56,0x1071ca4,0x1400), (62,0x1064224,0x1000), (64,0x1054cf4,0xc00), (72,0x892110,0xc00), (73,0x6d7540,0x1000)
-                  , (80,0x69f0e0,0xc00) ]
-          heapEntries = map fst owned
+      ok "the heap entries are the owned supplies" (heapEntries == map fst owned)
       walks <- maybe (H.failH "no task-entry depths") pure (depthsIn evidence supplied [entry | (_, entry, _) <- tasks])
       let headroom = [ (task, entry, stack, either (Left . show) (\walked -> let SS.StackDepth bytes = SS.reportDepth walked
                           in Right (any (`elem` heapEntries) (SS.reportSupplied walked), stack - toInteger bytes - 88)) result)
@@ -361,24 +367,10 @@ main = do
       -- Under S8 a nonzero SVC ends the path: the bounds cover the paths before a fatal report.
       excluding <- maybe (H.failH "no indirect targets") (\indirect -> pure indirect {SS.excludeFatalReports = True}) (indirectOf evidence)
       let walkExcluding starts = SS.stockDepths (stockCodeOfEvidence evidence) (SS.Supplied supplied) excluding SB.switchModel starts
-          nonFatal = walkExcluding [entry | (_, entry, _) <- tasks]
-      forM_ (zip tasks nonFatal) $ \((task, entry, stack), (_, result)) -> putStrLn ("heap task non-fatal bound under S8: task " ++ show task
-        ++ " entry 0x" ++ showHex entry "" ++ " stack " ++ show stack ++ ": " ++ either (("refused: " ++) . show)
-          (\walked -> let SS.StackDepth bytes = SS.reportDepth walked in "demand " ++ show bytes ++ ", headroom " ++ show (stack - toInteger bytes - 88)
-            ++ " after the 88-byte IRQ peak; heap entries reached " ++ show (filter (`elem` heapEntries) (SS.reportSupplied walked))
-            ++ "; conditions " ++ show (Set.toList (SS.reportConditions walked))) result)
-      -- Past the fatal report every walk stops at a register branch: the argument callback 0x6f16e0, the
-      -- message-trace word at 0x7250cc, callback tables indexed by a message or state (0xdf7594, 0xec09b4,
-      -- 0xec9bf8, 0xefcb58, 0x10548ec, 0xd80e68), object callback fields (0x106444c, 0x106d000, 0x10724b8,
-      -- 0x892c00), a callback list at a constant address (0x6d6fec), a return through a reloaded lr
-      -- (0x89bf08) and a plain-image call 0x11e8ca0.
-      let nonFatalRefusals = [ (1, 0x6f16e0), (2, 0xec09b4), (3, 0xdf7594), (4, 0x11e8ca0), (7, 0xec9bf8), (33, 0x7250cc)
-                             , (35, 0x7250cc), (36, 0xd80e68), (43, 0xefcb58), (55, 0x106d000), (56, 0x10724b8), (62, 0x106444c)
-                             , (64, 0x10548ec), (72, 0x892c00), (73, 0x6d6fec), (80, 0x89bf08) ]
-      ok "under S8 every task walk refuses at its pinned register branch, tasks 33, 36 and 72 at their S1-S7 constructs"
-        ([(task, either Just (const Nothing) result) | ((task, _, _), (_, result)) <- zip tasks nonFatal]
-          == [(task, Just (SS.UnresolvedBranch site)) | (task, site) <- nonFatalRefusals]
-          && all (\task -> fmap SS.UnresolvedBranch (lookup task nonFatalRefusals) == Just (pinned task)) [33, 36, 72])
+      (closedSites', openSites') <- declaredClosed evidence
+      ok "the declared message-trace, task-55 and task-62 sites close; the chart and task-35 declarations stay open"
+        (closedSites' == [0x7250cc, 0x106444c, 0x1064464, 0x106cfcc]
+          && openSites' == [0xed1494, 0xec0990, 0xec09b4, 0xdf7570, 0xdf7594, 0x11e8c7c, 0x11e8ca0, 0xec9bd4, 0xec9bf8, 0xefcb20, 0xefcb58, 0x10548bc, 0x10548ec, 0xd80e48, 0xd80e68])
       -- One fatal report, to the abort's first re-entry: the abort's own demand, the 64-byte handler
       -- frame and the reporter's demand with the nested report excluded. A measurement, not a bound on nesting.
       case walkExcluding [0x4d978, 0x40cac] of
@@ -388,17 +380,25 @@ main = do
             ++ " bytes below the abort's entry SP (abort " ++ show abort ++ ", handler 64, reporter " ++ show reporter ++ ")")
         results -> putStrLn ("fatal report to its first re-entry of 0x4d978: unmeasured, " ++ show [(showHex entry "", either show (const "bounded") result) | (entry, result) <- results])
       pure ()
-  -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the
-  -- J6 pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
+  -- The retained role's demands: the stock heap entries walked on canonical images 4 and 5, the J6
+  -- pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
   j6 <- either (H.failH . show) pure (compose registeredJoins source j6Pieces)
   let stockEvidence = JoinEvidence targets targets parts (compositionPieces j6)
-  case suppliedOf stockEvidence >>= \supplied -> depthsIn stockEvidence supplied [0x89cda4, 0x89cdc4, 0x89cde4, 0x89e560] of
+      stockPinned = [(0x89cda4, 504), (0x89cde4, 496), (0x89cdc4, 464), (0x89e560, 456), (0x89da3c, 552), (0x89da64, 544), (0x89e464, 432), (0xbf1c1c, 512), (0xbf1c44, 504)]
+      bytesOf report = let SS.StackDepth bytes = SS.reportDepth report in toInteger bytes
+  ownedSupplied <- maybe (H.failH "suppliedOf refused on the J7 composition") pure (suppliedOf evidence)
+  case suppliedOf stockEvidence >>= \supplied -> depthsIn stockEvidence supplied (map fst stockPinned) of
     Nothing -> H.failH "no supplied depths or indirect targets for the stock heap walk"
     Just results -> do
-      putStrLn ("stock heap depths: " ++ show [(entry, fmap (\report -> let SS.StackDepth bytes = SS.reportDepth report in bytes) result) | (entry, result) <- results])
-      ok "stock malloc, free, _malloc_r and _free_r have their pinned bounded depths on canonical code"
-        ([(entry, either (const Nothing) (\report -> let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)) result) | (entry, result) <- results]
-          == [(0x89cda4, Just 504), (0x89cdc4, Just 464), (0x89cde4, Just 496), (0x89e560, Just 456)])
+      let stock = [(entry, either (const Nothing) (Just . bytesOf) result) | (entry, result) <- results]
+      putStrLn ("stock heap depths: " ++ show [(showHex entry "", either show (show . bytesOf) result) | (entry, result) <- results])
+      ok "every stock heap entry has its pinned bounded depth on canonical code"
+        (stock == [(entry, Just bytes) | (entry, bytes) <- stockPinned])
+      forM_ stock $ \(entry, stockBytes) -> do
+        let ownedBytes = (\(SS.StackDepth bytes) -> toInteger bytes) <$> M.lookup entry ownedSupplied
+        putStrLn ("heap entry 0x" ++ showHex entry "" ++ ": owned " ++ show ownedBytes ++ ", stock " ++ show stockBytes)
+        ok ("owned heap entry 0x" ++ showHex entry "" ++ " is no deeper than its stock counterpart")
+          (((<=) <$> ownedBytes <*> stockBytes) == Just True)
 
   -- Staging and the contract.
   (dat, observed) <- stageComposition tools scratch source j7

@@ -848,14 +848,14 @@ forceRun run =
     forceEvents = foldr (\event rest -> event `seq` rest) ()
 
 data Difference
-  = StatusDiffers RunnerStatus RunnerStatus
-  | RegisterDiffers Register Word32 Word32
-  | MemoryDiffers RegionId
+  = StatusDiffers !RunnerStatus !RunnerStatus
+  | RegisterDiffers !Register !Word32 !Word32
+  | MemoryDiffers !RegionId
   | WritesDiffer
   | ReferenceTruncated
   | SubjectTruncated
-  | ReferenceWriteProjectionFailed WriteProjectionError
-  | SubjectWriteProjectionFailed WriteProjectionError
+  | ReferenceWriteProjectionFailed !WriteProjectionError
+  | SubjectWriteProjectionFailed !WriteProjectionError
   | -- | The model reads or writes outside the fixture for this case.
     ModelOutsideFixture
   deriving (Eq, Show)

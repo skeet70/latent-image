@@ -32,6 +32,7 @@ impl<A: HeapAccess> StockBridge<A> {
         Self { access }
     }
 
+    #[inline(always)]
     fn finish(&self, result: Result<NonNull<u8>, HeapError>) -> Result<Option<NonNull<u8>>, HeapError> {
         match result {
             Ok(payload) => Ok(Some(payload)),
@@ -43,6 +44,7 @@ impl<A: HeapAccess> StockBridge<A> {
         }
     }
 
+    #[inline(always)]
     pub fn malloc(&self, bytes: u32) -> Result<Option<NonNull<u8>>, HeapError> {
         let request = match StockRequest::parse(bytes, self.access.capacity()) {
             Ok(request) => request,
@@ -51,6 +53,7 @@ impl<A: HeapAccess> StockBridge<A> {
         self.finish(self.access.with_heap(|heap| unsafe { heap.allocate_stock(request) }))
     }
 
+    #[inline(always)]
     pub fn calloc(&self, count: u32, bytes: u32) -> Result<Option<NonNull<u8>>, HeapError> {
         let Some(product) = count.checked_mul(bytes) else {
             return self.finish(Err(HeapError::OutOfMemory));
@@ -64,6 +67,7 @@ impl<A: HeapAccess> StockBridge<A> {
 
     /// # Safety
     /// `old`, when present, must point to readable arena memory.
+    #[inline(always)]
     pub unsafe fn realloc(&self, old: Option<NonNull<u8>>, bytes: u32) -> Result<Option<NonNull<u8>>, HeapError> {
         let request = match StockRequest::parse(bytes, self.access.capacity()) {
             Ok(request) => request,
@@ -74,6 +78,7 @@ impl<A: HeapAccess> StockBridge<A> {
 
     /// # Safety
     /// `payload`, when present, must point to readable arena memory.
+    #[inline(always)]
     pub unsafe fn free(&self, payload: Option<NonNull<u8>>) -> Result<(), HeapError> {
         if payload.is_none() {
             return Ok(());
@@ -81,6 +86,7 @@ impl<A: HeapAccess> StockBridge<A> {
         self.access.with_heap(|heap| heap.free(payload))
     }
 
+    #[inline(always)]
     pub fn trim(&self, _pad: u32) -> u32 {
         self.access.with_heap(|_| 0)
     }
@@ -250,7 +256,7 @@ mod target {
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     unsafe fn acquire(context: u32) -> *mut Heap {
         xm1_heap_lock(context);
         let sentinel = ptr::addr_of_mut!(__heap_sentinel);
@@ -271,6 +277,9 @@ mod target {
             ARENA_END - GUARD_BYTES - POOL_START
         }
 
+        // Inlined with the bridge into each core entry, so the retained lock runs from the entry's own frame; the
+        // heap operations stay `#[inline(never)]`. J7HeapCanonicalTests requires every entry's depth <= stock's.
+        #[inline(always)]
         fn with_heap<T>(&self, operation: impl FnOnce(&mut Heap) -> T) -> T {
             unsafe {
                 let state = acquire(self.0);
@@ -293,6 +302,7 @@ mod target {
         &GLOBAL_ALLOCATOR
     }
 
+    #[inline(always)]
     fn result_pointer(result: Result<Option<NonNull<u8>>, HeapError>) -> u32 {
         match result {
             Ok(Some(payload)) => payload.as_ptr() as u32,

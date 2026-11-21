@@ -31,10 +31,15 @@ refuseSource source failure = do
     _ -> pure ()
   refuse failure
 
+-- | With `--unadmitted-retirement` the trapped image is staged while retired references remain;
+-- they are listed and recorded as the contract's retirement obligations.
 main :: IO ()
 main = do
   arguments <- getArgs
-  case arguments of
+  let flag = "--unadmitted-retirement"
+      authority = if flag `elem` arguments then UnadmittedRetirement else AdmittedRetirement
+      positional = filter (/= flag) arguments
+  case positional of
     [encoder, rebuild, decoder, datPath, image4Path, loaderAPath, loaderBPath, image5Path, plainPath, image2Path, linkedPath, symbolsPath, elfPath, scratchPath, outputPath, contractPath, image4OutputPath] -> do
       forM_ [outputPath, contractPath, image4OutputPath] $ \path -> doesPathExist path >>= \exists -> when exists (H.failH (path ++ " already exists"))
       dat <- H.readRegular (64 * 1024 * 1024) datPath
@@ -51,11 +56,16 @@ main = do
       let carrier@(Carrier (GuestAddress low) (GuestAddress high)) = stage4Carrier
       putStrLn ("carrier [0x" ++ showHex low "" ++ ", 0x" ++ showHex high "" ++ ")")
       artifact <- either refuse pure (derivePublicArtifact ProductionArtifact (sourceProperties source) carrier (ArtifactInput linked symbols elf))
-      staged <- either (refuseSource source) pure (stageNativeImage4 source artifact)
+      staged <- either (refuseSource source) pure (stageNativeImage4 authority source artifact)
+      let obligations = nativeRetiredReferences source
+      when (authority == UnadmittedRetirement) $ do
+        mapM_ (putStrLn . hitListing) obligations
+        mapM_ (putStrLn . show) (sourceRetainedFieldEvidence source obligations)
+        putStrLn ("retirement not admitted: " ++ show (length obligations) ++ " retained references unresolved")
       createDirectoryIfMissing True scratchPath
       scratch <- Image4.validateScratchDirectory scratchPath
       candidate <- stageCandidate (Image4.Tools encoder rebuild decoder) scratch staged
       B.writeFile image4OutputPath (stagedBytes staged)
       B.writeFile outputPath (candidateBytes candidate)
       L.writeFile contractPath (J.encode (publicCandidateContractValue candidate) <> "\n")
-    _ -> H.failH "usage: stage-property-service-public ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 LOADER_A LOADER_B IMAGE5 PLAIN IMAGE2 LINKED_BIN SYMBOLS LINKED_ELF SCRATCH_DIR OUT_DAT OUT_CONTRACT OUT_IMAGE4"
+    _ -> H.failH "usage: stage-property-service-public ENCODER REBUILD DECODER SOURCE_DAT IMAGE4 LOADER_A LOADER_B IMAGE5 PLAIN IMAGE2 LINKED_BIN SYMBOLS LINKED_ELF SCRATCH_DIR OUT_DAT OUT_CONTRACT OUT_IMAGE4 [--unadmitted-retirement]"

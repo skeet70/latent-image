@@ -17,6 +17,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.Host (get)
 import qualified OracleMain as Oracle
+import Replacement.PropertyService.Oracle (CaseLabel (..))
 import System.Directory (Permissions (..), canonicalizePath, createDirectory, createDirectoryIfMissing, doesPathExist, getPermissions, getTemporaryDirectory, removeDirectoryRecursive, removeFile, setPermissions)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose, openTempFile)
@@ -64,6 +65,14 @@ main = do
   check "execution defaults unchanged" . (== Oracle.ExecuteNative) =<< Oracle.executionMode []
   forM_ [["--rejudge-run-root"], ["--rejudge-run-root", ".", "--cache", "."], ["--rejudge-run-root", ".", "--batch-checkpoint", "1"]] $ \arguments ->
     refused "offline mode refuses fallback options" (Oracle.executionMode arguments)
+  withFixture $ \_ _ _ fresh -> do
+    let path = fresh </> "stock.native-result.json"
+    B.writeFile path "{\"runner\":{\"instructions\":40,\"status\":\"returned\",\"trace\":[{\"pc\":\"0x61e110\"},{\"pc\":\"0x61e114\"},{\"pc\":\"0x1000\"}],\"memory_provenance\":[{\"pc\":\"0x61e118\"}]}}"
+    row <- Oracle.stockCaseRow path (CaseLabel "p001-get") 0x61e110 []
+    check "a stock case row reports the getter extent's evidence" (row == object
+      [ "id" .= text "p001-get", "entry" .= text "0x61e110", "extent" .= (0x6510 :: Int)
+      , "stock_trace_instructions" .= (2 :: Int), "stock_provenance_instructions" .= (1 :: Int), "stock_instructions_inside" .= (3 :: Int)
+      , "stock_instructions" .= (40 :: Int), "stock_status" .= text "returned", "differences" .= ([] :: [String]) ])
   withFixture $ \root runner inputs fresh -> do
     frozen <- loadFrozenRun root runner inputs
     observed <- observeFrozen frozen fresh [CaseId "offline"]

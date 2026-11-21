@@ -13,6 +13,10 @@ FILE_SERVICE_CONTROLS = [
     "intercept_keeps_callback",
     "media_task_no_busy",
     "media_task_worker_row",
+    "close_keeps_tag",
+    "open_failure_keeps_pair",
+    "write_index_unstored",
+    "flagged_close_unmarked",
 ]
 
 def file_service_suffixes():

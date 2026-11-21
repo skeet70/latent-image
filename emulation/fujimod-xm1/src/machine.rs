@@ -439,6 +439,28 @@ impl Machine {
         self.gpio_press(key, GpioReleaseKey::Fn, pulse)
     }
 
+    /// Sets the POWER switch's MCU status bit to OFF.
+    pub fn switch_power_off(&mut self) -> Result<(), String> {
+        use fujimod_emulator_devices::capability::SerialStatus;
+        use crate::guest::POWER_SWITCH;
+        self.require_running()?;
+        let node = self.session.node(POWER_SWITCH.node)?;
+        let status = self.session.board.inspect_capability::<dyn SerialStatus, _>(node,
+            |serial| serial.status_value(POWER_SWITCH.route, POWER_SWITCH.register))?;
+        self.session.serial_status_input(POWER_SWITCH.node, POWER_SWITCH.route, POWER_SWITCH.register, status | POWER_SWITCH.off)
+    }
+
+    /// Whether core 0 is at the stock power-off terminal and that address holds `b .`.
+    pub fn at_power_off_terminal(&self) -> Result<bool, String> {
+        use crate::guest::POWER_OFF_TERMINAL;
+        if self.session.board.read_register(0, fujimod_emulator_cpu::Register::Pc)? != u64::from(POWER_OFF_TERMINAL) {
+            return Ok(false);
+        }
+        let mut word = [0; 4];
+        self.session.board.read_physical(u64::from(POWER_OFF_TERMINAL), &mut word)?;
+        Ok(u32::from_le_bytes(word) == 0xeaff_fffe)
+    }
+
     pub fn shutter(&mut self, stage: ShutterStage, pulse: KeyPulse) -> Result<Latch, String> {
         self.require_running()?;
         let key = self.document.firmware.shutter(&self.session, stage)?;
@@ -849,6 +871,42 @@ pub(crate) mod tests {
         let mut session = crate::run::open(&document, &update, &rom).unwrap();
         session.board.set_execution_policy(document.execution_policy.into()).unwrap();
         Machine::new(document, session).unwrap()
+    }
+
+    const NOP: u32 = 0xe1a0_0000;
+
+    fn power_status(machine: &Machine) -> u8 {
+        use crate::guest::POWER_SWITCH;
+        use fujimod_emulator_devices::capability::SerialStatus;
+        let node = machine.session.node(POWER_SWITCH.node).unwrap();
+        machine.session.board.inspect_capability::<dyn SerialStatus, _>(node,
+            |serial| serial.status_value(POWER_SWITCH.route, POWER_SWITCH.register)).unwrap()
+    }
+
+    fn code_at(machine: &Machine, address: u32, words: &[u32]) {
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        machine.session.board.write_physical(u64::from(address), &bytes).unwrap();
+    }
+
+    #[test]
+    fn power_off_sets_only_the_mcu_off_bit() {
+        let mut machine = machine();
+        let before = power_status(&machine);
+        assert_eq!(before & 1, 0);
+        machine.switch_power_off().unwrap();
+        assert_eq!(power_status(&machine), before | 1);
+    }
+
+    #[test]
+    fn the_power_off_terminal_requires_core_zero_at_its_self_branch() {
+        use fujimod_emulator_cpu::Register;
+        let machine = machine();
+        assert!(!machine.at_power_off_terminal().unwrap());
+        code_at(&machine, 0x00ec5818, &[SPIN]);
+        machine.session.board.write_register(0, Register::Pc, 0x00ec5818).unwrap();
+        assert!(machine.at_power_off_terminal().unwrap());
+        code_at(&machine, 0x00ec5818, &[NOP]);
+        assert!(!machine.at_power_off_terminal().unwrap());
     }
 
     #[test]

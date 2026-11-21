@@ -11,8 +11,8 @@
 //!   those of kinds `0xe`, `0xf`, 4 and 5, the seek of `0xa` and `0xb` on a
 //!   node of type other than 5 or 7;
 //! - kind 1 on a registered node other than `0x38`, with an id the `0xbfad04`
-//!   switch passes to its default arm (`0x13` among them), and on a node of
-//!   type 5 or 7 the `0xbfad04` push that follows;
+//!   switch passes to its default arm (`0x13` among them) or seek id `0x17`;
+//!   on a node of type 5 or 7 the `0xbfad04` push that follows;
 //! - kind `0x13` on the open node.
 //!
 //! Every node a push, pop, open or re-open opens (`0xbfa800`) needs 1..=`ROW_STATES`
@@ -244,8 +244,8 @@ pub enum NotOwned {
     EmptyNode,
     /// A `NodeRef` past the tree's nodes.
     TreeBounds,
-    /// An inner move of kinds 6..`0xb` that `0xbf9f44` takes as a page step
-    /// or refuses for a zero id.
+    /// An inner move of kinds 6..`0xb` or of kind 1's seek that `0xbf9f44`
+    /// takes as a page step or refuses for a zero id.
     InnerMove,
 }
 
@@ -352,8 +352,11 @@ pub(crate) trait Rules {
     const CLOSE_CLEARS_MENU_OPEN: bool = true;
     /// The inner steps of kinds 6..`0xb` notify with id 0.
     const FRAME_NOTIFY_ID_ZERO: bool = true;
-    /// Kinds `0xa` and `0xb` run `0xbfad04`'s seek loop.
+    /// Kinds `0xa` and `0xb` and kind 1 with id `0x17` run `0xbfad04`'s seek
+    /// loop.
     const SEEK_STEPS: bool = true;
+    /// The seek loop compares the cursor row's token with its target.
+    const SEEK_TESTS_FIRST: bool = true;
     /// `0xbfa800` asks no availability on a node with fixed availability.
     const FIXED_UNQUERIED: bool = true;
     /// `0xbf9a5c(0x7a)` writes property `0x285`.
@@ -763,10 +766,10 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.services.kind_switch(&mut self.state, call)
     }
 
-    /// `0xbfad04` after a delegated open, push or pop that succeeded. Its
-    /// arms other than the default return 1 here unless the open node has
-    /// type 5 or 7; stock then runs it.
-    fn seek_framed(
+    /// `0xbfad04` after a delegated open, push or pop that succeeded. Unless
+    /// the open node has type 5 or 7 or the call takes the seek loop, it
+    /// returns 1 here; stock then runs it.
+    fn seek_delegated(
         &mut self,
         kind: StageKind,
         node: StageNode,
@@ -775,13 +778,32 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         target: StageExtra,
     ) -> Result<EngineResult, NotOwned> {
         let current = self.current()?;
-        if !framed(current) {
+        if !framed(current) && !(kind == StageKind::Open && seek == StageId::SEEK) {
             return Ok(EngineResult::Accepted);
         }
         self.called = true;
         self.delegated = true;
         let call = SeekCall { kind, node, node_type: current.node_type, id, seek, target };
         Ok(self.services.seek(&mut self.state, call))
+    }
+
+    /// `0xbfad04`'s loop for seek id `0x17` (all.c:331649-331670): up to
+    /// total-rows times, stop when the cursor row's token equals `target`,
+    /// otherwise `0xbf9f44(4, node, 1)`. The result is the last move's.
+    fn seek_rows(&mut self, node_word: StageNode, target: StageExtra) -> Result<EngineResult, NotOwned> {
+        let total = self.state.total.get();
+        let mut result = EngineResult::Accepted;
+        if !R::SEEK_STEPS {
+            return Ok(result);
+        }
+        for step in 0..total {
+            let found = Self::token_at(self.current()?, self.state.live.cursor)?.get() == target.get();
+            if found && (R::SEEK_TESTS_FIRST || step != 0) {
+                break;
+            }
+            result = self.move_rows(Direction::Down, node_word, StepCount::new(1))?;
+        }
+        Ok(result)
     }
 
     /// `0xbfad04`'s arm for an open node of type 5 or 7 (all.c:331620-331625):
@@ -929,7 +951,8 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         NodeIndex::parse(node.get()).ok_or(NotOwned::StageNode)
     }
 
-    /// `0xbf9f44`'s arm for an inner move of kinds 6..`0xb` is a row step.
+    /// `0xbf9f44`'s arm for an inner move of kinds 6..`0xb` or of kind 1's
+    /// seek is a row step.
     fn check_inner_move(node: &Node, node_word: StageNode, id: StageId) -> Result<(), NotOwned> {
         if id.get() == 0 || (node.rows_per_page.get() == id.get() && node_word.get() != 0) {
             return Err(NotOwned::InnerMove);
@@ -1250,7 +1273,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         let current = self.current()?;
         let landed = StageNode::from(current.id);
         if self.delegated {
-            return self.seek_framed(switch.kind(), landed, id, StageId::NO_SEEK, StageExtra::new(0));
+            return self.seek_delegated(switch.kind(), landed, id, StageId::NO_SEEK, StageExtra::new(0));
         }
         if !framed(current) {
             return Ok(EngineResult::Accepted);
@@ -1351,7 +1374,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 }
                 let rows = Self::rows(source)?;
                 let total = self.state.total.get();
-                let zero_step = total == 0 || Self::token_at(source, entry.cursor)?.get() == extra.get();
+                let zero_step = total == 0 || (R::SEEK_TESTS_FIRST && Self::token_at(source, entry.cursor)?.get() == extra.get());
                 if zero_step {
                     self.check_push_move_pop(None, node_word, id)?;
                 } else {
@@ -1360,17 +1383,8 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                         self.check_push_move_pop(Some(row.child), node_word, id)?;
                     }
                 }
-                if R::SEEK_STEPS && total != 0 {
-                    let mut result = EngineResult::Accepted;
-                    for _ in 0..total {
-                        if Self::token_at(self.current()?, self.state.live.cursor)?.get() == extra.get() {
-                            break;
-                        }
-                        result = self.move_rows(Direction::Down, node_word, StepCount::new(1))?;
-                    }
-                    if result != EngineResult::Accepted {
-                        return Ok(EngineResult::Rejected);
-                    }
+                if self.seek_rows(node_word, extra)? != EngineResult::Accepted {
+                    return Ok(EngineResult::Rejected);
                 }
                 if !self.switch_node(Switch::Push, node_word, Direction::Down, notify_id)? {
                     return Ok(EngineResult::Rejected);
@@ -1420,7 +1434,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     /// Kind 1.
     #[inline]
     fn open(&mut self, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
-        if id.seeks() {
+        if id.seeks() && id != StageId::SEEK {
             return Err(NotOwned::EventClass);
         }
         if node_word == SEEK_CLASS_NODE {
@@ -1440,15 +1454,19 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Self::check_open(opened, self.state.live.cursor)?;
         if framed(opened) {
             self.check_follow_push(opened, 1)?;
+        } else if id == StageId::SEEK {
+            Self::check_inner_move(opened, node_word, StageId::new(1))?;
         }
         if self.open_rows(OpenMode::Open(StageKind::Open), node_word, Direction::Down)? {
             let current = self.current()?;
             self.notify(StageKind::Open, node_word, StageId::VALUE, current.class);
             let followed = if self.delegated {
-                self.seek_framed(StageKind::Open, node_word, StageId::VALUE, id, extra)?
+                self.seek_delegated(StageKind::Open, node_word, StageId::VALUE, id, extra)?
             } else if framed(current) {
                 let notify_id = if R::FRAMED_NOTIFY_ID { StageId::VALUE } else { id };
                 self.follow_framed(Switch::Push, node_word, notify_id)?
+            } else if id == StageId::SEEK {
+                self.seek_rows(node_word, extra)?
             } else {
                 EngineResult::Accepted
             };

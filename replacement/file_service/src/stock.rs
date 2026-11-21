@@ -62,10 +62,16 @@ impl HandleMemory for StockHandles {
         Pair { index: FileIndex(read_word(at)), tag: read_word(at + 4) }
     }
 
+    /// In stock's order: a bind (0x71ea8c) stores the tag first, an unbind (0x71eafc) the index.
     fn set_pair(&mut self, slot: Slot, pair: Pair) {
         let at = MAP + 8 * slot.index() as u32;
-        write_word(at, pair.index.0);
-        write_word(at + 4, pair.tag);
+        if pair == Pair::FREE {
+            write_word(at, pair.index.0);
+            write_word(at + 4, pair.tag);
+        } else {
+            write_word(at + 4, pair.tag);
+            write_word(at, pair.index.0);
+        }
     }
 }
 

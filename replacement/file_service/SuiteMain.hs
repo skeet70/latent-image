@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Handles as Handles
 import qualified Replacement.FileService.Requests as Requests
+import qualified Replacement.FileService.Workers as Workers
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -54,6 +55,15 @@ increments =
             , ("close_async", 0x71c7bc), ("close_wait", 0x71c7e0), ("translate", 0x71d450)
             , ("media_ready", 0x71ddf0), ("post", 0x71fde4), ("media_task", 0x71fe7c)
             , ("route", 0x721578), ("intercept", 0x7217f0)
+            ]
+        ]
+    )
+  , ( "workers"
+    , Increment Workers.code Workers.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("open_worker", 0x7115a4), ("write_worker", 0x7116e4), ("close_worker", 0x711768)
+            , ("close_entry_worker", 0x711840), ("seek_worker", 0x71eca4), ("release_worker", 0x71f134)
             ]
         ]
     )

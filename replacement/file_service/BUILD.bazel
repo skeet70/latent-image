@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib")
 load(":controls.bzl", "FILE_SERVICE_CONTROLS", "file_service_suffixes")
 
@@ -13,6 +13,8 @@ _SOURCES = [
     "src/routing.rs",
     "src/stock.rs",
     "src/stock_requests.rs",
+    "src/stock_workers.rs",
+    "src/workers.rs",
 ]
 
 [xm1_rust_rlib(
@@ -29,7 +31,7 @@ _SOURCES = [
 
 genrule(
     name = "host-tests",
-    srcs = ["src/lib.rs", "src/routing_tests.rs", "src/tests.rs"] + _SOURCES,
+    srcs = ["src/lib.rs", "src/routing_tests.rs", "src/tests.rs", "src/workers_tests.rs"] + _SOURCES,
     outs = ["host-tests.passed"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
     tools = ["@lab_xm1_rust//:bin/rustc"],
@@ -41,6 +43,7 @@ haskell_library(
         "Replacement/FileService/Handles.hs",
         "Replacement/FileService/Native.hs",
         "Replacement/FileService/Requests.hs",
+        "Replacement/FileService/Workers.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
@@ -89,12 +92,33 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "payload",
+    srcs = ["Replacement/FileService/Payload.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = ["//host:base"],
+)
+
+haskell_test(
+    name = "payload-tests",
+    size = "small",
+    srcs = ["PayloadTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":payload",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_binary(
     name = "file-service-observe",
     srcs = ["ObserveMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     main_file = "ObserveMain.hs",
     deps = [
+        ":payload",
         "//emulation:case-sha256",
         "//emulation:emulator-usb",
         "//host:aeson",

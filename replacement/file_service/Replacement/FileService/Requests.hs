@@ -7,6 +7,7 @@
 module Replacement.FileService.Requests
   ( code
   , scenarios
+  , translation
   ) where
 
 import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))

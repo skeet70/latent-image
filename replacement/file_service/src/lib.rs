@@ -9,8 +9,13 @@ pub mod routing;
 pub mod stock;
 #[allow(unsafe_code)]
 pub mod stock_requests;
+#[allow(unsafe_code)]
+pub mod stock_workers;
+pub mod workers;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(test)]
+mod workers_tests;

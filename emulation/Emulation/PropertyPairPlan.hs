@@ -498,6 +498,8 @@ data Plan = Plan
   , planCarriers :: [PhysicalRange]
   , planReads :: M.Map Word32 [(Word32,Int)]
   , planBankBoundary :: Maybe StorageBoundaries.BankApplyBoundary
+  -- | Bank apply return sites that a non-linking branch in the images also targets.
+  , planApplyLandings :: S.Set Word32
   } deriving (Eq, Show)
 
 -- | The observer's `--reset-observation` document for the plan.
@@ -613,14 +615,19 @@ roleImage4 inputs = do
 branchLinks :: Word32 -> B.ByteString -> S.Set Word32 -> [(Word32, Word32)]
 branchLinks base bytes targets =
   [ (target, address + 4)
+  | (address, True, target) <- branchWords base bytes
+  , S.member target targets ]
+
+-- | Every aligned A32 `b` or `bl`, conditional or not: its address, whether it links, and its target.
+branchWords :: Word32 -> B.ByteString -> [(Word32, Bool, Word32)]
+branchWords base bytes =
+  [ (address, testBit word 24, address + 8 + fromIntegral (signed * 4))
   | offset <- [0, 4 .. B.length bytes - 4]
   , let word = word32At bytes offset
         address = base + fromIntegral offset
-  , word `shiftR` 28 /= 0xf && (word `shiftR` 24) .&. 0xf == 0xb
+  , word `shiftR` 28 /= 0xf && (word `shiftR` 25) .&. 0x7 == 0x5
   , let displacement = fromIntegral (word .&. 0xffffff) :: Int32
-        signed = if testBit displacement 23 then displacement .|. complement 0xffffff else displacement
-        target = address + 8 + fromIntegral (signed * 4)
-  , S.member target targets ]
+        signed = if testBit displacement 23 then displacement .|. complement 0xffffff else displacement ]
 
 derivePlan :: PlanInputs -> Either String Plan
 derivePlan inputs = do
@@ -682,6 +689,8 @@ derivePlan inputs = do
           protected = S.fromList (map fst guards)
           completed = [(site,StorageSite BankApplyReturn) | (base,bytes) <- images,(_,site) <- branchLinks base bytes roots,S.notMember site protected]
       pure ((target,StorageSite BankApplyEntry):completed)
+  let applyReturns = S.fromList [site | (site,StorageSite BankApplyReturn) <- bankApply]
+      applyLandings = S.fromList [target | (base,bytes) <- images,(_,False,target) <- branchWords base bytes,S.member target applyReturns]
   customRefresh <- case contractPublication contract of
     Nothing -> Right []
     Just publication -> do
@@ -703,6 +712,7 @@ derivePlan inputs = do
     , planStores = M.fromList stores
     , planCarriers = if role == RetainedRole then [] else carrier : maybe [] publicationCarriers (contractPublication contract)
     , planBankBoundary = bankBoundary
+    , planApplyLandings = applyLandings
     , planReads = case contractPublication contract of
         Nothing -> M.empty
         Just _ -> M.fromList [(address,ranges) | (address,label) <- M.toList sites
@@ -736,30 +746,46 @@ deriveStoragePlan inputs matrix = do
   forM_ added $ \(address,_) -> unless (M.notMember address (planSites plan)) (Left "storage lifecycle trace site collides with the property plan")
   pure plan {planSites=M.union (M.fromList added) (planSites plan),planReads=M.union (M.fromList readRanges) (planReads plan)}
 
+-- | The checked accessor stores. A property-only contract that names the raw bank/save accessors
+-- uses them; one without them uses the owned storage accessors in its carrier.
 storeSites :: Contract -> B.ByteString -> Either String [(Word32, StoreAccessor)]
 storeSites contract linked = case contractPublication contract of
-  Nothing -> legacyStoreSites contract linked
-  Just publication -> concat <$> forM [StorageByte,StorageHalf,CustomByte,CustomHalf,CustomWord,OutputByte,OutputHalf,StatusWord] (\accessor -> do
+  Nothing
+    | any ((`elem` map storeAccessorName [BankStore8,BankStore16,SaveStore8,SaveStore16]) . fst) (contractEntries contract) -> legacyStoreSites contract linked
+    | otherwise ->
+        checkedStoreSites contract (contractCarrierStart contract) [propertyCarrier] [StorageByte,StorageHalf,OutputByte,OutputHalf,StatusWord] linked
+  Just publication ->
+    checkedStoreSites contract image4Base (propertyCarrier : publicationCarriers publication) [StorageByte,StorageHalf,CustomByte,CustomHalf,CustomWord,OutputByte,OutputHalf,StatusWord] linked
+  where
+    propertyCarrier = PhysicalRange (contractCarrierStart contract) (contractCarrierEnd contract)
+
+-- | Each accessor's entries in `linked`, whose first byte is at `base`, with their exact encodings
+-- inside `carriers`.
+checkedStoreSites :: Contract -> Word32 -> [PhysicalRange] -> [StoreAccessor] -> B.ByteString -> Either String [(Word32, StoreAccessor)]
+checkedStoreSites contract base carriers accessors linked = concat <$> forM accessors (\accessor -> do
     let name = storeAccessorName accessor
         entries = [entry | (candidate,entry) <- contractEntries contract, candidate == name]
-        (expected,index) = case accessor of
-          StorageByte -> (StorageEncoding.storageStoreWords StorageEncoding.StorageByte,33)
-          StorageHalf -> (StorageEncoding.storageStoreWords StorageEncoding.StorageHalf,33)
-          CustomByte -> (customStoreWords CustomStoreByte,customStoreIndex CustomStoreByte)
-          CustomHalf -> (customStoreWords CustomStoreHalf,customStoreIndex CustomStoreHalf)
-          CustomWord -> (customStoreWords CustomStoreWord,customStoreIndex CustomStoreWord)
-          OutputByte -> (StorageEncoding.storageOutputWords StorageEncoding.StorageByte,7)
-          OutputHalf -> (StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,12)
-          StatusWord -> (StorageEncoding.storageStatusWords,2)
-          _ -> ([],0)
-        carriers = PhysicalRange (contractCarrierStart contract) (contractCarrierEnd contract) : publicationCarriers publication
+        (expected,indices) = case accessor of
+          StorageByte -> windowStores StorageEncoding.StorageByte
+          StorageHalf -> windowStores StorageEncoding.StorageHalf
+          CustomByte -> (customStoreWords CustomStoreByte,[customStoreIndex CustomStoreByte])
+          CustomHalf -> (customStoreWords CustomStoreHalf,[customStoreIndex CustomStoreHalf])
+          CustomWord -> (customStoreWords CustomStoreWord,[customStoreIndex CustomStoreWord])
+          OutputByte -> (StorageEncoding.storageOutputWords StorageEncoding.StorageByte,[7])
+          OutputHalf -> (StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,[12])
+          StatusWord -> (StorageEncoding.storageStatusWords,[2])
+          _ -> ([],[])
+        -- Each address window ends in its own store instruction.
+        windowStores width =
+          let encoded = StorageEncoding.storageStoreWords width
+          in (encoded,[index | (index,word) <- zip [0..] encoded, word == StorageEncoding.storageStoreWord width])
     unless (not (null entries) && length entries == S.size (S.fromList entries)) (Left (T.unpack name ++ ": missing or duplicate boundary instance"))
-    forM entries $ \entry -> do
+    concat <$> forM entries (\entry -> do
       let size = 4*length expected
-          offset = fromIntegral (entry-image4Base)
-      unless (entry >= image4Base && offset+size <= B.length linked && any (\region -> entry >= rangeStart region && toInteger entry+toInteger size <= toInteger (rangeEnd region)) carriers) (Left (T.unpack name ++ ": boundary outside admitted carriers"))
+          offset = fromIntegral (entry-base)
+      unless (entry >= base && offset+size <= B.length linked && any (\region -> entry >= rangeStart region && toInteger entry+toInteger size <= toInteger (rangeEnd region)) carriers) (Left (T.unpack name ++ ": boundary outside admitted carriers"))
       unless ([word32At linked (offset+word*4) | word <- [0..length expected-1]] == expected) (Left (T.unpack name ++ ": checked boundary encoding differs"))
-      pure (entry+fromIntegral (index*4),accessor))
+      pure [(entry+fromIntegral (index*4),accessor) | index <- indices]))
 
 legacyStoreSites :: Contract -> B.ByteString -> Either String [(Word32, StoreAccessor)]
 legacyStoreSites contract linked = forM [BankStore8,BankStore16,SaveStore8,SaveStore16] $ \accessor -> do

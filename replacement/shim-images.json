@@ -297,7 +297,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "df4353c2e84993108b598595bde0175631de337e636a784524a6d055497c47f7"
+      "expected_sha256": "6aba4849d29de7308d316178b4025b0fba526fd7d9e3c47c0bdcf9777351dcf4"
     },
     {
       "id": "//host/firmware:engine-elf-modal75-menu-engine-render",
@@ -378,7 +378,7 @@
         "xm1_stock_61d8a4",
         "xm1_stock_61df44"
       ],
-      "expected_sha256": "633b0a291b8d7af38e09a1c4a62253b55cee4af7a5a7e19044d35f6401a352e7"
+      "expected_sha256": "50e978d88ee720480c30f6eafe4d729a18355f2bd94ae455c9ef56379c77d8cb"
     },
     {
       "id": "//replacement/abi:pilot-image",
@@ -732,20 +732,37 @@
       ],
       "required_exports": [],
       "allowed_imports": [
+        "file_service_after_written_close",
         "file_service_cache_claim",
+        "file_service_cache_release",
         "file_service_copy_bytes",
         "file_service_copy_string",
         "file_service_current_task",
         "file_service_device_for_letter",
+        "file_service_directory_number",
+        "file_service_directory_slot",
+        "file_service_fs_close",
+        "file_service_fs_close_entry",
+        "file_service_fs_close_named",
+        "file_service_fs_open",
+        "file_service_fs_release",
+        "file_service_fs_seek",
+        "file_service_fs_write",
         "file_service_local_open",
         "file_service_local_position",
         "file_service_local_record",
+        "file_service_make_directory",
+        "file_service_media_refresh",
         "file_service_media_report",
+        "file_service_parse_path",
         "file_service_receive_request",
+        "file_service_register_written",
+        "file_service_rescan",
         "file_service_semaphore_signal",
         "file_service_semaphore_wait",
         "file_service_send",
         "file_service_sleep",
+        "file_service_split_path",
         "file_service_ticks",
         "file_service_wake",
         "scanout_enter_critical",
@@ -754,7 +771,7 @@
         "scanout_leave_critical",
         "scanout_yield"
       ],
-      "expected_sha256": "aeaa476c7746d4b21c4999644caa092ed8ad5af170701c23af1245fd2809c795"
+      "expected_sha256": "09666a2dafd66a0fed7249ba61a834717306af913bbb7d716d12be29c0aa6fbb"
     },
     {
       "id": "//replacement/fixed_image:probe-image",
@@ -787,7 +804,7 @@
         "__heap_retained_lock",
         "__heap_retained_unlock"
       ],
-      "expected_sha256": "09b755f4f1d8d6f487efb33554e9a20eab220d5ec0797f28f9040ce78803a3d1"
+      "expected_sha256": "33f15f6f794d63c32b4e88f4203ed9b2f9b4744b35ef09f4be4ff548d511fb31"
     },
     {
       "id": "//replacement/general_heap:general-heap-image",
@@ -804,7 +821,7 @@
         "__heap_retained_lock",
         "__heap_retained_unlock"
       ],
-      "expected_sha256": "c38a6034df692d3a1e5b0fcbd1ecbd781eef4a3bbb732e40481d5f6830ede3b2"
+      "expected_sha256": "1023e0cb0ff49239c40c398945f8e4bac18611c7c44e50debd4b9867a5eba209"
     },
     {
       "id": "//replacement/general_heap:general-heap-recipe-image",
@@ -821,7 +838,7 @@
         "__heap_retained_lock",
         "__heap_retained_unlock"
       ],
-      "expected_sha256": "c8781f9e7cb9e5666b840baa93df68ec913890af8266bc2c7cdcb7fa05b8fde7"
+      "expected_sha256": "0609b36f164aa9bca9d585cb6d4f6c220d17aee6542d8daa7275feee89655ef1"
     },
     {
       "id": "//replacement/idle_task:idle-task-image",

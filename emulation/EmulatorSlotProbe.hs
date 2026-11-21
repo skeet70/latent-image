@@ -42,6 +42,11 @@ main = run `catch` \failure -> do
           case limit of
             Right value -> putStrLn ("probe-memory-max " ++ unwords (words value))
             Left _ -> pure ()
+          high <- try (readFile ("/sys/fs/cgroup" ++ group ++ "/memory.high") >>= \text -> evaluate (length text) >> pure text)
+            :: IO (Either IOException String)
+          case high of
+            Right value -> putStrLn ("probe-memory-high " ++ unwords (words value))
+            Left _ -> pure ()
           swapLimit <- try (readFile ("/sys/fs/cgroup" ++ group ++ "/memory.swap.max") >>= \text -> evaluate (length text) >> pure text)
             :: IO (Either IOException String)
           case swapLimit of
