@@ -4727,7 +4727,7 @@
       "private-data/scratch/FileServiceWrite/runs/20261121T125550Z-file-service-requests/result/file-service-requests.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130052Z-file-service-playback-cardless/result/comparison-owned.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130052Z-file-service-playback-cardless/result/comparison-stock-2.json",
-      "private-data/scratch/FileServiceRead/runs/20261120T135330Z-file-service-observer-old-owned/result/comparison-owned.json",
+      "private-data/scratch/FileServiceWrite/runs/20261121T132447Z-file-service-observer-old-owned/result/comparison-owned.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-playback-card/result/comparison-owned.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-playback-card/result/comparison-stock-2.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-playback-card/result/comparison-owned-media-task-worker-row.json",
@@ -4859,7 +4859,7 @@
       },
       {
         "name": "old_owned_verdict",
-        "path": "private-data/scratch/FileServiceRead/runs/20261120T135330Z-file-service-observer-old-owned/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132447Z-file-service-observer-old-owned/result/comparison-owned.json",
         "pointer": [
           "verdict"
         ]
@@ -5023,10 +5023,10 @@
     "notes": "No emulated route reaches the write worker 0x2c19, close with entry update 0x2c1b, release 0x2c1d or a write-mode open; those are qualified natively only. Card sector bytes are not compared: the bridge keeps writes in an in-memory overlay with no export. The 0x2c04 posters 0x70f55c and 0x70f5f8 build the payload in an uninitialized stack frame and store only the callback +0, the strcpy path +4, the value +0x34 and the selector byte +0x38 (id4.dis:248924-249002); worker 0x711f58 reads +0, +0x34, +0x38 and the path through its terminator (id4.dis:251611-251706, 0x71d1b8 at 263027-263049), so the path bytes after the terminator and +0x39..+0x3b are masked. Stock post 0x71fde4 writes r3 at 0x71fdf0 and r1 at 0x71fe1c, and send 0x72503c writes r2 at 0x725058, so post's return r1..r3 are not compared. The workers fit main's fixed bank; fixed-image admission admits every body, the open worker at {{open_worker_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
     "artifacts": [
       "private-data/scratch/FileServiceWrite/runs/20261121T124755Z-file-service-workers/result/file-service-workers.json",
-      "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-stock-2.json",
-      "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned-close-keeps-tag.json",
-      "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned-media-task-worker-row.json",
+      "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
+      "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-stock-2.json",
+      "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned-close-keeps-tag.json",
+      "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned-media-task-worker-row.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-playback-card/result/comparison-owned.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-playback-card/result/comparison-owned-close-keeps-tag.json",
       "private-data/scratch/FileServiceWrite/runs/20261121T130009Z-file-service-write-stage/result/staging-owned.json",
@@ -5036,7 +5036,7 @@
     "facts": [
       {
         "name": "firmware_sha256",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "stock",
           "inputs",
@@ -5090,7 +5090,7 @@
       },
       {
         "name": "owned_dat_sha256",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "owned",
           "inputs",
@@ -5100,14 +5100,14 @@
       },
       {
         "name": "verdict",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "verdict"
         ]
       },
       {
         "name": "open_workers",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "entry_counts",
           "worker:0x2c17",
@@ -5117,7 +5117,7 @@
       },
       {
         "name": "seek_workers",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "entry_counts",
           "worker:0x2c1c",
@@ -5127,7 +5127,7 @@
       },
       {
         "name": "close_workers",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "entry_counts",
           "worker:0x2c1a",
@@ -5137,7 +5137,7 @@
       },
       {
         "name": "fs_open",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "entry_counts",
           "fs_open",
@@ -5147,7 +5147,7 @@
       },
       {
         "name": "fs_seek",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "entry_counts",
           "fs_seek",
@@ -5157,7 +5157,7 @@
       },
       {
         "name": "fs_close",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "entry_counts",
           "fs_close",
@@ -5167,7 +5167,7 @@
       },
       {
         "name": "accepted_writes",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "card",
           "owned",
@@ -5177,7 +5177,7 @@
       },
       {
         "name": "accepted_bytes",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "card",
           "owned",
@@ -5187,7 +5187,7 @@
       },
       {
         "name": "card_equal",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "card",
           "comparison",
@@ -5196,7 +5196,7 @@
       },
       {
         "name": "stock_interface_events",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "stock",
           "interface_events"
@@ -5204,7 +5204,7 @@
       },
       {
         "name": "owned_interface_events",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "owned",
           "interface_events"
@@ -5212,7 +5212,7 @@
       },
       {
         "name": "stock_watched_writes",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "stock",
           "watched_writes"
@@ -5220,7 +5220,7 @@
       },
       {
         "name": "owned_watched_writes",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "owned",
           "watched_writes"
@@ -5228,7 +5228,7 @@
       },
       {
         "name": "owned_retired_fetches",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "owned",
           "retired_fetches"
@@ -5236,7 +5236,7 @@
       },
       {
         "name": "stock_retired_fetches",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned.json",
         "pointer": [
           "stock",
           "retired_fetches"
@@ -5244,21 +5244,21 @@
       },
       {
         "name": "stock_rerun_verdict",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-stock-2.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-stock-2.json",
         "pointer": [
           "verdict"
         ]
       },
       {
         "name": "close_control_verdict",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned-close-keeps-tag.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned-close-keeps-tag.json",
         "pointer": [
           "verdict"
         ]
       },
       {
         "name": "worker_row_control_verdict",
-        "path": "private-data/scratch/FileServiceWrite/runs/20261121T130032Z-file-service-write-protect-card/result/comparison-owned-media-task-worker-row.json",
+        "path": "private-data/scratch/FileServiceWrite/runs/20261121T132500Z-file-service-write-protect-card/result/comparison-owned-media-task-worker-row.json",
         "pointer": [
           "verdict"
         ]
