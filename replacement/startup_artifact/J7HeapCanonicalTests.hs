@@ -317,7 +317,7 @@ main = do
     Nothing -> H.failH "suppliedOf refused on the J7 composition"
     Just supplied -> do
       let depthOf entry = (\(SS.StackDepth bytes) -> toInteger bytes) <$> M.lookup entry supplied
-          owned = [(0x89cda4, 536), (0x89cde4, 536), (0x89cdc4, 472), (0x89e560, 472), (0x89da3c, 544), (0x89da64, 544), (0x89e464, 456), (0xbf1c1c, 536), (0xbf1c44, 536)]
+          owned = [(0x89cda4, 464), (0x89cde4, 464), (0x89cdc4, 432), (0x89e560, 432), (0x89da3c, 464), (0x89da64, 464), (0x89e464, 432), (0xbf1c1c, 464), (0xbf1c44, 464)]
       putStrLn ("heap supplied depths: " ++ show [(entry, depthOf entry) | (entry, _) <- owned])
       let report name entries' = do
             results <- maybe (H.failH ("no depths for " ++ name)) pure (depthsIn evidence supplied entries')
@@ -380,17 +380,25 @@ main = do
             ++ " bytes below the abort's entry SP (abort " ++ show abort ++ ", handler 64, reporter " ++ show reporter ++ ")")
         results -> putStrLn ("fatal report to its first re-entry of 0x4d978: unmeasured, " ++ show [(showHex entry "", either show (const "bounded") result) | (entry, result) <- results])
       pure ()
-  -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the
-  -- J6 pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
+  -- The retained role's demands: the stock heap entries walked on canonical images 4 and 5, the J6
+  -- pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
   j6 <- either (H.failH . show) pure (compose registeredJoins source j6Pieces)
   let stockEvidence = JoinEvidence targets targets parts (compositionPieces j6)
-  case suppliedOf stockEvidence >>= \supplied -> depthsIn stockEvidence supplied [0x89cda4, 0x89cdc4, 0x89cde4, 0x89e560] of
+      stockPinned = [(0x89cda4, 504), (0x89cde4, 496), (0x89cdc4, 464), (0x89e560, 456), (0x89da3c, 552), (0x89da64, 544), (0x89e464, 432), (0xbf1c1c, 512), (0xbf1c44, 504)]
+      bytesOf report = let SS.StackDepth bytes = SS.reportDepth report in toInteger bytes
+  ownedSupplied <- maybe (H.failH "suppliedOf refused on the J7 composition") pure (suppliedOf evidence)
+  case suppliedOf stockEvidence >>= \supplied -> depthsIn stockEvidence supplied (map fst stockPinned) of
     Nothing -> H.failH "no supplied depths or indirect targets for the stock heap walk"
     Just results -> do
-      putStrLn ("stock heap depths: " ++ show [(entry, fmap (\report -> let SS.StackDepth bytes = SS.reportDepth report in bytes) result) | (entry, result) <- results])
-      ok "stock malloc, free, _malloc_r and _free_r have their pinned bounded depths on canonical code"
-        ([(entry, either (const Nothing) (\report -> let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)) result) | (entry, result) <- results]
-          == [(0x89cda4, Just 504), (0x89cdc4, Just 464), (0x89cde4, Just 496), (0x89e560, Just 456)])
+      let stock = [(entry, either (const Nothing) (Just . bytesOf) result) | (entry, result) <- results]
+      putStrLn ("stock heap depths: " ++ show [(showHex entry "", either show (show . bytesOf) result) | (entry, result) <- results])
+      ok "every stock heap entry has its pinned bounded depth on canonical code"
+        (stock == [(entry, Just bytes) | (entry, bytes) <- stockPinned])
+      forM_ stock $ \(entry, stockBytes) -> do
+        let ownedBytes = (\(SS.StackDepth bytes) -> toInteger bytes) <$> M.lookup entry ownedSupplied
+        putStrLn ("heap entry 0x" ++ showHex entry "" ++ ": owned " ++ show ownedBytes ++ ", stock " ++ show stockBytes)
+        ok ("owned heap entry 0x" ++ showHex entry "" ++ " is no deeper than its stock counterpart")
+          (((<=) <$> ownedBytes <*> stockBytes) == Just True)
 
   -- Staging and the contract.
   (dat, observed) <- stageComposition tools scratch source j7

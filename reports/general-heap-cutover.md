@@ -61,7 +61,21 @@ Results: the owned ABI matches stock at 94 steps and differs only as declared at
 
 ## Stack headroom
 
-`J7HeapCanonicalTests` walks stock bytes with `StockStack`. Entry demands including the retained lock/wait chain are owned/stock 536/504 at malloc `0x89cda4`, 472/464 at free `0x89cdc4`, 536/496 at `_malloc_r` `0x89cde4` and 472/456 at `_free_r` `0x89e560`: the owned frames add 32, 8, 40 and 16 bytes. Realloc 544, trim 456 and calloc 536 have no bounded stock counterpart in this walk.
+`J7HeapCanonicalTests` walks stock bytes with `StockStack` on the J6 composition and checks, entry by entry, that each owned entry's demand including callees is at most its stock counterpart's (stock dominance). Demands in bytes, including the retained lock/wait chain:
+
+| Entry | Stock | Owned |
+| --- | --- | --- |
+| malloc `0x89cda4` | 504 | 464 |
+| `_malloc_r` `0x89cde4` | 496 | 464 |
+| free `0x89cdc4` | 464 | 432 |
+| `_free_r` `0x89e560` | 456 | 432 |
+| realloc `0x89da3c` | 552 | 464 |
+| `_realloc_r` `0x89da64` | 544 | 464 |
+| trim `0x89e464` | 432 | 432 |
+| calloc `0xbf1c1c` | 512 | 464 |
+| `_calloc_r` `0xbf1c44` | 504 | 464 |
+
+The deepest owned path is the retained lock `0x72b164` (408 bytes) called from the core entry's own frame: 56 bytes for malloc, realloc and calloc (six saved registers and a 32-byte request area), 24 for free and trim. The bridge, `with_heap` and lock acquisition are inlined into the core entries; the heap operations they call (`allocate_stock`, `calloc_stock`, `resize_stock`, `free`) are not inlined, so their frames are never below the lock call.
 
 The walker now follows the constructs the earlier task walks stopped at. `0x4a960` is a kernel lock release whose lock address the routine spilled to `[r11, #-0x28]`; the walker tracks words a frame stores and reloads until a frame address is copied or a callee may write that far above its entry SP. `0x4360c` is the kernel abort's `svc #0x1010`; each loader's SVC handler stores 64 bytes on the task stack and calls its exception reporter `0x40cac`/`0xd0cac`, both checked from loader bytes. The reporter's hook (`0x4004f114`/`0x400df0d4`) holds only the image entry's mode-2 return `0x69cc6c` (S7: each hook's only store is its setter, called only after the loader's mode-2 call). `0x72b694` and `0x892c38` call words at fixed addresses; a word every scanned store writes with a constant, or with the argument a setter's every caller in stock or owned code passes, holds its image value, 0 inside the cold-boot clear `[0x89ec00,0xbf1a00)`, or those constants (S6), and a possibly zero word is called only after a zero test of its register. `0x829a0c` holds `0x72b210` or `0x72b318`, `0x890f14` holds `0x890ee8` and the diagnostic hook `0x89f794` holds 0 or `0xed4a8c`; with the owned image-5 initializer composed (J9), its own call of setter `0x69cf84` passes `0xed4a8c`. A path ends after a call when no path of the callee returns, as after a call of `0x43604`, whose `svc #0x1010` is followed by `b .`.
 
@@ -83,7 +97,7 @@ Per-task whole bounds are not the acceptance criterion: several stock tasks have
 | 72 | `0x892110` | 0xc00 | `0x892c00` | callback arrays in client-built graphics commands |
 | 80 | `0x69f0e0` | 0xc00 | `0x89bf08`, the divmod wrapper | `0x6a1c44` calls word `0x95b074`, 0 until a setter runs, without a zero test |
 
-The criterion is stock dominance: each owned allocator entry that replaces a stock entry has a worst-case depth, callees included, no greater than the stock entry's, so a stack-safe stock execution stays stack-safe. The owned entries currently exceed stock by 32 (malloc), 8 (free), 40 (`_malloc_r`) and 16 (`_free_r`) bytes.
+The criterion is stock dominance: each owned allocator entry that replaces a stock entry has a worst-case depth, callees included, no greater than the stock entry's, so a stack-safe stock execution stays stack-safe. All nine entries meet it; trim equals stock.
 
 The one-level fatal path is unmeasured: with fatal reports excluded the abort `0x4d978` is bounded, but the reporter `0x40cac` stops at `0x6f16e0`.
 
@@ -98,6 +112,6 @@ The one-level fatal path is unmeasured: with fatal reports excluded the abort `0
 - Qualify `general-heap-fixed-image` at the `0xba0000` ceiling with card-backed capture, saved-image playback and Wi-Fi heap demand. The current fixed-placement scenarios cover only cardless inputs.
 - Check DMA-loaded instruction visibility and later MPU changes on the camera before promoting the fixed-range image.
 - Close interior jumps into retired carriers after sealing, when guards no longer bind a fetch to an entry or pending invocation.
-- Close task-stack headroom. Owned entry demands exceed stock by 32 (malloc), 8 (free), 40 (`_malloc_r`) and 16 (`_free_r`) bytes. Under S1-S7 thirteen published tasks reach the recursive fatal report through the kernel abort `0x4d978`, and tasks 33, 36 and 72 stop at an argument-filled callback word, a RAM-indexed state table and an object callback array. Under S8 all sixteen stop at the register branches the [stack-headroom table](#stack-headroom) names, and the reporter `0x40cac` stops at `0x6f16e0`; bounds need closed target sets for those branches. The census also lacks image-6 Wi-Fi tasks and any heap caller outside the published tables.
+- Close task-stack headroom. Under S1-S7 thirteen published tasks reach the recursive fatal report through the kernel abort `0x4d978`, and tasks 33, 36 and 72 stop at an argument-filled callback word, a RAM-indexed state table and an object callback array. Under S8 all sixteen stop at the register branches the [stack-headroom table](#stack-headroom) names, and the reporter `0x40cac` stops at `0x6f16e0`; bounds need closed target sets for those branches. The census also lacks image-6 Wi-Fi tasks and any heap caller outside the published tables.
 
 The current no-card scenario does not claim a captured image or playback rendering. The [capability inventory](replacement-inventory-baseline.md#2-coarse-capability-outline) separately records blocked emulator playback/RAW conversion and incomplete sensor-backed capture. The final-pass scenarios must use their supported device routes as those frontiers close, not bypass heap calls or synthesize successful captures.
