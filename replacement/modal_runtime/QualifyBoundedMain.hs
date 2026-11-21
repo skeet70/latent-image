@@ -393,13 +393,14 @@ planMode q scope = do
   requireCleanSource
   identity <- verifySource
   verifyInputs q
+  jobs <- buildJobsFromEnvironment
   printJson $ object
     [ "schema" .= (1 :: Int)
     , "status" .= ("planned-not-executed" :: String)
     , "qualification_scope" .= scopeText scope
     , "source" .= sourceJson identity
     , "inputs" .= inputJson (inputIdentity q)
-    , "resources" .= resourcesValue
+    , "resources" .= resourcesValue jobs
     , "gate" .= (caseText gateCase ++ "." ++ roleText gateRole)
     , "reuse" .= object
         [ "old_matrix_eligible" .= False
@@ -564,13 +565,13 @@ inputJson inputs = object $
   , "roles" .= (2 * inputPairs inputs)
   ] ++ ownedBaseInputs (inputOwnedBase inputs)
 
-resourcesValue :: Value
-resourcesValue = object
+resourcesValue :: BuildJobs -> Value
+resourcesValue (BuildJobs jobs) = object
   [ "emulator_memory_max_bytes" .= memoryMaxBytes
   , "emulator_swap_max_bytes" .= (0 :: Integer)
   , "build_memory_max_bytes" .= Admission.memoryMaxBytes (Admission.classMemoryMax Admission.Build)
   , "emulator_slots" .= (3 :: Int)
-  , "bazel_jobs" .= (2 :: Int)
+  , "bazel_jobs" .= jobs
   , "native_batches" .= (0 :: Int)
   ]
 
@@ -738,13 +739,14 @@ readBoundedScope roleRoot = do
   unless (swap == 0) (failH ("memory.swap.max is " ++ show swap))
   createDirectoryIfMissing True roleRoot
   peak <- peakBytes directory
+  BuildJobs jobs <- buildJobsFromEnvironment
   kills <- oomKills directory
   events <- oomEvents directory
   writeJson (roleRoot </> "resources-baseline.json") $ object
     [ "memory_max" .= limit
     , "swap_max" .= swap
     , "emulator_slots" .= (3 :: Int)
-    , "bazel_jobs" .= (2 :: Int)
+    , "bazel_jobs" .= jobs
     , "baseline_peak" .= peak
     , "baseline_oom_kills" .= kills
     , "baseline_oom_events" .= events
@@ -803,6 +805,7 @@ publishHeadroom :: Qualification -> RunOutcome -> SourceProvenance -> InputIdent
 publishHeadroom q outcome source inputs = do
   gateValue <- decodeFile (qualRoot q </> "gate.json") >>= either failH pure
   tools <- toolIdentity q
+  jobs <- buildJobsFromEnvironment
   let directory = qualRoot q </> "headroom"
       terminalPath = directory </> "terminal.json"
       reviewPath = directory </> "review-packet.json"
@@ -815,7 +818,7 @@ publishHeadroom q outcome source inputs = do
         , "source" .= sourceJson source
         , "inputs" .= inputJson inputs
         , "tools" .= toolJson tools
-        , "resources" .= resourcesValue
+        , "resources" .= resourcesValue jobs
         , "gate" .= gateValue
         , "execution" .= object
             [ "executed_roles" .= executed
@@ -1395,13 +1398,14 @@ publish q matrix source inputs = do
         ]
       qualified = all snd predicates
       status = if qualified then MatrixQualified else MatrixUnqualified
+  jobs <- buildJobsFromEnvironment
   terminal <- pure $ object
     [ "schema" .= (1 :: Int)
     , "status" .= matrixVerdictText status
     , "source" .= sourceJson source
     , "inputs" .= inputJson inputs
     , "tools" .= toolJson tools
-    , "resources" .= resourcesValue
+    , "resources" .= resourcesValue jobs
     , "gate" .= either (const Null) gateJson gateParsed
     , "execution" .= object
         [ "required_pairs" .= requiredPairs
@@ -1565,13 +1569,14 @@ writeFailurePacket :: Qualification -> String -> Failure -> IO ()
 writeFailurePacket q status (Failure predicate detail artifact) = do
   createDirectoryIfMissing True (qualRoot q)
   source <- verifySource
+  jobs <- buildJobsFromEnvironment
   let value = object
         [ "schema" .= (1 :: Int)
         , "status" .= status
         , "qualification" .= ("not-qualified" :: String)
         , "source" .= sourceJson source
         , "inputs" .= inputJson (inputIdentity q)
-        , "resources" .= resourcesValue
+        , "resources" .= resourcesValue jobs
         , "failed_case" .= object ["predicate" .= predicateText predicate, "detail" .= detail, "artifact" .= artifact]
         , "predicates" .= [object ["name" .= predicateText predicate, "pass" .= False, "detail" .= detail]]
         , "remaining_scope" .= object ["full_matrix" .= ("not claimed" :: String)]
