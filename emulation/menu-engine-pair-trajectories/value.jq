@@ -39,7 +39,7 @@ def change_sites: [
   ["01029188", "pipeline-4010-receive", {"reads": [["016fea28", 48], ["016fe9f8", 4], ["017030d0", 28], ["016fec4c", 4]]}],
   ["01029430", "pipeline-4010-complete", {"reads": [["017030d0", 4], ["016fe9f8", 4]]}],
   ["00f3a834", "pipeline-4010-callback", {"lr": true}],
-  ["00defa30", "record-13a5-send", {"reads": [["01526a78", 16]]}],
+  ["00defa30", "record-13a5-send", {"reads": [{"sp": 0, "bytes": 4}]}],
   ["00d3680c", "menu-token-release", {"reads": [["0094f890", 8]]}]];
 def change_reads: [
   ["pipeline-pending", "017030d0", 28], ["pipeline-callback", "016fe9f8", 4], ["pipeline-state", "016fec4c", 4],

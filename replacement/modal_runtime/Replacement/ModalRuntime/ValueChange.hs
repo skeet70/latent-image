@@ -113,6 +113,7 @@ data Event
   | Completed { completedCallback :: CallbackRef }
   | CallbackInvoked { invokedStatus :: Word32, invokedFrom :: Maybe Word32 }
   | RecordReply { replyBytes :: B.ByteString }
+    -- ^ `0x00defa30`'s status r0, r1-r3 and the stacked fifth argument: the `0x13a5` payload.
   | TokenReleased { tokenBitmap :: B.ByteString }
   | Notified { notifiedKind :: Word32, notifiedNode :: Word32, notifiedId :: Word32, notifiedClass :: Word32 }
   | ValueApplied
@@ -197,12 +198,15 @@ segmentEvents table = mapMaybe event
       [pending, cell] | word32At pending 0 == Just 2 -> Completed . callback <$> word32At cell 0
       _ -> Nothing
     OtherSite "pipeline-4010-callback" -> Just (CallbackInvoked (first hit) (hitLr hit))
-    OtherSite "record-13a5-send" -> Just (RecordReply (B.concat (hitMemory hit)))
+    OtherSite "record-13a5-send" ->
+      let (a, b, c, d) = hitRegisters hit
+      in Just (RecordReply (B.concat (map littleEndian [a, b, c, d] ++ hitMemory hit)))
     OtherSite "menu-token-release" -> Just (TokenReleased (B.concat (hitMemory hit)))
     ValueSite ValueNotify -> let (a, b, c, d) = hitRegisters hit in Just (Notified a b c d)
     ValueSite ValueApply -> Just ValueApplied
     ValueSite StockValueArm -> Just ValueApplied
     _ -> Nothing
+  littleEndian value = B.pack [fromIntegral (value `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
 
 data SegmentVerdict = SegmentVerdict
   { verdictPhase :: T.Text
