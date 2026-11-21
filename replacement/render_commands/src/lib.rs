@@ -11,24 +11,15 @@ mod develop_source {
     pub mod font_core;
 }
 pub use develop_source::font_core;
-pub mod raster;
 pub mod producer;
 pub mod publisher;
 pub mod context;
 pub mod resources;
-pub mod runtime;
-pub mod shape_assets;
-pub mod vector_raster;
-pub mod actor;
-pub mod actor_request;
-pub mod actor_sequence;
 pub use commands::{Alpha, CatalogTextId, Colour, CustomTextId, ImageId, StrokeWidth, TextRef, DrawCommand, DrawList, TextPenOp, TextX, TextY, TextAdvance, TextCoordinate, Rgba, ShapePaint, ShapePalette, ShapeSecondarySource};
 pub mod stock_objects;
-pub mod guest_assets;
 pub mod vglib_scene;
 pub mod vg_submission;
 pub mod scanout_latch;
-pub use raster::{Surface, AssetPack, AssetProvenance, RasterError, RasterResources, FontBinding, FontRegistry, ShapeBinding, VectorWorkspace, PaintBlend, PaintCoverage};
 
 #[cfg(test)]
 mod report_tests;
@@ -37,11 +28,7 @@ mod publisher_tests;
 #[cfg(test)]
 mod context_tests;
 #[cfg(test)]
-mod runtime_tests;
-#[cfg(test)]
 mod script_tables_tests;
-#[cfg(test)]
-mod actor_tests;
 #[cfg(test)]
 pub(crate) mod test_buffers;
 

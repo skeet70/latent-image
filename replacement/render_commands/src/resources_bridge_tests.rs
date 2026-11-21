@@ -1,7 +1,6 @@
 use super::{BitmapCatalog, BitmapError, DataAddress, DataRegion, IndexedItemPalette, ResourceError, ResourceMemory};
 use super::super::commands::{Alpha, Colour, DrawCommand, Rgba, ShapePaint, ShapePalette, ShapeSecondarySource};
 use super::super::producer::{classify_stock_resource, CommandBuffer, ProducerError, ResourceContent, SemanticPrerequisite};
-use super::super::shape_assets::ShapeError;
 use super::super::{FontId, ImageId, PaletteIndex, PanelPoint, ResourceId};
 
 fn descriptors() -> [u8; 36] {
@@ -50,17 +49,4 @@ fn missing_bitmap_metadata_is_not_an_image_or_shape_fallback() {
     let catalog = BitmapCatalog { memory: ResourceMemory::new(&[]).unwrap() };
     assert_eq!(catalog.resolve(ResourceId(0xff000007), None), Err(ProducerError::Bitmap(BitmapError::Resource(ResourceError::MissingData(DataAddress(0x0022a908))))));
     assert_eq!(classify_stock_resource(ResourceId(0xff000007)), Err(ProducerError::MissingSemantic(SemanticPrerequisite::BitmapKind(ResourceId(0xff000007)))));
-}
-
-#[test]
-fn catalog_shape_binding_validates_the_borrowed_payload() {
-    let descriptors = descriptors();
-    let invalid_gvff = [0u8; 64];
-    let regions = [
-        DataRegion { base: DataAddress(0x0022a8b4), bytes: &descriptors },
-        DataRegion { base: DataAddress(0x00300000), bytes: &invalid_gvff },
-    ];
-    let catalog = BitmapCatalog { memory: ResourceMemory::new(&regions).unwrap() };
-    assert!(matches!(catalog.shape_binding(ResourceId(0xff000001)), Err(BitmapError::Shape(ShapeError::Magic))));
-    assert!(matches!(catalog.shape_binding(ResourceId(0xff000000)), Err(BitmapError::Shape(ShapeError::NativeBitmap))));
 }

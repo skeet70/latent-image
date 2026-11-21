@@ -1,6 +1,6 @@
 {
   "unit": "render_commands",
-  "summary": "The address-independent command, raster and publisher model. It has no stock entry, but it classifies stock resource-catalog ids and layout.",
+  "summary": "The address-independent command and publisher model. It has no stock entry, but it classifies stock resource-catalog ids.",
   "classification": "module",
   "rows": [
     {
@@ -20,31 +20,6 @@
           ],
           "contract": "menu/recipe_bank_ram_engine.ld",
           "requirement": "stock resource-catalog id classification (`src/resources.rs`, `classify_stock_resource`, ids `0xff000000..=0xff0008c5`). the retained stock resource catalog and bitmaps. an owned asset pack covers every owned screen"
-        }
-      ],
-      "predicates": {
-        "caller_closure": "unestablished",
-        "same_image_comparison": "unestablished",
-        "direct_owned_api": "unestablished"
-      }
-    },
-    {
-      "id": "render_commands-02",
-      "shim": "stock fifty-unit text window and script/glyph layout in `src/raster.rs`",
-      "kind": "guest-memory layout view",
-      "other_side": "retained stock font and script resources",
-      "owned": "no",
-      "removal": "owned fonts and scripts cover every owned screen",
-      "state": "required",
-      "evidence": [
-        {
-          "image": "//host/firmware:engine-elf-modal75-menu-engine-render",
-          "kind": "layout",
-          "symbols": [
-            "rb_menu_engine_entry"
-          ],
-          "contract": "menu/recipe_bank_ram_engine.ld",
-          "requirement": "stock fifty-unit text window and script/glyph layout in `src/raster.rs`. retained stock font and script resources. owned fonts and scripts cover every owned screen"
         }
       ],
       "predicates": {

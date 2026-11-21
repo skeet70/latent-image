@@ -31,7 +31,6 @@
     "constructorOwner": "PipelineTransforms owns src/font_core.rs and font_core/resource.rs, including FontAsset::parse and FontEngine::new",
     "sharedTypePrerequisiteCommit": "9565a43c",
     "constructorPath": "FontAsset::parse(resource bytes) -> FontEngine::new(asset,FontConfig,FontWorkspace::bitmap(decoded)) -> glyph_mask(GlyphId)",
-    "consumerOwner": "GraphicsRuntime.GraphicsCpuRaster owns Surface::draw_glyph_mask(baseline,mask,colour) and the cross-family consumer fixtures",
     "behavioralFixtures": "Seven tests in bitmap.rs exercise real FontAsset/FontEngine construction from independent literal CRLF BDF and DCW ICON resources, literal metrics and packed/gray pixels, missing glyph/workspace/invalid-resource errors, and public Gray4 mask range validation with stride padding. Original/native ABI scenarios retain their interfaces; Thai name-padding fixtures are corrected and extended from A32 word-comparison evidence.",
     "qualification": "Source-only. No builds, tests, native runs, formatters or SDK/guest setup performed. Joint producer/consumer qualification remains the integration owner's gate."
   },

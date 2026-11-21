@@ -56,7 +56,7 @@ xm1_rust_rlib(
 
 filegroup(
     name = "module",
-    srcs = ["src/lib.rs", "src/value_picker.rs", "src/tree_list.rs", "src/pane_drawer.rs", "src/owned_frame.rs", "src/owned_tree.rs", "src/owned_picker.rs", "src/owned_pane.rs", "src/engine_frame.rs", "src/engine_model.rs", "src/owned_frame_tests.rs"],
+    srcs = ["src/lib.rs", "src/value_picker.rs", "src/tree_list.rs", "src/pane_drawer.rs", "src/engine_model.rs"],
     visibility = ["//visibility:public"],
 )
 

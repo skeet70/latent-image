@@ -148,12 +148,6 @@
       "raster_owner": "PipelineMotionSearch and FontScanlineFlush",
       "precision": "The glyph-mask route executes the actual raster VM at requested dimensions. It does not rescale a 2047-normalized outline and does not allocate an outline-command intermediate."
     },
-    "graphics_consumer_binding": {
-      "owner": "GraphicsRuntime",
-      "source": "replacement/render_commands/src/raster.rs:140",
-      "route": "CpuRaster::draw_glyph_mask(baseline,&GlyphMask,colour)",
-      "behavior": "Revalidates the borrowed mask, applies bearing offsets, clips, decodes PackedMsb1/Gray4/Gray8 and blends coverage. The outline core has no framebuffer or device access."
-    },
     "state_and_limits": [
       "Fresh portable rendering owns explicitly initialized typed state. This is not a claim that an arbitrary retained legacy workspace is zero.",
       "program+c0/c4 are incoming legacy workspace translation scales; decoded VM handlers do not produce them. The physical adapter preserves these inputs. The fresh portable constructor initializes its corresponding named fields to zero and the inline compound calculation consumes those fields.",

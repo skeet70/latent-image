@@ -251,7 +251,7 @@ pub struct BitmapEntry {
     pub data: DataAddress,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BitmapError { Resource(ResourceError), Raster(super::raster::RasterError), Shape(super::shape_assets::ShapeError), InvalidIdentifier(ResourceId), Unsupported(BitmapKind), Geometry }
+pub enum BitmapError { Resource(ResourceError), InvalidIdentifier(ResourceId) }
 
 pub struct BitmapCatalog<'a> { pub memory: ResourceMemory<'a> }
 impl<'data> BitmapCatalog<'data> {
@@ -281,40 +281,6 @@ impl<'data> BitmapCatalog<'data> {
             }
             BitmapKind::ShapeKindTwo => ResourceContent::Shape { image: entry.image, alpha: Alpha::OPAQUE, paint: ShapePaint::Original },
         })
-    }
-
-    pub fn shape_binding(&self, resource: ResourceId) -> Result<super::raster::ShapeBinding<'data>, BitmapError> {
-        let entry = self.entry(resource)?;
-        let asset = super::shape_assets::ShapeAsset::decode(entry, &self.memory).map_err(BitmapError::Shape)?;
-        Ok(super::raster::ShapeBinding::new(asset))
-    }
-
-    pub fn extract_rcp1<'out>(
-        &self,
-        resource: ResourceId,
-        provenance: super::raster::AssetProvenance<'out>,
-        output: &'out mut [u8],
-    ) -> Result<super::raster::AssetPack<'out>, BitmapError> {
-        let entry = self.entry(resource)?;
-        if entry.kind != BitmapKind::NativeRgba { return Err(BitmapError::Unsupported(entry.kind)); }
-        if entry.width == 0 || entry.height == 0 { return Err(BitmapError::Geometry); }
-        let stride = entry.width.checked_mul(4).ok_or(BitmapError::Geometry)?;
-        let length = usize::from(stride).checked_mul(usize::from(entry.height)).ok_or(BitmapError::Geometry)?;
-        let output = output.get_mut(..32usize.checked_add(length).ok_or(BitmapError::Geometry)?).ok_or(BitmapError::Resource(ResourceError::Capacity))?;
-        let pixels = self.memory.bytes(entry.data, length).map_err(BitmapError::Resource)?;
-        output[..32].fill(0);
-        output[..4].copy_from_slice(b"RCP1");
-        output[4..8].copy_from_slice(&1u32.to_le_bytes());
-        output[8] = 2;
-        output[12..16].copy_from_slice(&entry.image.value().to_le_bytes());
-        output[20..22].copy_from_slice(&entry.width.to_le_bytes());
-        output[22..24].copy_from_slice(&entry.height.to_le_bytes());
-        output[24..26].copy_from_slice(&stride.to_le_bytes());
-        output[28..32].copy_from_slice(&(length as u32).to_le_bytes());
-        for (source, destination) in pixels.chunks_exact(4).zip(output[32..].chunks_exact_mut(4)) {
-            destination.copy_from_slice(&[source[3], source[2], source[1], source[0]]);
-        }
-        super::raster::AssetPack::parse(output, provenance).map_err(BitmapError::Raster)
     }
 }
 
