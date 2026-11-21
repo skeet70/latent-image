@@ -5,7 +5,9 @@ ENTRY(xm1_file_service_entry_route)
 INCLUDE imports.ld
 INCLUDE fixed-imports.ld
 MEMORY {
-  RETIRED_WORKERS (rx) : ORIGIN = 0x7115a4, LENGTH = 0x7118fc - 0x7115a4
+  RETIRED_WORKERS (rx) : ORIGIN = 0x7115a4, LENGTH = 0x712890 - 0x7115a4
+  RETIRED_CAPACITY (rx) : ORIGIN = 0x715a58, LENGTH = 0x715f0c - 0x715a58
+  RETIRED_CATALOG (rx) : ORIGIN = 0x718a8c, LENGTH = 0x71b9e8 - 0x718a8c
   RETIRED (rx) : ORIGIN = 0x71bc2c, LENGTH = 0x721834 - 0x71bc2c
   INCLUDE fixed-memory.ld
 }
