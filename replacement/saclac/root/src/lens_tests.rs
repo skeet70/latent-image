@@ -168,7 +168,7 @@ fn a_step_posts_the_halfword_and_answers_notification_1b() {
     assert_eq!(posts(&kernel), [(LENS_DC, 0x420b, words(&[0xf1_4bc8, 0xfffd, 0, 1, 0, 0, 4]))]);
     assert_eq!(fake.take_entered(), []);
     assert_eq!(children.live(done(0x35, &[], record), &mut root), ChildOutcome::Complete);
-    assert_eq!(fake.take_entered().last(), Some(&(0x0057_e900, vec![0, 0b010, 0, 0, 0])));
+    assert_eq!(fake.take_entered().last(), Some(&(0x0057_e900, vec![0, 0b010])));
     assert_eq!(fake.byte(PENDING + 0x1b), 0);
 }
 
@@ -189,5 +189,21 @@ fn a_bring_up_applies_the_resource_index_before_answering_with_the_completion_wo
     let finished = words(&[0, 9, 8, 6]);
     let completed = Message::Completed(Completed { completion: completion(0x2f).unwrap(), parameters: parameters(&finished) });
     assert_eq!(children.bring_up(completed, record, &mut root), ChildOutcome::Complete);
-    assert_eq!(fake.take_entered(), [(0x76_d9c8, vec![]), (0x74_0b18, vec![7]), (0x00b0_0001, vec![0, 9, 8, 6, 0])]);
+    assert_eq!(fake.take_entered(), [(0x76_d9c8, vec![]), (0x74_0b18, vec![7]), (0x00b0_0001, vec![0, 9, 8, 6])]);
+}
+
+#[test]
+fn a_lens_stop_answers_its_client_with_the_status_and_the_stopped_value() {
+    let kernel = saclac_kernel();
+    let cx = kernel.task().unwrap();
+    let (fake, mut root, record) = driving(peers(&cx));
+    fake.set_word(0x169_d050, 0x00b0_0005);
+    let mut children = LensChildren::new();
+    let stop = Message::Command(Command { kind: CommandKind::LensStop, parameters: parameters(&[]) });
+    assert_eq!(children.bring_up(stop, record, &mut root), ChildOutcome::Pending);
+    fake.take_entered();
+    let finished = words(&[0, 9]);
+    let completed = Message::Completed(Completed { completion: completion(0x30).unwrap(), parameters: parameters(&finished) });
+    assert_eq!(children.bring_up(completed, record, &mut root), ChildOutcome::Complete);
+    assert_eq!(fake.take_entered(), [(0x00b0_0005, vec![0, 9])]);
 }

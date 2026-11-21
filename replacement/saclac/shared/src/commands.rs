@@ -65,7 +65,7 @@ pub trait CommandMemory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientArguments {
     Status(CompletionStatus),
-    Reply { status: CompletionStatus, words: [u32; 4] },
+    Reply { status: CompletionStatus, words: ReplyWords },
 }
 
 impl ClientArguments {
@@ -74,6 +74,25 @@ impl ClientArguments {
             Self::Status(status) | Self::Reply { status, .. } => status,
         }
     }
+}
+
+/// The one to four words a client reply passes after its status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplyWords {
+    words: [u32; 4],
+    count: usize,
+}
+
+impl ReplyWords {
+    /// Panics unless `words` holds one to four words.
+    pub fn new(words: &[u32]) -> Self {
+        assert!((1..=4).contains(&words.len()), "a client reply passes one to four words after its status");
+        let mut stored = [0; 4];
+        stored[..words.len()].copy_from_slice(words);
+        Self { words: stored, count: words.len() }
+    }
+
+    pub fn words(&self) -> &[u32] { &self.words[..self.count] }
 }
 
 pub trait Clients {
@@ -147,7 +166,7 @@ impl<M: CommandMemory> Commands<M> {
         if let Some(callback) = callback {
             let third = if channels.is_valid(reply.channel) { client } else { UNCONFIGURED_CHANNEL };
             let [fourth, fifth] = reply.words;
-            clients.enter(callback, ClientArguments::Reply { status: reply.status, words: [reply.channel.0 as u32, third, fourth, fifth] });
+            clients.enter(callback, ClientArguments::Reply { status: reply.status, words: ReplyWords::new(&[reply.channel.0 as u32, third, fourth, fifth]) });
         }
     }
 
@@ -181,7 +200,7 @@ impl<M: CommandMemory> Commands<M> {
         let client = self.memory.word(StoredCommand::Autofocus, 39);
         self.finish(StoredCommand::Autofocus, status);
         if let Some(callback) = callback {
-            clients.enter(callback, ClientArguments::Reply { status, words: [value, client, u32::from(noticed), probes] });
+            clients.enter(callback, ClientArguments::Reply { status, words: ReplyWords::new(&[value, client, u32::from(noticed), probes]) });
         }
     }
 }
