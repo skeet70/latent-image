@@ -158,6 +158,9 @@ backends =
   , (0x719de0, Backend "catalog_rebuild" ["r0", "r1"] [])
   , (0x6f5330, Backend "flagged_select" ["r0", "r1"] [])
   , (0x71a93c, Backend "catalog_find" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 8, readSpec (registerWord 13 0) 48, readSpec (registerWord 13 4) 188])
+  , (0x71d1b8, Backend "path_wildcard" ["r0"] [])
+  , (0x714940, Backend "entry_update" ["r0", "r2", "r3"] [readSpec (register 1) 16, readSpec (register 13) 8])
+  , (0x713ef4, Backend "entry_update_one" ["r0", "r2", "r3"] [readSpec (register 1) 16, readSpec (register 13) 8])
   ]
 
 backendCapture :: Backend -> Value

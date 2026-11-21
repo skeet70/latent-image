@@ -74,3 +74,12 @@ file_service_catalog_window = 0x717a24;
 file_service_catalog_window_visit = 0x712a4c;
 file_service_catalog_find = 0x71a93c;
 file_service_directory_reserved = 0x7158a8;
+/* paths workers */
+file_service_delete_file_request = 0x71df30;
+file_service_delete_directory_request = 0x71e08c;
+file_service_readonly_request = 0x71e288;
+file_service_path_wildcard = 0x71d1b8;
+file_service_entry_update = 0x714940;
+file_service_entry_update_one = 0x713ef4;
+file_service_device_state = 0x6f52e4;
+file_service_fs_delete = 0x6ff84c;

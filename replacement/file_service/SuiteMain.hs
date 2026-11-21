@@ -22,6 +22,7 @@ import qualified Replacement.FileService.Selection as Selection
 import qualified Replacement.FileService.Volume as Volume
 import qualified Replacement.FileService.Workers as Workers
 import qualified Replacement.FileService.Catalog as Catalog
+import qualified Replacement.FileService.Paths as Paths
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -101,6 +102,15 @@ increments =
         | (name, address) <-
             [ ("select_groups_worker", 0x71a834), ("rebuild_catalog_worker", 0x71a8a0), ("find_entry_worker", 0x71b8c0)
             , ("complete_request_worker", 0x71b9b0), ("resolve_index_worker", 0x719614)
+            ]
+        ]
+    )
+  , ( "paths"
+    , Increment Paths.code Paths.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("file_delete_worker", 0x7118fc), ("filename_set_worker", 0x7119b0), ("directory_delete_worker", 0x711b50)
+            , ("image_remove_worker", 0x711bc8), ("readonly_worker", 0x711ea4), ("attribute_set_worker", 0x711f58)
             ]
         ]
     )

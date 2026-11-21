@@ -40,6 +40,13 @@ FILE_SERVICE_CONTROLS = [
     "catalog_find_mark_kept",
     "catalog_complete_returns_status",
     "catalog_resolve_totals_inclusive",
+    # paths
+    "paths_cancel_restores_callback",
+    "paths_request_callback_unrestored",
+    "paths_directory_delete_returns_zero",
+    "paths_filename_returns_status",
+    "paths_remove_restores_callback",
+    "paths_attribute_failure_unreloaded",
 ]
 
 def file_service_suffixes():
