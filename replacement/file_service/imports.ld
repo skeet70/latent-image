@@ -31,3 +31,14 @@ file_service_fs_release = 0x6ffc68;
 file_service_media_refresh = 0x71d66c;
 file_service_after_written_close = 0x71141c;
 file_service_rescan = 0x71985c;
+/* media_io workers */
+file_service_volume_geometry = 0x701090;
+file_service_volume_flag = 0x7012a0;
+file_service_volume_units = 0x7012c0;
+file_service_query_path = 0x701e18;
+file_service_read_pages = 0x700cd8;
+file_service_write_pages = 0x700d20;
+file_service_pattern_pass = 0x715b34;
+file_service_fs_read = 0x6feeec;
+file_service_local_size = 0x6aa4ec;
+file_service_local_read = 0x6aa52c;

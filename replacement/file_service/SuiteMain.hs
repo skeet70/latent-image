@@ -15,6 +15,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Handles as Handles
+import qualified Replacement.FileService.MediaIo as MediaIo
 import qualified Replacement.FileService.Requests as Requests
 import qualified Replacement.FileService.Workers as Workers
 import Replacement.FileService.Native
@@ -64,6 +65,15 @@ increments =
         | (name, address) <-
             [ ("open_worker", 0x7115a4), ("write_worker", 0x7116e4), ("close_worker", 0x711768)
             , ("close_entry_worker", 0x711840), ("seek_worker", 0x71eca4), ("release_worker", 0x71f134)
+            ]
+        ]
+    )
+  , ( "media-io"
+    , Increment MediaIo.code MediaIo.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("capacity_worker", 0x715a58), ("pattern_worker", 0x715de4), ("query_worker", 0x71ded4)
+            , ("read_pages_worker", 0x71e828), ("write_pages_worker", 0x71e8c4), ("read_worker", 0x71edbc)
             ]
         ]
     )

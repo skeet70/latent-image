@@ -17,6 +17,13 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # media_io
+    "capacity_ignores_units",
+    "pattern_single_repeat",
+    "query_raw_status",
+    "pages_range_inclusive",
+    "pages_keep_state",
+    "read_redirect_unrounded",
 ]
 
 def file_service_suffixes():

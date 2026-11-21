@@ -637,4 +637,10 @@ entry_veneer! {
     "close_entry_worker" => "xm1_file_service_close_entry_worker",
     "seek_worker" => "xm1_file_service_seek_worker",
     "release_worker" => "xm1_file_service_release_worker",
+    "capacity_worker" => "xm1_file_service_capacity_worker",
+    "pattern_worker" => "xm1_file_service_pattern_worker",
+    "query_worker" => "xm1_file_service_query_worker",
+    "read_pages_worker" => "xm1_file_service_read_pages_worker",
+    "write_pages_worker" => "xm1_file_service_write_pages_worker",
+    "read_worker" => "xm1_file_service_read_worker",
 }

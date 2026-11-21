@@ -136,6 +136,14 @@ backends =
   , (0x71543c, Backend "split_path" ["r0"] [readSpec (register 13) 4])
   , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
   , (0x716184, Backend "make_directory" ["r0", "r1"] [])
+  , (0x701090, Backend "volume_geometry" ["r0"] [])
+  , (0x7012a0, Backend "volume_flag" ["r0"] [])
+  , (0x7012c0, Backend "volume_units" ["r0"] [])
+  , (0x6feeec, Backend "fs_read" ["r0", "r1", "r2"] [])
+  , (0x7111c4, Backend "local_record" [] [])
+  , (0x6aa4ec, Backend "local_size" ["r0"] [])
+  , (0x6aa52c, Backend "local_read" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 4])
+  , (0x7111e0, Backend "local_position" ["r0"] [])
   ]
 
 backendCapture :: Backend -> Value
