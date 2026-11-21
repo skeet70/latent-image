@@ -18,6 +18,7 @@ module Replacement.ModalRuntime.FrameSubmission
   , submissionSite
   , operation
   , phaseSubmission
+  , submissionHit
   , compareSubmission
   , frameInstructions
   ) where
@@ -183,6 +184,10 @@ frameRecordRead hit = case hitMemory hit of
   [_, _, _, _, _, bytes] -> Just <$> parseFrameRecord bytes
   [_, _, _, _, _] -> Right Nothing
   _ -> Left "frame step lacks its reads"
+
+-- | The hits `phaseSubmission` reads.
+submissionHit :: Hit -> Bool
+submissionHit hit = label hit `elem` ["frame-step-entry", "frame-dispatch-return", "vg-geometry-request"] || submissionSite (label hit) /= Nothing
 
 -- | One observation's frames in recording order, and its submitted work outside every frame step.
 phaseSubmission :: T.Text -> [Hit] -> Either String PhaseSubmission

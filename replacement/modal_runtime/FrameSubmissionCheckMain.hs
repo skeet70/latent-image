@@ -29,13 +29,9 @@ phases :: FilePath -> IO [PhaseSubmission]
 phases directory = do
   readers <- receiptObservations directory
   forM readers $ \reader -> do
-    hits <- readerFoldHits reader (\kept hit -> Right (if relevant hit then hit : kept else kept)) []
+    hits <- readerFoldHits reader (\kept hit -> Right (if submissionHit hit then hit : kept else kept)) []
       >>= either (fail . ((directory ++ ": ") ++)) (pure . reverse)
     either (fail . ((directory ++ ": ") ++)) pure (phaseSubmission (readerPhase reader) hits)
- where
-  relevant hit = case hitSite hit of
-    OtherSite name -> name `elem` ["frame-step-entry", "frame-dispatch-return"] || submissionSite name /= Nothing
-    _ -> False
 
 statistics :: [Word64] -> J.Value
 statistics [] = J.Null
