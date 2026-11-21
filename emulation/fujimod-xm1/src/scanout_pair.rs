@@ -3,6 +3,7 @@
 //! continuous fetch/write guard over the retired bodies and the owned fixed range.
 
 mod scanout_pair_laws;
+mod scanout_pair_route;
 
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
@@ -12,6 +13,7 @@ use fujimod_xm1::guest::RouteKey;
 use fujimod_xm1::machine::{Machine, RunOutcome};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use scanout_pair_laws::*;
+use scanout_pair_route::{Presenting, bind_frame};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -29,8 +31,9 @@ const BUS_LIMIT: usize = 1 << 20;
 const WATCH_LIMIT: usize = 1 << 20;
 const HIT_LIMIT: usize = 1 << 16;
 const KEY_HOLD: u64 = 8_000_000;
-/// Receipts whose calls carry entry words, record reads and instruction spans.
-const RECEIPT_SCHEMA: u32 = 2;
+const FRAME_WAIT: u64 = 1_000_000;
+/// Receipts whose checkpoints carry the wait steps they took before their frame.
+const RECEIPT_SCHEMA: u32 = 3;
 
 fn require(condition: bool, reason: &str) -> Result<(), String> { if condition { Ok(()) } else { Err(reason.into()) } }
 
@@ -51,9 +54,12 @@ struct Inputs {
     role: Role, contract_sha256: String, run: Vec<u8>, rom: Vec<u8>, dat: ValidatedUpdate,
     /// Image 4 as the role runs it: canonical for stock, canonical with the entry branches for owned.
     image4: Vec<u8>, entries: Vec<u32>, body: (u32, u32),
-    /// The owned role's route: the board tick each stock route point ended at, and the stock receipt's digest.
-    schedule: Option<(Vec<u64>, String)>,
+    /// The owned role's route: the board tick each stock route point ended at, the stock checkpoints' wait steps
+    /// and the stock receipt's digest.
+    schedule: Option<Schedule>,
 }
+
+struct Schedule { ticks: Vec<u64>, waits: Vec<u32>, digest: String }
 
 fn load(arguments: &[String]) -> Result<Inputs, String> {
     let role = if arguments[0] == "stock" { Role::Stock } else { Role::Owned };
@@ -83,7 +89,11 @@ fn load(arguments: &[String]) -> Result<Inputs, String> {
             let bytes = read(&Path::new(&arguments[6]).join("receipt.json"))?;
             let stock: Receipt = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
             require(stock.role == Role::Stock && stock.complete && !stock.points.is_empty(), "the owned route needs a complete stock receipt")?;
-            Some((stock.points.iter().map(|point| point.tick).collect(), sha256(&bytes)))
+            Some(Schedule {
+                ticks: stock.points.iter().map(|point| point.tick).collect(),
+                waits: stock.checkpoints.iter().map(|checkpoint| checkpoint.waits).collect(),
+                digest: sha256(&bytes),
+            })
         }
     };
     Ok(Inputs {
@@ -369,7 +379,7 @@ impl Observer {
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-struct Checkpoint { label: String, menu: Option<[u32; 3]>, frame_sha256: Option<String>, front: FrontState }
+struct Checkpoint { label: String, waits: u32, menu: Option<[u32; 3]>, frame_sha256: Option<String>, front: FrontState }
 
 /// Where one route step ended.
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -426,7 +436,7 @@ impl Run<'_> {
     fn advance(&mut self, budget: u64) -> Result<(), String> {
         let (target, until) = match &self.inputs.schedule {
             None => (self.machine.instructions().checked_add(budget).ok_or("route budget overflow")?, None),
-            Some((ticks, _)) => {
+            Some(Schedule { ticks, .. }) => {
                 let tick = *ticks.get(self.points.len()).ok_or("the stock route has fewer points")?;
                 let bound = self.machine.hold_bound(tick.saturating_sub(self.machine.session.board.now()) + 1);
                 (self.machine.instructions().checked_add(bound).ok_or("route budget overflow")?, Some(tick))
@@ -468,10 +478,14 @@ impl Run<'_> {
     }
 
     fn checkpoint(&mut self, label: String) -> Result<(), String> {
+        let replay = match &self.inputs.schedule {
+            None => None,
+            Some(Schedule { waits, .. }) => Some(*waits.get(self.checkpoints.len()).ok_or("the stock route has fewer checkpoints")?),
+        };
+        let (waits, frame_sha256) = bind_frame(self, replay)?;
         let machine = &self.machine;
-        let frame = machine.frame()?.map(|bytes| sha256(&bytes));
         let engine = selected_engine([machine.word(u64::from(SELECTION + 0x10))?, machine.word(u64::from(SELECTION + 0x28))?]);
-        let checkpoint = Checkpoint { label, menu: menu(machine)?, frame_sha256: frame, front: front_state(machine, engine)? };
+        let checkpoint = Checkpoint { label, waits, menu: menu(machine)?, frame_sha256, front: front_state(machine, engine)? };
         self.checkpoints.push(checkpoint);
         Ok(())
     }
@@ -495,6 +509,11 @@ impl Run<'_> {
         self.advance(40_000_000)?;
         self.checkpoint("final".into())
     }
+}
+
+impl Presenting for Run<'_> {
+    fn presented(&mut self) -> Result<Option<String>, String> { Ok(self.machine.frame()?.map(|bytes| sha256(&bytes))) }
+    fn wait(&mut self) -> Result<(), String> { self.advance(FRAME_WAIT) }
 }
 
 fn execute(inputs: &Inputs, output: &Path) -> Result<(), String> {
@@ -543,7 +562,7 @@ fn execute(inputs: &Inputs, output: &Path) -> Result<(), String> {
         error, machine_failure: machine.failure.clone(), contract_sha256: inputs.contract_sha256.clone(), update_sha256: sha256(&inputs.dat.0),
         run_sha256: sha256(&inputs.run), rom_sha256: sha256(&inputs.rom),
         observer_sha256: sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?),
-        schedule_sha256: inputs.schedule.as_ref().map(|(_, digest)| digest.clone()),
+        schedule_sha256: inputs.schedule.as_ref().map(|schedule| schedule.digest.clone()),
         instructions: machine.instructions(), points, checkpoints, guard_carrier_fetches: guard.carrier_fetches, guard_body_fetches: guard.body_fetches,
         guard_installation_writes: guard.installation_writes, guard_carriers_match: carriers_match,
         calls: observer.calls.len(), compared_calls: observer.calls.iter().filter(|call| call.compared()).count(), open_calls,
