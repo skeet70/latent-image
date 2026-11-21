@@ -1,14 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | file-service-observe observe --role stock|owned --update DAT --image4 ID4 --run JSON
---     --boot-rom ROM --adjustment-nand NAND [--card IMG] --bridge BRIDGE --output NEW_DIR
+--     --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
 --   file-service-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the 29 file-service entries and
 -- the media task's request workers, a write watch over the result slot, mediamsg session and
 -- open set, and a fetch watch over the retired extents minus the entry veneer words. After
--- attach it presses PLAY and the playback route keys, idles a fixed budget after each, and
--- captures the screen.
+-- attach it presses the route keys (by default PLAY and the playback keys), idles a fixed budget
+-- after each, and captures the screen.
 --
 -- compare: the calls whose return address lies outside the retired extents and the owned body
 -- (`__fixed_body_start` to `__fixed_body_end` in OWNED_SYMBOLS) are the component's interface.
@@ -71,6 +71,7 @@ data Inputs = Inputs
   , inputCard :: Maybe FilePath
   , inputBridge :: FilePath
   , inputOutput :: FilePath
+  , inputRoute :: [CrawlKey]
   }
 
 entries :: [Entry]
@@ -116,9 +117,10 @@ image4Base, workerTable :: Word32
 image4Base = 0x61c400
 workerTable = 0x814740
 
--- | Playback opens DSCF3097 first; LEFT, LEFT, RIGHT, RIGHT then reads 3096, 3095, 3096, 3097.
-route :: [CrawlKey]
-route = [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]
+-- | The default route: playback opens DSCF3097 first; LEFT, LEFT, RIGHT, RIGHT then reads 3096,
+-- 3095, 3096, 3097.
+playbackRoute :: [CrawlKey]
+playbackRoute = [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]
 
 -- | The stock bridge session releases the power hold between 784M and 874M instructions after
 -- reset; attach is at about 399M and one playback file's open, reads and close finish within 13M.
@@ -191,21 +193,31 @@ parseInputs arguments = do
   pairs <- collect arguments
   let values = M.fromList pairs
       names = ["role", "update", "image4", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
-  need (length pairs == M.size values && M.keys (M.delete "card" values) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card"
+  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
+  keys <- case M.lookup "route" values of
+    Nothing -> pure playbackRoute
+    Just text -> mapM crawlKey (splitOn text)
   pure
     Inputs
       { inputRole = role, inputUpdate = values M.! "update", inputImage4 = values M.! "image4"
       , inputRun = values M.! "run", inputRom = values M.! "boot-rom", inputNand = values M.! "adjustment-nand"
       , inputCard = M.lookup "card" values, inputBridge = values M.! "bridge", inputOutput = values M.! "output"
+      , inputRoute = keys
       }
   where
     collect [] = pure []
     collect (('-' : '-' : key) : value : rest) = ((key, value) :) <$> collect rest
     collect _ = ioError (userError "options require --name value")
+    splitOn text = case break (== ',') text of
+      (key, ',' : rest) -> key : splitOn rest
+      (key, _) -> [key]
+    crawlKey wire = case [key | key <- [minBound .. maxBound], crawlKeyWire key == wire] of
+      [key] -> pure key
+      _ -> ioError (userError ("--route names an unknown key: " ++ wire))
 
 readSpec :: Value -> Int -> Value
 readSpec base count = object ["base" .= base, "count" .= count]
@@ -351,7 +363,7 @@ observe inputs directory record = do
         ++ maybe [] (\card -> ["--sd-card-image", card]) (M.lookup "card" paths)
   BL.writeFile specPath (A.encode spec <> "\n")
   record "workers" (A.toJSON [object ["code" .= workerCode w, "address" .= a] | w <- workers, let Address a = workerAddress w])
-  record "route" (A.toJSON (map crawlKeyWire route))
+  record "route" (A.toJSON (map crawlKeyWire (inputRoute inputs)))
   record "budget" (object ["settle_chunks" .= settleChunks, "final_chunks" .= finalChunks, "chunk_instructions" .= chunkInstructions])
   steps <- newIORef []
   cursor <- newIORef (0 :: Int)
@@ -381,7 +393,7 @@ observe inputs directory record = do
       record "hits_at_attach" (A.toJSON attached)
       shot <- emulatorCapture emulator "attached"
       record "attached_screen" shot
-      forM_ (zip [1 :: Int ..] route) $ \(index, key) -> do
+      forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> do
         first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator watch
         press <- emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire key])
@@ -401,7 +413,7 @@ observe inputs directory record = do
       observed <- emulatorWatchEnd emulator
       last' <- drain emulator
       screen <- emulatorCapture emulator "final"
-      modifyIORef' steps (object ["step" .= (length route + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary observed, "screen" .= screen] :)
+      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary observed, "screen" .= screen] :)
       saveSteps
       record "hit_count" (A.toJSON last')
 
