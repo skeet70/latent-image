@@ -11,8 +11,10 @@ _SOURCES = [
     "src/handles.rs",
     "src/requests.rs",
     "src/routing.rs",
+    "src/search.rs",
     "src/stock.rs",
     "src/stock_requests.rs",
+    "src/stock_search.rs",
     "src/stock_workers.rs",
     "src/workers.rs",
 ]
@@ -31,7 +33,7 @@ _SOURCES = [
 
 genrule(
     name = "host-tests",
-    srcs = ["src/lib.rs", "src/routing_tests.rs", "src/tests.rs", "src/workers_tests.rs"] + _SOURCES,
+    srcs = ["src/lib.rs", "src/routing_tests.rs", "src/search_tests.rs", "src/tests.rs", "src/workers_tests.rs"] + _SOURCES,
     outs = ["host-tests.passed"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
     tools = ["@lab_xm1_rust//:bin/rustc"],
@@ -43,6 +45,7 @@ haskell_library(
         "Replacement/FileService/Handles.hs",
         "Replacement/FileService/Native.hs",
         "Replacement/FileService/Requests.hs",
+        "Replacement/FileService/Search.hs",
         "Replacement/FileService/Workers.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

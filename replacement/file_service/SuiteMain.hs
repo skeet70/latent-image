@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Handles as Handles
 import qualified Replacement.FileService.Requests as Requests
+import qualified Replacement.FileService.Search as Search
 import qualified Replacement.FileService.Workers as Workers
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
@@ -64,6 +65,15 @@ increments =
         | (name, address) <-
             [ ("open_worker", 0x7115a4), ("write_worker", 0x7116e4), ("close_worker", 0x711768)
             , ("close_entry_worker", 0x711840), ("seek_worker", 0x71eca4), ("release_worker", 0x71f134)
+            ]
+        ]
+    )
+  , ( "search"
+    , Increment Search.code Search.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("find_first_worker", 0x712700), ("find_next_worker", 0x7127e0)
+            , ("find_first_entry_worker", 0x71e3a4), ("find_next_entry_worker", 0x71e550)
             ]
         ]
     )

@@ -31,3 +31,14 @@ file_service_fs_release = 0x6ffc68;
 file_service_media_refresh = 0x71d66c;
 file_service_after_written_close = 0x71141c;
 file_service_rescan = 0x71985c;
+/* search workers */
+file_service_fill_memory = 0x70e664;
+file_service_copy_memory = 0x70e6c4;
+file_service_little_endian = 0x70e650;
+file_service_divide = 0x4d978;
+file_service_format_timestamp = 0x71d214;
+file_service_find_first = 0x7008a4;
+file_service_find_next = 0x700b10;
+file_service_find_first_entry = 0x7004b0;
+file_service_find_next_entry = 0x700768;
+file_service_name_rejected = 0x7131a0;

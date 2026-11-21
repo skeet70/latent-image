@@ -17,6 +17,10 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # search
+    "search_output_uncleared",
+    "search_keeps_rejected",
+    "entry_size_unrounded",
 ]
 
 def file_service_suffixes():
