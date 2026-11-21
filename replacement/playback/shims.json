@@ -62,7 +62,7 @@
         "kind": "reference-only",
         "symbols": ["xm1_playback_jpeg_acquire", "xm1_playback_jpeg_restart", "xm1_playback_jpeg_release", "xm1_playback_jpeg_interrupt"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "The twenty-hook lifecycle and develop-consumer package has independent stock native comparisons and guarded installed preparation/PLAY receipts, with exactly forty ABI7 publication records restored on rollback. Acquire finishes a device left registered by a cancelled develop decode whose completion handed lock 9 over. Historical eight- and seventeen-hook receipts remain separately identified."
+        "requirement": "The twenty-hook lifecycle and develop-consumer package has independent stock native comparisons and guarded installed preparation/PLAY receipts, with exactly forty ABI7 publication records restored on rollback. Historical eight- and seventeen-hook receipts remain separately identified."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
@@ -78,7 +78,7 @@
         "kind": "reference-only",
         "symbols": ["xm1_playback_jpeg_build_request", "xm1_playback_jpeg_complete_first", "xm1_playback_jpeg_complete_second", "xm1_playback_jpeg_initialize", "xm1_playback_jpeg_reset_state", "xm1_playback_jpeg_restart_request", "xm1_playback_jpeg_cancel_timer", "xm1_playback_jpeg_preserve_prefix", "xm1_playback_jpeg_finish_request", "xm1_playback_jpeg_cancel_request", "xm1_playback_jpeg_submit", "xm1_playback_jpeg_develop_job4", "xm1_playback_jpeg_record_notification", "xm1_playback_jpeg_clear_record_release"],
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "Exact whole lifecycle and develop job4/notification/clear-record bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction through job4 and PLAY handbacks remain separate epochs; job4 construction runs only on task0xb. Owned job4 releases after its record notification, re-waits after unrelated event-0x10 wakes, and returns Cancelled on the cancel-all signature 0x40 while the decode keeps lock9 until its notification hands it over; the retained framework caller discards that result."
+        "requirement": "Exact whole lifecycle and develop job4/notification/clear-record bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction through job4 and PLAY handbacks remain separate epochs; job4 construction runs only on task0xb. Owned job4 releases after its record notification and re-waits after unrelated event-0x10 wakes; on the cancel-all signature 0x40 it submits stock's reset/release sequence and returns Cancelled, which the retained framework caller discards."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     },
@@ -108,7 +108,7 @@
       "evidence": [{
         "kind": "reference-only",
         "contract": "replacement/playback/jpeg-contract.json",
-        "requirement": "The runtime and callback remain resident through nominal PLAY and retained IRQ release; a cancelled develop decode keeps the static request and IRQ registration until its completion. Unload and post-consumer reuse are not qualified."
+        "requirement": "The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified."
       }],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     }
