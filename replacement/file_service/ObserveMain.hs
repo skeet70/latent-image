@@ -14,10 +14,12 @@
 -- (`__fixed_body_start` to `__fixed_body_end` in OWNED_SYMBOLS) are the component's interface.
 -- Their ordered entries with arguments up to each owned entry's arity, returns with r0..r3
 -- except registers the stock entry clobbers or the caller does not read, worker entries with
--- r0..r3, state snapshots, the watched writes and the screens must be equal, and the owned role
--- must fetch nothing in the retired extents. Registers left out are reported, not compared.
--- Request payload bytes the stock posters leave undefined are masked in snapshots, request
--- reads and watched writes.
+-- r0..r3, the calls the component makes into the retained filesystem, path and media-state
+-- services (arguments and the bytes they point at, and r0 on return), state snapshots, the
+-- watched writes, the screens and the card's accepted writes, dirty sectors and final command
+-- history must be equal, and the owned role must fetch nothing in the retired extents.
+-- Registers left out are reported, not compared. Request payload bytes the stock posters leave
+-- undefined are masked in snapshots, request reads and watched writes.
 module Main (main) where
 
 import Control.Exception (SomeException, bracket, displayException, try)
@@ -90,15 +92,53 @@ entries =
       ]
   ]
 
+-- | The owned handle workers, traced as worker sites; their entry words are veneers.
+ownedWorkers :: [(Word32, String)]
+ownedWorkers =
+  [ (0x7115a4, "open_worker"), (0x7116e4, "write_worker"), (0x711768, "close_worker")
+  , (0x711840, "close_entry_worker"), (0x71eca4, "seek_worker"), (0x71f134, "release_worker")
+  ]
+
 retired :: [Span]
 retired =
   [ Span (Address s) (Address e)
   | (s, e) <-
-      [ (0x71bc2c, 0x71bcc8), (0x71be74, 0x71c504), (0x71c634, 0x71c81c), (0x71d450, 0x71d66c)
-      , (0x71ddf0, 0x71ded4), (0x71ea34, 0x71eba0), (0x71ef18, 0x71f078), (0x71fde4, 0x71fe2c)
-      , (0x71fe7c, 0x71ff3c), (0x721108, 0x721744), (0x7217f0, 0x721834)
+      [ (0x7115a4, 0x7118fc), (0x71bc2c, 0x71bcc8), (0x71be74, 0x71c504), (0x71c634, 0x71c81c)
+      , (0x71d450, 0x71d66c), (0x71ddf0, 0x71ded4), (0x71ea34, 0x71eba0), (0x71eca4, 0x71edbc)
+      , (0x71ef18, 0x71f078), (0x71f078, 0x71f418), (0x71fde4, 0x71fe2c), (0x71fe7c, 0x71ff3c)
+      , (0x721108, 0x721744), (0x7217f0, 0x721834)
       ]
   ]
+
+-- | The retained filesystem, path and media-state services the workers submit work to, and
+-- the pointed bytes each call's arguments name. Registers holding the caller's stack
+-- addresses are left out; their bytes are captured instead.
+data Backend = Backend {backendName :: String, backendArguments :: [T.Text], backendReads :: [Value]}
+
+backends :: [(Word32, Backend)]
+backends =
+  [ (0x701634, Backend "fs_open" ["r1", "r2", "r3"] [readSpec (register 0) 48])
+  , (0x6ff000, Backend "fs_write" ["r0", "r1", "r2"] [readSpec (register 1) 64])
+  , (0x6ff138, Backend "fs_seek" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 4])
+  , (0x6ffff4, Backend "fs_close" ["r0"] [])
+  , (0x6ffdcc, Backend "fs_close_named" ["r0", "r1", "r2"] [readSpec (register 2) 20])
+  , (0x6ffb10, Backend "fs_close_entry" ["r0", "r1", "r2", "r3"] [readSpec (register 2) 20, readSpec (register 3) 12])
+  , (0x6ffc68, Backend "fs_release" ["r0"] [])
+  , (0x71e960, Backend "cache_claim" [] [])
+  , (0x71e9ec, Backend "cache_release" ["r0"] [])
+  , (0x71d66c, Backend "media_refresh" ["r0", "r1"] [])
+  , (0x71141c, Backend "after_written_close" ["r0"] [])
+  , (0x71985c, Backend "rescan" [] [])
+  , (0x71565c, Backend "register_written" ["r0"] [readSpec (register 1) 48])
+  , (0x7160b8, Backend "parse_path" ["r1"] [readSpec (register 1) 64])
+  , (0x715f0c, Backend "directory_slot" ["r0"] [])
+  , (0x71543c, Backend "split_path" ["r0"] [readSpec (register 13) 4])
+  , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
+  , (0x716184, Backend "make_directory" ["r0", "r1"] [])
+  ]
+
+backendCapture :: Backend -> Value
+backendCapture backend = object ["entry" .= backendReads backend, "returns" .= ([] :: [Value])]
 
 -- | The owned body's extent in the fixed image.
 readBody :: FilePath -> IO Span
@@ -141,7 +181,7 @@ inside (Span (Address s) (Address e)) a = s <= a && a < e
 fetchSpans :: [Span]
 fetchSpans = concatMap split retired
   where
-    veneers = [a | Entry (Address a) _ <- entries]
+    veneers = [a | Entry (Address a) _ <- entries] ++ map fst ownedWorkers
     split (Span (Address s) (Address e)) = go s (sort [v | v <- veneers, s <= v, v < e])
       where
         go from [] = [Span (Address from) (Address e) | from < e]
@@ -259,8 +299,10 @@ workerCapture = object ["entry" .= [readSpec (register 0) 12, readSpec (register
 stateReads :: Value
 stateReads = A.toJSON [[s, e - s] | Span (Address s) (Address e) <- [resultSlot, sessionAndOpenSet]]
 
+-- | The result slot, the session and open set, and the tag map, tag slots, sequence and
+-- context pointer.
 writeSpans :: [Span]
-writeSpans = [resultSlot, sessionAndOpenSet]
+writeSpans = [resultSlot, sessionAndOpenSet, Span (Address 0x910140) (Address 0x910208)]
 
 mergedSpans :: [Span] -> [Span]
 mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
@@ -335,6 +377,7 @@ observe inputs directory record = do
   let sites =
         [(entryAddress e, "fs:" ++ entryName e, entryCapture (entryName e)) | e <- entries]
           ++ [(workerAddress w, "worker:" ++ hexWord (workerCode w), workerCapture) | w <- workers]
+          ++ [(Address a, "backend:" ++ backendName b, backendCapture b) | (a, b) <- backends]
       writes = map spanValue writeSpans
       fetches = map spanValue fetchSpans
       spec =
@@ -628,15 +671,30 @@ event body hit = do
            in Just (Event "entry" name (external body lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= registersOf live hit, "reads" .= captured] ++ common)) (registersOf dead hit))
       | "worker:" `isPrefixOf` label ->
           Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= requestReads hit] ++ common)) (object []))
+      | "backend:" `isPrefixOf` label, Just backend <- M.lookup address backendSites, not (external body lr) ->
+          Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf (backendArguments backend) hit, "reads" .= readsOf hit] ++ common)) (object []))
+      | "backend:" `isPrefixOf` label -> Nothing
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
-          let name = fromMaybe (hexWord site) (M.lookup site entryNames)
+          case M.lookup site backendSites of
+            Just backend
+              | external body address -> Nothing
+              | otherwise -> Just (Event "backend-return" (backendName backend) True (object (["kind" .= ("backend-return" :: T.Text), "name" .= backendName backend, "result" .= registersOf ["r0"] hit] ++ common)) (object []))
+            Nothing -> returned site
+      | otherwise -> Nothing
+  where
+    returned site = do
+          address <- hexValue (field "address" hit)
+          let common = ["core" .= field "core" hit, "task" .= taskOf hit, "state" .= maskState (field "memory" hit)]
+              name = fromMaybe (hexWord site) (M.lookup site entryNames)
               kind = if M.member site entryNames then "return" else "worker-return"
               unread r = r `elem` clobbered name || (r == "r0" && address `elem` resultUnread)
               dead = if kind == "return" then filter unread argumentRegisters else argumentRegisters
               live = filter (`notElem` dead) argumentRegisters
           Just (Event kind name (kind == "worker-return" || external body address) (object (["kind" .= kind, "name" .= name, "result" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
-      | otherwise -> Nothing
+
+backendSites :: M.Map Word32 Backend
+backendSites = M.fromList backends
 
 loadHits :: FilePath -> IO [Value]
 loadHits directory = do
@@ -658,7 +716,7 @@ firstDifferences limit stock owned =
     pad xs = take total (xs ++ repeat Null)
 
 counts :: [Event] -> M.Map String (Int, Int)
-counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0) else (0, 1)) | e <- events, eventKind e `elem` ["entry", "worker"]]
+counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0) else (0, 1)) | e <- events, eventKind e `elem` ["entry", "worker", "backend"]]
   where add (a, b) (c, d) = (a + c, b + d)
 
 compareMain :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
@@ -694,11 +752,19 @@ compareMain stockDir ownedDir symbols output = do
       writeDiff = firstDifferences 20 stockWrites ownedWrites
       screenDiff = firstDifferences 20 (screens stockReceipt stockSteps) (screens ownedReceipt ownedSteps)
       ownedFetches = fetchTotal ownedReceipt ownedSteps
+      card steps =
+        [ object ["accepted_writes" .= field "accepted_writes" media, "accepted_write_bytes" .= field "accepted_write_bytes" media, "dirty_sectors" .= field "dirty_sectors" media]
+        | s <- steps, idled <- take 1 (reverse (arrayOf (field "idle" s))), let media = field "media" idled
+        ]
+      finalHistory steps = [field "history" (field "media" idled) | s <- take 1 (reverse steps), idled <- take 1 (reverse (arrayOf (field "idle" s)))]
+      cardOf steps = card steps ++ finalHistory steps
+      cardDiff = firstDifferences 20 (cardOf stockSteps) (cardOf ownedSteps)
       behaviorEqual =
         interface stockEvents == interface ownedEvents
           && interfaceCounts stockCounts == interfaceCounts ownedCounts
           && stockWrites == ownedWrites
           && screens stockReceipt stockSteps == screens ownedReceipt ownedSteps
+          && cardOf stockSteps == cardOf ownedSteps
           && null (violations stockReceipt stockSteps) && null (violations ownedReceipt ownedSteps)
           && sharedInputs stockReceipt == sharedInputs ownedReceipt
       ownedRole = field "role" ownedReceipt == String (roleName Owned)
@@ -716,6 +782,7 @@ compareMain stockDir ownedDir symbols output = do
     , "dead_registers" .= firstDifferences 20 (dead stockEvents) (dead ownedEvents)
     , "watched_writes" .= writeDiff
     , "screens" .= object ["stock" .= screens stockReceipt stockSteps, "owned" .= screens ownedReceipt ownedSteps, "comparison" .= screenDiff]
+    , "card" .= object ["stock" .= card stockSteps, "owned" .= card ownedSteps, "comparison" .= cardDiff]
     , "owned_retired_fetches_by_extent" .= [field "fetches_by_extent" w | w <- watches ownedReceipt ownedSteps]
     , "stock_retired_fetches_by_extent" .= [field "fetches_by_extent" w | w <- watches stockReceipt stockSteps]
     , "watch_violations" .= object ["stock" .= violations stockReceipt stockSteps, "owned" .= violations ownedReceipt ownedSteps]

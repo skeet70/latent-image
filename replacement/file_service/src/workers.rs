@@ -291,7 +291,11 @@ pub fn write<P: Port>(port: &mut P) -> u32 {
 
 /// 0x71ed34: the count written replaces the payload's length.
 fn write_file<P: Port>(port: &mut P) -> u32 {
-    let index = handle_index(port);
+    let index = if cfg!(file_service_control_write_index_unstored) {
+        port.lookup(port.word(HANDLE))
+    } else {
+        handle_index(port)
+    };
     let callback = Callback(port.word(CALLBACK));
     let (count, raw) = if port.context() {
         port.fs_write(index, port.word(write::SOURCE), port.word(write::LENGTH))
@@ -299,9 +303,7 @@ fn write_file<P: Port>(port: &mut P) -> u32 {
         (0, RAW_NO_CONTEXT)
     };
     let status = port.translate(raw);
-    if !cfg!(file_service_control_write_count_unstored) {
-        port.set_word(write::LENGTH, count);
-    }
+    port.set_word(write::LENGTH, count);
     port.complete(callback, status, count);
     status
 }
