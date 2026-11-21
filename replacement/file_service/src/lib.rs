@@ -12,6 +12,9 @@ pub mod stock_requests;
 #[allow(unsafe_code)]
 pub mod stock_workers;
 pub mod workers;
+pub mod catalog;
+#[allow(unsafe_code)]
+pub mod stock_catalog;
 
 #[cfg(test)]
 mod tests;
@@ -19,3 +22,5 @@ mod tests;
 mod routing_tests;
 #[cfg(test)]
 mod workers_tests;
+#[cfg(test)]
+mod catalog_tests;

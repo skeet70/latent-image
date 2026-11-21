@@ -16,6 +16,11 @@ SECTIONS {
   .write_worker 0x7116e4 : { KEEP(*(.text.file_service_entry_write_worker)) . = 0x711768; } > RETIRED_WORKERS =0xf000f0e7
   .close_worker 0x711768 : { KEEP(*(.text.file_service_entry_close_worker)) . = 0x711840; } > RETIRED_WORKERS =0xf000f0e7
   .close_entry_worker 0x711840 : { KEEP(*(.text.file_service_entry_close_entry_worker)) . = 0x7118fc; } > RETIRED_WORKERS =0xf000f0e7
+  .resolve_index_worker 0x719614 : { KEEP(*(.text.file_service_entry_resolve_index_worker)) . = 0x71985c; } > RETIRED_CATALOG =0xf000f0e7
+  .select_groups_worker 0x71a834 : { KEEP(*(.text.file_service_entry_select_groups_worker)) . = 0x71a8a0; } > RETIRED_CATALOG =0xf000f0e7
+  .rebuild_catalog_worker 0x71a8a0 : { KEEP(*(.text.file_service_entry_rebuild_catalog_worker)) . = 0x71a93c; } > RETIRED_CATALOG =0xf000f0e7
+  .find_entry_worker 0x71b8c0 : { KEEP(*(.text.file_service_entry_find_entry_worker)) . = 0x71b9b0; } > RETIRED_CATALOG =0xf000f0e7
+  .complete_request_worker 0x71b9b0 : { KEEP(*(.text.file_service_entry_complete_request_worker)) . = 0x71b9e8; } > RETIRED_CATALOG =0xf000f0e7
   .result_acquire 0x71bc2c : { KEEP(*(.text.file_service_entry_result_acquire)) . = 0x71bc6c; } > RETIRED =0xf000f0e7
   .result_release 0x71bc6c : { KEEP(*(.text.file_service_entry_result_release)) . = 0x71bc90; } > RETIRED =0xf000f0e7
   .result_wait 0x71bc90 : { KEEP(*(.text.file_service_entry_result_wait)) . = 0x71bcc8; } > RETIRED =0xf000f0e7
@@ -58,3 +63,4 @@ ASSERT(xm1_file_service_entry_result_acquire == 0x71bc2c && xm1_file_service_ent
 ASSERT(__fixed_body_start == ORIGIN(OWNED_FIXED), "fixed body does not start at the fixed origin")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "the fixed bank has writable statics")
 ASSERT(__fixed_bss_end <= ORIGIN(OWNED_FIXED) + LENGTH(OWNED_FIXED), "the fixed bank exceeds the fixed reservation")
+ASSERT(xm1_file_service_entry_resolve_index_worker == 0x719614 && xm1_file_service_entry_select_groups_worker == 0x71a834 && xm1_file_service_entry_rebuild_catalog_worker == 0x71a8a0 && xm1_file_service_entry_find_entry_worker == 0x71b8c0 && xm1_file_service_entry_complete_request_worker == 0x71b9b0, "catalog worker veneers are not at their stock entries")

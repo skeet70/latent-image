@@ -17,6 +17,12 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # catalog
+    "catalog_group_bound_inclusive",
+    "catalog_rebuild_selection_kept",
+    "catalog_find_mark_kept",
+    "catalog_complete_untranslated",
+    "catalog_resolve_totals_inclusive",
 ]
 
 def file_service_suffixes():

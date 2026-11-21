@@ -136,6 +136,9 @@ backends =
   , (0x71543c, Backend "split_path" ["r0"] [readSpec (register 13) 4])
   , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
   , (0x716184, Backend "make_directory" ["r0", "r1"] [])
+  , (0x719de0, Backend "catalog_rebuild" ["r0", "r1"] [])
+  , (0x70e664, Backend "fill_memory" ["r0", "r1", "r2"] [])
+  , (0x71a93c, Backend "catalog_find" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 8, readSpec (registerWord 13 0) 48, readSpec (registerWord 13 4) 188])
   ]
 
 backendCapture :: Backend -> Value

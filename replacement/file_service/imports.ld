@@ -31,3 +31,13 @@ file_service_fs_release = 0x6ffc68;
 file_service_media_refresh = 0x71d66c;
 file_service_after_written_close = 0x71141c;
 file_service_rescan = 0x71985c;
+/* catalog workers */
+file_service_catalog_rebuild = 0x719de0;
+file_service_fill_memory = 0x70e664;
+file_service_catalog_find = 0x71a93c;
+file_service_directory_marked = 0x715918;
+file_service_reserved_cluster = 0x713d60;
+file_service_directory_reserved = 0x7158a8;
+file_service_cluster_path = 0x713db8;
+file_service_catalog_window = 0x717a24;
+file_service_catalog_window_visit = 0x712a4c;

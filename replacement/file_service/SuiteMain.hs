@@ -17,6 +17,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Handles as Handles
 import qualified Replacement.FileService.Requests as Requests
 import qualified Replacement.FileService.Workers as Workers
+import qualified Replacement.FileService.Catalog as Catalog
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -64,6 +65,15 @@ increments =
         | (name, address) <-
             [ ("open_worker", 0x7115a4), ("write_worker", 0x7116e4), ("close_worker", 0x711768)
             , ("close_entry_worker", 0x711840), ("seek_worker", 0x71eca4), ("release_worker", 0x71f134)
+            ]
+        ]
+    )
+  , ( "catalog"
+    , Increment Catalog.code Catalog.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("select_groups_worker", 0x71a834), ("rebuild_catalog_worker", 0x71a8a0), ("find_entry_worker", 0x71b8c0)
+            , ("complete_request_worker", 0x71b9b0), ("resolve_index_worker", 0x719614)
             ]
         ]
     )
