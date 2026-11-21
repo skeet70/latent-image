@@ -672,7 +672,7 @@ event body hit = do
       | "worker:" `isPrefixOf` label ->
           Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= requestReads hit] ++ common)) (object []))
       | "backend:" `isPrefixOf` label, Just backend <- M.lookup address backendSites, not (external body lr) ->
-          Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf (backendArguments backend) hit, "reads" .= readsOf hit] ++ common)) (object []))
+          Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf (backendArguments backend) hit, "reads" .= backendReadsOf backend hit] ++ common)) (object []))
       | "backend:" `isPrefixOf` label -> Nothing
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
@@ -695,6 +695,16 @@ event body hit = do
 
 backendSites :: M.Map Word32 Backend
 backendSites = M.fromList backends
+
+-- | A backend call's captured bytes; a path read stops at its terminator, the bytes past it
+-- being whatever the poster's frame held.
+backendReadsOf :: Backend -> Value -> Value
+backendReadsOf backend hit
+  | backendName backend `elem` ["fs_open", "register_written", "parse_path"] =
+      A.toJSON [String (maskedHex (terminated bytes) bytes) | r <- arrayOf (field "reads" (field "observation" hit)), String text <- [field "bytes" r], let bytes = hexBytes text]
+  | otherwise = readsOf hit
+  where
+    terminated bytes = scanl (\open b -> open && b /= 0) True (take (length bytes - 1) bytes)
 
 loadHits :: FilePath -> IO [Value]
 loadHits directory = do
