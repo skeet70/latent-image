@@ -17,6 +17,10 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # selection
+    "selection_odd_uncounted",
+    "selection_tag_untruncated",
+    "selection_selected_total_skipped",
 ]
 
 def file_service_suffixes():

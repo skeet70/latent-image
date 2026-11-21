@@ -637,4 +637,5 @@ entry_veneer! {
     "close_entry_worker" => "xm1_file_service_close_entry_worker",
     "seek_worker" => "xm1_file_service_seek_worker",
     "release_worker" => "xm1_file_service_release_worker",
+    "select_worker" => "xm1_file_service_select_worker",
 }

@@ -17,6 +17,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import qualified Replacement.FileService.Handles as Handles
 import qualified Replacement.FileService.Requests as Requests
 import qualified Replacement.FileService.Workers as Workers
+import qualified Replacement.FileService.Selection as Selection
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -67,6 +68,7 @@ increments =
             ]
         ]
     )
+  , ("selection", Increment Selection.code Selection.scenarios [("xm1_file_service_entry_select_worker", 0x719098)])
   ]
 
 loadElf :: [(String, Word)] -> FilePath -> IO (E.Elf, String)

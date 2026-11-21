@@ -31,3 +31,16 @@ file_service_fs_release = 0x6ffc68;
 file_service_media_refresh = 0x71d66c;
 file_service_after_written_close = 0x71141c;
 file_service_rescan = 0x71985c;
+/* selection workers */
+file_service_fill_memory = 0x70e664;
+file_service_text_difference = 0x70e884;
+file_service_extension_kind = 0x713264;
+file_service_kind_supported = 0x713508;
+file_service_page_cluster = 0x713d60;
+file_service_directory_path = 0x713db8;
+file_service_catalog_locate = 0x7189b4;
+file_service_marked_before = 0x7153a8;
+file_service_page_counted = 0x715f80;
+file_service_media_snapshot = 0x712b4c;
+file_service_page_selected = 0x715918;
+file_service_catalog_load = 0x717a24;
