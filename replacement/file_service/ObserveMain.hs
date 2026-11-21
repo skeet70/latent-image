@@ -136,6 +136,16 @@ backends =
   , (0x71543c, Backend "split_path" ["r0"] [readSpec (register 13) 4])
   , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
   , (0x716184, Backend "make_directory" ["r0", "r1"] [])
+  , (0x70ec84, Backend "device_for_letter" ["r0"] [])
+  , (0x71f4b8, Backend "volume_record" ["r0"] [])
+  , (0x71f4d8, Backend "volume_release" ["r0"] [])
+  , (0x71f418, Backend "volume_switch" ["r0", "r1"] [])
+  , (0x6fae80, Backend "set_level" ["r0", "r1"] [])
+  , (0x6f535c, Backend "flagged_prepare" [] [])
+  , (0x71f7dc, Backend "volume_attach" [] [readSpec (register 0) 12, readSpec (registerWord 0 8) 0x44])
+  , (0x71fcbc, Backend "volume_reattach" [] [readSpec (register 0) 12, readSpec (registerWord 0 8) 0x44])
+  , (0x719de0, Backend "catalog_rebuild" ["r0", "r1"] [])
+  , (0x6f5330, Backend "flagged_select" ["r0", "r1"] [])
   ]
 
 backendCapture :: Backend -> Value

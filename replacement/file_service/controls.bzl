@@ -17,6 +17,11 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # volume
+    "volume_attach_kind_unset",
+    "volume_detach_callback_unrestored",
+    "volume_format_slots_kept",
+    "volume_reformat_state_unset",
 ]
 
 def file_service_suffixes():
