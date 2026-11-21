@@ -2,20 +2,29 @@
 
 -- | file-service-stage publications IMAGE4 ELF OUTPUT_JSON
 --   file-service-stage body ELF OUTPUT_BIN
+--   file-service-stage stock-role ELF PUBLICATIONS_JSON OUTPUT_JSON
 --
 -- publications: every word of the linked image-4 sections (entry branches and traps over the
 -- retired extents) that differs from stock image 4, as stage-fixed-image rows.
 -- body: the OWNED_FIXED bytes [__fixed_body_start, __fixed_body_end) of the same link.
+-- stock-role: a bank's publication rows without the file service's retired extents of ELF.
 module Main (main) where
 
 import qualified ArmElf as E
 import Control.Monad (unless)
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (FromJSON (..), encode, object, withObject, (.:), (.=))
+import qualified Data.Aeson as A
 import Data.Bits (shiftL)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Word (Word32)
+import Replacement.FileService.StockRole (Publication (..), retiredExtents, stockRolePublications)
 import System.Environment (getArgs)
+
+newtype Row = Row Publication
+
+instance FromJSON Row where
+  parseJSON = withObject "publication" $ \o -> fmap Row (Publication <$> o .: "address" <*> o .: "old" <*> o .: "new")
 
 image4Base :: Word32
 image4Base = 0x61c400
@@ -64,7 +73,13 @@ main = do
       let bytes = [maybe 0 id (E.byteAt elf address) | address <- [start .. end - 1]]
       B.writeFile output (B.pack bytes)
       putStrLn ("body " ++ show (length bytes) ++ " bytes")
-    _ -> fail "usage: file-service-stage publications IMAGE4 ELF OUTPUT_JSON | body ELF OUTPUT_BIN"
+    ["stock-role", elfPath, publicationsPath, output] -> do
+      elf <- loadElf elfPath
+      rows <- B.readFile publicationsPath >>= either fail pure . A.eitherDecodeStrict'
+      kept <- either fail pure (stockRolePublications (retiredExtents elf) [publication | Row publication <- rows])
+      BL.writeFile output (encode [object ["address" .= publicationAddress p, "old" .= publicationOld p, "new" .= publicationNew p] | p <- kept])
+      putStrLn (show (length rows - length kept) ++ " retired-extent publication words dropped, " ++ show (length kept) ++ " kept")
+    _ -> fail "usage: file-service-stage publications IMAGE4 ELF OUTPUT_JSON | body ELF OUTPUT_BIN | stock-role ELF PUBLICATIONS_JSON OUTPUT_JSON"
   where
     row image elf address = case E.wordAt elf address of
       Just new -> pure (address, stockWord image address, new)
