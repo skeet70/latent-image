@@ -13,7 +13,7 @@ import Data.Either (isLeft)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word16, Word32, Word64)
+import Data.Word (Word8, Word16, Word32, Word64)
 import Emulation.PropertyPairCheck
 import Emulation.PropertyPairPlan hiding (image4Base)
 import Emulation.PropertyPairRoutes (AttachPhase (..))
@@ -64,7 +64,7 @@ activeA = BankImage (B.replicate 0x1c2 0x11)
 activeB = BankImage (B.replicate 0x1c2 0x22)
 backingA = BankImage (B.replicate 410 0x11 <> B.replicate 40 0)
 backingB = BankImage (replaceBytes 0x140 (B.replicate 40 0x22) (replaceBytes 0 (B.replicate 0x118 0x22) (bankBytes backingA)))
-restoredBacking = BankImage (replaceBytes 0 (B.take 0x118 (B.drop 16 (bankBytes activeA))) (bankBytes backingB))
+restoredBacking = BankImage (replaceBytes 0x10 (B.take 0x118 (B.drop 16 (bankBytes activeA))) (bankBytes backingB))
 
 blankRecord, appendCandidate, sealedRecord, savedWorking :: RecordImage
 blankRecord = RecordImage (B.replicate 52 0)
@@ -287,14 +287,17 @@ matrixAdmitted = matrixAdmittedFor Storage.FilmSimulation
 data WriteWitness = WriteWitness { writeTrace :: [Value], writeRows :: [Value] }
 
 changedWrites :: Role -> Regions -> Regions -> WriteWitness
-changedWrites role before after = WriteWitness traces rows
+changedWrites role before after = byteWrites role
+  [ (start+fromIntegral index,old,new)
+  | (start,oldBytes) <- M.toAscList before
+  , let newBytes=case M.lookup start after of Just bytes -> bytes; Nothing -> error "missing after region"
+  , (index,(old,new)) <- zip [0::Int ..] (zip (B.unpack oldBytes) (B.unpack newBytes)),old /= new
+  ]
+
+-- | One single-byte CPU write per (address, old, new).
+byteWrites :: Role -> [(Word32,Word8,Word8)] -> WriteWitness
+byteWrites role changes = WriteWitness traces rows
   where
-    changes =
-      [ (start+fromIntegral index,old,new)
-      | (start,oldBytes) <- M.toAscList before
-      , let newBytes=case M.lookup start after of Just bytes -> bytes; Nothing -> error "missing after region"
-      , (index,(old,new)) <- zip [0::Int ..] (zip (B.unpack oldBytes) (B.unpack newBytes)),old /= new
-      ]
     accessor address = if address >= 0x89f834 && address < 0x89f8a8 then CustomByte else StorageByte
     site wanted = case [address+fromIntegral (index*4) | (kind,address,_,index) <- composedBoundaries,kind == wanted] of
       address:_ -> address
@@ -337,6 +340,23 @@ programHit :: Role -> Value
 programHit role = matrixHit role RecordProgram 0x6ab2f4 [0x89fa80,0,0,0x600] 0 (matrixStack role) 0
   [programBytes]
 
+programResultHit :: Role -> Value
+programResultHit role = matrixHit role RecordProgramResult 0x6ab390 [0] 0 (matrixStack role) 0 []
+
+commitHit :: Role -> Value
+commitHit role = matrixHit role PropertyCommit propertyCommit [] 0 (matrixStack role) 0 []
+
+-- | An unchanged save whose settings write stores the current 40 bytes at backing `+0x140`, so stock
+-- reaches the custom refresh, which reports no change.
+coveredUnchangedSave :: Role -> WriteWitness
+coveredUnchangedSave role = WriteWitness
+  ([refreshHit role Storage.CustomRefreshEntry savedState] ++ writeTrace stored
+   ++ [refreshHit role Storage.CustomRefreshReturn savedState,commitHit role])
+  (writeRows stored)
+  where
+    stored=byteWrites role [(0x9c281c+0x140+fromIntegral index,byte,byte)
+      | (index,byte) <- zip [0::Int ..] (B.unpack (B.take 40 (B.drop 0x140 (bankBytes (backingImage savedState)))))]
+
 readHit :: Role -> Value
 readHit role = matrixHit role RecordRead 0x6aad94 [0xb00000,0x8a0080] 0 (matrixStack role) 0 []
 
@@ -362,11 +382,11 @@ stepWitness family role step = case step of
         third=stateWrites role committedState savedState
     in WriteWitness
       ([refreshHit role Storage.CustomRefreshEntry initialState] ++ writeTrace first
-       ++ [appendHit role,programHit role,matrixHit role RecordProgramResult 0x6ab390 [0] 0 (matrixStack role) 0 []]
+       ++ [appendHit role,programHit role,programResultHit role]
        ++ writeTrace second ++ writeTrace third ++ [refreshHit role Storage.CustomRefreshReturn savedState]
        ++ profileHits role Storage.LiveProfile)
       (writeRows first ++ writeRows second ++ writeRows third)
-  SaveUnchanged -> WriteWitness [refreshHit role Storage.CustomRefreshEntry savedState,refreshHit role Storage.CustomRefreshReturn savedState] []
+  SaveUnchanged -> WriteWitness [commitHit role] []
   CaptureAlternate -> copy Storage.Capture liveState capturedState
   RestoreAlternate -> copy Storage.Restore editedState restoredState
   SelectCustom -> withState (profileHits role Storage.StoredCustom)
@@ -418,7 +438,7 @@ prepareSteps witnesses changes bootTrace = build (StepNumber 1) (HitCursor (leng
     build number@(StepNumber ordinal) from@(HitCursor first) previous (kind:rest) =
       let witness=case M.lookup kind witnesses of Just value -> value; Nothing -> error "matrix step has no shared witness"
           rawTrace=case M.lookup kind changes of Just change -> change (writeTrace witness); Nothing -> writeTrace witness
-          idle=InstructionCounter (counterValue previous+case stepAction kind of Storage.SetModeDial _ -> 0; _ -> instructionsValue preKeyIdle)
+          idle=InstructionCounter (counterValue previous+case stepAction kind of Storage.SetModeDial _ -> 40000000; _ -> instructionsValue preKeyIdle)
           spanCount=100*fromIntegral (max (length rawTrace) (length (writeRows witness)))+1000
           end=InstructionCounter (counterValue idle+spanCount+10)
           to=HitCursor (first+length rawTrace)
@@ -572,7 +592,7 @@ bootIdentity role session = object
   , "adjustment_nand" .= (if session == BootSession 0 then A.toJSON (digestOf "nand") else Null)
   , "record_nand" .= Null,"committed_nand" .= (if session == BootSession 0 then Null else A.toJSON (roleExportDigest role))
   , "source_kind" .= (if session == BootSession 0 then "initial-seeded" else "full-committed"::T.Text)
-  , "card_sha256" .= Null,"procedure" .= digestOf "synthetic SDK procedure"
+  , "card_sha256" .= Null,"procedure" .= digestOf "synthetic SDK procedure","emulator_binary" .= digestOf "synthetic emulator"
   ]
 
 freshStart :: Role -> BootSession -> B.ByteString -> Value
@@ -618,12 +638,20 @@ matrixObservationWithBoot :: Role -> [Value] -> M.Map FixtureStep TraceMutation 
 matrixObservationWithBoot = matrixObservationForSetting Storage.FilmSimulation
 
 matrixObservationForSetting :: Storage.StorageSetting -> Role -> [Value] -> M.Map FixtureStep TraceMutation -> Observation
-matrixObservationForSetting family role bootTrace changes = Observation
+matrixObservationForSetting family role = matrixObservationFrom (matrixWitnessesFor family role) family role
+
+-- | The film-simulation lifecycle with one step's witness replaced.
+matrixObservationReplacing :: FixtureStep -> WriteWitness -> Role -> M.Map FixtureStep TraceMutation -> Observation
+matrixObservationReplacing step witness role =
+  matrixObservationFrom (M.insert step witness (matrixWitnessesFor Storage.FilmSimulation role)) Storage.FilmSimulation role []
+
+matrixObservationFrom :: M.Map FixtureStep WriteWitness -> Storage.StorageSetting -> Role -> [Value] -> M.Map FixtureStep TraceMutation -> Observation
+matrixObservationFrom witnesses family role bootTrace changes = Observation
   { obsReceipt=receipt,obsSpec=spec,obsReset=firstReset,obsHits=hits,obsSteps=steps,obsSession=sessionBytes
   , obsBootResets=M.singleton (BootSession 1) childReset
   }
   where
-    prepared=prepareSteps (matrixWitnessesFor family role) changes bootTrace
+    prepared=prepareSteps witnesses changes bootTrace
     firstReset=if null bootTrace then matrixInitialReset else initialReset bootTrace
     resetDigest=if null bootTrace then matrixInitialResetDigest else sha256 firstReset
     (oldEnd,oldCounter)=case reverse prepared of
@@ -649,6 +677,7 @@ matrixObservationForSetting family role bootTrace changes = Observation
       , "storage_before" .= appliedStateValue,"storage_after" .= rebootedStateValue
       , "result" .= object
           [ "kind" .= ("cold-reboot"::T.Text),"export" .= committedExport role oldCounter
+          , "power_off" .= object ["switched" .= counterValue oldCounter,"terminal" .= counterValue oldCounter]
           , "prior_session" .= finalSdk role (BootSession 0) firstReset oldCounter
           , "new_start" .= freshStart role (BootSession 1) childReset,"new_reset" .= decodeWire childReset
           , "input_committed_sha256" .= roleExportDigest role,"next_session" .= (1::Word32),"new_hits_start" .= cursorValue oldEnd
@@ -829,10 +858,19 @@ matrixConsumerCases =
   , stepRefusalCase "changed refresh cannot report success before programming" SaveChanged (swapFixtureSites RecordProgram RecordProgramResult)
   , stepRefusalCase "changed refresh requires its actual append request" SaveChanged (withoutSite Area3Append)
   , stepRefusalCase "changed refresh requires actual return" SaveChanged (withoutSite (StorageSite Storage.CustomRefreshReturn))
-  , stepRefusalCase "unchanged save requires an invocation rather than absence of NV events" SaveUnchanged
-      (withoutSite (StorageSite Storage.CustomRefreshEntry) . withoutSite (StorageSite Storage.CustomRefreshReturn))
-  , stepRefusalCase "unchanged refresh cannot fail" SaveUnchanged
-      (alterFirstSite (StorageSite Storage.CustomRefreshReturn) (fixtureArgument 0 1))
+  ] ++
+  [ unchangedRefusalCase ("unchanged save refuses an area-3 append and record program " ++ roleWire role) role
+      (matrixObservation role (M.singleton SaveUnchanged (++ [appendHit role,programHit role,programResultHit role])))
+  | role <- [RetainedRole,OwnedRole]
+  ] ++
+  [ comparisonCase "unchanged save through the refresh taken when a settings write covers 0x140 qualifies and compares" RolesAgree
+      (matrixObservationReplacing SaveUnchanged (coveredUnchangedSave RetainedRole) RetainedRole M.empty)
+      (matrixObservationReplacing SaveUnchanged (coveredUnchangedSave OwnedRole) OwnedRole M.empty)
+  , unchangedRefusalCase "unchanged refresh cannot fail" OwnedRole
+      (matrixObservationReplacing SaveUnchanged (coveredUnchangedSave OwnedRole) OwnedRole
+        (M.singleton SaveUnchanged (alterFirstSite (StorageSite Storage.CustomRefreshReturn) (fixtureArgument 0 1))))
+  , comparisonCase "unchanged save property commits are compared across roles" StorageEvidenceDiffers retainedMatrix
+      (matrixObservation OwnedRole (M.singleton SaveUnchanged (++ [commitHit OwnedRole])))
   , stepRefusalCase "alternate cancellation requires restore direction" RestoreAlternate
       (alterFirstSite (StorageSite Storage.ExchangeAlternateEntry) (fixtureArgument 0 0))
   , stepRefusalCase "alternate capture compares all 450 bytes" CaptureAlternate
@@ -841,9 +879,12 @@ matrixConsumerCases =
   , stepRefusalCase "alternate restore requires the captured image" RestoreAlternate
       (alterFirstSite (StorageSite Storage.ExchangeAlternateEntry)
         (wireMemory [bankBytes activeB,flippedByte 449 (bankBytes activeA),B.replicate 450 0,bankBytes backingB]))
-  , stepRefusalCase "alternate restore compares all 280 backing bytes" RestoreAlternate
+  , stepRefusalCase "alternate restore compares the first backing ordinary byte" RestoreAlternate
       (alterFirstSite (StorageSite Storage.ExchangeAlternateReturn)
-        (wireMemory [bankBytes activeA,bankBytes activeA,B.replicate 450 0,flippedByte 279 (bankBytes restoredBacking)]))
+        (wireMemory [bankBytes activeA,bankBytes activeA,B.replicate 450 0,flippedByte 0x10 (bankBytes restoredBacking)]))
+  , stepRefusalCase "alternate restore compares the last backing ordinary byte" RestoreAlternate
+      (alterFirstSite (StorageSite Storage.ExchangeAlternateReturn)
+        (wireMemory [bankBytes activeA,bankBytes activeA,B.replicate 450 0,flippedByte 0x127 (bankBytes restoredBacking)]))
   , stepRefusalCase "C selection requires record zero" SelectCustom (alterFirstSite GetterEntry (fixtureArgument 3 1))
   , stepRefusalCase "live selection requires record one" SelectLive (alterFirstSite GetterEntry (fixtureArgument 3 0))
   , stepRefusalCase "C getter requires its actual default-getter caller" SelectCustom
@@ -874,12 +915,29 @@ matrixConsumerCases =
   [comparisonCase label StorageEvidenceDiffers retainedMatrix (matrixObservation OwnedRole (M.singleton HalfPressApplication change))
   | (label,change) <- s1ComparisonMutations] ++
   coldProvenanceCases ++ coverageCases ++ matrixControlCases ++ optionalEeCases ++ repetitionFamilyCases ++ [fullImageProofBindingCase]
+  ++ [ comparisonCase "a C scanner row the firmware rewrites is admitted per role and compared across roles" RolesAgree
+         (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) retainedMatrix) (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix)
+     , comparisonCase "an owned C scanner row value that differs from retained is refused" StorageEvidenceDiffers retainedMatrix
+         (mapStorageSnapshots (wireField ["c_scanner_row"] rewritten) ownedMatrix)
+     , comparisonCase "dequeue entries from a caller without a traced return are not paired" RolesAgree
+         (matrixObservation RetainedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller))
+         (matrixObservation OwnedRole (M.singleton HalfPressApplication s1UntracedDequeueCaller))
+     , comparisonCase "S1 frame residue outside the poster-defined bytes is not compared across roles" RolesAgree
+         retainedMatrix (matrixObservation OwnedRole (M.singleton HalfPressApplication s1ResidueMutation)) ]
+  where
+    rewritten = A.toJSON (wireBytes (littleWords [0x317,0,0x101,3,0x37243726,8,8]))
 
 mapStorageSnapshots :: (Value -> Value) -> Observation -> Observation
 mapStorageSnapshots change = transformObservation (mapWireTree update)
   where
     update value@(Object fields) | KM.member "c_scanner_row" fields = change value
     update value = value
+
+unchangedRefusalCase :: String -> Role -> Observation -> (String,Bool)
+unchangedRefusalCase label role observation =
+  let result=qualifiedMatrix role observation
+  in (label ++ outcomeDescription result,case result of
+    Left (StorageCheckFailed name (Storage.CustomCommit Storage.Unchanged)) -> Storage.matrixStepNameText name == stepName SaveUnchanged; _ -> False)
 
 semanticRefusalCase :: String -> Observation -> (String,Bool)
 semanticRefusalCase label observation =
@@ -938,6 +996,10 @@ coldProvenanceCases =
       (transformObservation (mapWireTree laterReset) ownedMatrix)
   , refusalCase "fresh child cannot load a saved emulator checkpoint" OwnedRole
       (transformObservation (mapWireTree savedCheckpoint) ownedMatrix)
+  , refusalCase "cold export must be at the POWER OFF terminal" OwnedRole
+      (alterColdResult (wireField ["power_off","terminal"] (Number 0)) ownedMatrix)
+  , refusalCase "POWER OFF must be switched at the previous action's end" OwnedRole
+      (alterColdResult (wireField ["power_off","switched"] (Number 0)) ownedMatrix)
   , comparisonCase "initial adjustment NAND remains a cross-role cohort input" RolesDiffer retainedMatrix changedInitialSeed
   , semanticRefusalCase "C scanner bit25 is an observed selection requirement"
       (mapStorageSnapshots (wireField ["c_input_bitmap"] (Number 0)) ownedMatrix)

@@ -246,6 +246,21 @@ impl GpioBinding {
     }
 }
 
+/// The POWER switch as an MCU status bit (emulation/README.md: row 11/code 6). Callback
+/// `0x006a00a8` inverts bit 0 of the cached MCU word `0x008280b8`, which `0x006a30e0` refreshes
+/// from MCU register `0x60`; that register is `serial_spi1` route 1's status input. Bit 0 set is OFF.
+pub struct PowerSwitch {
+    pub node: &'static str,
+    pub route: usize,
+    pub register: u8,
+    pub off: u8,
+}
+
+pub const POWER_SWITCH: PowerSwitch = PowerSwitch { node: "serial_spi1", route: 1, register: 0x60, off: 1 };
+
+/// Core 0's stock power-off self-branch, `b .` at `0x00ec5818` (image 5).
+pub const POWER_OFF_TERMINAL: u32 = 0x00ec_5818;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShutterBinding {

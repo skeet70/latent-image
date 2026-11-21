@@ -21,6 +21,7 @@ import Data.Word (Word32)
 import Numeric (readHex, showHex)
 import Text.Read (readMaybe)
 import Replacement.PropertyService.Placement hiding (stage4Carrier)
+import Replacement.PropertyService.RetainedImage4Pcm (pcmWordClosed)
 import qualified Replacement.RecordStore.References as R
 import qualified Replacement.RecordStore.Carrier as RecordCarrier
 import ServiceInventory (Image(..))
@@ -235,8 +236,10 @@ publicationReferences ranges images = R.resolvedReferences ranges images ++ filt
     customHits = concatMap (\region -> scanReferences (asCarrier region) images S.empty) (retiredSettings ++ [Region 0x89f8f0 0x89f8f8])
     entries = map (\(address,_,_) -> address) publishedEntries
     replaced site = any (`contains` site) retiredSettings
+    sample site = maybe False (`pcmWordClosed` site) (lookup ScanImage4 images)
     refused hit
       | hitImage hit == ScanImage4, let GuestAddress site = hitSite hit, replaced site = False
+      | hitImage hit == ScanImage4, sample (hitSite hit) = False
       | otherwise = case hitReference hit of
           BranchInto (GuestAddress target) -> target `notElem` entries
           MovPairInto (GuestAddress target) -> target `notElem` entries

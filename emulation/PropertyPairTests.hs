@@ -6,6 +6,7 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits ((.&.))
+import Data.Word (Word32)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
@@ -60,6 +61,13 @@ main = do
           Right plan -> all (\(accessor,address,_,index) -> M.lookup (address+fromIntegral (index*4)) (planStores plan) == Just accessor) composedBoundaries
             && classifyWriter plan (composedCodeStart+0x80) == CarrierBody
           Left _ -> False)
+    , check "a write through any address window of a checked store is an owned accessor write"
+        (case composedInputs >>= derivePlan of
+          Right plan -> and [ classifyWriter plan (address+4*index) == OwnedAccessor
+                            | (accessor,address,encoded,_) <- composedBoundaries, accessor `elem` [StorageByte,StorageHalf]
+                            , (index,word) <- zip [0..] encoded, word == storeWordOf accessor ]
+            && length [() | (StorageHalf,_,encoded,_) <- composedBoundaries, word <- encoded, word == storeWordOf StorageHalf] == 4
+          Left _ -> False)
     , check "composed plans guard retired bank custom and record interiors but not live entries"
         (case composedInputs >>= derivePlan of
           Right plan -> all (\address -> M.lookup address (planSites plan) == Just (Guard RetiredStorage)) [0x61d8e0,0x6a8488,0x6ac2b8]
@@ -81,6 +89,12 @@ main = do
         (isLeft (do inputs <- composedInputs
                     let contract = inputContract inputs
                     derivePlan inputs{inputContract=contract{contractEntries=[("xm1_bank_store8",composedCodeStart)]}}))
+    , check "a property-only contract naming storage accessors checks them in its carrier"
+        (case fixturePlanInputs OwnedRole (storageHullBindings storageLinked) >>= derivePlan of
+          Right plan -> all (\(accessor,address,_,index) -> M.lookup (address+fromIntegral (index*4)) (planStores plan) == Just accessor) storageBoundaries
+          Left _ -> False)
+    , check "a property-only storage accessor with a changed encoding is refused"
+        (isLeft (fixturePlanInputs OwnedRole (storageHullBindings (B.take 4 storageLinked <> littleWords [0] <> B.drop 8 storageLinked)) >>= derivePlan))
     , check "guarded absolute stores resolve their actual destination and reject whole-write overflow"
         (storeEffect StorageByte [0x409c295c,0xab] == Just (0x409c295c,1,0xab)
           && storeEffect StorageHalf [0x96d1a9,0x1234] == Nothing
@@ -216,6 +230,10 @@ main = do
         (fmap (\result -> (map effectWriter (resultWrites result), map callResult (resultSetters result), map callResult (resultGetters result))) (crawlResult OwnedRole ownedStep)
           == Just ([OwnedAccessor], [Just 0], [Just 0xab]))
     , check "retained and owned observations of the same effects compare equal" (compared retainedStep ownedStep == Right ())
+    , check "hits carrying the runtime's render-object provenance ordinal compare equal"
+        (compared (withProvenance (Number 3) retainedStep) (withProvenance (Number 5) ownedStep) == Right ())
+    , check "a non-numeric render-object provenance ordinal is refused"
+        (isLeft (compared retainedStep (withProvenance (String "3") ownedStep)))
     , check "equivalent spec JSON encoding preserves the retained-owned comparison"
         (let base = observation OwnedRole ownedStep
              spec = " \n" <> obsSpec base <> " \n"
@@ -471,3 +489,13 @@ main = do
   let allResults = results ++ matrixResults ++ bankResults ++ bankProofResults ++ sourceModeResults
   unless (and allResults) exitFailure
   putStrLn ("property-pair-tests: " ++ show (length allResults) ++ " passed")
+
+withProvenance :: Value -> Step -> Step
+withProvenance ordinal step = step {stepHits = map tag (stepHits step)}
+  where
+    tag (Object fields) = Object (KM.insert "render_object_provenance_sequence" ordinal fields)
+    tag other = other
+
+-- `strb r1, [r2]` and `strh r1, [r2]`, the store ending each address window of storage-boundary.S.
+storeWordOf :: StoreAccessor -> Word32
+storeWordOf accessor = if accessor == StorageHalf then 0xe1c210b0 else 0xe5c21000

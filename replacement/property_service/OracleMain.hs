@@ -3,9 +3,10 @@
 
 -- | Compares canonical public entries with the current linked body.
 -- Native-only observations do not admit DAT retirement.
-module OracleMain (main, ExecutionMode (..), FrozenRun, FrozenBatchName (..), BatchExecution (..), executionMode, loadFrozenRun, observeBatch, consumeReport, finishFrozenRun, ResearchMode (..), researchMode, checkCompactBudget, parseCompactAllocationGeometry) where
+module OracleMain (main, ExecutionMode (..), FrozenRun, FrozenBatchName (..), BatchExecution (..), executionMode, loadFrozenRun, observeBatch, consumeReport, finishFrozenRun, ResearchMode (..), researchMode, checkCompactBudget, parseCompactAllocationGeometry, stockCaseRow) where
 
 import qualified ArmElf as ELF
+import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON, Value (..), eitherDecodeStrict', object, withObject, (.=))
@@ -13,9 +14,12 @@ import Data.Aeson.Types (parseEither, (.:))
 import qualified Data.Aeson.Key as K
 import qualified Emulation.NativeCase as NC
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Short as SBS
 import Data.Either (isLeft)
 import Data.Containers.ListUtils (nubOrd)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Set as S
@@ -49,6 +53,7 @@ import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMis
 import System.Environment (getArgs, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (ExitSuccess), exitFailure, exitSuccess)
 import System.FilePath (takeDirectory, takeFileName, (</>))
+import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
 import System.Process (readProcessWithExitCode)
 
 canonicalImage4Sha256 :: String
@@ -330,8 +335,20 @@ observeBatch execution directory identifiers = case execution of
       pure (BatchExecuted, observations)
     Just cacheRoot -> cachedObservedBatchWith WriteAllResults cacheRoot runner (directory </> "batch.json")
 
--- | One runner session over at most 'batchLimit' cases in @directory@, its runs keyed by case label.
-runBatch :: BatchGate -> Maybe FilePath -> FilePath -> FilePath -> [CaseSpec] -> IO (BatchRecord, M.Map CaseLabel Run)
+-- | A case report's SHA-256 in hexadecimal, held unpinned.
+newtype ReportDigest = ReportDigest SBS.ShortByteString deriving Eq
+
+reportDigest :: Sha256 -> ReportDigest
+reportDigest digest = ReportDigest (SBS.toShort (BC.pack (sha256Hex digest)))
+
+reportDigestText :: ReportDigest -> String
+reportDigestText (ReportDigest digest) = BC.unpack (SBS.fromShort digest)
+
+batchDirectory :: FilePath -> String -> Int -> FilePath
+batchDirectory out prefix index = out </> prefix ++ "-" ++ (if index < 10 then "0" else "") ++ show index
+
+-- | One runner session over at most 'batchLimit' cases in @directory@: each case's run and report digest, in case order.
+runBatch :: BatchGate -> Maybe FilePath -> FilePath -> FilePath -> [CaseSpec] -> IO (BatchRecord, [(Run, ReportDigest)])
 runBatch (BatchGate contract admission measuredPaths checkpoint counter frozen) cache runner directory specs = do
   storageCheckpoint BeforeBatch admission measuredPaths
   ensure (length specs <= batchLimit) "batch over the case limit"
@@ -340,6 +357,7 @@ runBatch (BatchGate contract admission measuredPaths checkpoint counter frozen) 
   (reuse, observed) <- observeBatch execution directory (map (CaseId . caseId) specs)
   ensure (length observed == length specs) (batchPath ++ ": observation count differs from the case count")
   rows <- forM (zip specs observed) $ \(spec, (CaseId label, observation)) -> do
+    ensure (label == caseId spec) (batchPath ++ ": observation " ++ label ++ " is out of case order")
     consumed <- consumeReport execution directory (CaseId label)
     let report = consumedValue consumed
         reportPath = directory </> label ++ ".native-result.json"
@@ -347,31 +365,94 @@ runBatch (BatchGate contract admission measuredPaths checkpoint counter frozen) 
     run <- either (\problem -> failH (reportPath ++ ": " ++ problem)) pure (runOf observation writes)
     let abiRun = projectRun contract (caseExpectedRegisters spec) run
     forced <- evaluate (forceRun abiRun)
-    pure (CaseLabel label, forced, sha256Hex (consumedDigest consumed))
+    digest <- evaluate (reportDigest (consumedDigest consumed))
+    pure (label, forced, digest)
   batchBytes <- B.readFile batchPath
   let batchDigest = sha256 batchBytes
       batchSha = sha256Hex batchDigest
       summary = encodeCanonical $ object
         [ "batch_sha256" .= batchSha
-        , "cases" .= [object ["id" .= label, "status" .= runnerStatusLabel (runStatus run), "result_sha256" .= digest] | (CaseLabel label, run, digest) <- rows]
+        , "cases" .= [object ["id" .= label, "status" .= runnerStatusLabel (runStatus run), "result_sha256" .= reportDigestText digest] | (label, run, digest) <- rows]
         ]
   B.writeFile (directory </> "summary.json") summary
   record <- evaluate (BatchRecord (takeFileName directory) (length specs) batchDigest (sha256 summary) reuse)
-  runs <- evaluate (M.fromList [(label, run) | (label, run, _) <- rows])
   storageCheckpoint AfterBatch admission measuredPaths
+  putStrLn (takeFileName directory ++ ": " ++ reuseLabel reuse)
   completed <- atomicModifyIORef' counter (\count -> let next = count + 1 in (next, next))
   when (maybe False (\(BatchCheckpoint limit) -> completed >= limit) checkpoint)
     (failH ("batch checkpoint reached after " ++ show completed ++ " complete chunks; passed=false qualification_status=partial"))
-  pure (record, runs)
+  pure (record, [(run, digest) | (_, run, digest) <- rows])
 
-runBatches :: BatchGate -> Maybe FilePath -> FilePath -> FilePath -> String -> [CaseSpec] -> IO ([BatchRecord], M.Map CaseLabel Run)
-runBatches gate cache runner out prefix specs = do
-  results <- forM (zip [0 :: Int ..] (chunks batchLimit specs)) $ \(index, chunk) ->
-    runBatch gate cache runner (out </> prefix ++ "-" ++ (if index < 10 then "0" else "") ++ show index) chunk
-  pure (map fst results, M.unions (map snd results))
+-- | Runs @items@ in batches of 'batchLimit' under @prefix@. @prepare@ gives an item's case and the
+-- judgment of its run; a batch's runs are released once each judgment is evaluated to weak head normal form.
+runReduced :: BatchGate -> Maybe FilePath -> FilePath -> FilePath -> String -> [a] -> (a -> IO (CaseSpec, Run -> ReportDigest -> IO b)) -> IO ([BatchRecord], [b])
+runReduced gate cache runner out prefix items prepare = do
+  results <- forM (zip [0 :: Int ..] (chunks batchLimit items)) $ \(index, chunk) -> do
+    prepared <- mapM prepare chunk
+    (record, runs) <- runBatch gate cache runner (batchDirectory out prefix index) (map fst prepared)
+    judged <- forM (zip prepared runs) $ \((_, judge), (run, digest)) -> judge run digest >>= evaluate
+    pure (record, judged)
+  pure (map fst results, concatMap snd results)
 
-lookupRun :: M.Map CaseLabel Run -> CaseLabel -> IO Run
-lookupRun runs label = maybe (failH ("no run for " ++ caseLabelText label)) pure (M.lookup label runs)
+-- | A finished pass whose runs later passes compare against: its batch prefix under the output
+-- and each case's report digest by ordinal.
+data ReferencePass = ReferencePass FilePath String (IM.IntMap ReportDigest)
+
+referencePass :: FilePath -> String -> [ReportDigest] -> ReferencePass
+referencePass out prefix digests = ReferencePass out prefix (IM.fromList (zip [0 ..] digests))
+
+-- | The run of the case at @ordinal@ of a reference pass, read back from the report that pass judged.
+referenceRun :: EntryContract -> ReferencePass -> Int -> CaseSpec -> IO Run
+referenceRun contract (ReferencePass out prefix digests) ordinal spec = do
+  let path = batchDirectory out prefix (ordinal `div` batchLimit) </> caseId spec ++ ".native-result.json"
+  (bytes, report) <- readEvidence path
+  ensure (Just (reportDigest (sha256 bytes)) == IM.lookup ordinal digests) (path ++ ": reference report differs from the one its pass judged")
+  exit <- orFail (path ++ ": runner exit") (N.reportRunnerExit report)
+  observation <- orFail (path ++ ": runner observation") (N.observeNative exit [region | CaseRegion region _ <- caseRegions spec] (get report "runner"))
+  writes <- either (\problem -> failH (path ++ ": " ++ problem)) pure (reportWrites report)
+  run <- either (\problem -> failH (path ++ ": " ++ problem)) pure (runOf observation writes)
+  evaluate (forceRun (projectRun contract (caseExpectedRegisters spec) run))
+
+-- | A list whose elements are evaluated to weak head normal form.
+forcedList :: [a] -> [a]
+forcedList items = foldr seq () items `seq` items
+
+slotSites :: [Word32]
+slotSites = [0x1618, 0x16c, 0x148, 0x7c, 0x6c, 0x70]
+
+-- | One stock or candidate run reduced to what the results report: its status, its entry count
+-- at each of 'slotSites', its stub events when the results list them per case, its differences
+-- and its report digest.
+data Outcome = Outcome
+  { outcomeStatus :: !RunnerStatus
+  , outcomeSlots :: ![Int]
+  , outcomeEvents :: ![H.BoundaryEvent]
+  , outcomeDifferences :: ![Difference]
+  , outcomeDigest :: !ReportDigest
+  }
+
+outcomeOf :: Bool -> [Difference] -> Run -> ReportDigest -> IO Outcome
+outcomeOf perCaseEvents differences run digest = do
+  let events = maybe [] eventsOf (lookup callsId (runMemory run))
+      forcedEvents = forcedList [event | event@(H.BoundaryEvent site a b c) <- events, site `seq` a `seq` b `seq` c `seq` True]
+  evaluate (Outcome (runStatus run)
+    (forcedList [length [() | H.BoundaryEvent found _ _ _ <- events, found == site] | site <- slotSites])
+    (if perCaseEvents then forcedEvents else [])
+    (forcedList differences)
+    digest)
+
+-- | A control run reduced to its status and differences.
+data ControlRun = ControlRun !RunnerStatus ![Difference]
+
+controlRun :: [Difference] -> Run -> IO ControlRun
+controlRun differences run = evaluate (ControlRun (runStatus run) (forcedList differences))
+
+-- | 'fixtureImage' of @image@ under each fixture variant.
+variantImages :: [(DefaultImage, P.GuestAddress)] -> Fixture -> B.ByteString -> M.Map FixtureVariant B.ByteString
+variantImages windows fx image = M.fromList [(variant, fixtureImage windows (variantFixture fx variant) image) | variant <- [minBound .. maxBound]]
+
+variantImage :: M.Map FixtureVariant B.ByteString -> FixtureVariant -> B.ByteString
+variantImage images variant = fromMaybe (error "fixture variant without an image") (M.lookup variant images)
 
 
 -- | A case under one fixture variant.
@@ -397,8 +478,8 @@ classLabel standing = case standing of
   Classified (Delegated _) -> "delegated"
   OutOfRange -> "out-of-range"
 
-statusCounts :: [Run] -> Value
-statusCounts runs = object [fromString status .= count | (status, count) <- M.toList (M.fromListWith (+) [(runnerStatusLabel (runStatus run), 1 :: Int) | run <- runs])]
+statusCounts :: [RunnerStatus] -> Value
+statusCounts statuses = object [fromString status .= count | (status, count) <- M.toList (M.fromListWith (+) [(runnerStatusLabel status, 1 :: Int) | status <- statuses])]
 
 -- | The first 20 differences of each kind, in case order.
 differenceSamples :: [(String, CaseLabel, Difference)] -> Value
@@ -511,8 +592,27 @@ controlHolds control failed = case controlKind control of
   MustFail -> failed > 0
   MustPass -> failed == 0
 
+-- | A case's results row: its stock entry, the stock evidence its report at @path@ shows inside
+-- that entry's extent, and its pass-2 differences. The row is in normal form, so it holds nothing of the parsed report.
+stockCaseRow :: FilePath -> CaseLabel -> Word32 -> [Difference] -> IO Value
+stockCaseRow path label entryAddress differences = do
+  let extent = fromMaybe 4 (lookup entryAddress [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions])
+  stockEvidence <- evidenceAt path entryAddress extent
+  evaluate (force (object
+    [ "id" .= caseLabelText label
+    , "entry" .= hex entryAddress
+    , "extent" .= extent
+    , "stock_trace_instructions" .= evidenceTrace stockEvidence
+    , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
+    , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
+    , "stock_instructions" .= evidenceInstructions stockEvidence
+    , "stock_status" .= evidenceStatus stockEvidence
+    , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
+    ]))
+
 main :: IO ()
 main = do
+  hSetBuffering stdout LineBuffering
   arguments <- getArgs
   case dropWhile (/= "--emit-case-table") arguments of
     [] -> pure ()
@@ -577,7 +677,7 @@ deriveFor shape = case shape of
 stageFor :: PublicEntryShape -> CanonicalSource -> LinkedArtifact -> Either ArtifactError B.ByteString
 stageFor shape = case shape of
   CanonicalEntry -> stagedImage4Bytes
-  PublicWrapperEntry -> \source artifact -> stagedBytes <$> stageNativeImage4 source artifact
+  PublicWrapperEntry -> \source artifact -> stagedBytes <$> stageNativeImage4 AdmittedRetirement source artifact
 
 -- | The ids `--ids` lists as comma-separated hex, or Nothing for every id.
 subsetIds :: [String] -> IO (Maybe (S.Set PropertyId))
@@ -755,12 +855,14 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
           patches <- slotPatch "c-selector-3" identifier arm arm {slotDefault = SlotStock (Stock61d65c Profile3)}
           Right (Control "c-selector-3" MustFail (PatchedCandidate patches) (acrossVariants identifier defaultOperations) ("0x61d65c selector 2 -> 3 for " ++ propertyHex identifier))
         [] -> Left "c-selector-3: no slot field calls 0x61d65c with selector 2"
-      gateByteControl = case [(identifier, arm, gateOffset) | (identifier, OwnedField arm@(FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gateOffset)))) <- armsWhere gated] of
-        (identifier, arm, gateOffset) : _ -> do
-          patches <- specialPatches "c-gate-byte" identifier (HookedField arm) (HookedField arm {fieldHook = ConfigGatedResave (ConfigOffset (gateOffset + 1))})
-          Right (Control "c-gate-byte" MustFail (PatchedCandidate patches) (acrossVariants identifier [o | o@(Set {}) <- operations])
-            ("gate byte " ++ hex (configBase + fromIntegral gateOffset) ++ " -> " ++ hex (configBase + fromIntegral gateOffset + 1) ++ " for " ++ propertyHex identifier))
-        [] -> Left "c-gate-byte: no gated field"
+      -- The owned setter reads the gate through its configuration service's literal address, not through the
+      -- SPECIALS hook offset, so the control moves that literal.
+      gateReadControl = case [(identifier, configBase + fromIntegral gateOffset) | (identifier, OwnedField (FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gateOffset)))) <- armsWhere gated] of
+        (identifier, gateAddress) : _ -> case [address | address <- [carrierStart, carrierStart + 4 .. carrierEnd - 4], candidateWord address == gateAddress] of
+          [site] -> Right (Control "c-gate-read" MustFail (PatchedCandidate [Patch site gateAddress (gateAddress + 1)]) (acrossVariants identifier [o | o@(Set {}) <- operations])
+            ("gate read " ++ hex gateAddress ++ " -> " ++ hex (gateAddress + 1) ++ " at the owned literal " ++ hex site ++ " for " ++ propertyHex identifier))
+          sites -> Left ("c-gate-read: the owned carrier holds " ++ show (length sites) ++ " literals of gate " ++ hex gateAddress)
+        [] -> Left "c-gate-read: no gated field"
       mirrorControl name chosen note = case [(identifier, arm) | (identifier, OwnedSlotField arm@(SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)] of
         (identifier, arm) : _ -> do
           index <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no slot index")) Right (slotIndexOf identifier)
@@ -818,7 +920,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             "defect build: the configuration default's store saves first"
         , defectControl "c-gate-inverted" "invert_gate" [RunCase variant (OracleCase identifier o) | (identifier, _) <- armsWhere gated, variant <- allVariants, o@(Set {}) <- operations]
             "defect build: the gated resave runs when the gate byte is not 0"
-        , gateByteControl
+        , gateReadControl
         , mirrorControl "c-mirror-getter" [o | o@(Get {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the getter reads the requested slot"
         , mirrorControl "c-mirror-write" [o | o@(Set {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the set omits the record-0 write"
         , readOnlyControl "c-read-only-stores" (\arm -> HookedField arm) [o | o@(Set {}) <- operations] "SPECIALS subkind read-only -> hooked field; the set stores the field"
@@ -895,7 +997,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
           NativeEvidence view -> isLeft (validateNativeImage4View view mutated)
           StagedEvidence _ _ _ -> isLeft (case shape of
             CanonicalEntry -> validateStagedImage4 (sourceHull source) artifact image4 mutated
-            PublicWrapperEntry -> validateLocalImage4 artifact image4 mutated))
+            PublicWrapperEntry -> validateLocalImage4 (sourceKept source) artifact image4 mutated))
       at address after = Patch address (candidateWord address) after
       admissionControls :: [(String, Bool)]
       admissionControls =
@@ -1079,24 +1181,21 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     if Compact.compactConsumerAgreement result then exitSuccess else exitFailure
 
   -- Pass 1: stock.
-  let stockSpecsFor = [withDerivedFrame stockSupplied [] (stockSpec contract (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc)) | rc <- runCases]
-  (stockBatches, stockRuns) <- runBatches gate cache runner out "stock" stockSpecsFor
-  let stockRun rc = lookupRun stockRuns (runLabel rc)
-  modelRows <- fmap concat . forM runCases $ \rc -> case modelled (standing (runProperty rc)) of
-    Nothing -> pure []
-    Just owned -> do
-      run <- stockRun rc
-      pure [(rc, modelDifferences contract (fxOf rc) owned (oracleOperation (runCase rc)) run)]
+  let stockSpecOf rc = withDerivedFrame stockSupplied [] (stockSpec contract (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc))
+      modelOf rc = modelled (standing (runProperty rc))
+  (stockBatches, stockOutcomes) <- runReduced gate cache runner out "stock" runCases $ \rc ->
+    pure (stockSpecOf rc, \run -> outcomeOf smokeRun (maybe [] (\owned -> modelDifferences contract (fxOf rc) owned (oracleOperation (runCase rc)) run) (modelOf rc)) run)
+  let modelRows = [(rc, outcomeDifferences outcome) | (rc, outcome) <- zip runCases stockOutcomes, isJust (modelOf rc)]
+      stockPass = referencePass out "stock" (map outcomeDigest stockOutcomes)
+      stockReference ordinal rc = referenceRun contract stockPass ordinal (stockSpecOf rc)
+      ownedCaseSpec images c reference = withDerivedFrame ownedSupplied ownedRanges (caseSpec (variantImage images (runVariant c)) candidateFunctions (fxOf c) (runLabel c) (standing (runProperty c)) (runCase c) (observedExpectation reference))
 
   -- Pass 2: candidate against stock.
-  candidateSpecs <- forM runCases $ \c -> do
-    run <- stockRun c
-    pure (withDerivedFrame ownedSupplied ownedRanges (caseSpec (fixtureImage (artifactDefaultWindows artifact) (fxOf c) candidate) candidateFunctions (fxOf c) (runLabel c) (standing (runProperty c)) (runCase c) (observedExpectation run)))
-  (candidateBatches, candidateRuns) <- runBatches gate cache runner out "candidate" candidateSpecs
-  verdicts <- forM runCases $ \c -> do
-    reference <- stockRun c
-    subject <- lookupRun candidateRuns (runLabel c)
-    pure (c, compareRuns reference subject)
+  let candidateImages = variantImages (artifactDefaultWindows artifact) fx candidate
+  (candidateBatches, candidateOutcomes) <- runReduced gate cache runner out "candidate" (zip [0 ..] runCases) $ \(ordinal, c) -> do
+    reference <- stockReference ordinal c
+    pure (ownedCaseSpec candidateImages c reference, \run -> outcomeOf smokeRun (compareRuns reference run) run)
+  let verdicts = zip runCases (map outcomeDifferences candidateOutcomes)
   -- Wrong variants: each applies the mutants tool's one word to the owned image
   -- and runs the same case plan, so a control row names the variant's site.
   variantInputs <- variantArguments arguments
@@ -1105,38 +1204,35 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
     ensure (address >= carrierStart && address + 4 <= carrierEnd) ("variant " ++ name ++ " is outside the owned carrier")
     let offset = fromIntegral (address - image4Base)
     ensure (offset + 4 <= B.length candidate) ("variant " ++ name ++ " is outside the owned image")
-    let image = B.take offset candidate <> word32le mutated <> B.drop (offset + 4) candidate
-    specs <- forM runCases $ \c -> do
-      run <- stockRun c
-      pure (withDerivedFrame ownedSupplied ownedRanges (caseSpec (fixtureImage (artifactDefaultWindows artifact) (fxOf c) image) candidateFunctions (fxOf c) (runLabel c) (standing (runProperty c)) (runCase c) (observedExpectation run)))
-    (batches, runs) <- runBatches gate cache runner out ("variant-" ++ name) specs
-    outcomes <- forM runCases $ \c -> do
-      reference <- stockRun c
-      subject <- lookupRun runs (runLabel c)
-      pure (runLabel c, compareRuns reference subject)
-    pure (batches, (name, outcomes))
+    let images = variantImages (artifactDefaultWindows artifact) fx (B.take offset candidate <> word32le mutated <> B.drop (offset + 4) candidate)
+    (batches, outcomes) <- runReduced gate cache runner out ("variant-" ++ name) (zip [0 ..] runCases) $ \(ordinal, c) -> do
+      reference <- stockReference ordinal c
+      pure (ownedCaseSpec images c reference, \run _ -> evaluate (forcedList (compareRuns reference run)))
+    pure (batches, (name, zip (map runLabel runCases) outcomes))
   let entryStanding c = standing (oracleProperty (entryOperation c))
       entryExpected c = projectExpectation contract (fromMaybe placeholderExpectation (modelled (entryStanding c) >>= \owned -> modelExpectation fx owned (oracleOperation (entryOperation c))))
-  (entryStockBatches, entryStockRuns) <- runBatches gate cache runner out "entry-stock"
-    [withDerivedFrame stockSupplied [] (entryCaseSpec image4 stockFunctions fx (entryLabel c) (entryStanding c) c (entryExpected c)) | c <- adapterCases]
-  (entryCandidateBatches, entryCandidateRuns) <- runBatches gate cache runner out "entry-candidate"
-    [withDerivedFrame ownedSupplied ownedRanges (entryCaseSpec candidate candidateFunctions fx (entryLabel c) (entryStanding c) c (entryExpected c)) | c <- adapterCases]
-  entryVerdicts <- forM adapterCases $ \c -> do
-    reference <- lookupRun entryStockRuns (entryLabel c)
-    subject <- lookupRun entryCandidateRuns (entryLabel c)
-    pure (c, compareRuns reference subject ++ case modelled (entryStanding c) of
-      Nothing -> []
-      Just owned -> modelDifferences contract fx owned (oracleOperation (entryOperation c)) subject)
-  let wrappers = (if smokeRun then take 2 else id) [(wrapper, OracleCase identifier (Get Bank0 LiveRead (SlotArgument 0))) | wrapper <- [minBound .. maxBound], identifier <- propertyIds, inSubset identifier]
+      entryStockSpec c = withDerivedFrame stockSupplied [] (entryCaseSpec image4 stockFunctions fx (entryLabel c) (entryStanding c) c (entryExpected c))
+  (entryStockBatches, entryStockDigests) <- runReduced gate cache runner out "entry-stock" adapterCases $ \c ->
+    pure (entryStockSpec c, \_ digest -> pure digest)
+  let entryStockPass = referencePass out "entry-stock" entryStockDigests
+  (entryCandidateBatches, entryDifferences) <- runReduced gate cache runner out "entry-candidate" (zip [0 ..] adapterCases) $ \(ordinal, c) -> do
+    reference <- referenceRun contract entryStockPass ordinal (entryStockSpec c)
+    pure (withDerivedFrame ownedSupplied ownedRanges (entryCaseSpec candidate candidateFunctions fx (entryLabel c) (entryStanding c) c (entryExpected c)),
+      \subject _ -> evaluate (forcedList (compareRuns reference subject ++ case modelled (entryStanding c) of
+        Nothing -> []
+        Just owned -> modelDifferences contract fx owned (oracleOperation (entryOperation c)) subject)))
+  let entryVerdicts = zip adapterCases entryDifferences
+      wrappers = (if smokeRun then take 2 else id) [(wrapper, OracleCase identifier (Get Bank0 LiveRead (SlotArgument 0))) | wrapper <- [minBound .. maxBound], identifier <- propertyIds, inSubset identifier]
       wrapperLabel wrapper c = prefixedCaseLabel (CaseLabel ("wrapper-" ++ show (fromEnum wrapper))) (caseLabel c)
-      wrapperSpecs image functions = [wrapperCaseSpec wrapper image functions fx (wrapperLabel wrapper c) (standing (oracleProperty c)) c | (wrapper, c) <- wrappers]
-  (wrapperStockBatches, wrapperStockRuns) <- runBatches gate cache runner out "wrapper-stock" (map (withDerivedFrame stockSupplied []) (wrapperSpecs image4 stockFunctions))
-  (wrapperCandidateBatches, wrapperCandidateRuns) <- runBatches gate cache runner out "wrapper-candidate" (map (withDerivedFrame ownedSupplied ownedRanges) (wrapperSpecs candidate candidateFunctions))
-  wrapperVerdicts <- forM wrappers $ \(wrapper, c) -> do
-    let label = wrapperLabel wrapper c
-    reference <- lookupRun wrapperStockRuns label
-    subject <- lookupRun wrapperCandidateRuns label
-    pure (label, compareRuns reference subject)
+      wrapperSpec image functions (wrapper, c) = wrapperCaseSpec wrapper image functions fx (wrapperLabel wrapper c) (standing (oracleProperty c)) c
+      wrapperStockSpec = withDerivedFrame stockSupplied [] . wrapperSpec image4 stockFunctions
+  (wrapperStockBatches, wrapperStockDigests) <- runReduced gate cache runner out "wrapper-stock" wrappers $ \item ->
+    pure (wrapperStockSpec item, \_ digest -> pure digest)
+  let wrapperStockPass = referencePass out "wrapper-stock" wrapperStockDigests
+  (wrapperCandidateBatches, wrapperDifferences) <- runReduced gate cache runner out "wrapper-candidate" (zip [0 ..] wrappers) $ \(ordinal, item) -> do
+    reference <- referenceRun contract wrapperStockPass ordinal (wrapperStockSpec item)
+    pure (withDerivedFrame ownedSupplied ownedRanges (wrapperSpec candidate candidateFunctions item), \subject _ -> evaluate (forcedList (compareRuns reference subject)))
+  let wrapperVerdicts = zip [wrapperLabel wrapper c | (wrapper, c) <- wrappers] wrapperDifferences
   entryControlImages <- forM
     [("nonzero-means-default", "nonzero_means_default"), ("sentinel-plus-one", "sentinel_plus_one")] $ \(name, defect) ->
       case M.lookup (DefectName defect) defects of
@@ -1164,68 +1260,51 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         PublicWrapperEntry -> candidateFunctions
         CanonicalEntry -> candidateFunctions ++ [FunctionSpan (carrierEnd - 16) (carrierEnd - 4)])
   let controlEntryLabel name c = prefixedCaseLabel (CaseLabel ("ec-" ++ name)) (entryLabel c)
-  (entryControlBatches, entryControlRuns) <- runBatches gate cache runner out "entry-controls"
-    [entryCaseSpec image spans fx (controlEntryLabel name c) (entryStanding c) c (entryExpected c)
-    | (name, image, spans) <- entryControlImages ++ veneerImages, c <- entryControlCases name]
-  entryControlOutcomes <- forM (entryControlImages ++ veneerImages) $ \(name, _, _) -> do
-    rows <- forM (entryControlCases name) $ \c -> do
-      subject <- lookupRun entryControlRuns (controlEntryLabel name c)
-      let differences = expectationDifferences (entryExpected c) subject
-      pure (subject, differences)
-    let failed = length [() | (_, differences) <- rows, not (null differences)]
-        statuses = map (runnerStatusLabel . runStatus . fst) rows
-        holds = failed > 0 && all ((== Returned) . runStatus . fst) rows
-    pure (object ["name" .= name, "holds" .= holds, "failed_cases" .= failed, "statuses" .= statuses], holds)
+      entryControlItems = [(name, image, spans, c) | (name, image, spans) <- entryControlImages ++ veneerImages, c <- entryControlCases name]
+  (entryControlBatches, entryControlRuns) <- runReduced gate cache runner out "entry-controls" entryControlItems $ \(name, image, spans, c) ->
+    pure (entryCaseSpec image spans fx (controlEntryLabel name c) (entryStanding c) c (entryExpected c), \subject _ -> controlRun (expectationDifferences (entryExpected c) subject) subject)
+  let entryControlOutcomes =
+        [ (object ["name" .= name, "holds" .= holds, "failed_cases" .= failed, "statuses" .= map runnerStatusLabel statuses], holds)
+        | (name, _, _) <- entryControlImages ++ veneerImages
+        , let rows = [result | ((rowName, _, _, _), result) <- zip entryControlItems entryControlRuns, rowName == name]
+              failed = length [() | ControlRun _ differences <- rows, not (null differences)]
+              statuses = [status | ControlRun status _ <- rows]
+              holds = failed > 0 && all (== Returned) statuses
+        ]
 
   -- Guest controls.
   controlImages <- forM planned $ \control -> case controlImage control of
     PatchedCandidate patches -> do
       image <- either (failH . ((controlName control ++ ": ") ++)) pure (applyPatches patches candidate)
-      pure (control, image, candidateFunctions,artifactDefaultWindows artifact)
+      pure (control, variantImages (artifactDefaultWindows artifact) fx image, candidateFunctions)
     DefectBuild defect@(DefectName name) -> case M.lookup defect defects of
-      Just (image, spans, _, windows) -> pure (control, image, spans,windows)
+      Just (image, spans, _, windows) -> pure (control, variantImages windows fx image, spans)
       Nothing -> failH (controlName control ++ ": no --defect " ++ name)
-  controlSpecs <- forM (concat [[(control, image, spans, windows, c) | c <- controlCases control] | (control, image, spans, windows) <- controlImages]) $ \(control, image, spans, windows, c) -> do
-    run <- stockRun c
-    pure (caseSpec (fixtureImage windows (fxOf c) image) spans (fxOf c) (runPrefixed (controlName control) c) (standing (runProperty c)) (runCase c) (observedExpectation run))
-  (controlBatches, controlRuns) <- runBatches gate cache runner out "controls" controlSpecs
-  controlOutcomes <- forM controlImages $ \(control, _, _, _) -> do
-    failures <- fmap concat . forM (controlCases control) $ \c -> do
-      reference <- stockRun c
-      subject <- lookupRun controlRuns (runPrefixed (controlName control) c)
-      pure [(runPrefixed (controlName control) c, d) | d <- compareRuns reference subject]
-    let failedCases = M.size (M.fromListWith (++) [(label, [d]) | (label, d) <- failures])
-    pure (control, failedCases, failures)
-  let controlsHold = null unavailable && and [controlHolds control failed | (control, failed, _) <- controlOutcomes]
+  let controlCaseSet = S.fromList (concatMap controlCases planned)
+      stockOrdinals = M.fromList [(rc, ordinal) | (ordinal, rc) <- zip [0 :: Int ..] runCases, S.member rc controlCaseSet]
+      controlItems = [(control, images, spans, c) | (control, images, spans) <- controlImages, c <- controlCases control]
+  (controlBatches, controlRuns) <- runReduced gate cache runner out "controls" controlItems $ \(control, images, spans, c) -> do
+    ordinal <- maybe (failH (caseLabelText (runLabel c) ++ ": control case is not a stock case")) pure (M.lookup c stockOrdinals)
+    reference <- stockReference ordinal c
+    pure (caseSpec (variantImage images (runVariant c)) spans (fxOf c) (runPrefixed (controlName control) c) (standing (runProperty c)) (runCase c) (observedExpectation reference),
+      \subject _ -> controlRun (compareRuns reference subject) subject)
+  let controlOutcomes =
+        [ (control, M.size (M.fromListWith (++) [(label, [d]) | (label, d) <- failures]), failures)
+        | (control, _, _) <- controlImages
+        , let failures = [(runPrefixed (controlName rowControl) c, d) | ((rowControl, _, _, c), ControlRun _ differences) <- zip controlItems controlRuns, controlName rowControl == controlName control, d <- differences]
+        ]
+      controlsHold = null unavailable && and [controlHolds control failed | (control, failed, _) <- controlOutcomes]
         && and (map snd admissionControls) && and (map snd entryControlOutcomes)
-        && all ((== Returned) . runStatus) (M.elems controlRuns)
+        && and [status == Returned | ControlRun status _ <- controlRuns]
 
   -- Per-case stock evidence for the shared judge: the entry each case entered and
   -- the instructions the runner reports inside that entry's extent.
-  let caseBatch index = "stock-" ++ (if index < 10 then "0" else "") ++ show index
-      caseOrdinals = M.fromList (zip (map runLabel runCases) [0 :: Int ..])
-      entryExtents = [(spanStart span', spanEnd span' - spanStart span') | span' <- stockFunctions]
-      extentOf entry = fromMaybe 4 (lookup entry entryExtents)
-  caseRows <- forM (zip runCases verdicts) $ \(rc, (_, differences)) -> do
+  caseRows <- forM (zip3 [0 :: Int ..] runCases verdicts) $ \(ordinal, rc, (_, differences)) -> do
     let label = runLabel rc
         spec = stockSpec contract (fxOf rc) image4 properties label stockFunctions (runCase rc)
         N.GuestAddress entry = caseEntry spec
-        entryAddress = fromIntegral entry :: Word32
-        extent = extentOf entryAddress
-        ordinal = fromMaybe 0 (M.lookup label caseOrdinals)
-        path = out </> caseBatch (ordinal `div` batchLimit) </> (caseLabelText label ++ ".native-result.json")
-    stockEvidence <- evidenceAt path entryAddress extent
-    pure (object
-      [ "id" .= caseLabelText label
-      , "entry" .= hex entryAddress
-      , "extent" .= extent
-      , "stock_trace_instructions" .= evidenceTrace stockEvidence
-      , "stock_provenance_instructions" .= evidenceProvenance stockEvidence
-      , "stock_instructions_inside" .= (evidenceTrace stockEvidence + evidenceProvenance stockEvidence)
-      , "stock_instructions" .= evidenceInstructions stockEvidence
-      , "stock_status" .= evidenceStatus stockEvidence
-      , "differences" .= [differenceKind difference ++ ": " ++ differenceDetail difference | difference <- differences]
-      ])
+        path = batchDirectory out "stock" (ordinal `div` batchLimit) </> (caseLabelText label ++ ".native-result.json")
+    stockCaseRow path label (fromIntegral entry) differences
 
   -- Results.
   runnerSha <- sha256Hex <$> (canonicalizePath runner >>= sha256File)
@@ -1239,8 +1318,8 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       byClass = M.fromListWith (\(a, b, c) (d, e, f) -> (a + d, b + e, c + f))
         [(classOf (runProperty c), (1 :: Int, if null ds then 1 else 0 :: Int, if null ds then 0 else 1 :: Int)) | (c, ds) <- verdicts]
       runIds = M.keys (M.fromList [(runProperty c, ()) | c <- runCases])
-      stockAll = M.elems stockRuns
-      candidateAll = M.elems candidateRuns
+      stockStatuses = map outcomeStatus stockOutcomes
+      candidateStatuses = map outcomeStatus candidateOutcomes
       passed = null modelFailures && null verdictFailures && all (null . snd) entryVerdicts && all (null . snd) wrapperVerdicts && controlsHold
       allBatches = stockBatches ++ candidateBatches ++ controlBatches ++ concat variantBatches ++ entryStockBatches ++ entryCandidateBatches ++ entryControlBatches ++ wrapperStockBatches ++ wrapperCandidateBatches
       executedBatches = length [() | record <- allBatches, not (isJust frozen), recordReuse record == BatchExecuted]
@@ -1248,14 +1327,8 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
       executedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchExecuted]
       reusedCases = sum [recordCases record | record <- allBatches, not (isJust frozen), recordReuse record == BatchReused]
       batchValue record = object ["name" .= recordName record, "cases" .= recordCases record, "batch_sha256" .= sha256Hex (recordBatchSha record), "summary_sha256" .= sha256Hex (recordSummarySha record), "reuse" .= (if isJust frozen then "offline-rejudged" else reuseLabel (recordReuse record))]
-      slotSites = [0x1618, 0x16c, 0x148, 0x7c, 0x6c, 0x70 :: Word32]
-      eventsOfRun run = maybe [] eventsOf (lookup callsId (runMemory run))
-      runEvents runs label = maybe [] eventsOfRun (M.lookup label runs)
       eventJson (H.BoundaryEvent site a b c) = object ["site" .= hex site, "a" .= hex a, "b" .= hex b, "c" .= hex c]
-      slotCounts runs =
-        [ object ["site" .= hex site, "count" .= length [() | run <- runs, H.BoundaryEvent found _ _ _ <- eventsOfRun run, found == site]]
-        | site <- slotSites
-        ]
+      slotCounts outcomes = [object ["site" .= hex site, "count" .= count] | (site, count) <- zip slotSites (foldl' (\totals slots -> forcedList (zipWith (+) totals slots)) (map (const 0) slotSites) (map outcomeSlots outcomes))]
       results = object
         [ "schema_version" .= (1 :: Int)
         , "suite" .= ("property-service" :: String)
@@ -1292,16 +1365,16 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
         , "batches" .= map batchValue allBatches
         , "slot_entries" .= object
             [ "sites" .= slotSites
-            , "stock" .= slotCounts stockAll
-            , "candidate" .= slotCounts candidateAll
+            , "stock" .= slotCounts stockOutcomes
+            , "candidate" .= slotCounts candidateOutcomes
             , "cases" .=
                 [ object
                     [ "case" .= caseLabelText (runLabel c)
                     , "property" .= propertyHex (runProperty c)
-                    , "stock" .= map eventJson (runEvents stockRuns (runLabel c))
-                    , "candidate" .= map eventJson (runEvents candidateRuns (runLabel c))
+                    , "stock" .= map eventJson (outcomeEvents stockOutcome)
+                    , "candidate" .= map eventJson (outcomeEvents candidateOutcome)
                     ]
-                | c <- runCases, smokeRun
+                | smokeRun, (c, stockOutcome, candidateOutcome) <- zip3 runCases stockOutcomes candidateOutcomes
                 ]
             ]
         , "wrappers" .= object ["cases" .= length wrappers, "failed" .= length [() | (_, ds) <- wrapperVerdicts, not (null ds)]]
@@ -1342,7 +1415,7 @@ oracle arguments runner linkedPath symbolsPath elfPath = do
             , "modelled_cases" .= length modelRows, "disagreeing_cases" .= length modelFailures
             ]
         , "pass2" .= object ["passed" .= (length verdicts - length verdictFailures), "failed" .= length verdictFailures]
-        , "status_distribution" .= object ["stock" .= statusCounts stockAll, "candidate" .= statusCounts candidateAll]
+        , "status_distribution" .= object ["stock" .= statusCounts stockStatuses, "candidate" .= statusCounts candidateStatuses]
         , "controls" .=
             ( [ object
                   [ "name" .= controlName control
