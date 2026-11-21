@@ -26,6 +26,10 @@ FILE_SERVICE_CONTROLS = [
     "volume_detach_callback_unrestored",
     "volume_format_slots_kept",
     "volume_reformat_state_unset",
+    # counts
+    "counts_extension_unchecked",
+    "counts_flags_short",
+    "position_without_directories",
 ]
 
 def file_service_suffixes():

@@ -58,3 +58,12 @@ file_service_flagged_prepare = 0x6f535c;
 file_service_catalog_rebuild = 0x719de0;
 file_service_flagged_select = 0x6f5330;
 file_service_no_volume_status = 0x6ed770;
+/* counts workers */
+file_service_extension_key = 0x713264;
+file_service_extension_byte4 = 0x713508;
+file_service_extension_byte5 = 0x713488;
+file_service_reserved_cluster = 0x713d60;
+file_service_cluster_path = 0x713db8;
+file_service_text_difference = 0x70e884;
+file_service_directory_position = 0x7189b4;
+file_service_file_number = 0x713360;

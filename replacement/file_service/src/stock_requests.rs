@@ -645,4 +645,6 @@ entry_veneer! {
     "volume_detach_worker" => "xm1_file_service_volume_detach_worker",
     "volume_format_armed_worker" => "xm1_file_service_volume_format_armed_worker",
     "volume_format_worker" => "xm1_file_service_volume_format_worker",
+    "file_counts_worker" => "xm1_file_service_file_counts_worker",
+    "file_position_worker" => "xm1_file_service_file_position_worker",
 }

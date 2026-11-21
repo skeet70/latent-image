@@ -19,6 +19,8 @@ _SOURCES = [
     "src/workers.rs",
     "src/stock_volume.rs",
     "src/volume.rs",
+    "src/counts.rs",
+    "src/stock_counts.rs",
 ]
 
 [xm1_rust_rlib(
@@ -50,6 +52,7 @@ haskell_library(
         "Replacement/FileService/Search.hs",
         "Replacement/FileService/Workers.hs",
         "Replacement/FileService/Volume.hs",
+        "Replacement/FileService/Counts.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",

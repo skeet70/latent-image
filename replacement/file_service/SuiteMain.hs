@@ -14,6 +14,7 @@ import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
+import qualified Replacement.FileService.Counts as Counts
 import qualified Replacement.FileService.Handles as Handles
 import qualified Replacement.FileService.Requests as Requests
 import qualified Replacement.FileService.Search as Search
@@ -86,6 +87,10 @@ increments =
             , ("volume_format_armed_worker", 0x7123b4), ("volume_format_worker", 0x712580)
             ]
         ]
+    )
+  , ( "counts"
+    , Increment Counts.code Counts.scenarios
+        [("xm1_file_service_entry_file_counts_worker", 0x718a8c), ("xm1_file_service_entry_file_position_worker", 0x718de4)]
     )
   ]
 
