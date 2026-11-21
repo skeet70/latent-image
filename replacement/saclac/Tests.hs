@@ -89,6 +89,8 @@ main = do
         (admit bin symbols disasm (sections <> "  [ 7] .data PROGBITS 00efcc00 00cc00 000004 00 WA 0 0 4\n"))
       refused "BSS in retired code" (WritableSection ".bss")
         (admit bin symbols disasm (sections <> "  [ 8] .bss NOBITS 00efcc00 00cc00 000004 00 WA 0 0 4\n"))
+      refused "section table of another link" SectionsDifferFromElf
+        (admit bin symbols disasm (C.unlines (filter (not . C.isInfixOf " .bss ") (C.lines sections))))
       refused "moved veneer" (EntryMoved "xm1_saclac_dispatch_entry" 0xefca6c 0xefca70)
         (admit bin (replaceSymbol symbols "xm1_saclac_dispatch_entry" "00efca70 00000004 T xm1_saclac_dispatch_entry") disasm sections)
       refused "veneer size" (EntryVeneerSize "xm1_saclac_dispatch_entry" 8)

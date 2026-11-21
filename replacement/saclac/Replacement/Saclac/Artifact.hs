@@ -301,6 +301,7 @@ data WalkReason
 data PlacementError
   = SymbolsRejected
   | SectionsRejected
+  | SectionsDifferFromElf
   | DataSymbol String
   | SymbolOutside String Word32 Word32
   | SectionOutside String Word32 Int
@@ -609,6 +610,11 @@ admit union elfBytes bin symbolsBytes disasm sectionsBytes = do
     require (not (sectionNoBits section) || (inFixed && sectionName section == ".bss")) (WritableSection (sectionName section))
     unless (insideExtents (sectionLow section) && insideExtents (sectionLow section + fromIntegral (sectionBytes section) - 1)) $
       Left (SectionOutside (sectionName section) (sectionLow section) (sectionBytes section))
+  elf <- first ElfRejected (ELF.parseElf elfBytes)
+  require (sections == [ Section (ELF.sectionName section) (ELF.sectionAddress section) (fromIntegral (ELF.sectionSize section))
+                           (ELF.sectionAllocated section) (ELF.sectionWritable section) (ELF.sectionType section == 8)
+                       | section <- ELF.elfSections elf, ELF.sectionType section `elem` [1, 8] ])
+    SectionsDifferFromElf
   forM_ published $ \section -> do
     let low = sectionLow section
     require (low `mod` 4 == 0 && sectionBytes section `mod` 4 == 0) (SectionOutside (sectionName section) low (sectionBytes section))
