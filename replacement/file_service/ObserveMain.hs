@@ -136,6 +136,11 @@ backends =
   , (0x71543c, Backend "split_path" ["r0"] [readSpec (register 13) 4])
   , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
   , (0x716184, Backend "make_directory" ["r0", "r1"] [])
+  , (0x7004b0, Backend "find_first_entry" ["r3"] [readSpec (register 0) 32, readSpec (register 1) 16, readSpec (register 2) 80])
+  , (0x70e664, Backend "fill_memory" ["r1", "r2"] [])
+  , (0x70e650, Backend "little_endian" ["r0"] [])
+  , (0x4d978, Backend "divide" ["r0", "r1"] [])
+  , (0x71d214, Backend "format_timestamp" ["r2"] [readSpec (register 1) 4])
   ]
 
 backendCapture :: Backend -> Value
