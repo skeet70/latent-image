@@ -1425,7 +1425,7 @@ publish q matrix source inputs = do
         ]
     , "failed_case" .= failedCase roles checks
     , "remaining_scope" .= object
-        [ "image_size" .= ("the opening-time landing apply changes live settings; a changed selection followed by Close or by confirmation and a restore elsewhere is final-pass: under the run document stock refuses the half-press after DOWN inside the IMAGE SIZE picker, and LEFT, OK, BACK and MENU after the change" :: String)
+        [ "image_size" .= ("this matrix covers the opening-time landing apply; a changed selection is gated separately (E-MENU-VALUE-CHANGED-SELECTION-150): under the run document both roles submit an identical 0x4010 and stay pending, and completion handling is compared under a labelled alternative schedule. Stock completes only with status 0 (0x01029188, 0x01029430), so there is no failure completion; cancellation by a later 0x4010 is unreachable because both roles refuse the second DOWN, and the pipeline-init clear (0x010287c8) has no natural input on this route" :: String)
         , "full_matrix" .= (if qualified then "claimed by this matrix" else "not claimed" :: String)
         , "hardware" .= ("not claimed" :: String)
         ]
