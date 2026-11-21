@@ -242,9 +242,9 @@
           "kind": "retained-entry",
           "symbols": [],
           "retained_targets": [
-            13821520,
-            22726236,
-            26476612
+            13818416,
+            22723132,
+            26473508
           ],
           "contract": "replacement/time_services/time-services.ld",
           "requirement": "The exact linked symbols and definite references are required in this composition. Caller closure, direct owned API migration and same-image comparison remain unestablished."
