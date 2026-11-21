@@ -237,6 +237,9 @@ Scope: Host/emulator observation-only evidence, with historical and corrected ru
 
 <!-- /evidence-record E-MENU-HANDOFF-PRESERVATION-150 -->
 
+<!-- evidence-record E-MENU-VALUE-CHANGED-SELECTION-150 -->
+<!-- /evidence-record E-MENU-VALUE-CHANGED-SELECTION-150 -->
+
 ## Time services
 
 `replacement/time_services` owns the task-6 delay and task-9 timer loops, software timer slots and interrupt registration behind typed ports. `//replacement/time_services:host-tests` exercises callback ordering, cancellation, delay completion and the task receive-error contract. These are core contract tests, not stock equality evidence.
