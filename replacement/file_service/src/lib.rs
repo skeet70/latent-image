@@ -19,3 +19,8 @@ mod tests;
 mod routing_tests;
 #[cfg(test)]
 mod workers_tests;
+pub mod counts;
+#[allow(unsafe_code)]
+pub mod stock_counts;
+#[cfg(test)]
+mod counts_tests;

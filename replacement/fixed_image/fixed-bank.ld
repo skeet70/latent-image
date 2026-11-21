@@ -48,6 +48,8 @@ SECTIONS {
   .mediamsg 0x721108 : { . = 0x721578; } > RETIRED =0xf000f0e7
   .route 0x721578 : { KEEP(*(.text.file_service_entry_route)) . = 0x721744; } > RETIRED =0xf000f0e7
   .intercept 0x7217f0 : { KEEP(*(.text.file_service_entry_intercept)) . = 0x721834; } > RETIRED =0xf000f0e7
+  .file_counts_worker 0x718a8c : { KEEP(*(.text.file_service_entry_file_counts_worker)) . = 0x718de4; } > RETIRED_CATALOG =0xf000f0e7
+  .file_position_worker 0x718de4 : { KEEP(*(.text.file_service_entry_file_position_worker)) . = 0x719098; } > RETIRED_CATALOG =0xf000f0e7
   .text : { __fixed_body_start = .; *(.text*) } > OWNED_FIXED
   .rodata : { KEEP(*(.rodata.XM1_REQUIRES_LENS_SAFETY_CONTRACT)) *(.rodata*) } > OWNED_FIXED
   .data : { *(.data*) . = ALIGN(4); __fixed_body_end = .; } > OWNED_FIXED
@@ -58,3 +60,4 @@ ASSERT(xm1_file_service_entry_result_acquire == 0x71bc2c && xm1_file_service_ent
 ASSERT(__fixed_body_start == ORIGIN(OWNED_FIXED), "fixed body does not start at the fixed origin")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "the fixed bank has writable statics")
 ASSERT(__fixed_bss_end <= ORIGIN(OWNED_FIXED) + LENGTH(OWNED_FIXED), "the fixed bank exceeds the fixed reservation")
+ASSERT(xm1_file_service_entry_file_counts_worker == 0x718a8c && xm1_file_service_entry_file_position_worker == 0x718de4, "counts worker veneers are not at their stock entries")

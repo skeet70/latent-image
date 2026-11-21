@@ -17,6 +17,10 @@ FILE_SERVICE_CONTROLS = [
     "open_failure_keeps_pair",
     "write_index_unstored",
     "flagged_close_unmarked",
+    # counts
+    "counts_extension_unchecked",
+    "counts_flags_short",
+    "position_without_directories",
 ]
 
 def file_service_suffixes():

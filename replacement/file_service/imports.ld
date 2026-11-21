@@ -31,3 +31,13 @@ file_service_fs_release = 0x6ffc68;
 file_service_media_refresh = 0x71d66c;
 file_service_after_written_close = 0x71141c;
 file_service_rescan = 0x71985c;
+/* counts workers */
+file_service_fill_memory = 0x70e664;
+file_service_extension_key = 0x713264;
+file_service_extension_byte4 = 0x713508;
+file_service_extension_byte5 = 0x713488;
+file_service_reserved_cluster = 0x713d60;
+file_service_cluster_path = 0x713db8;
+file_service_text_difference = 0x70e884;
+file_service_directory_position = 0x7189b4;
+file_service_file_number = 0x713360;
