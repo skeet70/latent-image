@@ -42,6 +42,7 @@ import Data.Word (Word32, Word8)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import EmulatorUsb
 import Numeric (readHex, showHex)
+import Replacement.FileService.Payload (payloadDefined)
 import System.Directory (createDirectory, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
@@ -545,22 +546,6 @@ receivePayload = 0x910228
 
 payloadCapacity :: Int
 payloadCapacity = 0x50
-
--- | Which payload bytes are defined. The stock open (0x71c2b0) and close (0x71c134) posters
--- build the payload in an uninitialized stack frame and copy a string into it with 0x70e748:
--- open's path field +4..+0x34 and close's name field +0xc..+0x20 are undefined after the
--- terminator. Bytes at or past the payload length belong to no request.
-payloadDefined :: Word32 -> Int -> [Word8] -> [Bool]
-payloadDefined code len bytes = map defined [0 .. length bytes - 1]
-  where
-    string
-      | code `elem` [0x2c17, 0x2c2d] = Just (4, 0x34)
-      | code `elem` [0x2c1a, 0x2c30] = Just (0xc, 0x20)
-      | otherwise = Nothing
-    defined o
-      | o >= len = False
-      | Just (s, e) <- string, s <= o, o < e = notElem 0 (take (o - s) (drop s bytes))
-      | otherwise = True
 
 -- | The defined flags of a payload behind a 12-byte request header.
 requestDefined :: [Word8] -> [Word8] -> [Bool]

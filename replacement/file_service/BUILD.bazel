@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib")
 load(":controls.bzl", "FILE_SERVICE_CONTROLS", "file_service_suffixes")
 
@@ -92,12 +92,33 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "payload",
+    srcs = ["Replacement/FileService/Payload.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = ["//host:base"],
+)
+
+haskell_test(
+    name = "payload-tests",
+    size = "small",
+    srcs = ["PayloadTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":payload",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_binary(
     name = "file-service-observe",
     srcs = ["ObserveMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     main_file = "ObserveMain.hs",
     deps = [
+        ":payload",
         "//emulation:case-sha256",
         "//emulation:emulator-usb",
         "//host:aeson",
@@ -118,6 +139,7 @@ filegroup(
         ":file-service-stage",
         ":file-service-suite",
         ":host-tests",
+        ":payload-tests",
     ] + ["//replacement/fixed_image:fixed-bank-image" + suffix for suffix in file_service_suffixes()],
 )
 
