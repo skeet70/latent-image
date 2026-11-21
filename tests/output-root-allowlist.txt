@@ -15,6 +15,7 @@ emulation/menu-engine-pair-trajectories/fn-oracle.jq
 emulation/menu-engine-pair-trajectories/oracle.jq
 emulation/menu-engine-pair-trajectories/prepare-draw-route-probe.sh
 emulation/menu-engine-pair-trajectories/run-render-pairs.sh
+emulation/menu-engine-pair-trajectories/value.jq
 emulation/modal75-picker-trajectories/trajectories.jq
 host/FujiAF/RunOutput.hs
 host/firmware/EngineStack.hs
