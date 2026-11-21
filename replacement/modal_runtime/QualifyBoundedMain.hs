@@ -262,12 +262,12 @@ sha = either error id . parseSha256Hex
 
 expectedRunDocument, expectedTrajectories, expectedFirmware, expectedAdjustment :: Sha256
 expectedRunDocument = sha "2184474fa40c2f8ad86e963ceb0898c5776ec597332805ee1365748de4df04e8"
-expectedTrajectories = sha "4776cb3afe80e7d3d1cdb3ce0d12d46eae0cace92b1bb8907b459db87fc1e838"
+expectedTrajectories = sha "8b02169c330bce4ae7f3b8093505d1874a90076c551b90ade0e7bf86b471b6d8"
 expectedFirmware = sha "acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8"
 expectedAdjustment = sha "baf475358f1b8ec5b619fd4891cd32a1c8225c0d9341e60318031106a4354aa0"
 
 expectedArchive, expectedRetired, expectedTables, expectedPlan, expectedClock, expectedRom :: Sha256
-expectedArchive = sha "6ceb7d4c03c13d043ebecd220ab8a3e5bc762196d4d4ab502df24cc63e7e71ce"
+expectedArchive = sha "ee5f49a26a79764593881aaa5d2585b70fcba12176f4e9b191cb68276cf57b85"
 expectedRetired = sha "4808a6fe7ffec15ebbff6a2f482e1dad0c55e6565f437390b37d594635479c3b"
 expectedTables = sha "7fa536b6f4ab72205be57f407ce7224fa0bbc397aca2061ad2fac3e14ba2021d"
 expectedPlan = sha "b7ee628a84ad930e309bccf74bf69ec8065f22c12ec5b5b059db842bf7bba05a"
@@ -287,9 +287,9 @@ checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
 
 trajectoryRoot, runDocument, inputsRoot, archivePath, tablesPath, planPath, clockPath :: FilePath
-trajectoryRoot = "private-data/scratch/MenuValueFix/inputs/value-trajectories"
+trajectoryRoot = "private-data/scratch/MenuValueFix/inputs/value-trajectories7"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/MenuValueFix/inputs/value-current6"
+inputsRoot = "private-data/scratch/MenuValueFix/inputs/value-current7"
 archivePath = inputsRoot </> "engine.a"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
 planPath = inputsRoot </> "bank-plan.json"
