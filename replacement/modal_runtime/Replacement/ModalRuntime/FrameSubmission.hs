@@ -19,6 +19,7 @@ module Replacement.ModalRuntime.FrameSubmission
   , operation
   , phaseSubmission
   , submissionHit
+  , checkSubmissionDeclarations
   , compareSubmission
   , frameInstructions
   ) where
@@ -189,6 +190,12 @@ frameRecordRead hit = case hitMemory hit of
 submissionHit :: Hit -> Bool
 submissionHit hit = label hit `elem` ["frame-step-entry", "frame-dispatch-return", "vg-geometry-request"] || submissionSite (label hit) /= Nothing
 
+-- | A receipt's declared trace labels carry every submission site and `vg-geometry-request`.
+checkSubmissionDeclarations :: [T.Text] -> Either String ()
+checkSubmissionDeclarations declared = case [name | name <- "vg-geometry-request" : map siteLabel [minBound .. maxBound], name `notElem` declared] of
+  [] -> Right ()
+  missing -> Left ("receipt does not declare submission sites: " ++ T.unpack (T.intercalate ", " missing))
+
 -- | One observation's frames in recording order, and its submitted work outside every frame step.
 phaseSubmission :: T.Text -> [Hit] -> Either String PhaseSubmission
 phaseSubmission phase hits = do
@@ -212,6 +219,8 @@ phaseSubmission phase hits = do
             | otherwise -> Left "owned frame count changed by more than one in a step"
           _ -> Right StockStep
         let frame = SubmittedFrame path (reverse (openCalls current)) (reverse (openEngine current)) (openEntry current) (hitInstructions hit)
+        when (path == OwnedStep && all (\(Operation site _ _) -> site /= MakeCurrent) (openCalls current))
+          (Left (T.unpack phase ++ ": owned frame step without egl-make-current"))
         pure (M.delete core open, frame : frames, calls, engine, requests)
     "vg-geometry-request" -> do
       (address, request) <- either (Left . ((T.unpack phase ++ ": ") ++)) Right (geometryRequest hit)

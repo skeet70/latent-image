@@ -205,9 +205,10 @@ unsafe extern "C" {
     fn rb_render_call_8586d8();
     fn xm1_kernel_critical_enter() -> u32;
     fn xm1_kernel_critical_exit(saved: u32);
-    /// Called directly, without a trampoline frame, from the interrupt-context bridge and delivery.
+    /// Called directly, without a trampoline frame, from the interrupt-context bridge.
     fn rb_render_stock_6c7318(request: *mut u32, handle: *mut u32) -> i32;
-    fn rb_render_stock_6d7f30() -> i32;
+    /// The bridge's one-shot (`frame.S`).
+    fn rb_render_frame_scanout_delivery();
 }
 
 /// Runs `f` under the stock interrupt lock `0x7235d8`/`0x7236b0`, which serializes the latch's three contexts.
@@ -345,13 +346,12 @@ pub unsafe extern "C" fn rb_render_frame_scanout_bridge() {
     unsafe { xm1_kernel_critical_exit(token); }
 }
 
-/// The one-shot the bridge registers; posts `0xfefe` through `0x6d7f30` after the latch records the delivery.
+/// The latch update of `rb_render_frame_scanout_delivery`.
 #[no_mangle]
-pub unsafe extern "C" fn rb_render_frame_scanout_delivery() {
+pub unsafe extern "C" fn rb_render_frame_scanout_delivered() {
     let token = unsafe { xm1_kernel_critical_enter() };
     unsafe { (*(&raw mut LATCH)).delivered(); }
     unsafe { xm1_kernel_critical_exit(token); }
-    unsafe { rb_render_stock_6d7f30(); }
 }
 
 #[inline(never)]

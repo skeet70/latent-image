@@ -81,6 +81,19 @@ rb_render_frame_front_store:
     bx lr
 .size rb_render_frame_advance_front, .-rb_render_frame_advance_front
 
+@ The one-shot the scanout bridge registers in place of 0x6d80f0's {0x6d7f30, 0, 2, 0}. It records the delivery in
+@ the latch, releases its frame and branches to 0x6d7f30, which posts 0xfefe at the scheduler's stack depth.
+.section .text.rb_render_frame_scanout_delivery,"ax",%progbits
+.balign 4
+.global rb_render_frame_scanout_delivery
+.type rb_render_frame_scanout_delivery,%function
+rb_render_frame_scanout_delivery:
+    push {r4, lr}
+    bl rb_render_frame_scanout_delivered
+    pop {r4, lr}
+    b rb_render_stock_6d7f30
+.size rb_render_frame_scanout_delivery, .-rb_render_frame_scanout_delivery
+
 RB_RENDER_CALL rb_render_call_6d9478, 0x6d9478, 0
 RB_RENDER_CALL rb_render_call_6d9494, 0x6d9494, 0
 RB_RENDER_CALL rb_render_call_6499d0, 0x6499d0, 0

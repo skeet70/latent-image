@@ -11,6 +11,7 @@ module Main (main) where
 
 import Control.Monad (forM, unless)
 import qualified Data.Aeson as J
+import qualified Data.Aeson.Types as J
 import Data.Aeson ((.=))
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
@@ -27,11 +28,18 @@ import System.IO (hPutStrLn, stderr)
 
 phases :: FilePath -> IO [PhaseSubmission]
 phases directory = do
+  result <- B.readFile (directory ++ "/e2e-result.json") >>= either (fail . ((directory ++ ": ") ++)) pure . J.eitherDecodeStrict'
+  declared <- either (fail . ((directory ++ ": ") ++)) pure (J.parseEither declaredLabels result)
+  either (fail . ((directory ++ ": ") ++)) pure (checkSubmissionDeclarations declared)
   readers <- receiptObservations directory
   forM readers $ \reader -> do
     hits <- readerFoldHits reader (\kept hit -> Right (if submissionHit hit then hit : kept else kept)) []
       >>= either (fail . ((directory ++ ": ") ++)) (pure . reverse)
     either (fail . ((directory ++ ": ") ++)) pure (phaseSubmission (readerPhase reader) hits)
+ where
+  declaredLabels = J.withObject "e2e result" $ \fields -> do
+    sites <- fields J..: "declared_trace_sites" :: J.Parser [J.Value]
+    mapM (J.withObject "declared site" (J..: "label")) sites
 
 statistics :: [Word64] -> J.Value
 statistics [] = J.Null

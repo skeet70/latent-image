@@ -147,7 +147,7 @@
     },
     {
       "id": "render_adapter-04",
-      "shim": "`rb_render_frame_entry` in `frame.S`, published at `0x6d7920` in the `modal75,menu-engine,render,render-frame` variant, with the `0x6d7930` stock resume, the `rb_render_call_6d9478`, `6d9494`, `6499d0`, `6d76ec`, `6cfc68`, `7243a8` trampolines and the direct `rb_render_stock_6c7318` and `rb_render_stock_6d7f30` calls; `rb_render_frame_scanout_bridge` and `rb_render_frame_scanout_delivery` called by the retained secondary display queue and scheduler",
+      "shim": "`rb_render_frame_entry` in `frame.S`, published at `0x6d7920` in the `modal75,menu-engine,render,render-frame` variant, with the `0x6d7930` stock resume, the `rb_render_call_6d9478`, `6d9494`, `6499d0`, `6d76ec`, `6cfc68`, `7243a8` trampolines, the direct `rb_render_stock_6c7318` call and the `rb_render_stock_6d7f30` tail branch; `rb_render_frame_scanout_bridge` and `rb_render_frame_scanout_delivery` called by the retained secondary display queue and scheduler",
       "kind": "veneer or carrier at a stock address",
       "other_side": "VGLIB task 73's `0x5902` dispatch, the retained lock, option, hand-off, callback-queue, event-wait, scheduler-registration and display-event services, and the scanout commit drain and scheduler delivery that call the bridge and its one-shot",
       "owned": "no",

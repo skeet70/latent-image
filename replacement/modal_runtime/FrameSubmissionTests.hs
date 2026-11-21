@@ -38,6 +38,9 @@ translate x = hit "vg-translate" 0 (x, 7, 0, 0) []
 scissor :: Word32 -> [Word32] -> Integer -> Hit
 scissor pointer values = hit "vg-set-integers" 0 (0x1106, 4, pointer, 0) [B.pack (concatMap le32 values)]
 
+makeCurrent :: Integer -> Hit
+makeCurrent = hit "egl-make-current" 0 (1, 2, 2, 3) [B.replicate 44 0]
+
 dispatch :: Int -> Word8 -> Integer -> Hit
 dispatch core kind = hit "vg-job-dispatch" core (0, 0, 0, 0) [B.pack (kind : replicate 111 0)]
 
@@ -57,24 +60,34 @@ geometryJob address fill at =
 
 main :: IO ()
 main = do
-  let stock = phase [entry (Just 0) 100, translate 1 110, scissor 0x9000 [1, 2, 3, 4] 120, dispatch 1 3 130, leave (Just 0) 400]
-      owned = phase [entry (Just 4) 100, translate 1 105, scissor 0xa000 [1, 2, 3, 4] 106, dispatch 1 3 107, leave (Just 5) 200]
+  let stock = phase [entry (Just 0) 100, makeCurrent 105, translate 1 110, scissor 0x9000 [1, 2, 3, 4] 120, dispatch 1 3 130, leave (Just 0) 400]
+      owned = phase [entry (Just 4) 100, makeCurrent 101, translate 1 105, scissor 0xa000 [1, 2, 3, 4] 106, dispatch 1 3 107, leave (Just 5) 200]
+      allLabels = map T.pack ["vg-geometry-request", "vg-set-integer", "vg-set-float", "vg-set-vector", "vg-set-integers", "vg-clear", "vg-load-identity", "vg-load-matrix", "vg-multiply-matrix", "vg-translate", "vg-rotate", "vg-scale", "vg-set-paint", "vg-draw-path", "vg-draw-image", "vg-finish", "vg-get-integer", "egl-make-current", "egl-copy-buffers", "egl-get-error", "vg-job-submit", "vg-job-submit-return", "vg-job-dispatch", "vg-job-completion"]
       checks =
         [ ("work on the frame's core and engine work on the other core belong to the open frame",
-            map (\frame -> (length (frameCalls frame), length (frameEngine frame))) (phaseFrames owned) == [(2, 1)])
+            map (\frame -> (length (frameCalls frame), length (frameEngine frame))) (phaseFrames owned) == [(3, 1)])
         , ("a frame the owned record counted is an owned step", map framePath (phaseFrames owned) == [OwnedStep])
         , ("instructions run from entry to dispatcher return",
             map frameInstructions (phaseFrames stock ++ phaseFrames owned) == [Just 300, Just 100])
         , ("arrays compare by content, not by where each role's frame put them", compareSubmission [stock] [owned] == Right Nothing)
         , ("a different value is the first difference",
-            fmap (fmap mismatchIndex) (compareSubmission [stock] [phase [entry (Just 4) 1, translate 2 2, scissor 0xa000 [1, 2, 3, 4] 3, dispatch 1 3 4, leave (Just 5) 5]]) == Right (Just 0))
+            fmap (fmap mismatchIndex) (compareSubmission [stock] [phase [entry (Just 4) 1, makeCurrent 1, translate 2 2, scissor 0xa000 [1, 2, 3, 4] 3, dispatch 1 3 4, leave (Just 5) 5]]) == Right (Just 1))
         , ("different pointed bytes differ",
-            fmap (fmap mismatchIndex) (compareSubmission [stock] [phase [entry (Just 4) 1, translate 1 2, scissor 0x9000 [1, 2, 3, 5] 3, dispatch 1 3 4, leave (Just 5) 5]]) == Right (Just 1))
+            fmap (fmap mismatchIndex) (compareSubmission [stock] [phase [entry (Just 4) 1, makeCurrent 1, translate 1 2, scissor 0x9000 [1, 2, 3, 5] 3, dispatch 1 3 4, leave (Just 5) 5]]) == Right (Just 2))
         , ("a different engine command differs in the engine stream",
-            fmap (fmap mismatchStream) (compareSubmission [stock] [phase [entry (Just 4) 1, translate 1 2, scissor 0x9000 [1, 2, 3, 4] 3, dispatch 1 4 4, leave (Just 5) 5]]) == Right (Just EngineStream))
-        , ("a missing operation differs", case compareSubmission [stock] [phase [entry (Just 4) 1, translate 1 2, dispatch 1 3 4, leave (Just 5) 5]] of
-            Right (Just mismatch) -> mismatchIndex mismatch == 1 && mismatchOwned mismatch == Nothing
+            fmap (fmap mismatchStream) (compareSubmission [stock] [phase [entry (Just 4) 1, makeCurrent 1, translate 1 2, scissor 0x9000 [1, 2, 3, 4] 3, dispatch 1 4 4, leave (Just 5) 5]]) == Right (Just EngineStream))
+        , ("a missing operation differs", case compareSubmission [stock] [phase [entry (Just 4) 1, makeCurrent 1, translate 1 2, dispatch 1 3 4, leave (Just 5) 5]] of
+            Right (Just mismatch) -> mismatchIndex mismatch == 2 && mismatchOwned mismatch == Nothing
             _ -> False)
+        , ("an owned step without egl-make-current is refused",
+            either (const True) (const False) (phaseSubmission "p" [entry (Just 4) 1, translate 1 2, leave (Just 5) 3]))
+        , ("a stock step without egl-make-current is admitted",
+            either (const False) (const True) (phaseSubmission "p" [entry (Just 4) 1, translate 1 2, leave (Just 4) 3]))
+        , ("a receipt declaring every submission site passes", checkSubmissionDeclarations ("frame-step-entry" : allLabels) == Right ())
+        , ("a receipt without the submission sites is refused",
+            either (const True) (const False) (checkSubmissionDeclarations ["frame-step-entry", "frame-dispatch-return"]))
+        , ("a receipt missing one submission site is refused",
+            either (const True) (const False) (checkSubmissionDeclarations (filter (/= "vg-job-completion") allLabels)))
         , ("a different number of frame steps is refused",
             either (const True) (const False) (compareSubmission [stock] [phase []]))
         , ("work outside every frame step is compared too",

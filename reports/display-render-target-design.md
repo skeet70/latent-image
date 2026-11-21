@@ -115,8 +115,8 @@ The design we would build from scratch: the owned menu (#128) and later owned sc
 
 ### 2.2 Owned renderer
 
-- A CPU rasterizer over the draw list into a 32-bit straight-alpha surface of the surface's geometry (720 x 480 for the panel, the geometry the dumps show). It runs identically on host and guest, so its output is a host-testable function of the draw list and the asset pack.
-- It does not use the vector engine for UI. Design choice: the vector engine's rasterization law has no hardware evidence (section 3), and a host-testable renderer removes it from every UI qualification. Full-surface redraw writes 1.38 MB per frame; damage-limited redraw bounds the per-frame cost. Throughput on the camera is not measured.
+- The owned renderer draws no pixels. It decodes each frame's scene and submits it to the retained OpenVG client in stock's order, and the stock vector-engine path (tasks 71 and 72 and the engine) rasterizes it. Owner decision: reuse the camera's graphics hardware for UI; production CPU rasterization is removed.
+- It is qualified by submitted-work equality with stock on the same route (section 4.1), not by a host pixel law. Camera appearance is a property of the stock vector-engine path.
 - Fonts, glyphs and bitmaps come from an asset pack with declared provenance (publication policy).
 
 ### 2.3 Owned frame publisher

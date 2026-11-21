@@ -2,7 +2,7 @@
 
 ## Scope and evidence
 
-This is the decomp-first contract for the future owned frame publisher, [target design 2.3](../display-render-target-design.md#23-owned-frame-publisher), replacement step S7. It specifies task 73's `0x5902` frame step and its submission, buffer, display-shadow and completion boundaries. It does not implement or qualify an owned publisher. No native cases, emulator runs or camera operations were performed for this report.
+This is the decomp-first contract for the owned frame step and publisher, [target design 2.3](../display-render-target-design.md#23-owned-frame-publisher), replacement step S7. It specifies task 73's `0x5902` frame step and its submission, buffer, display-shadow and completion boundaries. The owned frame step and its qualification check are in [Vector-engine submission](#vector-engine-submission), which cites run-observed heap addresses; the other sections are read from bytes and the decomp without native cases, emulator runs or camera operations.
 
 All decomp references below are to x70view commit `a72c95a3572562fc05f359b4f35915f3a0243b19`. Exactness follows [the evidence rules](../xm1-decomp.md#evidence-rules). `exact` means source-inspected byte-verified reconstruction under that report's building-tree assumption, not a new build of x70view here. Names and C types remain inferred. Every behavioral claim about NONMATCHING C below is grounded in the cited listing instructions, not its reconstructed pointer arithmetic.
 

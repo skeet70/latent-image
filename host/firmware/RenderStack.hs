@@ -49,7 +49,8 @@ renderFrameEntryBytes = 48
 -- | The owned frame step on task 73. `rb_render_frame_apply` calls no stock code, so the whole entry is bounded by
 -- the headroom alone; the stock services run from `rb_render_frame_commit` and `rb_render_frame_complete` above
 -- the entry frame and keep the retained-stock margin. The scanout bridge and its one-shot run on interrupt stacks
--- in place of `0x6d80f0` and `0x6d7f30` and are bounded by `0x6d80f0`'s 32-byte frame (`I4:6d80f0-6d80f8`).
+-- in place of `0x6d80f0` and `0x6d7f30` and are bounded by `0x6d80f0`'s 32-byte frame (`I4:6d80f0-6d80f8`); the
+-- one-shot releases its frame before it branches to `0x6d7f30`.
 checkRenderFrameStack :: ELF.Elf -> (Word32 -> Bool) -> Either String RenderEntryReport
 checkRenderFrameStack elf inRuntime = do
   whole <- depth "rb_render_frame_entry"
