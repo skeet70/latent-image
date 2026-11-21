@@ -255,12 +255,12 @@ fn counts_store_the_group_rank_and_the_folded_count() {
     fake.file = 12;
     fake.groups = HashMap::from([(12, 3), (8, 3), (9, 2), (10, 3), (11, 0)]);
     fake.starts = HashMap::from([(3, 8)]);
-    fake.flags[..5].copy_from_slice(&[0, 1, 2, 3, 4]);
+    fake.flags[..6].copy_from_slice(&[0, 1, 2, 3, 5, 6]);
     fake.page_files = HashMap::from([(100, 10), (101, 20), (102, 30)]);
     assert_eq!(file_counts(&mut fake), 0);
     assert!(fake.events.contains(&Event::Byte5(0x77)));
-    // Of flags 0..4, bytes 0, 1 and 3 count from -1; pages 100..0x67 add 60.
-    assert_eq!(fake.stores(), vec![Event::Store(SECOND_AT, 2), Event::Store(FIRST_AT, 2 + 60)]);
+    // Of flags 0..=4, bytes 0, 1, 3 and 5 count from -1; pages 100..0x67 add 60.
+    assert_eq!(fake.stores(), vec![Event::Store(SECOND_AT, 2), Event::Store(FIRST_AT, 3 + 60)]);
 }
 
 #[test]

@@ -209,8 +209,8 @@ fn group_rank(port: &impl Port, number: FileNumber) -> u32 {
     rank
 }
 
-/// Flag bytes 0..max(position, 1) that are zero or odd, less one, plus the file counts of
-/// pages 100..page.
+/// Flag bytes 0..=position that are zero or odd, less one, plus the file counts of pages
+/// 100..page.
 fn folded_count(port: &impl Port, position: u32, page: Page) -> u32 {
     let mut count = 0u32.wrapping_sub(1);
     let mut index = 0u32;

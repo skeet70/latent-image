@@ -251,8 +251,7 @@ folded :: Env -> Word32 -> Word32 -> Word32
 folded e position page = flagged - 1 + pages
   where
     high = highRegion e
-    flagReads = max 1 position
-    flagged = fromIntegral (length [() | i <- [0 .. flagReads - 1], let b = byteAt high (0x15846 + fromIntegral i - highOffset), b == 0 || odd b])
+    flagged = fromIntegral (length [() | i <- [0 .. position], let b = byteAt high (0x15846 + fromIntegral i - highOffset), b == 0 || odd b])
     pages = if page > 100 then sum [halfAt high (0x127d6 + 2 * fromIntegral (k - 100) - highOffset) | k <- [100 .. page - 1]] else 0
 
 -- | Where a case's request sits: the header, the payload, the first and second caller words.
@@ -349,7 +348,7 @@ countsEnv =
     , envFileNumber = 30
     , envGroups = [(30, 3), (26, 3), (27, 2), (28, 3), (29, 0)]
     , envStarts = [(3, 26)]
-    , envFlags = [0, 1, 2, 3, 4, 5]
+    , envFlags = [0, 1, 2, 3, 5, 6]
     , envPageFiles = [(100, 10), (101, 20), (102, 30), (103, 0x7000)]
     }
 
