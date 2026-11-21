@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib")
 load(":controls.bzl", "FILE_SERVICE_CONTROLS", "file_service_suffixes")
 
@@ -41,6 +41,7 @@ haskell_library(
         "Replacement/FileService/Handles.hs",
         "Replacement/FileService/Native.hs",
         "Replacement/FileService/Requests.hs",
+        "Replacement/FileService/StockRole.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
@@ -83,10 +84,23 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     main_file = "StageMain.hs",
     deps = [
+        ":native-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "stock-role-tests",
+    size = "small",
+    srcs = ["StockRoleTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    main_file = "StockRoleTests.hs",
+    deps = [
+        ":native-lib",
+        "//host:base",
     ],
 )
 
@@ -98,6 +112,7 @@ haskell_binary(
     deps = [
         "//emulation:case-sha256",
         "//emulation:emulator-usb",
+        "//emulation:watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

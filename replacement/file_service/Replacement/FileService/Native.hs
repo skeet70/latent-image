@@ -24,6 +24,7 @@ module Replacement.FileService.Native
   ) where
 
 import qualified ArmElf as E
+import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as Key
@@ -431,7 +432,8 @@ runRole runner directory code image role scenarios = do
   collected <- newIORef []
   summary <- Native.runBatch runner batchPath $ \report -> do
     BL.writeFile (batchDirectory </> (Native.caseIdText (Native.reportCase report) ++ ".report.json")) (encode (Native.reportValue report))
-    modifyIORef' collected (observe compared report :)
+    observation <- evaluate (observe compared report)
+    modifyIORef' collected (observation :)
   observations <- reverse <$> readIORef collected
   unless (Native.summaryStatus summary == Native.BatchComplete && length observations == length scenarios) $
     fail ("native batch did not complete for " ++ roleLabel role ++ ": " ++ show (Native.summaryReason summary))
