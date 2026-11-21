@@ -21,6 +21,7 @@ import qualified Replacement.FileService.Search as Search
 import qualified Replacement.FileService.Selection as Selection
 import qualified Replacement.FileService.Volume as Volume
 import qualified Replacement.FileService.Workers as Workers
+import qualified Replacement.FileService.Catalog as Catalog
 import Replacement.FileService.Native
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
@@ -94,6 +95,15 @@ increments =
         [("xm1_file_service_entry_file_counts_worker", 0x718a8c), ("xm1_file_service_entry_file_position_worker", 0x718de4)]
     )
   , ("selection", Increment Selection.code Selection.scenarios [("xm1_file_service_entry_select_worker", 0x719098)])
+  , ( "catalog"
+    , Increment Catalog.code Catalog.scenarios
+        [ ("xm1_file_service_entry_" ++ name, address)
+        | (name, address) <-
+            [ ("select_groups_worker", 0x71a834), ("rebuild_catalog_worker", 0x71a8a0), ("find_entry_worker", 0x71b8c0)
+            , ("complete_request_worker", 0x71b9b0), ("resolve_index_worker", 0x719614)
+            ]
+        ]
+    )
   ]
 
 loadElf :: [(String, Word)] -> FilePath -> IO (E.Elf, String)

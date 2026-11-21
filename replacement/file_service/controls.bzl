@@ -34,6 +34,12 @@ FILE_SERVICE_CONTROLS = [
     "selection_odd_uncounted",
     "selection_tag_untruncated",
     "selection_selected_total_skipped",
+    # catalog
+    "catalog_group_mask_trimmed",
+    "catalog_rebuild_selection_kept",
+    "catalog_find_mark_kept",
+    "catalog_complete_returns_status",
+    "catalog_resolve_totals_inclusive",
 ]
 
 def file_service_suffixes():

@@ -24,7 +24,7 @@ extern "C" {
     fn file_service_page_counted(page: u32) -> u32;
     fn file_service_media_snapshot();
     fn file_service_page_selected(page: u32, selected: *mut u32) -> u32;
-    fn file_service_catalog_load(query: *mut selection::Query, first: u32, second: u32) -> u32;
+    fn file_service_catalog_window(query: *mut selection::Query, first: u32, second: u32) -> u32;
 }
 
 /// A request the media task hands a worker: the header address, whose word at +8 is the
@@ -139,7 +139,7 @@ impl Port for StockSelection {
     }
 
     fn load_window(&mut self, frame: &mut Frame) {
-        unsafe { file_service_catalog_load(&mut frame.query, 0, 0) };
+        unsafe { file_service_catalog_window(&mut frame.query, 0, 0) };
     }
 
     fn translate(&mut self, raw: RawStatus) -> u32 {

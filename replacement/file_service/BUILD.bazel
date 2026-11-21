@@ -30,16 +30,7 @@ genrule(
 
 haskell_library(
     name = "native-lib",
-    srcs = [
-        "Replacement/FileService/Handles.hs",
-        "Replacement/FileService/Native.hs",
-        "Replacement/FileService/Requests.hs",
-        "Replacement/FileService/Search.hs",
-        "Replacement/FileService/Workers.hs",
-        "Replacement/FileService/Volume.hs",
-        "Replacement/FileService/Counts.hs",
-        "Replacement/FileService/Selection.hs",
-    ],
+    srcs = glob(["Replacement/FileService/*.hs"], exclude = ["Replacement/FileService/Payload.hs"]),
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [

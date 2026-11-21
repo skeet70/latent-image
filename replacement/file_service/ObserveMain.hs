@@ -157,6 +157,7 @@ backends =
   , (0x71fcbc, Backend "volume_reattach" [] [readSpec (register 0) 12, readSpec (registerWord 0 8) 0x44])
   , (0x719de0, Backend "catalog_rebuild" ["r0", "r1"] [])
   , (0x6f5330, Backend "flagged_select" ["r0", "r1"] [])
+  , (0x71a93c, Backend "catalog_find" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 8, readSpec (registerWord 13 0) 48, readSpec (registerWord 13 4) 188])
   ]
 
 backendCapture :: Backend -> Value

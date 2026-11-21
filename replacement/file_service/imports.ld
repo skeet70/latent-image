@@ -58,7 +58,7 @@ file_service_flagged_prepare = 0x6f535c;
 file_service_catalog_rebuild = 0x719de0;
 file_service_flagged_select = 0x6f5330;
 file_service_no_volume_status = 0x6ed770;
-/* counts and selection workers */
+/* counts, selection and catalog workers */
 file_service_extension_key = 0x713264;
 file_service_extension_byte4 = 0x713508;
 file_service_extension_byte5 = 0x713488;
@@ -70,4 +70,7 @@ file_service_file_number = 0x713360;
 file_service_marked_before = 0x7153a8;
 file_service_page_counted = 0x715f80;
 file_service_page_selected = 0x715918;
-file_service_catalog_load = 0x717a24;
+file_service_catalog_window = 0x717a24;
+file_service_catalog_window_visit = 0x712a4c;
+file_service_catalog_find = 0x71a93c;
+file_service_directory_reserved = 0x7158a8;

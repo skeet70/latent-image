@@ -648,4 +648,9 @@ entry_veneer! {
     "file_counts_worker" => "xm1_file_service_file_counts_worker",
     "file_position_worker" => "xm1_file_service_file_position_worker",
     "select_worker" => "xm1_file_service_select_worker",
+    "select_groups_worker" => "xm1_file_service_select_groups_worker",
+    "rebuild_catalog_worker" => "xm1_file_service_rebuild_catalog_worker",
+    "find_entry_worker" => "xm1_file_service_find_entry_worker",
+    "complete_request_worker" => "xm1_file_service_complete_request_worker",
+    "resolve_index_worker" => "xm1_file_service_resolve_index_worker",
 }

@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(unsafe_code)]
 
+pub mod catalog;
 pub mod completion;
 pub mod counts;
 pub mod handles;
@@ -10,6 +11,8 @@ pub mod search;
 pub mod selection;
 #[allow(unsafe_code)]
 pub mod stock;
+#[allow(unsafe_code)]
+pub mod stock_catalog;
 #[allow(unsafe_code)]
 pub mod stock_counts;
 #[allow(unsafe_code)]
@@ -25,6 +28,8 @@ pub mod stock_workers;
 pub mod volume;
 pub mod workers;
 
+#[cfg(test)]
+mod catalog_tests;
 #[cfg(test)]
 mod counts_tests;
 #[cfg(test)]
