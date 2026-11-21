@@ -21,6 +21,8 @@ let
     # (E-WIFI-CMD53-UNANSWERED-150, a declared assumption). The R-profile
     # exclusive patch adds byte and halfword LDREX/STREX (#157).
     # Translation admission checks A32 and Thumb instructions before execution.
+    # The LZ patch latches a completion inside a transient enable clear
+    # pending on its start route (E-FUJIMOD-LZ-ENABLE-WINDOW-150, source-inferred).
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
@@ -36,6 +38,7 @@ let
       ./fujimod-owned-nand-pages.patch
       ./fujimod-passive-af-retention.patch
       ./fujimod-preservation-evidence.patch
+      ./fujimod-lz-masked-completion.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's

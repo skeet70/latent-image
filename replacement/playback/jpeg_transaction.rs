@@ -95,7 +95,7 @@ const ACTIVE: *mut JobAddress = 0x014c_5888 as *mut JobAddress;
 const IRQ_TOKEN: *mut InterruptToken = 0x014c_588c as *mut InterruptToken;
 const CONFIGURATION: *mut Configuration = 0x014c_5890 as *mut Configuration;
 const RESOURCE: *mut ResourceHandle = 0x014c_56f4 as *mut ResourceHandle;
-const RECORD: *const RecordAddress = 0x014c_56f0 as *const RecordAddress;
+const RECORD: *mut RecordAddress = 0x014c_56f0 as *mut RecordAddress;
 const TRANSACTION_LOCK: ReservedLock = ReservedLock(9);
 const INTERRUPT_DESCRIPTOR: InterruptDescriptor = InterruptDescriptor(0x48);
 const FIRMWARE_INTERRUPT_ENTRY: HandlerAddress = HandlerAddress(0x00d9_9570);
@@ -135,6 +135,12 @@ macro_rules! write_field {
         unsafe { write_volatile(addr_of_mut!((*pointer).$field), value) }
     }};
 }
+
+#[path = "jpeg_device.rs"]
+mod device;
+
+#[path = "jpeg_consumers.rs"]
+mod consumers;
 
 unsafe fn current() -> *mut Request {
     unsafe { read_volatile(ACTIVE).0 as *mut Request }
@@ -274,7 +280,7 @@ pub unsafe extern "C" fn xm1_playback_jpeg_restart(address: u32) {
 }
 
 /// # Safety
-/// The caller must own lock 9. The retained reset and interrupt-release services must stop the current device transaction before its request storage is reused.
+/// The caller must own lock 9. Reset and interrupt release must stop the current device transaction before its request storage is reused.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xm1_playback_jpeg_release() {
     unsafe { finish() };

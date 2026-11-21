@@ -1,10 +1,10 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(glob(["src/*.rs"]))
+exports_files(glob(["src/*.rs"]) + ["fixed-imports.ld"])
 
 core_sources = glob(["src/*.rs"], exclude = ["src/lib.rs", "src/*_tests.rs"])
 
@@ -53,6 +53,44 @@ xm1_rust_elf(
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
 )
 
+# The scanout ARM ABI for the one fixed bank (//replacement/fixed_image:fixed-bank-image), and its two
+# executed defect controls.
+[
+    xm1_rust_rlib(
+        name = "fixed-bank-" + variant,
+        src = "src/lib.rs",
+        crate_name = "xm1_display_scanout",
+        data = core_sources,
+        rustc_flags = ["--cfg", "'feature=\"fixed_bank\"'"] + (["--cfg", "'feature=\"%s\"'" % feature] if feature else []),
+        rlib_deps = {"calibration_liveview": "//replacement/calibration_liveview:libcalibration_liveview"},
+        out = variant + "/libxm1_display_scanout.rlib",
+    )
+    for variant, feature in [("owned", None), ("register-order", "defect_register_order"), ("skipped-drain", "defect_skipped_drain")]
+]
+
+haskell_library(
+    name = "display-scanout-artifact",
+    srcs = ["Replacement/DisplayScanout/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//emulation:case-sha256", "//host:aeson", "//host:base", "//host:bytestring", "//replacement/fixed_image:contract"],
+)
+
+haskell_binary(
+    name = "artifact",
+    srcs = ["ArtifactMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":display-scanout-artifact", "//emulation:case-sha256", "//host:aeson", "//host:base", "//host:bytestring", "//host:host-support"],
+)
+
+haskell_test(
+    name = "artifact-tests",
+    size = "small",
+    srcs = ["ArtifactTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":display-scanout-artifact", "//host:base", "//host:bytestring"],
+)
+
 genrule(
     name = "host-calibration-library",
     srcs = ["//replacement/calibration_liveview:src/lib.rs", "//replacement/calibration_liveview:src/publication.rs"],
@@ -88,6 +126,6 @@ haskell_binary(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel", "Replacement/DisplayScanout/Artifact.hs"],
     visibility = ["//replacement/shim_check:__pkg__"],
 )

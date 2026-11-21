@@ -5,9 +5,11 @@ mod contract;
 mod guard;
 #[path = "heap_cutover_check.rs"]
 mod check;
+#[path = "heap_abi.rs"]
+mod abi;
 use guard::Role;
 
-const HELP: &str = "heap-observe --cutover-run|--cutover-stock|--cutover-owned|--cutover-check|--cutover-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]";
+const HELP: &str = "heap-observe --cutover-run|--cutover-stock|--cutover-owned|--cutover-check|--cutover-controls|--abi-stock|--abi-owned|--abi-check|--abi-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]";
 const JOURNAL_LIMIT: u64 = 256 * 1024 * 1024;
 /// The owned journal records every owned allocator fetch; it exceeded 1 GiB decoded after 44,593 of the route's 51,221 stock boundaries.
 const CUTOVER_ACCESS_LIMITS: AccessLimits = match (heap_accesses::ByteLimit::new(4 * 1024 * 1024 * 1024), ACCESS_LIMITS) {
@@ -268,9 +270,10 @@ fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
 
 pub(super) fn command(arguments: &[std::ffi::OsString]) -> Option<Result<(), String>> {
     let name = arguments.first()?.to_str()?;
-    if !["--cutover-run", "--cutover-stock", "--cutover-owned", "--cutover-check", "--cutover-controls"].contains(&name) { return None; }
+    if !["--cutover-run", "--cutover-stock", "--cutover-owned", "--cutover-check", "--cutover-controls",
+        "--abi-stock", "--abi-owned", "--abi-check", "--abi-controls"].contains(&name) { return None; }
     Some((|| {
-        let running = matches!(name, "--cutover-run" | "--cutover-stock" | "--cutover-owned");
+        let running = matches!(name, "--cutover-run" | "--cutover-stock" | "--cutover-owned" | "--abi-stock" | "--abi-owned");
         require(arguments.len() == if running { 8 } else { 9 }, HELP)?;
         let inputs = load(arguments)?;
         let output = Path::new(&arguments[7]);
@@ -292,7 +295,7 @@ pub(super) fn command(arguments: &[std::ffi::OsString]) -> Option<Result<(), Str
             }
             "--cutover-check" => check::pair(&inputs, output, Path::new(&arguments[8])),
             "--cutover-controls" => check::controls(&inputs, output, Path::new(&arguments[8])),
-            _ => unreachable!(),
+            _ => abi::command(name, &inputs, arguments),
         }
     })())
 }

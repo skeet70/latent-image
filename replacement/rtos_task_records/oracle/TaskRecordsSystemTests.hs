@@ -53,7 +53,7 @@ boundary kind memory writes=C.Boundary kind (Address (if kind==C.ReturnBoundary 
 fixture :: C.Call
 fixture=C.Call {C.callDomain=DomainA,C.callAddress=Address 0x4d094,C.callSemantic=TaskRecordSemantic CreateTaskRecord,C.callCore=0,C.callCpsr=0x93,C.callArguments=Arguments [0x10007,request,0,0],C.callBefore=before,C.callAfter=after,C.callR0=0,C.callReturnCpsr=0x93,C.callWrites=stores,C.callBank=[],C.callCount=1,C.callFirst=1
   ,C.callTrace=Just (C.CallTrace registers returnedRegisters C.Returned [boundary C.PublicationBarrierBoundary before (init stores),boundary C.ReturnBoundary after [last stores]] Nothing)
-  ,C.callTask=current,C.callKernelContext=0,C.callTaskStack=Just (C.TaskStack (Address 0x80000000) (Address 0x80002000)),C.callWriteOrigins=replicate (length stores) origin,C.callBankOrigins=[],C.callUnreadable=S.empty}
+  ,C.callTask=current,C.callKernelContext=0,C.callTaskStack=Just (C.TaskStack (Address 0x80000000) (Address 0x80002000)),C.callWriteOrigins=replicate (length stores) origin,C.callBankOrigins=[],C.callUnreadable=S.empty,C.callTransitionExtents=stockTransitions,C.callDispatchEntries=fixedDispatchEntries Owned}
 
 clearFixture :: C.Call
 clearFixture =
@@ -132,7 +132,7 @@ compareSequences :: [C.Call] -> [C.Call] -> Either SystemRefusal ()
 compareSequences stock owned=compareSystemEvidence (sequenceObservation Stock) (captured Stock stock)
   (sequenceObservation Owned) (captured Owned owned)
  where
-  captured role=foldl' (accumulateSystem (Plan role "" [] [] [] [] retainedArmingEntries [] [])) emptySystemEvidence
+  captured role=foldl' (accumulateSystem (Plan role "" [] [] [] [] retainedArmingEntries [] [] stockTransitions (fixedDispatchEntries role))) emptySystemEvidence
 
 main :: IO ()
 main=do

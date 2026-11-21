@@ -122,23 +122,26 @@ run binary = do
     (invalidReserveCode == ExitFailure 75 && not invalidReserveRan)
 
   memoryCases <- forM
-    [ ("default-memory", [], "12884901888 8589934592")
-    , ("override-memory", [("XM1_HOST_BUILD_MEMORY_MAX", "24G"), ("XM1_HOST_BUILD_SWAP_MAX", "4G")], "25769803776 4294967296")
-    , ("zero-swap", [("XM1_HOST_BUILD_MEMORY_MAX", "8G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")], "8589934592 0")
-    , ("maximum-memory", [("XM1_HOST_BUILD_MEMORY_MAX", "32G"), ("XM1_HOST_BUILD_SWAP_MAX", "32G")], "34359738368 34359738368")
-    ] $ \(name, overrides, limits) -> do
+    [ ("default-memory", [], "12884901888", "8589934592")
+    , ("override-memory", [("XM1_HOST_BUILD_MEMORY_MAX", "10G"), ("XM1_HOST_BUILD_SWAP_MAX", "4G")], "10737418240", "4294967296")
+    , ("zero-swap", [("XM1_HOST_BUILD_MEMORY_MAX", "8G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")], "8589934592", "0")
+    , ("maximum-swap", [("XM1_HOST_BUILD_MEMORY_MAX", "2G"), ("XM1_HOST_BUILD_SWAP_MAX", "32G"), ("XM1_HOST_MEMORY_BUDGET", "4G")], "2147483648", "34359738368")
+    ] $ \(name, overrides, memory, swap) -> do
       writeFile (release name) ""
       invocation <- start name overrides
       code <- waitForProcess (invocationProcess invocation)
-      _ <- invocationStderr invocation
+      errors <- invocationStderr invocation
       entries <- lines <$> readFile' logFile
-      expect (name ++ " enforces RAM and swap for the whole build scope")
-        (code == ExitSuccess && ("memory " ++ name ++ " " ++ limits) `elem` entries)
+      expect (name ++ " enforces RAM and swap for the whole build scope and reserves only its RAM")
+        (code == ExitSuccess && ("memory " ++ name ++ " " ++ memory ++ " " ++ swap) `elem` entries
+          && ("\"reserved_memory_bytes\":" ++ memory ++ ",") `isInfixOf` errors)
   invalidMemoryCases <- forM
     [ ("invalid-ram", [("XM1_HOST_BUILD_MEMORY_MAX", "33G")])
     , ("zero-ram", [("XM1_HOST_BUILD_MEMORY_MAX", "0")])
     , ("invalid-swap", [("XM1_HOST_BUILD_SWAP_MAX", "33G")])
     , ("negative-swap", [("XM1_HOST_BUILD_SWAP_MAX", "-1")])
+    , ("ram-over-budget", [("XM1_HOST_BUILD_MEMORY_MAX", "5G"), ("XM1_HOST_MEMORY_BUDGET", "4G")])
+    , ("budget-over-physical", [("XM1_HOST_MEMORY_BUDGET", "1024T")])
     ] $ \(name, overrides) -> do
       writeFile (release name) ""
       invocation <- start name overrides
@@ -444,7 +447,7 @@ testEnvironment home bin logFile = do
       path = maybe bin ((bin ++ ":") ++) (lookup "PATH" inherited)
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
-      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE",
+      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE", "XM1_HOST_MEMORY_BUDGET",
         "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX",
         "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
   pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile) : ("XM1_STORAGE_MIN_FREE", "1")

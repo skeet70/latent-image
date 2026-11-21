@@ -86,7 +86,10 @@ checkUnpublished label model = do
   check (label ++ ": installer callback has not been sent") (installerRetarget `notElem` sent)
 
 manifestDocument :: RamPushManifest -> B.ByteString
-manifestDocument candidate = BL.toStrict (encode (object $
+manifestDocument = manifestDocumentWithLayout Nothing
+
+manifestDocumentWithLayout :: Maybe (Word32, Word32) -> RamPushManifest -> B.ByteString
+manifestDocumentWithLayout layout candidate = BL.toStrict (encode (object $
   [ "schema" .= (1 :: Int)
   , "base" .= unAddressHex (allocationBase candidate)
   , "size" .= allocationSize candidate
@@ -97,7 +100,9 @@ manifestDocument candidate = BL.toStrict (encode (object $
       , "rollback" .= unAddressHex (rollbackEntry entries)
       , "status" .= unAddressHex (statusEntry entries) ]
   , "publications" .= map publication (manifestPublications candidate) ]
-  ++ ["bank_variant" .= bankVariantTag variant | Just variant <- [manifestBankVariant candidate], variant `elem` [modalRenderBankVariant, modalValueBankVariant]]))
+  ++ ["bank_variant" .= bankVariantTag variant | Just variant <- [manifestBankVariant candidate], variant `elem` [modalRenderBankVariant, modalValueBankVariant]]
+  ++ ["experiment_layout" .= object ["table_offset" .= hexWord table, "installer_end_offset" .= hexWord end]
+     | Just (table, end) <- [layout]]))
   where
     entries = manifestEntries candidate
     unAddressHex = hexWord . unAddress
@@ -228,8 +233,8 @@ main = do
     (payloadKind emulatedExperiment == Experiment
       && payloadAllocationSize emulatedExperiment == 0x8000
       && payloadAbiVersion emulatedExperiment == 7
-      && payloadSetupCount emulatedExperiment == 8
-      && payloadActivationCount emulatedExperiment == 8
+      && payloadSetupCount emulatedExperiment == 0
+      && payloadActivationCount emulatedExperiment == 0
       && payloadBankVariant emulatedExperiment == Nothing)
   standardRelinker <- runfilesRelinker bankD3Payload
   check "the standard bank retains its Rust archive"
@@ -248,6 +253,53 @@ main = do
         , (bankModalValuePayload, modalValueBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 226, "build-recipe-bank-modal-value-ram.sh", "bank-modal.a")
         , (bankModalRenderPayload, modalRenderBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 228, "build-recipe-bank-modal-render-ram.sh", "bank-modal.a") ]
   _ <- parse standard
+  forM_ [0, 1, 8, 9, 17] $ \hooks -> do
+    let count = 2 * hooks
+        vector = [Publication index (if index < hooks then Setup else Activation)
+          (Address (0x00630000 + 4 * fromIntegral index)) (WordValue 0xe1a00000)
+          (WordValue (0xea000000 + fromIntegral index)) UnknownCore | index <- [0 .. count - 1]]
+        tableOffset = 0x6000
+        table = B.pack (concatMap (\p -> concatMap word32le
+          [unAddress (publicationAddress p), unWordValue (publicationOld p), unWordValue (publicationNew p),
+            if publicationPhase p == Setup then 0 else 1]) vector)
+        bytes = B.replicate tableOffset 0 <> table <> B.replicate (0x8000 - tableOffset - B.length table) 0
+        candidate = manifest { allocationSize = 0x8000, runtimeBytes = bytes, runtimeDigest = sha256 bytes
+          , manifestEntries = RamPushEntries (Address (base + 0x5600)) (Address (base + 0x5880)) (Address (base + 0x58ac))
+          , manifestPublications = vector, manifestBankVariant = Nothing }
+        document = manifestDocumentWithLayout (Just (fromIntegral tableOffset, 0x7000)) candidate
+        parseDocument encoded runtimeImage = parseRamPushManifest "/synthetic/ram-push-manifest.json" encoded runtimeImage
+        refuse label encoded runtimeImage = do
+          result <- try (parseDocument encoded runtimeImage) :: IO (Either SomeException RamPushManifest)
+          check label (case result of Left _ -> True; Right _ -> False)
+    parsed <- parseDocument document bytes
+    bound <- payloadForManifest parsed
+    check "experiment counts follow the artifact vector"
+      (length (manifestPublications parsed) == count && payloadSetupCount bound == hooks
+        && payloadActivationCount bound == hooks && manifestEntries parsed == manifestEntries candidate)
+    _ <- parse candidate
+    let state = RamPushState (manifestDigest parsed) (runtimeDigest parsed) (Address base) 0x8000
+          (manifestEntries parsed) vector callbackStockWord bootstrapBytes 1 Nothing
+        directory = root </> ("experiment-" ++ show hooks)
+    makeDir directory
+    statePath <- writeStateFile directory state
+    readRamPushState statePath >>= check "experiment rollback state preserves its actual vector" . (== state)
+    refuse "experiment table must fit its declared installer"
+      (manifestDocumentWithLayout (Just (fromIntegral tableOffset, fromIntegral tableOffset - 4)) candidate) bytes
+    refuse "experiment refuses an unaligned publication table"
+      (manifestDocumentWithLayout (Just (fromIntegral tableOffset + 1, 0x7000)) candidate) bytes
+    refuse "experiment refuses a publication table outside its allocation"
+      (manifestDocumentWithLayout (Just (0x8004, 0x8000)) candidate) bytes
+    if hooks == 0 then pure () else do
+      let corrupt = B.take tableOffset bytes <> B.singleton 1 <> B.drop (tableOffset + 1) bytes
+          corruptCandidate = candidate { runtimeBytes = corrupt, runtimeDigest = sha256 corrupt }
+      refuse "experiment refuses a rehashed runtime with a corrupted publication table"
+        (manifestDocumentWithLayout (Just (fromIntegral tableOffset, 0x7000)) corruptCandidate) corrupt
+      refusesManifest "experiment refuses an unmatched setup/activation vector"
+        (candidate { manifestPublications = drop 1 vector })
+      case vector of
+        first : laterPublications -> refusesManifest "experiment refuses activation before setup"
+          (candidate { manifestPublications = first { publicationPhase = Activation } : laterPublications })
+        [] -> fail "nonempty experiment vector required"
   let renderRuntime = B.replicate 0x3dd00 0
       renderPublications = publications ++
         [Publication index Activation (Address (0x00630000 + 4 * fromIntegral index))

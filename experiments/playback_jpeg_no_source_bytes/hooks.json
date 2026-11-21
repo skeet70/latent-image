@@ -1,0 +1,204 @@
+{
+  "hooks": [
+    {
+      "address": "0x0120b40c",
+      "handler": "xm1_playback_source_entry",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0120b40c",
+        "end": "0x0120b778",
+        "sha256": "90da01fffdecd496e473c74aa012c9028be5d2dad33a1b8f4a95b4ea7c466d32"
+      }
+    },
+    {
+      "address": "0x0120cab0",
+      "handler": "xm1_playback_mode_entry",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0120cab0",
+        "end": "0x0120cd74",
+        "sha256": "d9b5d69e40838f9bcecc142fb1bfeaefa18e43b790a027e0442d7b31deef0f0c"
+      }
+    },
+    {
+      "address": "0x00d9882c",
+      "handler": "xm1_playback_jpeg_acquire",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d9882c",
+        "end": "0x00d988a8",
+        "sha256": "9010056d9d8cfb72c81836b41be1d8a78bcee7144f2b50016d818eed778bf381"
+      }
+    },
+    {
+      "address": "0x00d988a8",
+      "handler": "xm1_playback_jpeg_restart",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d988a8",
+        "end": "0x00d988b8",
+        "sha256": "8fe358e626b4776b89d0a0f40b8697fe03e3eb5c7aab77f3b59e6288c0e3f731"
+      }
+    },
+    {
+      "address": "0x00d988b8",
+      "handler": "xm1_playback_jpeg_release",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d988b8",
+        "end": "0x00d98904",
+        "sha256": "db638b2a6dc404d71eda6c3da34001f8fa603e181da22555d6b8aaafdc04a7aa"
+      }
+    },
+    {
+      "address": "0x00d99570",
+      "handler": "xm1_playback_jpeg_interrupt",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d99570",
+        "end": "0x00d99714",
+        "sha256": "4ff7a2b304d223fed19b7f99f081018f54b93be2e1e7d1827956794c2c9576a5"
+      }
+    },
+    {
+      "address": "0x00d98904",
+      "handler": "xm1_playback_jpeg_build_request",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d98904",
+        "end": "0x00d989f8",
+        "sha256": "6392e76503ea8e6679b13f3003577a298a7e022d990194b7f484f686effef503"
+      }
+    },
+    {
+      "address": "0x0121fec8",
+      "handler": "xm1_playback_jpeg_complete_first",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0121fec8",
+        "end": "0x0121ff20",
+        "sha256": "62ed3b398b8c37d6bbce5ea41b4a8bfa3b088f33f5ab647a12a52770ec38ec23"
+      }
+    },
+    {
+      "address": "0x0121ff20",
+      "handler": "xm1_playback_jpeg_complete_second",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0121ff20",
+        "end": "0x0121ff78",
+        "sha256": "7044e6a3ace1333f6f16f979d45dda0e7414d0796af344d58fdade2cabae805d"
+      }
+    },
+    {
+      "address": "0x01220004",
+      "handler": "xm1_playback_jpeg_initialize",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x01220004",
+        "end": "0x012200a4",
+        "sha256": "3d54e6d19f94ef87bdd4911e0887498e27fefc2ea2435f1fc7b889a04f1aeac1"
+      }
+    },
+    {
+      "address": "0x012200c4",
+      "handler": "xm1_playback_jpeg_reset_state",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x012200c4",
+        "end": "0x012200ec",
+        "sha256": "94e29022682594ca375258295c3b62e57c662ce4818c8bc3375bd0bb9a8ef045"
+      }
+    },
+    {
+      "address": "0x012200ec",
+      "handler": "xm1_playback_jpeg_restart_request",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x012200ec",
+        "end": "0x01220120",
+        "sha256": "36bc30b9913ffd04354902be5224a528eb5ded37d53002a9ce9e6a5311987335"
+      }
+    },
+    {
+      "address": "0x01220120",
+      "handler": "xm1_playback_jpeg_cancel_timer",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x01220120",
+        "end": "0x0122013c",
+        "sha256": "4fb4d166fbadaa9b717efceb858bed4c7a4ba06874a69c5a037b549f3e30b8ef"
+      }
+    },
+    {
+      "address": "0x0122013c",
+      "handler": "xm1_playback_jpeg_preserve_prefix",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0122013c",
+        "end": "0x01220238",
+        "sha256": "88b6c5c06b98305342baecfbfed62d1f2eb6c07ec72f8871788179ad0b141838"
+      }
+    },
+    {
+      "address": "0x01220238",
+      "handler": "xm1_playback_jpeg_finish_request",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x01220238",
+        "end": "0x0122026c",
+        "sha256": "d9785ea18ca9bc37d4f0fc47d90fb6c1e4f260d446e1e01971a8fd0a9dd1a3d2"
+      }
+    },
+    {
+      "address": "0x0122026c",
+      "handler": "xm1_playback_jpeg_cancel_request",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x0122026c",
+        "end": "0x01220294",
+        "sha256": "f4f1aa064a51f3c5bfb7f3e9441d5823bdb74b1a27ad5a0253fc79427c2bfef1"
+      }
+    },
+    {
+      "address": "0x01220294",
+      "handler": "xm1_playback_jpeg_submit",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x01220294",
+        "end": "0x012202d0",
+        "sha256": "8fd653644486cfabcb4f6733463d5bc6376b78b45e6c6dcdf96227395b6ba8ba"
+      }
+    },
+    {
+      "address": "0x00e8fee4",
+      "handler": "xm1_playback_jpeg_develop_job4",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00e8fee4",
+        "end": "0x00e90014",
+        "sha256": "47bb5cc27a1cd0062590dd9bf2019597b5537f698b807e3edfa8cb27980807eb"
+      }
+    },
+    {
+      "address": "0x00e8eb18",
+      "handler": "xm1_playback_jpeg_record_notification",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00e8eb18",
+        "end": "0x00e8eb38",
+        "sha256": "3e54ac9af3dc1e6630f562c6a5897c97980635773395246431befb7bfc582841"
+      }
+    },
+    {
+      "address": "0x00d989f8",
+      "handler": "xm1_playback_jpeg_clear_record_release",
+      "mode": "replace_entry",
+      "source": {
+        "entry": "0x00d989f8",
+        "end": "0x00d98a18",
+        "sha256": "03ee1e67d5226419f039621036298d874ead30cf768356439d47fb085b63249d"
+      }
+    }
+  ]
+}

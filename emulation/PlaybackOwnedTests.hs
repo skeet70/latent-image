@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, forM_)
 import qualified Crypto.Hash.SHA256 as SHA
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson.Key as K
@@ -36,27 +36,48 @@ elf :: B.ByteString
 elf = elfFor ["xm1_playback_source_entry", "xm1_playback_mode_entry"]
 
 elfFor :: [T.Text] -> B.ByteString
-elfFor functions = B.pack [byte i | i <- [0..0x7ff]]
+elfFor = elfForFamily False
+
+elfForFamily :: Bool -> [T.Text] -> B.ByteString
+elfForFamily retained functions = B.pack [byte i | i <- [0..fileEnd]]
   where
-    encoded = map (B.pack . map (fromIntegral . fromEnum) . T.unpack) functions
+    lifecycle = "xm1_playback_jpeg_initialize" `elem` functions
+    stride = if lifecycle then 8 else 4
+    fileEnd = if lifecycle then 0x1fff else 0xfff
+    stringsOffset = if lifecycle then 0xc00 else 0xa00
+    sectionNamesOffset = if lifecycle then 0x1c00 else 0xe00
+    extraSymbols :: [(T.Text,Word32,Word32)]
+    extraSymbols = if lifecycle then
+      [("xm1_playback_jpeg_finish_released",0x10074,1)
+      ,("xm1_playback_jpeg_cancel_released",0x1007c,1)
+      ,("__ram_push_publications_start",0x15100,0xfff1)
+      ,("__ram_push_publications_end",0x15100 + tableBytes,0xfff1)
+      ,("__experiment_installer_end",0x15100 + tableBytes,0xfff1)] else []
+    tableBytes = 32 * fromIntegral (length functions)
+    encoded = map (B.pack . map (fromIntegral . fromEnum) . T.unpack) (functions ++ [name | (name,_,_) <- extraSymbols])
     names = B.singleton 0 <> B.concat [name <> B.singleton 0 | name <- encoded]
     nameOffsets = scanl (\offset name -> offset + fromIntegral (B.length name) + 1) 1 encoded
     sectionNames = "\0.text\0.symtab\0.strtab\0.shstrtab\0.ram_push.rendezvous\0.ram_push.mailbox\0.ram_push.publications\0"
     header = B.pack [127,69,76,70,1,1,1] <> B.replicate 9 0
       <> B.pack [2,0,40,0] <> word 1 <> word 0x10000 <> word 0 <> word 0x400 <> word 0
       <> B.pack [52,0,32,0,0,0,40,0,8,0,4,0]
-    symbol name value = word name <> word value <> word 4 <> B.pack [0x12,0,1,0]
-    symbols = B.replicate 16 0 <> B.concat [symbol name (0x10000 + index * 4) | (name,index) <- zip (take (length functions) nameOffsets) [0..]]
+    symbol name index function = case lookup function retainedTargets of
+      Just target | retained -> word name <> word target <> word 0 <> B.pack [0x12,0,0xf1,0xff]
+      _ -> word name <> word (0x10000 + index * stride) <> word stride <> B.pack [0x12,0,1,0]
+    retainedTargets = [(T.pack name,C.bodyStart body) | service <- C.jpegDeviceServices, let (body,name) = C.jpegDeviceContract service]
+    symbols = B.replicate 16 0 <> B.concat [symbol name index function | (name,index,function) <- zip3 (take (length functions) nameOffsets) [0..] functions]
+      <> B.concat [word name <> word target <> word 0 <> B.pack [0x10,0,fromIntegral sectionIndex,fromIntegral (sectionIndex `div` 256)]
+         | (name,(_,target,sectionIndex)) <- zip (drop (length functions) nameOffsets) extraSymbols]
     section name typ flags addr offset size link entsize = B.concat (map word [name,typ,flags,addr,offset,size,link,0,4,entsize])
     sections = B.replicate 40 0
-      <> section 1 1 6 0x10000 0x100 (fromIntegral (length functions) * 4) 0 0
-      <> section 7 2 0 0 0x140 (fromIntegral (B.length symbols)) 3 16
-      <> section 15 3 0 0 0x200 (fromIntegral (B.length names)) 0 0
-      <> section 23 3 0 0 0x300 (fromIntegral (B.length sectionNames)) 0 0
+      <> section 1 1 6 0x10000 0x100 (fromIntegral (length functions) * stride) 0 0
+      <> section 7 2 0 0 0x800 (fromIntegral (B.length symbols)) 3 16
+      <> section 15 3 0 0 (fromIntegral stringsOffset) (fromIntegral (B.length names)) 0 0
+      <> section 23 3 0 0 (fromIntegral sectionNamesOffset) (fromIntegral (B.length sectionNames)) 0 0
       <> section 33 1 3 0x15000 0x600 128 0 0
       <> section 54 1 3 0x15080 0x680 128 0 0
-      <> section 72 1 3 0x15100 0x700 256 0 0
-    chunks = [(0,header),(0x140,symbols),(0x200,names),(0x300,sectionNames),(0x400,sections)]
+      <> section 72 1 3 0x15100 0x700 (if lifecycle then tableBytes else 256) 0 0
+    chunks = [(0,header),(0x800,symbols),(stringsOffset,names),(sectionNamesOffset,sectionNames),(0x400,sections)]
     byte i = case [B.index bytes (i-offset) | (offset,bytes) <- chunks, i >= offset, i-offset < B.length bytes] of
       x:_ -> x
       [] -> 0
@@ -106,7 +127,7 @@ fetch target = object ["source" .= ("cpu-fetch" :: T.Text),"address" .= target,"
 checkJpeg :: IO ()
 checkJpeg = do
   let entries = [(start,end,0x10000 + index * 4,T.pack name,T.pack hash)
-        | (entry,index) <- zip C.playbackEntries [0..]
+        | (entry,index) <- zip C.transactionEntries [0..]
         , let (start,end,C.SourceSha256 hash,name) = C.playbackContract entry]
       hooks = [hook start end target name hash | (start,end,target,name,hash) <- entries]
       jpegMetadata = put "hooks" (A.toJSON hooks) (put "symbols" (object [K.fromText name .= hex target | (_,_,target,name,_) <- entries]) metadata)
@@ -117,6 +138,30 @@ checkJpeg = do
       jpegElf = elfFor [name | (_,_,_,name,_) <- entries]
   package <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime jpegElf)
   check "JPEG scope is separate from preparation pair" (P.qualificationScope package == P.JpegTransaction)
+  check "six-hook package retains the device family" (P.deviceOwnership package == P.RetainedJpegDevice)
+  let ownedNames = [T.pack name | service <- C.jpegDeviceServices, let (_,name) = C.jpegDeviceContract service]
+      allNames = [name | (_,_,_,name,_) <- entries] ++ ownedNames
+  owned <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor allNames))
+  check "ELF definitions select owned device family" (P.deviceOwnership owned == P.OwnedJpegDevice)
+  check "service targets are actual ELF definitions" ([(lo,hi) | (_,lo,hi) <- P.deviceServices (Just owned)]
+    == [(0x10018 + index*4,0x1001c + index*4) | index <- [0..9]])
+  check "owned family extends source guards by the ten original bodies"
+    (drop (length (P.originalBodies package)) (P.originalBodies owned)
+      == [(C.bodyStart body,fromIntegral (C.bodyEnd body-C.bodyStart body)) | service <- C.jpegDeviceServices, let (body,_) = C.jpegDeviceContract service])
+  forM_ [1..9] $ \count -> check "partial device definition family refused"
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor (take (6+count) allNames))))
+  retained <- either fail pure (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfForFamily True allNames))
+  check "historical absolute source service family remains admitted" (P.deviceOwnership retained == P.RetainedJpegDevice)
+  check "retained source family adds no exclusions" (P.originalBodies retained == P.originalBodies package)
+  check "retained service redirected away from pinned source refused"
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (changeByte 0x874 (elfForFamily True allNames))))
+  check "duplicate device export refused"
+    (isLeft (P.parsePackage (json jpegManifest) (json jpegMetadata) runtime (elfFor (allNames ++ take 1 ownedNames))))
+  let changedDeviceRuntime = changeByte 0x18 runtime
+      changedManifest = put "runtime_sha256" (String (sha changedDeviceRuntime)) jpegManifest
+      changedMetadata = put "runtime_sha256" (String (sha changedDeviceRuntime)) jpegMetadata
+  check "runtime identity cannot hide ELF device code mismatch"
+    (isLeft (P.parsePackage (json changedManifest) (json changedMetadata) changedDeviceRuntime (elfFor allNames)))
   let request = P.watchRequest package
       classes = case (A.fromJSON (get "write_ranges" request), A.fromJSON (get "fetch_ranges" request)) of
         (A.Success writes, A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
@@ -133,9 +178,171 @@ checkJpeg = do
     [[0x10008,0x10014],[0x10008,0x10010],[0x10014,0x10010],[]]
   mapM_ (\target -> check "retained internal JPEG body execution refused" (isLeft (observed [target])))
     [0xd99714,0xd999d4,0xd99a24]
+  let ownedRequest = P.watchRequest owned
+      ownedClasses = case (A.fromJSON (get "write_ranges" ownedRequest), A.fromJSON (get "fetch_ranges" ownedRequest)) of
+        (A.Success writes,A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
+          | (ranges,kinds) <- [(writes,["cpu-write","host-write","model-bus-write"] :: [T.Text]),(fetches,["cpu-fetch"])], range <- (ranges :: [Value])]
+        _ -> []
+      ownedAck = put "classes" (A.toJSON ownedClasses) (put "ranges" (get "ranges" ownedRequest) ack)
+      ownedState target = put "classes" (A.toJSON ownedClasses) (put "ranges" (get "ranges" ownedRequest) (state [target]))
+  mapM_ (\target -> check "owned device excludes each original low-level body"
+    (isLeft (P.witness owned ownedAck (ownedState target) (ownedState target)))) [0x65a478,0x65a58c,0x65a548,0x65ab20,0x65ab50,0x65ab7c,0x65abac,0x65abd8,0x65ac08,0x65a9e4]
   mapM_ (\offset -> check "owned JPEG entry mutation refused" (isLeft (P.checkGuestArtifacts package
     ((0x10000,changeByte offset completedRuntime) : drop 1 (P.guestArtifacts package))))) [8,12,16,20]
   check "partial JPEG ownership refused" (isLeft (P.parsePackage (json jpegManifest) (json (put "hooks" (A.toJSON (take 5 hooks)) jpegMetadata)) runtime jpegElf))
+
+checkConsumers :: IO ()
+checkConsumers = do
+  let entries = [(start,end,0x10000 + index * 4,T.pack name,T.pack hash)
+        | (entry,index) <- zip C.consumerPlaybackEntries [0..]
+        , let (start,end,C.SourceSha256 hash,name) = C.playbackContract entry]
+      hooks = [hook start end target name hash | (start,end,target,name,hash) <- entries]
+      consumerMetadata = put "hooks" (A.toJSON hooks)
+        (put "symbols" (object [K.fromText name .= hex target | (_,_,target,name,_) <- entries]) metadata)
+      consumerManifest = put "publications" (A.toJSON
+        [object ["address" .= hex address,"old" .= hex 0,"new" .= hex value,"phase" .= phase]
+        | (start,_,target,_,_) <- entries
+        , (address,value,phase) <- [(start+4,target,"setup" :: T.Text),(start,0xe51ff004,"activation")]]) manifest
+      names = [name | (_,_,_,name,_) <- entries]
+      deviceNames = [T.pack name | service <- C.jpegDeviceServices, let (_,name) = C.jpegDeviceContract service]
+      parse meta = P.parsePackage (json consumerManifest) (json meta) runtime (elfFor names)
+      changeConsumer key value = put "hooks" (A.toJSON (take 6 hooks ++ [put key value (hooks !! 6)] ++ drop 7 hooks)) consumerMetadata
+  package <- either fail pure (parse consumerMetadata)
+  owned <- either fail pure (P.parsePackage (json consumerManifest) (json consumerMetadata) runtime (elfFor (names ++ deviceNames)))
+  check "consumer scope is explicit" (P.qualificationScope package == P.JpegConsumers)
+  check "owned consumers protect twenty-one original extents" (length (P.originalBodies owned) == 21)
+  check "consumer source mismatch refused" (isLeft (parse (changeConsumer "source" (put "sha256" (String (T.replicate 64 "0")) (get "source" (hooks !! 6))))))
+  check "consumer target mismatch refused" (isLeft (parse (changeConsumer "trampoline" (String (hex 0x10000)))))
+  check "consumer site mismatch refused" (isLeft (parse (changeConsumer "address" (String (hex 0xd98908)))))
+  check "consumer admission mismatch refused" (isLeft (parse (changeConsumer "mode" (String "observe"))))
+  check "seven hooks are not an admitted composition" (isLeft (parse (put "hooks" (A.toJSON (take 7 hooks)) consumerMetadata)))
+  let request = P.watchRequest package
+      classes = case (A.fromJSON (get "write_ranges" request), A.fromJSON (get "fetch_ranges" request)) of
+        (A.Success writes,A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
+          | (ranges,kinds) <- [(writes,["cpu-write","host-write","model-bus-write"] :: [T.Text]),(fetches,["cpu-fetch"])]
+          , range <- (ranges :: [Value])]
+        _ -> []
+      ack = object ["armed" .= True,"ranges" .= get "ranges" request,"views" .= ("fixed" :: T.Text),"classes" .= classes]
+      state targets = object ["enabled" .= True,"ranges" .= get "ranges" request,"views" .= ("fixed" :: T.Text),"classes" .= classes
+        ,"records" .= map fetch targets,"violation" .= Null]
+      observe targets = P.witness package ack (state targets) (state targets)
+      playTargets = [0x10008,0x10014,0x10010,0x1001c]
+  prefix <- either fail pure (observe [0x10000,0x10004,0x10018])
+  play <- either fail pure (observe playTargets)
+  empty <- either fail pure (observe [])
+  let evidence = P.qualificationEvidence prefix play
+  check "consumers qualify across preparation and PLAY without prefix acquire" (P.qualificationEpochsObserved package evidence)
+  check "single PLAY witness cannot qualify consumer scope" (not (P.qualificationObserved package play))
+  check "preparation does not manufacture PLAY source or mode" (not (P.sourceObserved (P.playWitness evidence)) && not (P.modeObserved (P.playWitness evidence)))
+  check "prefix retains source and mode independently" (P.sourceObserved (P.preparationWitness evidence) && P.modeObserved (P.preparationWitness evidence))
+  withoutBuilder <- either fail pure (observe [0x10000,0x10004])
+  check "missing preparation builder refuses consumer scope" (not (P.qualificationEpochsObserved package (P.qualificationEvidence withoutBuilder play)))
+  forM_ playTargets $ \missing -> do
+    partial <- either fail pure (observe (filter (/= missing) playTargets))
+    check "each PLAY lifecycle consumer observation is required" (not (P.qualificationEpochsObserved package (P.qualificationEvidence prefix partial)))
+  misplaced <- either fail pure (observe (0x10018 : playTargets))
+  check "PLAY builder cannot substitute preparation builder" (not (P.qualificationEpochsObserved package (P.qualificationEvidence empty misplaced)))
+  withoutCompletion <- either fail pure (observe [0x10008,0x10014,0x10010])
+  check "preparation completion cannot substitute PLAY completion" (not (P.qualificationEpochsObserved package (P.qualificationEvidence misplaced withoutCompletion)))
+  forM_ [0xd9890c,0x121fed0] $ \target ->
+    check "original consumer execution is forbidden" (isLeft (observe [target]))
+  forM_ [0x18,0x1c] $ \offset ->
+    check "owned consumer entry bytes are immutable" (isLeft (P.checkGuestArtifacts package
+      ((0x10000,changeByte offset completedRuntime) : drop 1 (P.guestArtifacts package))))
+  check "consumer guard omissions cannot qualify" (isLeft (P.witness package ack
+    (put "violation" (String "record limit") (state playTargets)) (state playTargets)))
+  check "consumer source read omissions are refused" (isLeft (P.checkOriginalBodies owned []))
+
+checkLifecycle :: [C.PlaybackEntry] -> IO ()
+checkLifecycle owned = do
+  let entries = [(entry,start,end,0x10000 + index*8,T.pack name,T.pack hash)
+        | (entry,index) <- zip owned [0..]
+        , let (start,end,C.SourceSha256 hash,name) = C.playbackContract entry]
+      hookCount = fromIntegral (length entries) :: Word32
+      names = [name | (_,_,_,_,name,_) <- entries]
+      hooks = [hook start end target name hash | (_,start,end,target,name,hash) <- entries]
+      publications = [(site,0,value,phase)
+        | (_,start,_,target,_,_) <- entries
+        , (site,value,phase) <- [(start+4,target,0),(start,0xe51ff004,1)]]
+      vector = B.concat [B.concat (map word [site,old,new,phase]) | (site,old,new,phase) <- publications]
+      bytes = B.replicate 0x5100 0 <> vector <> B.replicate 0xe0 0
+      meta = put "runtime_sha256" (String (sha bytes)) $ put "hooks" (A.toJSON hooks) $
+        put "symbols" (object [K.fromText name .= hex target | (_,_,_,target,name,_) <- entries]) metadata
+      man = put "runtime_sha256" (String (sha bytes)) $ put "size" (A.toJSON (B.length bytes)) $
+        put "experiment_layout" (object ["table_offset" .= hex 0x5100,"installer_end_offset" .= hex (0x5100 + 32*hookCount)]) $
+        put "publications" (A.toJSON [object ["address" .= hex site,"old" .= hex old,"new" .= hex new
+          ,"phase" .= (if phase == 0 then "setup" else "activation" :: T.Text)] | (site,old,new,phase) <- publications]) manifest
+      parse m metadata' runtime' = P.parsePackage (json m) (json metadata') runtime' (elfFor names)
+      patch offset value original = B.take offset original <> word value <> B.drop (offset+4) original
+      terminal = foldr (uncurry patch) (B.take 0x5100 completedRuntime <> B.drop 0x5100 bytes)
+        [(0x506c,2*hookCount),(0x5094,2*hookCount),(0x5098,hookCount),(0x509c,hookCount),(0x50b4,2*hookCount)]
+  package <- either fail pure (parse man meta bytes)
+  check "lifecycle scope is explicit" (P.qualificationScope package == P.JpegLifecycle)
+  check "full lifecycle publishes two words per hook" (length (P.guestArtifacts package) == 1 + 2 * length entries)
+  check "release observations resolve inside their owned functions"
+    (P.releasedObservation package C.PlaybackJpegFinishRequest == Just 0x10074
+      && P.releasedObservation package C.PlaybackJpegCancelRequest == Just 0x1007c)
+  check "actual lifecycle installer counts admitted" (isRight (P.checkGuestArtifacts package
+    ((0x10000,terminal) : drop 1 (P.guestArtifacts package))))
+  forM_ [0x506c,0x5094,0x5098,0x509c,0x50b4] $ \offset ->
+    check "stale fixed-eight terminal counts refused" (isLeft (P.checkGuestArtifacts package
+      ((0x10000,patch offset 8 terminal) : drop 1 (P.guestArtifacts package))))
+  forM_ (filter (`elem` owned) (C.lifecycleEntries ++ C.developEntries)) $ \entry -> do
+    let (start,end,_,_) = C.playbackContract entry
+    check "every whole lifecycle and develop body is excluded" ((start+8,fromIntegral (end-start-8)) `elem` P.originalBodies package)
+  check "interior cancellation observation is not an owned entry"
+    (let (start,_,_,_) = C.playbackContract C.PlaybackJpegCancelRequest in start == 0x122026c)
+  check "full lifecycle requires linked installer layout" (isLeft (parse (case man of
+    Object fields -> Object (KM.delete "experiment_layout" fields); _ -> man) meta bytes))
+  let corrupt = changeByte 0x5100 bytes
+  check "rehashed publication vector corruption refused" (isLeft (parse
+    (put "runtime_sha256" (String (sha corrupt)) man)
+    (put "runtime_sha256" (String (sha corrupt)) meta) corrupt))
+  forM_ [0 .. length hooks - 1] $ \index -> do
+    let changed = take index hooks ++ [put "original_body" (object ["start" .= hex 0x1220288,"end" .= hex 0x1220294]) (hooks !! index)] ++ drop (index+1) hooks
+    check "partial original-body exclusions refused" (isLeft (parse man (put "hooks" (A.toJSON changed) meta) bytes))
+  let request = P.watchRequest package
+      classes = case (A.fromJSON (get "write_ranges" request), A.fromJSON (get "fetch_ranges" request)) of
+        (A.Success writes,A.Success fetches) -> [object ["range" .= range,"kinds" .= kinds]
+          | (ranges,kinds) <- [(writes,["cpu-write","host-write","model-bus-write"] :: [T.Text]),(fetches,["cpu-fetch"])]
+          , range <- (ranges :: [Value])]
+        _ -> []
+      ack = object ["armed" .= True,"ranges" .= get "ranges" request,"views" .= ("fixed" :: T.Text),"classes" .= classes]
+      state targets = object ["enabled" .= True,"ranges" .= get "ranges" request,"views" .= ("fixed" :: T.Text)
+        ,"classes" .= classes,"records" .= map fetch targets,"violation" .= Null]
+      observe targets = P.witness package ack (state targets) (state targets)
+      playTargets = [0x10010,0x10028,0x10020,0x10038,0x10078]
+      developTargets = [target | (entry,_,_,target,_,_) <- entries, entry `elem` C.developEntries]
+  prefix <- either fail pure (observe (0x10030 : developTargets))
+  play <- either fail pure (observe playTargets)
+  check "lifecycle requires natural owned cancellation in PLAY"
+    (P.qualificationEpochsObserved package (P.qualificationEvidence prefix play))
+  missingCancel <- either fail pure (observe (filter (/= 0x10078) playTargets))
+  check "other handbacks cannot substitute the cancel entry"
+    (not (P.qualificationEpochsObserved package (P.qualificationEvidence prefix missingCancel)))
+  forM_ developTargets $ \missing -> do
+    partial <- either fail pure (observe (0x10030 : filter (/= missing) developTargets))
+    check "each develop consumer is required in preparation" (not (P.qualificationEpochsObserved package (P.qualificationEvidence partial play)))
+  playDevelop <- either fail pure (observe (playTargets ++ developTargets))
+  builderOnly <- either fail pure (observe [0x10030])
+  check "PLAY develop consumers cannot substitute preparation"
+    (null developTargets || not (P.qualificationEpochsObserved package (P.qualificationEvidence builderOnly playDevelop)))
+  forM_ [start | (start,_) <- P.originalBodies package] $ \start ->
+    check "every original lifecycle fetch is refused" (isLeft (observe [start]))
+  check "stock cancel interior is observation only and cannot execute under ownership" (isLeft (observe [0x1220288]))
+  forM_ [C.preparationEntries,C.transactionEntries] $ \historicalEntries -> do
+    let subset = [row | row@(entry,_,_,_,_,_) <- entries, entry `elem` historicalEntries]
+        count = length subset
+        smallNames = [name | (_,_,_,_,name,_) <- subset]
+        smallHooks = [hook start end (0x10000+index*4) name hash
+          | ((_,start,end,_,name,hash),index) <- zip subset [0..]]
+        smallMeta = put "hooks" (A.toJSON smallHooks) $ put "symbols"
+          (object [K.fromText name .= hex (0x10000+index*4) | (name,index) <- zip smallNames [0..]]) metadata
+        smallMan = put "publications" (A.toJSON [object ["address" .= hex site,"old" .= hex 0,"new" .= hex new,"phase" .= phase]
+          | ((_,start,_,_,_,_),index) <- zip subset [0..]
+          , (site,new,phase) <- [(start+4,0x10000+index*4,"setup" :: T.Text),(start,0xe51ff004,"activation")]]) manifest
+    small <- either fail pure (P.parsePackage (json smallMan) (json smallMeta) runtime (elfFor smallNames))
+    check "preparation and transaction packages use actual counts without spare slots" (length (P.guestArtifacts small) == 1+2*count)
 
 main :: IO ()
 main = do
@@ -193,4 +400,7 @@ main = do
   check "changed snapshot refused" (isLeft (P.validateReady selected start (put "checkpoint" (put "snapshot_sha256" (String (T.replicate 64 "b")) (get "checkpoint" ready)) ready)))
   check "cold replay refused" (isLeft (P.validateReady selected start (object ["checkpoint" .= object ["start" .= ("cold" :: T.Text)]])))
   checkJpeg
+  checkConsumers
+  checkLifecycle (C.consumerPlaybackEntries ++ C.lifecycleEntries)
+  checkLifecycle C.playbackEntries
   putStrLn "owned playback package and bounded witness behavior passed"

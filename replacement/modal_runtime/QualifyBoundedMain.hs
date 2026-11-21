@@ -20,7 +20,7 @@ import GHC.Clock (getMonotonicTimeNSec)
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.StorageBudget (checkStorageBudget)
 import Replacement.ModalRuntime.QualifierPolicy
-  ( OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
+  ( OwnedArchive (..), OwnedBase (..), Qualification (..), Role (..), executionIdentity, installedCheckpointMatches
   , ownedBaseInputs, parseInvocation, qualificationOptions, roleFirmware )
 import Emulation.ParallelCases (mapBounded)
 import Replacement.ModalRuntime.MemoryCounters (oomEvents, oomKills, peakBytes, readCounter)
@@ -243,7 +243,7 @@ pairs =
   , CaseId "oracle-framed-pop-group41", CaseId "oracle-framed-push", CaseId "oracle-group-down", CaseId "oracle-group-down-wrap"
   , CaseId "oracle-group-left", CaseId "oracle-group-left-wrap", CaseId "oracle-group-right", CaseId "oracle-group-right-wrap"
   , CaseId "oracle-group-up", CaseId "oracle-group-up-wrap", CaseId "oracle-nowrap", CaseId "oracle-nowrap-edge"
-  , CaseId "oracle-open", CaseId "oracle-open-seek", CaseId "oracle-pop", CaseId "oracle-pop-deep", CaseId "oracle-pop-remember"
+  , CaseId "oracle-open", CaseId "oracle-open-seek", CaseId "oracle-open-seek-moved", CaseId "oracle-pop", CaseId "oracle-pop-deep", CaseId "oracle-pop-remember"
   , CaseId "oracle-pop-remember-off", CaseId "oracle-push", CaseId "oracle-push-classifier", CaseId "oracle-push-remember-off"
   , CaseId "oracle-push-restored", CaseId "oracle-push-same-parent", CaseId "oracle-reopen", CaseId "oracle-scroll"
   , CaseId "oracle-scroll-down", CaseId "oracle-scroll-up", CaseId "oracle-step-rows", CaseId "oracle-step-rows-wrap", CaseId "oracle-wrap"
@@ -286,13 +286,19 @@ binRoot q = qualRoot q </> "bin"
 checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
 
-trajectoryRoot, runDocument, inputsRoot, tablesPath, planPath, clockPath :: FilePath
+trajectoryRoot, runDocument, inputsRoot, archivePath, tablesPath, planPath, clockPath :: FilePath
 trajectoryRoot = "private-data/scratch/MenuValueFix/inputs/value-trajectories"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
 inputsRoot = "private-data/scratch/MenuValueFix/inputs/value-current6"
+archivePath = inputsRoot </> "engine.a"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
 planPath = inputsRoot </> "bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
+
+ownedArchive :: Qualification -> (FilePath, Sha256)
+ownedArchive q = case qualificationArchive q of
+  PinnedArchive -> (archivePath, expectedArchive)
+  ControlArchive path digest -> (path, digest)
 
 main :: IO ()
 main = do
@@ -301,16 +307,54 @@ main = do
   unless atRoot (failH "run from the repository root")
   arguments <- getArgs
   (q, command) <- either failH pure (parseInvocation defaultQualRoot arguments)
+  let pinned = qualificationArchive q == PinnedArchive
+      qualifying run = if pinned then run else failH "a control archive does not qualify; use control"
   case command of
-    ["plan"] -> planMode q FullMatrix
-    ["plan", "headroom"] -> planMode q HeadroomOnly
-    ["execute"] -> executeMode q FullMatrix
-    ["recheck"] -> recheckMode q
-    ["headroom"] -> executeMode q HeadroomOnly
-    ["measure"] -> measureMode q
+    ["plan"] -> qualifying (planMode q FullMatrix)
+    ["plan", "headroom"] -> qualifying (planMode q HeadroomOnly)
+    ["execute"] -> qualifying (executeMode q FullMatrix)
+    ["recheck"] -> qualifying (recheckMode q)
+    ["headroom"] -> qualifying (executeMode q HeadroomOnly)
+    ["measure"] -> qualifying (measureMode q)
+    "control" : names@(_ : _) | not pinned, all ((`elem` pairs) . CaseId) names -> controlMode q (map CaseId names)
     ["install-producer"] -> slottedMode q ["install-producer"] installCase Owned (qualRoot q </> "install-producer")
     ["role-slotted", name, role] | CaseId name `elem` pairs, Just parsed <- parseRole role -> roleMode q (CaseId name) parsed
-    _ -> failH "usage: menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] plan [headroom]|execute|headroom|measure|recheck"
+    _ -> failH "usage: menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] plan [headroom]|execute|headroom|measure|recheck\n       menu-engine-qualify-bounded [--root DIR] [--owned-base DAT SHA256] --control-archive ARCHIVE SHA256 control PAIR..."
+
+-- | Runs each pair with the control archive in the owned role; every pair comparison must fail.
+controlMode :: Qualification -> [CaseId] -> IO ()
+controlMode q names = do
+  occupied <- insideSlot
+  when occupied (failH "a control must start outside an emulator slot")
+  requireCleanSource
+  verifyInputs q
+  _ <- boundedSlotPolicy
+  checkStorageBudget (qualRoot q)
+  buildAndTest q
+  prepareInstalledCheckpoint q
+  outcomes <- forM names $ \name -> do
+    forM_ [Stock, Owned] $ \role -> do
+      result <- runRole q name role
+      case result of
+        Left failure -> writeFailurePacket q "blocked" failure >> failH "control role failed"
+        Right _ -> pure ()
+    comparison <- runPairCheck q name
+    let (detected, pairPath) = case comparison of
+          Left (Failure _ _ artifact) -> (True, artifact)
+          Right directory -> (False, directory </> "pair.json")
+    pairValue <- decodeFile pairPath >>= either failH pure
+    pure (detected, object ["case" .= caseText name, "detected" .= detected, "comparison" .= (pairValue :: Value)])
+  source <- verifySource
+  let detectedAll = all fst outcomes
+  writeJson (qualRoot q </> "control.json") $ object
+    [ "schema" .= (1 :: Int)
+    , "source" .= sourceJson source
+    , "inputs" .= inputJson (inputIdentity q)
+    , "control_archive" .= sha256Hex (snd (ownedArchive q))
+    , "pairs" .= map snd outcomes
+    , "detected" .= detectedAll
+    ]
+  unless detectedAll (failH "the control archive matches stock on a control pair")
 
 measureMode :: Qualification -> IO ()
 measureMode q = do
@@ -389,7 +433,7 @@ ownedCheckpointRoot q = do
         [ "viewer" .= sha256Hex (toolViewer tools), "sdk" .= sha256Hex (toolSdkRamPush tools)
         , "run" .= sha256Hex expectedRunDocument, "firmware" .= sha256Hex (snd (firmwareFor q Owned))
         , "adjustment" .= sha256Hex expectedAdjustment, "rom" .= sha256Hex expectedRom
-        , "archive" .= sha256Hex expectedArchive, "retired" .= sha256Hex expectedRetired ]
+        , "archive" .= sha256Hex (snd (ownedArchive q)), "retired" .= sha256Hex expectedRetired ]
   pure ("private-data/emulator-checkpoints" </> ("qualifier-install-" ++ sha256Hex (sha256 (encodeCanonical producer))))
 
 ownedProofPath :: Qualification -> IO FilePath
@@ -486,7 +530,7 @@ inputIdentity q = InputIdentity
   , inputTrajectories = expectedTrajectories
   , inputFirmware = expectedFirmware
   , inputAdjustment = expectedAdjustment
-  , inputArchive = expectedArchive
+  , inputArchive = snd (ownedArchive q)
   , inputRetired = expectedRetired
   , inputRom = expectedRom
   , inputTables = expectedTables
@@ -536,7 +580,7 @@ verifyInputs q = do
     [ ("run document", runDocument, expectedRunDocument)
     , ("firmware", inputsRoot </> "firmware.DAT", expectedFirmware)
     , ("adjustment NAND", inputsRoot </> "adjustment.nand", expectedAdjustment)
-    , ("owned archive", inputsRoot </> "engine.a", expectedArchive)
+    , ("owned archive", fst (ownedArchive q), snd (ownedArchive q))
     , ("retired picker", inputsRoot </> "retired.json", expectedRetired)
     , ("menu tables", tablesPath, expectedTables)
     , ("bank plan", planPath, expectedPlan)
@@ -547,8 +591,7 @@ verifyInputs q = do
     SharedBase -> pure ()
     StagedBase path digest -> requireDigest "owned base firmware" path digest
   files <- sort . filter (".json" `isSuffixOf`) <$> listDirectory trajectoryRoot
-  unless (length files == 2 * length pairs)
-    (failH ("expected " ++ show (2 * length pairs) ++ " trajectories, found " ++ show (length files)))
+  unless (length files == 2 * length pairs) (failH ("expected " ++ show (2 * length pairs) ++ " trajectories, found " ++ show (length files)))
   let names = sort . nub $ map pairName files
   unless (names == sort pairs) (failH ("trajectory pair names differ from the required " ++ show (length pairs)))
   forM_ pairs $ \name -> forM_ [Stock, Owned] $ \role ->
@@ -1087,7 +1130,7 @@ runViewer q name role directory logPath = do
       extra = case role of
         Stock -> ["--modal-lifetime-guard"]
         Owned -> [ "--ram-push-modal-scoped"
-                 , "--modal75-owned-archive", inputsRoot </> "engine.a"
+                 , "--modal75-owned-archive", fst (ownedArchive q)
                  , "--modal75-retired", inputsRoot </> "retired.json"
                  , "--menu-engine-owned", "--menu-value-owned" ]
             ++ [argument | proofPresent && prelinkedPresent, argument <- ["--modal75-prelinked", checkpointRoot </> "prelinked"]]

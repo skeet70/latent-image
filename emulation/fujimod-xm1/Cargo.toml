@@ -121,6 +121,10 @@ path = "src/time_observer.rs"
 name = "fujimod-xm1-preservation-control"
 path = "src/preservation_control.rs"
 
+[[bin]]
+name = "fujimod-xm1-scanout-pair"
+path = "src/scanout_pair.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

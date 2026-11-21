@@ -203,12 +203,12 @@ After software qualification, emulator evidence must cover autonomous interrupt 
 
 ## What is not established
 
-- No stock/candidate host cases, emulator runs or camera measurements were performed for this contract; the table is a qualification proposal.
+- The CPU evidence is the native stock/owned suite and one emulated route pair on the [fixed-bank image](#fixed-bank-image-and-stockowned-pair). No camera measurement exists.
 - No hardware evidence grounds L1-L5, and a stock/owned pair sharing the same model cannot independently validate those laws.
 - CPU preparation, default collection, packing and bitwise float conversions are implemented in the owned package. Native qualification of those implementations remains required. Calibration values are external inputs read through the owned calibration package. IRQ registration/release, critical exclusion, MMIO and scheduler yield remain explicit primitive boundaries.
 - Callback cancellation APIs, handle uniqueness across wrap, guarantees against reentrant slot mutation, interrupt latency bounds and registration cleanup are not derived from these entry points. Successful insertion can evict a live tail.
 - Register names beyond their software offsets, physical layer alpha/color meaning, panel choice, memory coherency, MMIO ordering barriers and atomic hardware latch points are not established by the listing.
-- S8 can retire only when retained clients no longer use the stock scheduler or the owned service preserves their request and callback contract. S9 stays until timing, reset and formatter laws are grounded and owned bring-up is qualified. This document does not remove either shim.
+- S8 can retire only when retained clients no longer use the stock scheduler or the owned service preserves their request and callback contract. The fixed-bank pair shows the owned service preserving it on the no-card menu route; S8 stays until that image is the integrated composition. S9 stays until timing, reset and formatter laws are grounded and owned bring-up is qualified.
 
 ## Current owned CPU interface
 
@@ -255,7 +255,7 @@ The catalog is 1498 cases: the earlier 1458 plus 40 `scale` cases. One `execute 
 | engine interlace bit | 4 observed, all engine-1 cases affected | `engine-initialize-1-0-0` | Stock always writes bit 0 of `S(e)+1`: set for modes 2,3,4,7,8,9 and clear otherwise, at `0x6cbbc4-0x6cbbd8`, `0x6cbe38-0x6cbe48` and `0x6cbec0-0x6cbecc`. The oracle left the incoming bit for non-interlaced modes; it now clears it. The owned code was right. |
 | boundary wait receipt | 2 | `boundary-engine-2-10` | The invalid-engine `wait` reject returns -30 before the polling loop and has no yield receipt. The check now requires the receipt only for the held wait. |
 
-The 1498-case catalog recorded above is unchanged. A second catalog of 416 cases drives 15 previously uncovered exports. It ran once as `execute ... completion,acquire,panel,select,avout,timing-frontend` (889 cases, 389 passed, 500 failed in four suite-side classes). After the fixes below, `completion` (184) and `select` (72) passed in that run; the rerun `acquire,avout,panel` passed 160 of 161, and the one remaining case was withdrawn with its held branch, leaving 84 of 84 in `panel`. `timing-frontend` was withdrawn before the rerun because its stage-normalization oracle is not yet independent; `timing_configuration` and `timing_live` stay uncovered. The 1498-case catalog was not rerun after these test-only changes.
+The 1498-case catalog recorded above is unchanged. A second catalog of 416 cases drives 15 previously uncovered exports. It ran once as `execute ... completion,acquire,panel,select,avout,timing-frontend` (889 cases, 389 passed, 500 failed in four suite-side classes). After the fixes below, `completion` (184) and `select` (72) passed in that run; the rerun `acquire,avout,panel` passed 160 of 161, and the one remaining case was withdrawn with its held branch, leaving 84 of 84 in `panel`. `timing-frontend` was withdrawn before the rerun because its stage-normalization oracle is not yet independent; `timing_configuration` and `timing_live` stay uncovered.
 
 | Class | Count | Example | Resolution |
 | --- | --- | --- | --- |
@@ -264,6 +264,9 @@ The 1498-case catalog recorded above is unchanged. A second catalog of 416 cases
 | AVout ordered write | 5 | `avout-request-0-0-0-268435456` | The ordered filter admitted only the `0xfff69000-0xfff6f000` banks; the AVout control page was invisible. |
 | panel level device stop | 2 | `panel-device-configuration-3-0-0-0-1-2-3` | Stock device 3 programming reaches `0x64e860`; the stock extent `0x64e800-0x64e918` now carries that leaf. With `0x9743e8 != 1` it returns -255 and writes no PWM word. |
 | held spin loop | 1 | `panel-device-configuration-3-13-0-0-1-2-3` | The owned held setter's `core::hint::spin_loop` is an unsupported instruction in the native profile. The format-13 held branch is withdrawn; the changed-format program branch remains covered. |
+| critical-section receipt | 2 observed, 50 affected | `capture-reset-receipt-0-0-0` | The completion catalog made the `0x7235d8`/`0x7236b0` boundaries count into a `0x211100` receipt mapped only for operations that expect it. Engine-0 first capture and every `scheduler_register` case reach them through `0x6c7318` (stock enters at `0x6c7328` and leaves at `0x6c7344` or `0x6c758c`). The two capture cases stopped on the unmapped receipt; the 48 register cases were not in that run. Capture and register cases now map the receipt: register expects one enter and one leave, and capture expects them on engine-0 first capture. Operations without a critical receipt get plain boundaries. |
+
+On the fixed-bank driver source (standalone ELF `dc1b5385`, panel ELF `c1eb5279`) one `execute ... all` run passed all 1914 cases of both catalogs after the critical-section receipt fix above, including the 48 register cases held to one enter and one leave.
 
 Natively compared are 45 exports: the 30 standalone and panel-cohort entries above plus `completion_event`, `completion_packet`, `mode_completion`, `mode_commit`, `operation_acquire`, `operation_lease`, `panel_auxiliary_frontend`, `panel_byte_frontend`, `panel_device_configuration`, `panel_device_set_transition`, `panel_initial_live_configuration`, `panel_formatter_configure`, `panel_formatter_set_enabled`, `mode_select` and `avout_request`. The panel ABI link script now names the stock critical/AVout primitives (`0x7235d8`, `0x7236b0`, `0x42574`, `0x4257c`) explicitly; no symbol is hidden. Not compared are the remaining 31 exports listed in the coverage table, the ordered write sequence for cases above 4096 accesses (final values are compared), and device laws L1-L5. The per-export table is `private-data/scratch/DisplayNativeQual/coverage.md`.
 
@@ -274,6 +277,42 @@ The shared native loader permits empty expected general-register observations on
 Source, native, integrated-model and hardware scopes remain separate: source is implemented; source review and the first cohesive host gate are required before accepting native ownership; no integrated-model or hardware result is asserted. No complete live-view claim follows from this unit. The frame publisher, VGLIB/raster/font producers and rendering assets remain their existing owners' interfaces. S7 retires only when the integrated publisher uses this driver's acknowledged publication; S8 retires only after retained-client request/callback parity is qualified; S9 still requires grounded L1-L5 and qualified bring-up. L6 pixel composition, DMA/cache visibility, panel routing and physical presentation remain outside this CPU unit.
 
 Prospective private accounting is `private-data/scratch/LiveViewDisplayOwnership/storage-plan.json`: selected compiler 3 GiB, selected proof 256 MiB, minimum reserve 108 GiB and physical growth guard equal to measured pre-large-phase available space minus 4 GiB. No build is admitted before complete independent source review. Every later Bazel command must use the current main host launcher through `devenv shell --`, the assigned output base and a fresh physical/selected-product admission check. No deletion, reserve reduction, SDK realization or firmware guest execution is part of this source change.
+
+## Fixed-bank image and stock/owned pair
+
+The crate (feature `fixed_bank`, cfg `rb_display_scanout_owned`) links into the one fixed bank, `//replacement/fixed_image:fixed-bank-image`, through the bank root `//replacement/bank:bank-fixed`, beside the file service. The bank has no writable statics: `fixed-bank.ld` asserts that `.data` and `.bss` are empty. Read-only data sits in its own non-executable `.rodata` section after `.text`, so the shim checker's code scan does not decode it as instructions. The scanout calls only the five stock primitives `fixed-imports.ld` binds: critical enter/leave `0x7235d8`/`0x7236b0`, yield `0x723ce8` and IRQ configure/release `0x64e918`/`0x64eb20`. `//replacement/display_scanout:artifact publish` writes one A32 branch at each of twelve stock entries: `isr_one` `0x6c6eb0`, `isr_zero` `0x6c70e4`, `scheduler_register` `0x6c7318`, `capture` `0x6c926c`, the four shadow setters, `commit` `0x6ca3e0`, `commit_zero`/`commit_one` `0x6cb0c4`/`0x6cb0d8` and `blank` `0x6cb8b4`. Registrations made by the owned code name those stock entries, so the scheduler slots and IRQ handler words hold stock values. In this image the owned driver serves every registration that reaches `0x6c7318`, including VGLIB's one-shots.
+
+`check-fixed-image` with `replacement/fixed_image/fixed-bank-allowlist.json` admits all twelve entries against a 2048-byte owned budget. Owned direct-call depths are 1824 bytes for `commit`, 1832 for `commit_zero` and `commit_one`, 1648 for `capture` and at most 192 for the rest. Built at opt-level 2 or `s`, the rlib exceeds the budget (up to 2248 bytes for capture and 2512 for commit), so it keeps the default `opt-level=z`.
+
+**Interrupt-stack obligation.** `commit_one` runs from the frame interrupt and enters at sp `0x70001ffc` on the core-0 IRQ stack, which ends at `0x70001800`: 2044 usable bytes. Its 1832 owned bytes leave 212 bytes. The deepest admitted interrupt path is the ISR running `commit_zero` as engine 0's persistent scheduler callback: the ISR frame (120 owned bytes) plus `commit_zero` (1832) leaves at most 92 bytes. Admission does not measure what those margins must hold: the completion callbacks the commit drains, the stock primitives, and nested interrupts, since the handler runs with IRQs enabled and a nested `isr_one` pushes onto the same stack. Any change that grows the commit or ISR path must be re-admitted, and the 92 bytes must be shown sufficient before the margin is relied on outside this route.
+
+### Pair method
+
+`//emulation:scanout-pair` runs one role per invocation on the natural no-card route to the menus and judges two receipts:
+
+```sh
+scanout-pair stock CONTRACT DAT ANALYSIS RUN ROM OUTPUT
+scanout-pair owned CONTRACT DAT ANALYSIS RUN ROM STOCK_DIR OUTPUT
+scanout-pair check STOCK_DIR OWNED_DIR REPORT_JSON
+scanout-pair qualify STOCK_DIR OWNED_DIR REGISTER_ORDER_DIR SKIPPED_DRAIN_DIR REPORT_JSON
+```
+
+- Roles. Both roles boot the same staged fixed record over the owned first stage. The stock role's DAT carries no entry publications, so stock code runs with the owned body resident and unreached. The owned role replays the stock receipt's route ticks, so inputs arrive at the same board ticks.
+- Calls. Each call into a published entry records its execution context, entry words, the record words it read and wrote, and its instruction count. A CPU watch on the scanout RAM records attributes each access to the innermost open call of its context. Interrupt context is sp inside core-0 ATCM `0x70000000..0x70002000`; anything else is task context.
+- Projection. Identical consecutive poll reads collapse to one. Scheduler requests compare the dereferenced request words and the output word, not stack pointers. Retained interrupt handles (`0x917ed0`, `0x917ed4`, `R(e)+0x14`) compare up to one consistent renaming by first appearance. VGLIB's caller is the wrapper `0x6d03b8`, returning to `0x6d0408`.
+- Rule. Calls pair in order within each context. A pair must agree on read entry words and on written words at return, and a word one role wrote and changed must be written by the other. Cross-context order follows interrupt arrival against task progress; it is reported, not compared. The checkpoints (menus, rendered frames, front and shadow buffer state) must be equal.
+- Laws. Each role is also checked alone. register-sequence: a commit writes the commit map in order. drain: no completion slot holds a callback after the drain. front-step: a commit's shadow word is its image address or VGLIB's last published group-1 item-0 value, or 0 before VGLIB's first publication. selection: VGLIB configures the selected engine. item-word: item configuration keeps bits 31:30 and returns -30 for an item above 3.
+- Controls. `qualify` requires the positive pair `equal` and each defect role refused on its named law. `defect_register_order` swaps the first two scanout writes of each commit; `defect_skipped_drain` skips the second completion list.
+
+### Pair result
+
+On the fixed-bank ELF `aeaa476c` the pair is `equal` and qualified (E-DISPLAY-SCANOUT-FIXED-PAIR-150). All 25 checkpoints are equal over 2121 compared calls (1990 interrupt, 131 task). Both roles make 1226 commits with 384 pending images and 35 drained callbacks, and break no law. Unattributed writes and cross-context order are identical. The deepest owned entry's sp is 176 bytes below its paired stock entry's. The register-order control is refused on register-sequence and the skipped-drain control on drain. The scanout-only fixed ELF `e9a69a50` gave the same verdict with 1233 commits; the route timing differs between the two images.
+
+The owned driver is slower. `commit_one` takes 3389 instructions per call against stock's 1310, and the owned body executes 4.43M fetches where stock's carriers execute 0.81M; the whole route differs by 2.8M of 618M instructions. At 5019 instructions per call an earlier build slipped VGLIB's publication by one frame at interrupt call 1551 and was refused, so commit cost is a correctness margin, not only a speed figure.
+
+The route reaches `capture` once, `commit_one` 1226 times, `isr_one` 733 times and `scheduler_register` 33 times, plus the four shadow setters. `commit`, `commit_zero`, `isr_zero` and `blank` are published but not reached on this route. The native suite covers engine 0 on the standalone build, where registrations name the exports. Two fixed-bank-only engine-0 paths are exercised by neither run: registering the literal `0x6cb0c4` and installing the `isr_zero` handler at `0x6c70e4`. The pair shares one device model, so it does not ground L1-L5.
+
+**Integration.** The fixed bank has one link: the crate is an rlib of `//replacement/bank:bank-fixed`. It assumes only `replacement/fixed_image/layout.json`: it has no writable statics, and retained callers reach its exports only through the published branches.
 
 ## Whole panel CPU composition
 

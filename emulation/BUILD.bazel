@@ -21,7 +21,7 @@ exports_files(
 )
 
 exports_files(
-    ["fujimod-xm1/src/heap_state.rs", "fujimod-xm1/src/heap_replay_state.rs"],
+    ["fujimod-xm1/src/heap_state.rs", "fujimod-xm1/src/heap_replay_state.rs", "fujimod-xm1/src/heap_abi_scenario.rs"],
     visibility = ["//replacement/general_heap:__pkg__"],
 )
 
@@ -1818,6 +1818,12 @@ sh_binary(
     visibility = ["//visibility:public"],
 )
 
+sh_binary(
+    name = "scanout-pair",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-scanout-pair"],
+    visibility = ["//visibility:public"],
+)
+
 haskell_binary(
     name = "time-prefix",
     srcs = ["TimePrefix.hs"],
@@ -3221,7 +3227,10 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
-    visibility = ["//transport:__pkg__"],
+    visibility = [
+        "//replacement/file_service:__pkg__",
+        "//transport:__pkg__",
+    ],
     deps = [
         ":case-sha256",
         ":key-release-observations",
@@ -3630,6 +3639,35 @@ haskell_test(
 )
 
 haskell_library(
+    name = "playback-device-lib",
+    srcs = ["Emulation/PlaybackDevice.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host/firmware:playback-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "playback-device-tests",
+    size = "small",
+    srcs = ["PlaybackDeviceTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":playback-device-lib",
+        "//host/firmware:playback-contract",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "media-inspection-lib",
     srcs = ["Emulation/MediaInspection.hs"],
     src_strip_prefix = ".",
@@ -3701,7 +3739,9 @@ haskell_binary(
         ":capture-stream-lib",
         ":media-inspection-lib",
         ":playback-decode-lib",
+        ":playback-device-lib",
         ":playback-owned-lib",
+        "//host/firmware:playback-contract",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -4529,7 +4569,7 @@ haskell_binary(
     srcs = ["SchedulerPairPlanMain.hs"],
     args = ["$(rootpath //replacement/rtos_scheduler:regions.json)"],
     data = ["//replacement/rtos_scheduler:regions.json"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
     deps = [
         ":scheduler-pair-lib",
         "//host:aeson",
@@ -4547,7 +4587,7 @@ haskell_binary(
 haskell_binary(
     name = "scheduler-pair-check",
     srcs = ["SchedulerPairCheckMain.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
     deps = [
         ":case-sha256",
         ":scheduler-pair-lib",

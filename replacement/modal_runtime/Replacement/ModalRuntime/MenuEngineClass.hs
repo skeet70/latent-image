@@ -240,13 +240,15 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
         stackCursor (depth - 2) >>= openable grandparent
     pure Pop
   open = do
-    when (stageId event `elem` ([0xe .. 0x12] ++ [0x17, 0x18])) (Left SeekingId)
+    when (stageId event `elem` ([0xe .. 0x12] ++ [0x18])) (Left SeekingId)
     index <- if stageNode event == seekClassNode then Left SeekClassNode
       else if stageNode event >= registrySlots then Left OutsideRegistry else Right (stageNode event)
     registered <- maybe (Left Unregistered) node (M.lookup index (treeRegistry tree))
     openable registered 0
     -- The open zeroes the stack, so the framed push restores cursor 0.
-    when (framed registered) (framedTarget (followPush registered 0))
+    if framed registered then framedTarget (followPush registered 0)
+      -- Seek id `0x17` steps with `0xbf9f44(4, node, 1)` on the opened node.
+      else when (stageId event == 0x17) (innerMove registered 1)
     pure Open
   close = do
     stageSlot

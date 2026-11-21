@@ -2078,7 +2078,7 @@
   }
   ,
 {
-  "id": "E-MENU-ENGINE-CUTOVER-150",
+  "id": "E-MENU-VALUE-PACKAGE-150",
   "claim": "The controlled-RTC value package selects the owned menu engine and IMAGE SIZE apply seam with stock drawing for {{required_pairs}} routes. At source {{source_head}}, archive {{owned_archive}} and observer {{observer_sha256}}, the recovered inventory has {{completed_roles}} of {{required_roles}} roles complete, {{failed_roles}} failed and {{missing_roles}} missing; full qualification remains {{status}} / {{qualification}}. All {{compared_pairs}} complete pairs pass the frozen engine/value checker, with {{settings_failures}} ordered-settings and {{render_failures}} rendered-artifact comparison failures. Required picker-26 owned still refuses the CPSR handoff: phase {{failure_phase}}, {{forward_writes}} forward and {{reverse_writes}} reverse publication stores, {{active_frames}} active frame and {{failed_oom_kills}} OOM kills; this is not a qualified rollback. The current known-worst stock gate completes={{gate_complete}} with {{gate_watch_rows}} watch rows, {{gate_peak}}-byte host-cgroup peak and {{gate_headroom}}-byte headroom under 2 GiB/no swap. On value-close-pop, {{arm_entries}} executed stock IMAGE SIZE arms each match an owned apply; {{notifications}} calls to 0xd5b350 agree in order over {{segments}} segments and live settings agree in {{live_segments}} segments. The opening apply receives {{owned_token}}; changed_live_bytes={{changed_live_bytes}}, with owned before/after changes {{apply_changes}}. The actual contiguous allocation is {{allocation_bytes}} bytes; linked .menu_engine and .menu_engine_data occupy {{engine_text_bytes}} and {{engine_data_bytes}} bytes. The separate e5b1081c old-session archive {{control_archive}}, relinked at {{control_commit}}, completes its control-only navigation={{control_completed}} and is rejected={{control_rejected}} by {{control_rejected_by}}. It omits stock's Pop notification and leaves different live settings in other-cancel. A separate read-only native probe of the current archive {{diagnostic_archive}} and its exact qqa observer captures actual entry word {{diagnostic_instruction}}, entry CPSR {{diagnostic_expected}}, pre-IRQ CPSR {{diagnostic_pre_irq}}, initial SVC SPSR {{diagnostic_svc_spsr}}, correctly saved IRQ SPSR {{diagnostic_irq_spsr}} and exception-return status {{diagnostic_eret_status}}. The first CPSR.A clear occurs inside helper_cpsr_write_eret_arm, followed by the unchanged guard's actual {{diagnostic_observed}} refusal. The probe does not complete or accept the required qualifier role.",
   "scope": "X-M1 1.50 cardless RAM-push value package under the controlled-RTC run document, stock drawing and a contiguous allocation. The {{compared_pairs}} complete pairs do not accept the full {{required_pairs}}-route qualification. The completed old-session control retains its own v926 observer scope; the current causal probe uses the preserved 6ceb/qqa/87ef inputs and matching installed checkpoint. No owned-renderer, whole-firmware or hardware acceptance; changed-selection confirmation and close/restore remain unreached.",
   "notes": "The first current run's missing-table stock launches were host-prerequisite failures. Only those stock launches were recovered; already completed current roles were retained and the real picker refusal was not retried unchanged. The reached IMAGE SIZE apply is the opening-time landing, not a post-DOWN changed selection or evidence of changed image dimensions. Changed selection followed by Close or confirmation/restore, and responsive IMAGE SIZE navigation, remain final-pass work. Stock refuses half-press after DOWN and LEFT/OK/BACK/MENU on the changed path (E-PICKER246-LEFT-TOKEN-150). The completed old-session control preserves every key and observation except permitting its known-wrong row-1 other-reopen landing; qualifier expectations are unchanged. It uses the frozen v926 SDK and e5b1081c relink sources plus four allocation/layout files, not the current positive observer. The separate authorized current probe directly captures the status values rather than transferring older observations. Its access watchpoints record current SPSR 0x53 before and 0x80000053 after the stock return block, while saved r1 retains 0x80000153. That block reports PC 0x4034c; its source-inspected writer is 0x40360 MSR SPSR_fc, whose mask excludes A. Its 0x40364 LDM^ invokes the observed exception-return write. The complete debugger response is saved directly by the tool caller. After detachment the producer reaches the helper's 600-second completion deadline; wrapper exit 1 is bounded host cleanup, not natural viewer completion. The native state/refusal witness is valid but is not a qualification receipt. A reusable certified native retirement/full-state mechanism, balanced authenticated exception contract and corrupt-status controls need independent review before any production observer change. Entry counts, PC and Stopped alone do not certify retirement; the late full handoff check must remain. No A mask, timing fit, guard or model relaxation is approved. Allocation and host-cgroup measurements do not establish free capacity in a particular capture/playback heap; transition-time stock-plus-Rust residency is not final reclaimed code.",
@@ -2894,6 +2894,180 @@
     }
   ]
 },
+{
+  "id": "E-GENERAL-HEAP-ABI-QUALIFICATION-150",
+  "claim": "At the retained stock ABI entries, called one at a time from a natural no-card seed (task {{seed_task}} entering the free core entry 0x89e560 with the lock free, after the menu route and one Up press), the owned general heap matches executed stock bytes at {{owned_compared}} of {{steps}} directed steps and differs only by the declared corrections at the other {{owned_corrections}}. The steps cover {{operations}} calls: zero-size, shrink, grow, same-chunk and zero resize, failed resize preserving bytes, calloc zeroing over reused memory, capacity rejection, exhaustion with {{exhaustion}} successes of 128 KiB before and after coalescence, a refused fragmented request and trim. Executed stock oversized resize leaks {{stock_leak}} recursive depth per call while owned stays balanced; stock calloc of a wrapped product returns {{stock_wrapped}} where owned returns {{owned_wrapped}}; stock trim returned {{stock_trim}}. The Rust GlobalAlloc front end, after the admitted tape, matches stock at {{front_compared}} steps with inapplicable requests {{front_inapplicable}}. Journal controls are refused on target {{owned_controls}} times for the owned ABI and {{front_controls}} for the front end; the executed traffic mutant is refused with {{mutant_error}}. Each role makes {{calls}} harness calls. The J7 canonical stack test passes {{j7_checks}} checks, including one per heap entry that the owned entry's demand with callees is at most its stock counterpart's, and pins the refused whole-task walks with and without the fatal report (S8).",
+  "scope": "Whole general-heap artifact behind the retained A32 entries malloc 0x89cda4, free 0x89cdc4, realloc 0x89da3c, calloc 0xbf1c1c and trim 0x89e464, called under the board harness on core 0 with interrupt delivery off from one natural no-card seed per role on the current FujiMod model; uncontended single-task calls, not cross-core contention, interrupt context or silicon timing.",
+  "notes": "Allocation addresses and movement on grow are not compared. One loader word differs from the decoded loader at the seed in both roles and is bound for fetches only. Stock trim did not release backing, so the trim correction is observed only as equal zero returns. Over-alignment has no stock counterpart and is covered by the host suite. The front end has no operation for zero-size, null-free, trim or overflowing calloc. The J7 canonical log records owned/stock demands of all nine heap entries and that whole-task walks of all 16 published-stack tasks refuse under S1-S7 and, with the fatal report excluded (S8), stop at the register branches the report names, so per-task heap headroom is unestablished (reports/general-heap-cutover.md#stack-headroom). Natural callers of realloc, calloc and trim remain unreached.",
+  "artifacts": [
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-controls.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-mutant.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/stock.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/owned.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/mutant-owned.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/front-end.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261120T233721Z-abi-stock/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003655Z-abi-owned/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003719Z-abi-mutant-owned/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T003726Z-abi-front-end/result/abi-journal.json",
+    "private-data/scratch/HeapCallbackTargets/runs/20261121T012620Z-dominance-gate2/result/startup-artifact-j7-heap-canonical-tests.log"
+  ],
+  "facts": [
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/journals/stock.json",
+      "pointer": [
+        "update_sha256"
+      ]
+    },
+    {
+      "name": "seed_task",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "seeds",
+        "0",
+        "task"
+      ]
+    },
+    {
+      "name": "steps",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "steps"
+      ]
+    },
+    {
+      "name": "owned_compared",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "compared"
+      ]
+    },
+    {
+      "name": "owned_corrections",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "operations",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "operations"
+      ]
+    },
+    {
+      "name": "exhaustion",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "first_exhaustion_successes"
+      ]
+    },
+    {
+      "name": "stock_leak",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "3",
+        "stock_lock",
+        "depth_change"
+      ]
+    },
+    {
+      "name": "stock_wrapped",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "1",
+        "stock",
+        "kind"
+      ]
+    },
+    {
+      "name": "owned_wrapped",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "1",
+        "counterpart",
+        "kind"
+      ]
+    },
+    {
+      "name": "stock_trim",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "owned_abi",
+        "corrections",
+        "0",
+        "stock",
+        "word"
+      ]
+    },
+    {
+      "name": "front_compared",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "rust_front_end",
+        "compared"
+      ]
+    },
+    {
+      "name": "front_inapplicable",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "rust_front_end",
+        "inapplicable"
+      ]
+    },
+    {
+      "name": "owned_controls",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-controls.json",
+      "pointer": [
+        "owned_abi_refused"
+      ]
+    },
+    {
+      "name": "front_controls",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-controls.json",
+      "pointer": [
+        "rust_front_end_refused"
+      ]
+    },
+    {
+      "name": "mutant_error",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-mutant.json",
+      "pointer": [
+        "error"
+      ]
+    },
+    {
+      "name": "calls",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T003733Z-abi-compare/result/abi-qualification.json",
+      "pointer": [
+        "calls"
+      ]
+    },
+    {
+      "name": "j7_checks",
+      "path": "private-data/scratch/HeapCallbackTargets/runs/20261121T012620Z-dominance-gate2/result/startup-artifact-j7-heap-canonical-tests.log",
+      "operation": "decimal-between",
+      "prefix": "startup-artifact-j7-heap-canonical-tests: ",
+      "suffix": " checks passed"
+    }
+  ]
+},
   {
     "id": "E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150",
     "claim": "The exact packaged playback source/mode preparation boundary passes ({{qualified}}) {{pairs}} original/owned entry pairs and rejects {{controls}} returned entry-omission controls under historical runner {{entry_runner}}. The same runtime {{runtime}} and ELF {{elf}} pass conditional published-caller/producer qualification ({{callers_qualified}}) under literal-entry runner {{caller_runner}}: {{caller_pairs}} original/owned machine-1 action2/action3 pairs, {{caller_controls}} returned caller-omission controls and {{producer_executions}} machine-5 action5/packet-0142/queue-descriptor executions, {{total_executions}} executions in that later cohort. The producer's accepted/rejected submit cases return with matching descriptor/payload, status and error ordering; its returned omission is rejected ({{producer_control}}). Actual published mode bytes {{publication}} reach {{owned_entry}}. Full dispatch return, machine-11 event, machine-1 cursor, callee-saved registers and stack are checked. Separate default Observe/install checks are {{observe_checks}}/{{install_checks}}, restoring {{observe_restored}}/{{install_restored}} original publication words.",
@@ -3324,75 +3498,2172 @@
     ]
   }
   ,{
-    "id": "E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150",
-    "claim": "The owned channel9 JPEG transaction qualifies ({{qualified}}) at actual retained Playback decode-requirements, submit, completion, restart and finish callers: {{pairs}} original/owned pairs and {{controls}} returned IRQ-omission controls. Runner {{runner}}, runtime {{runtime}} and ELF {{elf}} identify this cohort. The comparator observes consumer behavior, not native pixels or whole-request identity.",
-    "scope": "{{native_scope}} This JPEG transaction cohort is distinct from the earlier source/mode preparation entry and published-caller/producer cohorts in E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150.",
-    "notes": "Actual-caller native omission controls establish the bounded negative boundary. No full-system defect control, physical pixels, whole playback or natural application-mode acceptance.",
-    "artifacts": [],
+  "id": "E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150",
+  "claim": "The 20-hook artifact with a record-specific develop job4 wait and stock's hardware stop on cancel-all qualifies ({{lifecycle_qualified}}): {{lifecycle_comparisons}} retained caller comparisons plus {{lifecycle_builder_comparisons}} builder and develop comparisons (26 stock/owned comparisons), with {{lifecycle_controls}} IRQ omissions, {{lifecycle_first_completion_controls}} first-completion defects, {{lifecycle_builder_controls}} relocated original-builder defects, {{lifecycle_lifecycle_controls}} lifecycle memory defects and {{lifecycle_develop_controls}} develop entry defects returned and rejected (20 controls). Under the same all-bits cancel-all wake, stock and owned job4 submit the same reset/IRQ-release/resource-release/lock-signal sequence and leave equal memory, differing only in the returned status: {{lifecycle_develop_cancel_comparisons}}. {{lifecycle_develop_wake_cases}} owned-only wake cases pass (an unrelated wake followed by the record completion, and completion during the 0x10 clear), and {{lifecycle_develop_wake_controls}} stock job4 run under the same unrelated wake releases with the completion bytes unwritten and is rejected. It owns requirements initialization, both completions, reset, restart/timer, prefix preservation/restoration, submit, finish and whole cancel/restore, plus develop job4 0x00e8fee4, record notification 0x00e8eb18 and clear-record release 0x00d989f8; retained transaction entries={{lifecycle_retained_entries}}. Develop cases cover job4 setup failure, attached completion, sixteen-row packing with a preset pitch and a null plane, and IRQ-delivered record notification; the develop controls omit job4, omit the notification and release without clearing the record. The historical eight-hook consumer artifact qualifies ({{consumer_qualified}}): {{facade_pairs}} retained Playback facade/IRQ pairs plus {{builder_pairs}} builder pairs, including actual develop job4 and notification; returned controls are {{irq_controls}} IRQ omissions, {{builder_controls}} relocated original-builder instruction defects and {{completion_controls}} first-completion defects (11 pairs/14 controls total). Whole ordinary builder d98904..d989f8 and first completion 121fec8..121ff20 cover signed selector/default/7/8 mapping, strict packing byte1, the 101-byte minimum record, requirements forwarding, callback gates, synchronous setup failure and completion reentry. Earlier device cohort separately qualified {{current_pairs}} retained caller pairs and {{device_pairs}} nonpolling device-service CPU pairs, with returned programming-omission rejection={{program_omission}}. Historical transaction cohort separately qualified ({{qualified}}): {{pairs}} original/owned retained requirements/submit/completion/restart/finish pairs and {{controls}} returned IRQ-omission controls. These earlier cohorts retain their original artifact scopes; the historical device matrix was not replayed on the whole-lifecycle artifact.",
+  "scope": "{{lifecycle_scope}} Earlier eight-hook consumer scope: {{consumer_scope}} Synchronous failure/lifetime boundary: {{failure_lifetime}} Nine builder controls execute relocated original-source mutants with the owned transaction, not mutated owned Rust stores. Develop controls replace the linked owned entry with a return, or the clear-record entry with a tail branch to owned release. Device/resource/kernel/IRQ/cache/timer/nested-critical and task-event notify/wait providers remain conditional. Earlier device scope: {{device_scope}} Historical transaction scope: {{native_scope}} No native polling, DMA, pixels, physical IRQ timing, allocation/resource/lifetime/unload or general media ownership claim. Preparation and application-mode evidence remains separate.",
+  "notes": "Native register images are ordinary RAM, not a JPEG MMIO-read/device or polling model. The installed source-length omission is a preparation-prefix counterexample, not completed PLAY or absent-IRQ acceptance. No physical pixels, whole playback or natural application-mode acceptance. Construction precedes lock9 acquisition; the builder's only caller is job4 and job4's only caller is 0x00e93700 in all three images, which discards job4's result. From bytes, job4 runs only on task 0xb: sole subsystem-4 sender 0x00e92000 has one caller 0x00e6e4fc, which targets the special background triple 0x00e8a540 (task 0xb), and task 0xb's loop 0x00ea17d0 completes each job before its next receive. The kernel wait is satisfied by any event 0x10, and 0x10 can reach task 0xb from stale arbitration/allocator waiter entries, the armed image4 gate, never-cleared registrations written by 0x00e53d00 and completion-callback races; owned job4 re-waits after those, clearing only 0x10 through 0x007246f0. On a target that can be task 0xb, bit 0x40 comes only from cancel-all 0x00e937dc's 0xffffffff broadcast, which owned job4 treats as cancellation; whether any framework handle's +0x34 names task 0xb is not established. On cancel the owned reset is the qualified owned replica of stock's channel9 reset service; that it quiesces the decoder and its DMA rests on stock's own sequence and is otherwise unmeasured. Kernel event-flag semantics are not executed natively. The facts file is derived by the inline command recorded in its run.json. Runtime/ELF, qualifier, runner, manifest/metadata, SDK and consumed frozen stock sources are bound by the lifecycle artifact selectors. Second completion, restart and finish remain conditional native evidence, not natural PLAY observations.",
+  "artifacts": [
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json",
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/run.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/runtime.bin",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/kernel.elf",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/experiment.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/ram-push-manifest.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/observations.jsonl",
+    "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+    "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/observations.jsonl",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T223544Z-playback-jpeg-consumer-native-admitted-controls/run.json"
+  ],
+  "facts": [
+    {"name": "lifecycle_qualified", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["qualified"]},
+    {"name": "lifecycle_comparisons", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["comparisons"], "operation": "length"},
+    {"name": "lifecycle_builder_comparisons", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["builder_comparisons"], "operation": "length"},
+    {"name": "lifecycle_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["controls"], "operation": "length"},
+    {"name": "lifecycle_first_completion_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["first_completion_controls"], "operation": "length"},
+    {"name": "lifecycle_builder_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["builder_controls"], "operation": "length"},
+    {"name": "lifecycle_lifecycle_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["lifecycle_controls"], "operation": "length"},
+    {"name": "lifecycle_develop_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_controls"], "operation": "length"},
+    {"name": "lifecycle_develop_cancel_comparisons", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_cancel_comparisons"]},
+    {"name": "lifecycle_develop_wake_cases", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_wake_cases"], "operation": "length"},
+    {"name": "lifecycle_develop_wake_controls", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["develop_wake_controls"], "operation": "length"},
+    {"name": "lifecycle_retained_entries", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["retained_entries"]},
+    {"name": "lifecycle_runtime_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["runtime_sha256"]},
+    {"name": "lifecycle_elf_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["elf_sha256"]},
+    {"name": "lifecycle_qualifier_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["qualifier_sha256"]},
+    {"name": "lifecycle_runner_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["runner_sha256"]},
+    {"name": "lifecycle_manifest_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["manifest_sha256"]},
+    {"name": "lifecycle_metadata_sha256", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["metadata_sha256"]},
+    {"name": "lifecycle_source_rev", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["source_rev"]},
+    {"name": "lifecycle_scope", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["scope"]},
+    {"name": "lifecycle_consumed_source_fixtures", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json", "pointer": ["consumed_source_fixtures"]},
+    {"name": "lifecycle_sdk", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["dependencies", "sdk"]},
+    {"name": "lifecycle_runner", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["dependencies", "native_runner"]},
+    {
+      "name": "qualified",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "qualified"
+      ]
+    },
+    {
+      "name": "pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "runner",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "runner_sha256"
+      ]
+    },
+    {
+      "name": "runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "native_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json",
+      "pointer": [
+        "scope"
+      ]
+    },
+    {
+      "name": "current_qualified",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "qualified"
+      ]
+    },
+    {
+      "name": "current_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "device_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "device_cpu",
+        "cases"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "program_omission",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "device_cpu",
+        "omitted_program_control_returned_and_rejected"
+      ]
+    },
+    {
+      "name": "current_runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "current_elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "current_runner",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "runner_sha256"
+      ]
+    },
+    {
+      "name": "current_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "scope"
+      ]
+    },
+    {
+      "name": "device_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T070041Z-playback-jpeg-device-native/result/native/result.json",
+      "pointer": [
+        "device_cpu",
+        "scope"
+      ]
+    },
+    {
+      "name": "consumer_qualified",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "qualified"
+      ]
+    },
+    {
+      "name": "facade_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "builder_pairs",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "builder_comparisons"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "irq_controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "builder_controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "builder_controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "completion_controls",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "first_completion_controls"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "consumer_scope",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "scope"
+      ]
+    },
+    {
+      "name": "failure_lifetime",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "builder_failure_lifetime"
+      ]
+    },
+    {
+      "name": "consumer_runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "consumer_elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "consumer_runner",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "runner_sha256"
+      ]
+    },
+    {
+      "name": "historical_device_matrix_repeated",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "historical_device_matrix_repeated"
+      ]
+    },
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "emulator_start",
+        "inputs",
+        "installed_dat"
+      ]
+    }
+  ]
+} ,
+{
+  "id": "E-PLAYBACK-JPEG-TRANSACTION-INSTALLED-150",
+  "claim": "The whole-lifecycle and develop-consumer artifact has {{lifecycle_hooks}} hooks and {{lifecycle_publications}} publication words; install/menu/back checks={{lifecycle_install}}, with all {{lifecycle_restored}} old words restored on rollback. Natural constructor-prefix and PLAY epochs qualify ({{lifecycle_observed}}): preparation observes develop job4, builder, acquire, IRQ, record notification, release and clear-record release, then PLAY observes requirements initialization, prefix preservation, reset, submit, first completion, timer cancel and complete owned cancel/restore 0x0122026c..0x01220294. Guards exclude 33 whole original body extents; bounded guard results={{lifecycle_guards}}. Independent frozen stock source/output/final PNG equality={{lifecycle_equal}}, rendering photograph963-3095; released driver/completion equality and raw request differences={{lifecycle_handbacks}}. Original card unchanged={{lifecycle_card_unchanged}}. The historical eight-hook artifact installs and traverses menu/back with checks {{current_install}}, restoring {{current_restored}} publication words on rollback; the historical six-hook negative installed with checks {{negative_install}} and restored {{negative_restored}} words. Prepared/native/installed runtime and ELF bytes agree ({{prepared_runtime_equal}}). Natural preparation observes builder/acquire/IRQ/release once each in {{prefix_records}} guard records; two fixture PLAY jobs observe acquire/IRQ/release/first-completion twice each in {{play_records}} guard records. The distinct guarded epochs exclude {{excluded_bodies}} original body extents, with {{protected_count}} protected writes and {{body_fetch_count}} original-body fetches. Six complete {{allocation}}-byte snapshots are identical ({{snapshots_equal}}); upload differences per snapshot={{current_scalar_differences}} completed-installer ABI7 scalar bytes, with all {{publications}} publication words exact ({{current_publications_exact}}). Complete independent stock sources, decoded outputs and final PNG compare byte-equal ({{current_source_output_png_equal}}), rendering photograph963-3095. Released 528-byte drivers compare equal ({{current_driver_equal}}); 176-byte request differences={{current_request_differences}} retain raw timer offsets92/93. Independent-reference pixel differences={{current_reference_diff}} bytes; pre-press frame stability={{current_frame_stability}}. The source-length omission remains outcome {{negative_outcome}}, exit {{negative_exit}}, before PLAY: {{negative_matching_writes}} matching programming writes omit the {{negative_expected_length}}-byte length store at 0xfff63110; start is rejected and the strict model reports '{{negative_failure}}'. Historical six-hook artifact: six-hook install={{install}}, menu/back={{trajectory}}, rollback={{unload_check}}, restoring {{restored}} words in {{allocation}} bytes with {{publications}} publications. Historical PLAY completes {{jobs}} jobs, independent source/output/PNG equality={{source_output_png_equal}}, with equal released 528-byte drivers. Preview {{preview_source}} source bytes produce {{preview_output}} bytes; full {{full_source}} source bytes produce {{full_output}} bytes. Historical request offsets={{preview_offsets}}/{{full_offsets}}, stock timers={{preview_stock_timer}}/{{full_stock_timer}}, owned timers={{preview_owned_timer}}/{{full_owned_timer}}, reference differences={{preview_reference_diff}}/{{full_reference_diff}} bytes. Historical runtime before/after differences={{runtime_diff}}, upload differences={{scalar_diff}} completed ABI7 scalar bytes, publication differences={{publication_diff}}. Historical source/acquire/IRQ/release/restart fetches={{source_fetches}}/{{acquire_fetches}}/{{irq_fetches}}/{{release_fetches}}/{{restart_fetches}}, original-body fetches={{original_fetches}}, protected writes={{protected_writes}}. Historical observer exit {{observer_exit}} did not pass run-output: wrapper exit {{wrapper_exit}}, outcome {{wrapper_outcome}}, reason {{wrapper_reason}}.",
+  "scope": "Whole-lifecycle installed nominal channel9 reset/program/start/status/event read-and-ACK/endpoint services execute under the existing full-system JPEG model, with two fixture PLAY completions and IRQ/result/release handback. Native high-level device boundaries remain conditional. Allocation equality covers [0x00a81d00,0x00a89d00) and publications, not all RAM. Passive inspection media-state equality={{inspection_before_equal}}/{{inspection_after_equal}} applies within each inspection, not across all PLAY SD activity. Historical integrated-preparation pair={{integrated_pair}}, pre-press frame stability={{frame_stability}}, whole-playback acceptance={{whole_playback}} remain separate limitations. Native cohorts are E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150. Older source/layout/tail provenance is E-FUJIMOD-XM1-PLAY-JPEG-150; earlier preparation cohorts are E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150. Actual PLAY executes whole owned cancel/restore 0x0122026c..0x01220294; 0x01220288 is an interior observation, not the extent. Second completion, restart and finish remain conditional native only. Natural constructor prefix is distinct from the two fixture PLAY jobs. No code-state writes were made by the host observer; protected-write guards cover CPU, host and model-bus writes in declared ranges, not all guest RAM. No allocation/resource/lifetime or general media ownership claim.",
+  "notes": "The explicit emulator-only source-length omission fails naturally before PLAY; absent IRQ/result/release is not completed-PLAY negative acceptance. Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of USB disconnect signaling and natural application-mode ownership. Pixel-reference disagreements are counterexamples, not a tolerance. No broad diagnostic, physical-pixel, browsing, whole-playback, capture/save continuation, retirement or unload acceptance. Menu/back rollback retains allocation until power-off. All 20 lifecycle-artifact defect controls are native; no whole-lifecycle full-system negative is claimed. Develop job4, its record notification and clear-record release are owned; task-event notify/wait, the develop framework caller 0x00e936a8 and the overlay47 clear-record caller 0x01238160 remain retained. Job4 construction runs only on task 0xb (byte-level: sole sender 0x00e92000/0x00e6e4fc to the special background triple 0x00e8a540). The installed artifact carries the record-specific wait and the stock reset/release on cancel-all; preparation observes clear-record release after the notification, and the receipt does not record whether any unrelated 0x10 wake preceded it, so cancel-all and unrelated-wake paths have native coverage only. Source/output/PNG equality, handbacks and guards come from the stop-facts run, whose run.json records the full inline derivation. Static request/subscriber lifetime and IRQ quiescence remain open; reset quiescence rests on stock's sequence and is otherwise unmeasured. Earlier compile failures and incorrect --installed invocation failures remain at preparation/invocation scope, not installed PLAY acceptance.",
+  "artifacts": [
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json",
+    "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/run.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-native/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/runtime.bin",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/kernel.elf",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/experiment.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/ram-push-manifest.json",
+    "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/observations.jsonl",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/stock-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/omission-play/decode/bus-0.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T074218Z-playback-jpeg-device-prefix-owned/run.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T074555Z-playback-jpeg-device-stock-handback/run.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/stock-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/run.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/relinked/ram-push-manifest.json",
+    "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/result.json",
+    "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/owned-play/observations.jsonl",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T221753Z-playback-jpeg-consumer-install-inherited/run.json",
+    "private-data/scratch/PlaybackMediaClosure/runs/20261116T222438Z-playback-jpeg-consumer-owned-play/run.json"
+  ],
+  "facts": [
+    {"name": "lifecycle_install", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json", "pointer": ["checks"]},
+    {"name": "lifecycle_restored", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json", "pointer": ["mailbox", "rollback", "restored"]},
+    {"name": "lifecycle_epochs", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json", "pointer": ["owned_playback", "epochs"]},
+    {"name": "lifecycle_observed", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json", "pointer": ["owned_playback", "qualification_entries_observed"]},
+    {"name": "lifecycle_card_unchanged", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop-play/result.json", "pointer": ["card_original_unchanged"]},
+    {"name": "lifecycle_hooks", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/experiment.json", "pointer": ["hooks"], "operation": "length"},
+    {"name": "lifecycle_publications", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/relinked/ram-push-manifest.json", "pointer": ["publications"], "operation": "length"},
+    {"name": "lifecycle_equal", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["source_output_png_equal"]},
+    {"name": "lifecycle_handbacks", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["stock_handbacks"]},
+    {"name": "lifecycle_guards", "path": "private-data/scratch/JpegJob4Quiescence/runs/20261121T043706Z-jpeg-stop-facts/result/stop-facts.json", "pointer": ["guards"]},
+    {"name": "lifecycle_firmware", "path": "private-data/scratch/JpegJob4Quiescence/inputs/stop/install/e2e-result.json", "pointer": ["emulator_start", "inputs", "installed_dat"]},
+    {
+      "name": "install",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "checks",
+        "install"
+      ]
+    },
+    {
+      "name": "trajectory",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "checks",
+        "trajectory"
+      ]
+    },
+    {
+      "name": "unload_check",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "checks",
+        "unload"
+      ]
+    },
+    {
+      "name": "restored",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json",
+      "pointer": [
+        "mailbox",
+        "rollback",
+        "restored"
+      ]
+    },
+    {
+      "name": "jobs",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "source_output_png_equal",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "stock_owned_source_output_and_final_png_cmp_equal"
+      ]
+    },
+    {
+      "name": "png",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "final_png_sha256"
+      ]
+    },
+    {
+      "name": "preview_source",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "source_bytes"
+      ]
+    },
+    {
+      "name": "preview_output",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "output_bytes"
+      ]
+    },
+    {
+      "name": "full_source",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "source_bytes"
+      ]
+    },
+    {
+      "name": "full_output",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "output_bytes"
+      ]
+    },
+    {
+      "name": "preview_offsets",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "stock_owned_request_different_offsets"
+      ]
+    },
+    {
+      "name": "full_offsets",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "stock_owned_request_different_offsets"
+      ]
+    },
+    {
+      "name": "preview_stock_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "stock_timer_handle"
+      ]
+    },
+    {
+      "name": "full_stock_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "stock_timer_handle"
+      ]
+    },
+    {
+      "name": "preview_owned_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "owned_timer_handle"
+      ]
+    },
+    {
+      "name": "full_owned_timer",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "owned_timer_handle"
+      ]
+    },
+    {
+      "name": "preview_reference_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "0",
+        "independent_reference_different_bytes"
+      ]
+    },
+    {
+      "name": "full_reference_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "actual_jobs",
+        "1",
+        "independent_reference_different_bytes"
+      ]
+    },
+    {
+      "name": "runtime_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "before_after_different_bytes"
+      ]
+    },
+    {
+      "name": "scalar_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "before_uploaded_different_bytes"
+      ]
+    },
+    {
+      "name": "publication_diff",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "publication_different_bytes"
+      ]
+    },
+    {
+      "name": "source_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "source_entry_fetches"
+      ]
+    },
+    {
+      "name": "acquire_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_acquire_fetches"
+      ]
+    },
+    {
+      "name": "irq_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_irq_fetches"
+      ]
+    },
+    {
+      "name": "release_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_release_fetches"
+      ]
+    },
+    {
+      "name": "restart_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "jpeg_restart_fetches"
+      ]
+    },
+    {
+      "name": "original_fetches",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "original_body_fetches"
+      ]
+    },
+    {
+      "name": "protected_writes",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "watch",
+        "protected_writes"
+      ]
+    },
+    {
+      "name": "observer_exit",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_consumer_exit_status"
+      ]
+    },
+    {
+      "name": "wrapper_exit",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_wrapper_exit_status"
+      ]
+    },
+    {
+      "name": "wrapper_outcome",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_run_outcome"
+      ]
+    },
+    {
+      "name": "wrapper_reason",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "original_run_reason"
+      ]
+    },
+    {
+      "name": "runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "uploaded_sha256"
+      ]
+    },
+    {
+      "name": "elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "runtime",
+        "elf_sha256"
+      ]
+    },
+    {
+      "name": "integrated_pair",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+      "pointer": [
+        "owned_playback",
+        "integrated_pair"
+      ]
+    },
+    {
+      "name": "frame_stability",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json",
+      "pointer": [
+        "pre_press_frame_stability_context"
+      ]
+    },
+    {
+      "name": "whole_playback",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
+      "pointer": [
+        "owned_playback",
+        "whole_playback_acceptance"
+      ]
+    },
+    {
+      "name": "negative_install",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T071158Z-playback-jpeg-device-omission-install/result/install/e2e-result.json",
+      "pointer": [
+        "checks"
+      ]
+    },
+    {
+      "name": "negative_restored",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T071158Z-playback-jpeg-device-omission-install/result/install/e2e-result.json",
+      "pointer": [
+        "mailbox",
+        "rollback",
+        "restored"
+      ]
+    },
+    {
+      "name": "prepared_elf_equal",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "prepared_installed_elf_equal"
+      ]
+    },
+    {
+      "name": "prefix_guard",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "prefix_guard"
+      ]
+    },
+    {
+      "name": "play_guard",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "play_guard"
+      ]
+    },
+    {
+      "name": "snapshot_count",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "runtime_snapshots"
+      ],
+      "operation": "length"
+    },
+    {
+      "name": "current_png",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "final_png"
+      ]
+    },
+    {
+      "name": "current_preview_driver_equal",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "driver_equal"
+      ]
+    },
+    {
+      "name": "current_full_driver_equal",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "driver_equal"
+      ]
+    },
+    {
+      "name": "current_preview_offsets",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "request_difference_offsets"
+      ]
+    },
+    {
+      "name": "current_full_offsets",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "request_difference_offsets"
+      ]
+    },
+    {
+      "name": "current_preview_stock_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "stock_timer"
+      ]
+    },
+    {
+      "name": "current_full_stock_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "stock_timer"
+      ]
+    },
+    {
+      "name": "current_preview_owned_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "owned_timer"
+      ]
+    },
+    {
+      "name": "current_full_owned_timer",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "owned_timer"
+      ]
+    },
+    {
+      "name": "current_preview_reference_diff",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "0",
+        "reference_different_bytes"
+      ]
+    },
+    {
+      "name": "current_full_reference_diff",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "jobs",
+        "1",
+        "reference_different_bytes"
+      ]
+    },
+    {
+      "name": "negative_outcome",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T073935Z-playback-jpeg-device-prefix-omission/run.json",
+      "pointer": [
+        "outcome"
+      ]
+    },
+    {
+      "name": "negative_exit",
+      "path": "private-data/scratch/PlaybackMediaClosure/runs/20261116T073935Z-playback-jpeg-device-prefix-omission/run.json",
+      "pointer": [
+        "exit_status"
+      ]
+    },
+    {
+      "name": "negative_matching_writes",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "negative",
+        "matching_program_writes"
+      ]
+    },
+    {
+      "name": "negative_expected_length",
+      "path": "private-data/scratch/JpegDeviceEvidence/runs/20261116T083134Z-jpeg-device-evidence-facts/result/retained-facts.json",
+      "pointer": [
+        "negative",
+        "expected_length_store",
+        "value"
+      ]
+    },
+    {
+      "name": "negative_failure",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/omission-play/result.json",
+      "pointer": [
+        "bridge_boundary",
+        "failure"
+      ]
+    },
+    {
+      "name": "inspection_before_equal",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/media-inspection-before.json",
+      "pointer": [
+        "media_state_unchanged"
+      ]
+    },
+    {
+      "name": "inspection_after_equal",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-device-prefix-watch/owned-play/media-inspection-after.json",
+      "pointer": [
+        "media_state_unchanged"
+      ]
+    },
+    {
+      "name": "firmware_sha256",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "emulator_start",
+        "inputs",
+        "installed_dat"
+      ]
+    },
+    {
+      "name": "current_install",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "checks"
+      ]
+    },
+    {
+      "name": "current_restored",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "mailbox",
+        "rollback",
+        "restored"
+      ]
+    },
+    {
+      "name": "allocation",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "allocation",
+        "bytes"
+      ]
+    },
+    {
+      "name": "publications",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/install/e2e-result.json",
+      "pointer": [
+        "runtime",
+        "publications"
+      ]
+    },
+    {
+      "name": "prepared_runtime_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "artifacts",
+        "prepared_runtime_and_elf_compare_exact"
+      ]
+    },
+    {
+      "name": "prefix_records",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "preparation",
+        "records"
+      ]
+    },
+    {
+      "name": "play_records",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "play",
+        "records"
+      ]
+    },
+    {
+      "name": "excluded_bodies",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "protected_original_extents"
+      ]
+    },
+    {
+      "name": "protected_count",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "protected_writes"
+      ]
+    },
+    {
+      "name": "body_fetch_count",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "original_body_fetches"
+      ]
+    },
+    {
+      "name": "snapshots_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "all_actual_runtime_snapshots_byte_identical"
+      ]
+    },
+    {
+      "name": "current_scalar_differences",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "each_runtime_upload_difference_bytes"
+      ]
+    },
+    {
+      "name": "current_publications_exact",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "all_16_publication_words_exact_in_all_6_snapshots"
+      ]
+    },
+    {
+      "name": "current_source_output_png_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "both_complete_sources_outputs_and_final_png_compare_exact"
+      ]
+    },
+    {
+      "name": "current_driver_equal",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "driver_snapshots_each_528_bytes_compare_exact"
+      ]
+    },
+    {
+      "name": "current_request_differences",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "request_snapshots_each_176_bytes_differences"
+      ]
+    },
+    {
+      "name": "current_reference_diff",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "media_and_output",
+        "pixel_reference_different_bytes"
+      ]
+    },
+    {
+      "name": "current_frame_stability",
+      "path": "private-data/scratch/JpegConsumerEvidence/inputs/retained-facts.json",
+      "pointer": [
+        "actual_play",
+        "pre_press_frames_identical"
+      ]
+    },
+    {
+      "name": "current_runtime",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "runtime_sha256"
+      ]
+    },
+    {
+      "name": "current_elf",
+      "path": "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-consumer-ownership/native-admitted-controls/result.json",
+      "pointer": [
+        "elf_sha256"
+      ]
+    }
+  ]
+},
+  {
+    "id": "E-RTOS-PLATFORM-CURRENT-UNION-NATURAL-150",
+    "claim": "The current staged-union natural scheduler/task-record observations pass the reached semantic comparison ({{comparison}}): Stock {{stock_semantics}}, Owned {{owned_semantics}}, independent preexecution projection {{starts}}, route {{route}} and per-object/per-caller record sequences {{record_sequences}}. Owned completes {{entries}} entries and {{returns}} returns with {{pending}} pending, {{record_calls}} task-record calls, {{prepare_calls}} Prepare and {{first_entries}} FirstEntry calls. Full lifetime acceptance remains {{full_lifetime}}; both roles refuse {{stock_coverage}} / {{owned_coverage}}.",
+    "scope": "Current-image transition ownership, linked dispatcher/probe targets and exact saved Resume/IRQ-resume continuations qualify the observed boundary, not complete kernel or final Root ownership. Frozen Stock producer {{stock_observer}} is reused; one necessary changed-observer Owned capture {{owned_observer}} uses the unchanged DAT and trajectory. Its plan binds {{plan_entries}} entries, {{guards}} guards, {{probes}} probes, {{transitions}} transition extents and {{targets}} dispatcher targets. Saved-continuation reclassification replays a guest={{guest_replay}}. Capture containment: {{capture_scope}}.",
+    "notes": "Strict reset-delete/recreation/reuse coverage remains refused. The observed DomainA reset0 clear is not reset deletion; DomainB has no observed delete. Historical acquire/release occurrence rows omitted by the old producer cannot be reconstructed from collapsed classes. No complete lock/object lifetime, arena/raw-reader retirement, physical IRQ/cache/exclusive law, final packaged image4/Root acceptance or firmware promotion. Historical MissingTrace, NoSave and SavedContext refusals remain bound to their original observer/model artifacts; current-image binding does not waive saved-frame words, SP, CPSR or SelectStage.",
+    "artifacts": [
+      "private-data/scratch/PlatformComposition/current-union-natural-ownership-proof.json",
+      "private-data/scratch/PlatformComposition/current-union-natural-linked-proof.json",
+      "private-data/scratch/PlatformComposition/current-union-natural-continuation-proof.json",
+      "private-data/scratch/PlatformComposition/inputs/natural-lifecycle-archives/manifest.json",
+      "private-data/scratch/PlatformComposition/inputs/current-union-linked-owned-archive/manifest.json",
+      "private-data/scratch/PlatformComposition/runs/20261116T064134Z-natural-lifecycle-image-transition-maps/result/stock-transitions.json",
+      "private-data/scratch/PlatformComposition/runs/20261116T080609Z-natural-lifecycle-current-continuation-reclassification/result/diagnostic.json"
+    ],
     "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
-      {"name":"qualified","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["qualified"]},
-      {"name":"pairs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["comparisons"],"operation":"length"},
-      {"name":"controls","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["controls"],"operation":"length"},
-      {"name":"runner","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["runner_sha256"]},
-      {"name":"runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["runtime_sha256"]},
-      {"name":"elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["elf_sha256"]},
-      {"name":"native_scope","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050609Z-playback-jpeg-native-literal/result/native/result.json","pointer":["scope"]}
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "dat_sha256"
+        ]
+      },
+      {
+        "name": "comparison",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "comparison_accepted"
+        ]
+      },
+      {
+        "name": "stock_semantics",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "stock",
+          "qualification",
+          "accepted"
+        ]
+      },
+      {
+        "name": "owned_semantics",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "qualification",
+          "accepted"
+        ]
+      },
+      {
+        "name": "starts",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "comparable_preexecution_starts"
+        ]
+      },
+      {
+        "name": "route",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "route_comparison",
+          "accepted"
+        ]
+      },
+      {
+        "name": "record_sequences",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "observed_record_sequence_comparison",
+          "accepted"
+        ]
+      },
+      {
+        "name": "entries",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "entries"
+        ]
+      },
+      {
+        "name": "returns",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "returns"
+        ]
+      },
+      {
+        "name": "pending",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "pending"
+        ]
+      },
+      {
+        "name": "record_calls",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "task_record_calls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "prepare_calls",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "prepare_calls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "first_entries",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "first_entry_calls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "full_lifetime",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "full_lifetime_claim"
+        ]
+      },
+      {
+        "name": "stock_coverage",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "stock",
+          "task_record_coverage",
+          "refusal"
+        ]
+      },
+      {
+        "name": "owned_coverage",
+        "path": "private-data/scratch/PlatformComposition/inputs/current-union-natural-comparison-continuations.json",
+        "pointer": [
+          "owned",
+          "task_record_coverage",
+          "refusal"
+        ]
+      },
+      {
+        "name": "stock_observer",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-ownership-proof.json",
+        "pointer": [
+          "input",
+          "observer_sha256"
+        ]
+      },
+      {
+        "name": "owned_observer",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-linked-proof.json",
+        "pointer": [
+          "changed_capture",
+          "observer_sha256"
+        ]
+      },
+      {
+        "name": "plan_entries",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "entries"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "guards",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "guarded"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "probes",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "probes"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "transitions",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "transition_extents"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "targets",
+        "path": "private-data/scratch/PlatformComposition/runs/20261116T073918Z-natural-lifecycle-linked-owned-plan/result/owned-plan.json",
+        "pointer": [
+          "dispatch_targets"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "guest_replay",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-continuation-proof.json",
+        "pointer": [
+          "reclassification",
+          "guest_replay"
+        ]
+      },
+      {
+        "name": "capture_scope",
+        "path": "private-data/scratch/PlatformComposition/current-union-natural-linked-proof.json",
+        "pointer": [
+          "changed_capture",
+          "scope"
+        ]
+      }
     ]
   },
   {
-    "id": "E-PLAYBACK-JPEG-TRANSACTION-INSTALLED-150",
-    "claim": "The six-hook owned source/mode/JPEG package installs ({{install}}), traverses menu/back ({{trajectory}}) and rolls back ({{unload_check}}): {{restored}} old words restored, {{publications}} publications in a {{allocation}}-byte retained allocation. Nominal PLAY completes {{jobs}} jobs with independently byte-equal stock source spans, decoded buffers and final PNG ({{source_output_png_equal}}, PNG {{png}}); both released 528-byte driver snapshots are equal. Preview source {{preview_source}} bytes produces {{preview_output}} bytes; full source {{full_source}} bytes produces {{full_output}} bytes. Raw released-request differences remain offsets {{preview_offsets}}/{{full_offsets}}, timer handles stock {{preview_stock_timer}}/{{full_stock_timer}} versus owned {{preview_owned_timer}}/{{full_owned_timer}}. Independent-reference pixel differences remain {{preview_reference_diff}}/{{full_reference_diff}} bytes. Runtime before/after differences={{runtime_diff}}, uploaded/observed differences={{scalar_diff}} declared completed ABI7 rendezvous/mailbox scalar bytes, publication differences={{publication_diff}}. The protected watch records source/acquire/IRQ/release/restart fetches {{source_fetches}}/{{acquire_fetches}}/{{irq_fetches}}/{{release_fetches}}/{{restart_fetches}}, original-body fetches={{original_fetches}} and protected writes={{protected_writes}}. Observer exit {{observer_exit}} is not a passed run-output receipt: the original wrapper exits {{wrapper_exit}}, outcome {{wrapper_outcome}}, reason {{wrapper_reason}}.",
-    "scope": "One installed checkpoint and retained nominal two-job PLAY observation on emulated X-M1 1.50. The source/decoded/PNG and 528-byte driver comparisons use independent stock and owned snapshots. Runtime {{runtime}}, ELF {{elf}}; only the {{allocation}}-byte allocation and its publications are covered, not all RAM. Historical integrated-preparation pair={{integrated_pair}}, pre-press frame stability={{frame_stability}}, whole-playback acceptance={{whole_playback}}. Native actual-caller controls are E-PLAYBACK-JPEG-TRANSACTION-NATIVE-150. The older stock source/layout/tail and installed-source provenance remains E-FUJIMOD-XM1-PLAY-JPEG-150; the earlier 28-pair and 123-execution preparation scopes remain E-XM1-PLAYBACK-PREPARATION-PAIR-NATIVE-150.",
-    "notes": "Nominal PLAY does not execute restart command4 or establish device status17/24 laws. Image-source and decode/output ownership is independent of UsbController disconnect signaling and natural application-mode ownership. Independent-reference pixel disagreements remain counterexamples, not a fitted tolerance. No broad diagnostic, physical-pixel, whole-playback, capture continuation, retirement or unload acceptance. The separate menu/back rollback retains allocation until power-off.",
+    "id": "E-DISPLAY-SCANOUT-FIXED-PAIR-150",
+    "claim": "On the one fixed-bank image, which links the display scanout with the file service (ELF {{elf}}), the natural no-card stock/owned route pair is {{verdict}} (qualified {{qualified}}): {{checkpoints}} route checkpoints equal ({{checkpoints_equal}}) over {{compared_calls}} compared calls ({{interrupt_calls}} interrupt, {{task_calls}} task). Both roles make {{commits}} commits with {{pending}} pending images and {{drained}} drained callbacks; unattributed writes are equal ({{unattributed}}). The deepest owned entry's sp is {{stack_excess}} bytes below its paired stock entry's. Owned commit_one executes {{owned_commit_instructions}} instructions over {{commit_calls}} calls against stock's {{stock_commit_instructions}}, and the owned body {{owned_body}} fetches against stock's carrier {{stock_carrier}}. The register-order control is refused on register-sequence ({{register_order_detected}}) and the skipped-drain control on drain ({{skipped_drain_detected}}). Fixed admission gives commit_one {{commit_one_stack}} owned stack bytes on a {{stack_budget}}-byte budget.",
+    "scope": "Emulated X-M1 1.50 on FujiMod: one natural no-card boot-to-menus route, the owned role replaying the stock role's route ticks, candidate DAT {{firmware_sha256}} and contract {{contract}}. Twelve stock entries are published; the route reaches capture, commit_one, isr_one, scheduler_register and the four shadow setters.",
+    "notes": "commit, commit_zero, isr_zero and blank are published but not reached on the route. The native suite covers engine 0 on the standalone build only; registering the literal 0x6cb0c4 and installing the isr_zero handler at 0x6c70e4 in the fixed-bank image are exercised by neither run. Both roles share one device model, so L1-L5 are not grounded. Admission counts owned direct calls only: on the core-0 IRQ stack (2044 bytes below entry sp 0x70001ffc) commit_one leaves 212 bytes and the ISR running commit_zero at most 92; drained callbacks, stock primitives and nested interrupts are unmeasured. No camera run.",
     "artifacts": [
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json",
-      "private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/stock-play/result.json",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/run.json",
-      "private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/relinked/ram-push-manifest.json"
+      "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141150Z-bank-display-role-stock/result/receipt.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141217Z-bank-display-role-owned/result/receipt.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141309Z-bank-display-role-register-order/result/receipt.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141418Z-bank-display-role-skipped-drain/result/receipt.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141052Z-fixed-bank-stage/result/staging-owned.json"
     ],
     "facts": [
-      {"name":"firmware_sha256","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["emulator_start","inputs","installed_dat"]},
-      {"name":"install","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","install"]},
-      {"name":"trajectory","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","trajectory"]},
-      {"name":"unload_check","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["checks","unload"]},
-      {"name":"restored","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["mailbox","rollback","restored"]},
-      {"name":"publications","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["runtime","publications"]},
-      {"name":"allocation","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T045703Z-playback-jpeg-install-eligibility2/result/install/e2e-result.json","pointer":["allocation","bytes"]},
-      {"name":"jobs","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs"],"operation":"length"},
-      {"name":"source_output_png_equal","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["stock_owned_source_output_and_final_png_cmp_equal"]},
-      {"name":"png","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["final_png_sha256"]},
-      {"name":"preview_source","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","source_bytes"]},
-      {"name":"preview_output","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","output_bytes"]},
-      {"name":"full_source","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","source_bytes"]},
-      {"name":"full_output","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","output_bytes"]},
-      {"name":"preview_offsets","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","stock_owned_request_different_offsets"]},
-      {"name":"full_offsets","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","stock_owned_request_different_offsets"]},
-      {"name":"preview_stock_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","stock_timer_handle"]},
-      {"name":"full_stock_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","stock_timer_handle"]},
-      {"name":"preview_owned_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","owned_timer_handle"]},
-      {"name":"full_owned_timer","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","owned_timer_handle"]},
-      {"name":"preview_reference_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","0","independent_reference_different_bytes"]},
-      {"name":"full_reference_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["actual_jobs","1","independent_reference_different_bytes"]},
-      {"name":"runtime_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","before_after_different_bytes"]},
-      {"name":"scalar_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","before_uploaded_different_bytes"]},
-      {"name":"publication_diff","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","publication_different_bytes"]},
-      {"name":"source_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","source_entry_fetches"]},
-      {"name":"acquire_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_acquire_fetches"]},
-      {"name":"irq_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_irq_fetches"]},
-      {"name":"release_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_release_fetches"]},
-      {"name":"restart_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","jpeg_restart_fetches"]},
-      {"name":"original_fetches","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","original_body_fetches"]},
-      {"name":"protected_writes","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["watch","protected_writes"]},
-      {"name":"observer_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_consumer_exit_status"]},
-      {"name":"wrapper_exit","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_wrapper_exit_status"]},
-      {"name":"wrapper_outcome","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_run_outcome"]},
-      {"name":"wrapper_reason","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["original_run_reason"]},
-      {"name":"runtime","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","uploaded_sha256"]},
-      {"name":"elf","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["runtime","elf_sha256"]},
-      {"name":"integrated_pair","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","integrated_pair"]},
-      {"name":"frame_stability","path":"private-data/scratch/PlaybackMediaClosure/runs/20261116T050256Z-playback-jpeg-owned-play/result/retained-facts.json","pointer":["pre_press_frame_stability_context"]},
-      {"name":"whole_playback","path":"private-data/scratch/PlaybackMediaClosure/inputs/jpeg-transaction/owned-play/result.json","pointer":["owned_playback","whole_playback_acceptance"]}
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "update_sha256"
+        ]
+      },
+      {
+        "name": "verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "verdict"
+        ]
+      },
+      {
+        "name": "qualified",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "qualified"
+        ]
+      },
+      {
+        "name": "checkpoints",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "checkpoints"
+        ]
+      },
+      {
+        "name": "checkpoints_equal",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "checkpoints_equal"
+        ]
+      },
+      {
+        "name": "compared_calls",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "compared_calls"
+        ]
+      },
+      {
+        "name": "interrupt_calls",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "interrupt_calls"
+        ]
+      },
+      {
+        "name": "task_calls",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "task_calls"
+        ]
+      },
+      {
+        "name": "commits",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "commits"
+        ]
+      },
+      {
+        "name": "pending",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "pending_commits"
+        ]
+      },
+      {
+        "name": "drained",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "drained_callbacks"
+        ]
+      },
+      {
+        "name": "unattributed",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "unattributed_writes_equal"
+        ]
+      },
+      {
+        "name": "stack_excess",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "stack_excess_bytes"
+        ]
+      },
+      {
+        "name": "owned_commit_instructions",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "instruction_spans",
+          "commit-one",
+          "1"
+        ]
+      },
+      {
+        "name": "commit_calls",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "instruction_spans",
+          "commit-one",
+          "0"
+        ]
+      },
+      {
+        "name": "stock_commit_instructions",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "stock",
+          "instruction_spans",
+          "commit-one",
+          "1"
+        ]
+      },
+      {
+        "name": "owned_body",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "body_fetches"
+        ]
+      },
+      {
+        "name": "stock_carrier",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "stock",
+          "carrier_fetches"
+        ]
+      },
+      {
+        "name": "register_order_detected",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "controls",
+          "register-order",
+          "detected"
+        ]
+      },
+      {
+        "name": "skipped_drain_detected",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "controls",
+          "skipped-drain",
+          "detected"
+        ]
+      },
+      {
+        "name": "contract",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141523Z-bank-display-qualify/result/qualification.json",
+        "pointer": [
+          "positive",
+          "owned",
+          "contract_sha256"
+        ]
+      },
+      {
+        "name": "elf",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
+        "pointer": [
+          "elf_sha256"
+        ]
+      },
+      {
+        "name": "commit_one_stack",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
+        "pointer": [
+          "owned_stack_bytes"
+        ]
+      },
+      {
+        "name": "stack_budget",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
+        "pointer": [
+          "owned_stack_budget"
+        ]
+      }
+    ]
+  }
+  ,{
+    "id": "E-FILE-SERVICE-HANDLES-150",
+    "claim": "The owned file-service tag allocator 0x71ef18/0x71eff4 and handle map 0x71ea34/0x71eaac/0x71eb28, linked in place over the stock tag slots 0x9101c0, sequence 0x910200 and map 0x910140, match the stock X-M1 1.50 image-4 bytes natively: the handles suite is {{verdict}} on {{cases}} cases and detects every one of {{controls}} deliberately wrong controls. Owned ELF {{owned_sha256}}, image 4 {{firmware_sha256}}, decomp {{decomp_commit}}. On the card route of E-FILE-SERVICE-REQUESTS-150, which is {{card_verdict}} to stock, retained workers call map_bind {{card_map_bind}}, map_unbind {{card_map_unbind}}, map_lookup {{card_map_lookup}} and tag_release {{card_tag_release}} times.",
+    "scope": "Host-only native per-entry cases on the Cortex-R5F runner over scripted stock semaphore and file-cache services, and the full-system card route of E-FILE-SERVICE-REQUESTS-150 with its interface, snapshots and watched writes.",
+    "notes": "Tag allocation runs in full system only inside the owned open poster, so it is compared there through the tag in the watched open payload, not as an interface call. The tag slots, sequence and map words are not watched. Semaphore contention and scheduling are scripted, not qualified.",
+    "artifacts": [
+      "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+        "pointer": [
+          "image4_sha256"
+        ]
+      },
+      {
+        "name": "verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "cases",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+        "pointer": [
+          "cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "controls",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+        "pointer": [
+          "controls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "owned_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+        "pointer": [
+          "owned_sha256"
+        ]
+      },
+      {
+        "name": "decomp_commit",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141159Z-file-service-handles/result/file-service-handles.json",
+        "pointer": [
+          "decomp_commit"
+        ]
+      },
+      {
+        "name": "card_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "card_map_bind",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "map_bind",
+          "owned",
+          "interface"
+        ]
+      },
+      {
+        "name": "card_map_unbind",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "map_unbind",
+          "owned",
+          "interface"
+        ]
+      },
+      {
+        "name": "card_map_lookup",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "map_lookup",
+          "owned",
+          "interface"
+        ]
+      },
+      {
+        "name": "card_tag_release",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "tag_release",
+          "owned",
+          "interface"
+        ]
+      }
+    ]
+  }
+  ,{
+    "id": "E-FILE-SERVICE-REQUESTS-150",
+    "claim": "The owned file-service request path (open, read, write and close posters and their ten caller entries, result-slot helpers, post, status translation, media readiness, mediamsg routing with deferral and replay, the open interceptor and the media task) matches the stock X-M1 1.50 image-4 bytes natively: the requests suite is {{native_verdict}} on {{native_cases}} cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, image 4 {{image4_sha256}}). On the cardless full-system route the owned DAT {{owned_dat_sha256}} is {{fullsystem_verdict}} to stock: {{stock_interface_events}} and {{owned_interface_events}} interface events, {{stock_watched_writes}} and {{owned_watched_writes}} watched writes and every screen equal, with {{owned_retired_fetches}} owned fetches of the retired extents against {{stock_retired_fetches}} stock ones. A stock rerun is {{stock_rerun_verdict}}, and the same comparator finds the earlier owned DAT, which entered workers with r1 at the worker instead of its table row, {{old_owned_verdict}}. On the card route (card {{card_sha256}}, FujiMod bridge {{card_bridge_sha256}}) the same DAT {{card_owned_dat_sha256}} is {{card_verdict}} to stock through {{card_opens}} opens, {{card_reads}} reads and {{card_closes}} closes: {{card_stock_interface_events}} and {{card_owned_interface_events}} interface events, {{card_stock_watched_writes}} and {{card_owned_watched_writes}} watched writes and every screen equal, with {{card_owned_retired_fetches}} owned fetches of the retired extents against {{card_stock_retired_fetches}} stock ones. A stock rerun is {{card_stock_rerun_verdict}}, and DATs staged from the media_task_worker_row and intercept_keeps_callback control images are {{card_worker_row_verdict}} and {{card_intercept_verdict}}.",
+    "scope": "Host-only X-M1 1.50. Native: per-entry cases over scripted stock services on the Cortex-R5F runner; media-task cases stop at the worker and compare r0..r3 and sp. Full system: FujiMod RAM-push fresh boot to attach, then PLAY, LEFT, LEFT, RIGHT, RIGHT. With no card the route reaches post, mediamsg routing, readiness, the media task and the 0x2c00 worker but no open, read or close request. With the three-JPEG playback card it also reaches the async open, read and close entries, the 0x2c17, 0x2c18 and 0x2c1a workers, tag release, the handle map and the open interceptor. The interface is every call returning outside the retired extents and the owned body, compared on entry arguments up to the owned arity, return registers, r0..r3 at worker entries, result-slot, session and open-set snapshots and writes, request reads and screen digests. Both routes use one observer, which leaves out return registers the stock entry body writes on some path, and r0 at the eight stock callers that write it first after the resultless map_unbind and tag_release. It also masks mediamsg receive-buffer payload bytes past the request length and those the stock open and close posters leave undefined.",
+    "notes": "Stock open (0x71c2b0) and close (0x71c134) copy the path or name with strcpy into an uninitialized stack payload, so the bytes after the terminator are undefined in stock as well. Close stores its slot words on every path (0x71c1b4..0x71c1bc), so they stay compared. A register the stock body writes on some path cannot be read after return by an AAPCS caller or one built with interprocedural register allocation. Card boots of DATs on the fixed first-stage image rely on FujiMod's source-inferred LZ masked-completion law (E-FUJIMOD-LZ-ENABLE-WINDOW-150). Retained callbacks and retained services the owned code calls are not traced; their effects appear only through watched writes and screens. Kernel and device laws are not qualified natively. The owned ELF is the one fixed bank (//replacement/fixed_image:fixed-bank-image), which also links the display scanout; fixed-image admission admits every file-service body, the deepest (close_wait, read_wait, write_wait) at {{admission_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
+    "artifacts": [
+      "private-data/scratch/FileServiceRead/runs/20261120T141214Z-file-service-requests/result/file-service-requests.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-stock-2.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T135330Z-file-service-observer-old-owned/result/comparison-owned.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-stock-2.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141341Z-file-service-card-control-media-task-worker-row/result/comparison-owned.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141450Z-file-service-card-control-intercept-keeps-callback/result/comparison-owned.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141052Z-fixed-bank-stage/result/staging-owned.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141052Z-fixed-bank-stage/result/staging-control-media-task-worker-row.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T141052Z-fixed-bank-stage/result/staging-control-intercept-keeps-callback.json",
+      "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_file_service_close_wait.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "inputs",
+          "update",
+          "sha256"
+        ]
+      },
+      {
+        "name": "native_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141214Z-file-service-requests/result/file-service-requests.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "native_cases",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141214Z-file-service-requests/result/file-service-requests.json",
+        "pointer": [
+          "cases"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "native_controls",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141214Z-file-service-requests/result/file-service-requests.json",
+        "pointer": [
+          "controls"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "owned_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141214Z-file-service-requests/result/file-service-requests.json",
+        "pointer": [
+          "owned_sha256"
+        ]
+      },
+      {
+        "name": "image4_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141214Z-file-service-requests/result/file-service-requests.json",
+        "pointer": [
+          "image4_sha256"
+        ]
+      },
+      {
+        "name": "owned_dat_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "inputs",
+          "update",
+          "sha256"
+        ]
+      },
+      {
+        "name": "fullsystem_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "stock_interface_events",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "interface_events"
+        ]
+      },
+      {
+        "name": "owned_interface_events",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "interface_events"
+        ]
+      },
+      {
+        "name": "stock_watched_writes",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "watched_writes"
+        ]
+      },
+      {
+        "name": "owned_watched_writes",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "watched_writes"
+        ]
+      },
+      {
+        "name": "owned_retired_fetches",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "retired_fetches"
+        ]
+      },
+      {
+        "name": "stock_retired_fetches",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "retired_fetches"
+        ]
+      },
+      {
+        "name": "stock_rerun_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141606Z-file-service-fullsystem-cardless/result/comparison-stock-2.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "old_owned_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T135330Z-file-service-observer-old-owned/result/comparison-owned.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "card_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "inputs",
+          "card",
+          "sha256"
+        ]
+      },
+      {
+        "name": "card_bridge_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "inputs",
+          "bridge",
+          "sha256"
+        ]
+      },
+      {
+        "name": "card_owned_dat_sha256",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "inputs",
+          "update",
+          "sha256"
+        ]
+      },
+      {
+        "name": "card_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "card_opens",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "open_async",
+          "owned",
+          "interface"
+        ]
+      },
+      {
+        "name": "card_reads",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "read_async",
+          "owned",
+          "interface"
+        ]
+      },
+      {
+        "name": "card_closes",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "entry_counts",
+          "close_async",
+          "owned",
+          "interface"
+        ]
+      },
+      {
+        "name": "card_stock_interface_events",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "interface_events"
+        ]
+      },
+      {
+        "name": "card_owned_interface_events",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "interface_events"
+        ]
+      },
+      {
+        "name": "card_stock_watched_writes",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "watched_writes"
+        ]
+      },
+      {
+        "name": "card_owned_watched_writes",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "watched_writes"
+        ]
+      },
+      {
+        "name": "card_owned_retired_fetches",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "owned",
+          "retired_fetches"
+        ]
+      },
+      {
+        "name": "card_stock_retired_fetches",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-owned.json",
+        "pointer": [
+          "stock",
+          "retired_fetches"
+        ]
+      },
+      {
+        "name": "card_stock_rerun_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141150Z-file-service-fullsystem-card/result/comparison-stock-2.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "card_worker_row_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141341Z-file-service-card-control-media-task-worker-row/result/comparison-owned.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "card_intercept_verdict",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T141450Z-file-service-card-control-intercept-keeps-callback/result/comparison-owned.json",
+        "pointer": [
+          "verdict"
+        ]
+      },
+      {
+        "name": "admission_stack",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_file_service_close_wait.json",
+        "pointer": [
+          "owned_stack_bytes"
+        ]
+      },
+      {
+        "name": "admission_budget",
+        "path": "private-data/scratch/FileServiceRead/runs/20261120T140915Z-fixed-bank-admission/result/xm1_file_service_close_wait.json",
+        "pointer": [
+          "owned_stack_budget"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "E-MENU-ENGINE-CUTOVER-150",
+    "claim": "The pinned 68-pair menu-engine matrix is {{seek_status}} at source {{seek_source}} with owned archive {{seek_archive}} and trajectory inventory {{seek_inventory}}: {{seek_passed_pairs}} of {{seek_required_pairs}} pairs pass the menu, render and settings comparisons, and {{seek_completed_roles}} roles complete ({{seek_executed_roles}} executed, {{seek_reused_roles}} reused, {{seek_failed_roles}} failed, {{seek_partial_roles}} partial). Under the engine criterion picker-15 has pair status {{picker15_pair_status}} (pass {{picker15_pass}}) and picker-250 pair status {{picker250_pair_status}} (pass {{picker250_pass}}); the added oracle-open-seek-moved pair passes ({{moved_pass}}). The SeekStepsFirst control archive {{control_archive}} in the owned role is detected on oracle-open-seek-moved (detected {{control_detected}}, pair status {{control_moved_pair_status}}) and not on {{control_open_seek_case}} (detected {{control_open_seek_detected}}). The time-services qualification over owned base {{time_base}} with archive {{time_archive}} is {{time_status}} at source {{time_source}}: {{time_passed_pairs}} of {{time_required_pairs}} pairs pass and {{time_completed_roles}} roles complete ({{time_executed_roles}} executed, {{time_failed_roles}} failed). The earlier engine225 matrix with archive {{e225_archive}} was {{e225_status}} with {{e225_pairs}} pairs and {{e225_completed_roles}} complete roles at source {{e225_source}}; the current checker classifies kind 1 with seek id 0x17 as owned, so that archive is not the qualifier's pin.",
+    "scope": "X-M1 1.50 cardless RAM-push engine-only controlled-RTC cutover: the qualifier's one pinned matrix, which adds the moved open-seek route and links the increment-7 archive owning kind 1 with seek id 0x17, for the menu cutover ({{seek_seconds}} seconds at one emulator slot) and for the time-services owned base. Owned renderer, full native and hardware remain separate.",
+    "notes": "Reused menu-matrix roles were observed in an earlier attempt at the same inputs whose source lacks only the design-report commit; execution identity excludes the source commit. The control commands were run with MATRIX_ROOT naming the kept stock roles, and the matrix and time-services runs with SEED_ROOTS naming earlier attempts; neither variable is in the recorded argv. SeekStepsFirst differs from stock on oracle-open-seek-moved in the last-move read at both the oracle-key and close-menu phases. On oracle-open-seek the guest comparison does not detect SeekStepsFirst; the host oracle does. Page steps, multi-level moves, seek id 0x18, kind 0xe with seek id 0x17, kind 1 with ids 0xe/0x10 and kinds 0xa/0xb landing on type 5/7 nodes stay with stock; no key route reaches them. Equivalent picker-15 plus picker-250 functionality does not qualify IMAGE SIZE/observe1 or per-boundary highlight pixels.",
+    "artifacts": [
+      "reports/owned-menu-engine-design.md",
+      "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+      "private-data/scratch/ControllerStrategy/engine225/bounded-qual/review-packet.json",
+      "private-data/scratch/MenuSourcePort/technical-review.json",
+      "private-data/scratch/MenuEngineSteps/inputs/engine.a",
+      "private-data/scratch/MenuEngineSteps/inputs/control-seek-steps-first.a",
+      "private-data/scratch/MenuEngineSteps/inputs/control-seek-steps-first.patch",
+      "emulation/menu-oracle-open-seek-moved.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-review-packet.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-gate.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-host-build-verdicts.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/stdout.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/measurement.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/pairs.jsonl",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/role-summaries.jsonl",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/input-sha256.txt",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek-moved/pair.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek-moved/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/checks/oracle-open-seek-moved/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/input-sha256.txt",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/qualifier-control.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/checks/oracle-open-seek/pair-check.log",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-review-packet.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-host-build-verdicts.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/stdout.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/measurement.json",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/pairs.jsonl",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/role-summaries.jsonl",
+      "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/input-sha256.txt"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "firmware"
+        ]
+      },
+      {
+        "name": "seek_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "seek_source",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "seek_archive",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "seek_inventory",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "trajectory_inventory"
+        ]
+      },
+      {
+        "name": "seek_required_pairs",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "required_pairs"
+        ]
+      },
+      {
+        "name": "seek_passed_pairs",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/stdout.json",
+        "pointer": [
+          "passed_pairs"
+        ]
+      },
+      {
+        "name": "seek_completed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      },
+      {
+        "name": "seek_executed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "executed_roles"
+        ]
+      },
+      {
+        "name": "seek_reused_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "reused_roles"
+        ]
+      },
+      {
+        "name": "seek_failed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "failed_roles"
+        ]
+      },
+      {
+        "name": "seek_partial_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "partial_roles"
+        ]
+      },
+      {
+        "name": "seek_seconds",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/measurement.json",
+        "pointer": [
+          "wall_seconds"
+        ]
+      },
+      {
+        "name": "picker15_pair_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair.json",
+        "pointer": [
+          "pair_status"
+        ]
+      },
+      {
+        "name": "picker15_pass",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-15/pair.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "picker250_pair_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair.json",
+        "pointer": [
+          "pair_status"
+        ]
+      },
+      {
+        "name": "picker250_pass",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/picker-250/pair.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "moved_pass",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T050020Z-menu-engine-steps-matrix/result/checks/oracle-open-seek-moved/pair.json",
+        "pointer": [
+          "pass"
+        ]
+      },
+      {
+        "name": "control_archive",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+        "pointer": [
+          "control_archive"
+        ]
+      },
+      {
+        "name": "control_detected",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+        "pointer": [
+          "detected"
+        ]
+      },
+      {
+        "name": "control_moved_pair_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090826Z-menu-engine-steps-control-moved/result/qualifier-control.json",
+        "pointer": [
+          "pairs",
+          "0",
+          "comparison",
+          "pair_status"
+        ]
+      },
+      {
+        "name": "control_open_seek_case",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/qualifier-control.json",
+        "pointer": [
+          "pairs",
+          "0",
+          "case"
+        ]
+      },
+      {
+        "name": "control_open_seek_detected",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T090311Z-menu-engine-steps-control/result/qualifier-control.json",
+        "pointer": [
+          "pairs",
+          "0",
+          "detected"
+        ]
+      },
+      {
+        "name": "e225_status",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "e225_source",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "e225_archive",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "e225_pairs",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "pairs"
+        ],
+        "operation": "length"
+      },
+      {
+        "name": "e225_completed_roles",
+        "path": "private-data/scratch/ControllerStrategy/engine225/bounded-qual/terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      },
+      {
+        "name": "time_status",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "status"
+        ]
+      },
+      {
+        "name": "time_source",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "source",
+          "head"
+        ]
+      },
+      {
+        "name": "time_base",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_base_firmware"
+        ]
+      },
+      {
+        "name": "time_archive",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "inputs",
+          "owned_archive"
+        ]
+      },
+      {
+        "name": "time_passed_pairs",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/stdout.json",
+        "pointer": [
+          "passed_pairs"
+        ]
+      },
+      {
+        "name": "time_required_pairs",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "required_pairs"
+        ]
+      },
+      {
+        "name": "time_completed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "completed_roles"
+        ]
+      },
+      {
+        "name": "time_executed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "executed_roles"
+        ]
+      },
+      {
+        "name": "time_failed_roles",
+        "path": "private-data/scratch/MenuEngineSteps/runs/20261120T140849Z-menu-engine-steps-time/result/qualifier-terminal.json",
+        "pointer": [
+          "execution",
+          "failed_roles"
+        ]
+      }
     ]
   }
 ]

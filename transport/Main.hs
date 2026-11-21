@@ -519,9 +519,9 @@ ramSession kind policy payload requested = do
       putStrLn ("output: "++pushed)
       runRamPushWith xm1PeerCacheAvailability NoRamPushObserver (retainedAllocation retained) manifest realClock nativeApi pushed >>= ramPushLine >>= putStrLn
   where
-    -- Waiving the pins keeps the compiled installer entry offsets.
     requireCompiledEntries base built =
-      unless (manifestEntries (pinnedManifest built) == payloadEntries payload base)
+      unless (payloadKind payload == Experiment
+        || manifestEntries (pinnedManifest built) == payloadEntries payload base)
         (P.reject "relinked installer entry offsets differ from the compiled installer layout")
 
 ramWatch :: FilePath -> Maybe (Int,Int) -> IO RamWatch

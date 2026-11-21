@@ -1,0 +1,107 @@
+diff --git a/crates/emulator-exr2-codecs/src/lz.rs b/crates/emulator-exr2-codecs/src/lz.rs
+index 1f8e9a5..12ed29b 100644
+--- a/crates/emulator-exr2-codecs/src/lz.rs
++++ b/crates/emulator-exr2-codecs/src/lz.rs
+@@ -6,6 +6,9 @@
+ //! laws. Supported descriptor forms and bounded scalar half-size FIR
+ //! descriptors are admitted. The
+ //! default resize mode awaits a result and has no manufactured completion.
++//! A completion pulses the core routed at start even while that core's
++//! enable is clear; the controller latches it pending (source-inferred from
++//! the stock kernel's pending clears, unmeasured).
+ use fujimod_emulator_devices::exr2::irq;
+ use fujimod_emulator_imaging::exr2_isp::Irq;
+ use fujimod_emulator_devices::{Cx, Device, compression::method4::Stream};
+@@ -662,8 +665,7 @@ impl Decompressor {
+         }
+         let route = self.route()?;
+         if let Some(irq) = p.irq {
+-            let masked_resize = matches!(p.job, Job::Resize) && route.is_none();
+-            if !masked_resize && route.map(|r| (r.core, r.line)) != Some((irq.core, irq.line)) {
++            if route.is_some_and(|r| (r.core, r.line) != (irq.core, irq.line)) {
+                 return Err("decompressor IRQ route changed during DMA".into());
+             }
+         }
+diff --git a/crates/emulator-exr2-codecs/src/lz/tests.rs b/crates/emulator-exr2-codecs/src/lz/tests.rs
+index 5a75b34..8e4caa1 100644
+--- a/crates/emulator-exr2-codecs/src/lz/tests.rs
++++ b/crates/emulator-exr2-codecs/src/lz/tests.rs
+@@ -7,6 +7,8 @@ struct Ram {
+     irqs: Vec<(usize, u32)>,
+     writes: usize,
+     irq_writes: usize,
++    inputs: [irq::Inputs; 2],
++    deliver: bool,
+ }
+ impl Host for Ram {
+     fn now(&self) -> u64 {
+@@ -21,6 +23,9 @@ impl Host for Ram {
+     fn raise_irq(&mut self, c: usize, l: u32) -> Result<(), String> {
+         self.irqs.push((c, l));
+         self.irq_writes = self.writes;
++        if self.deliver {
++            self.inputs[c].pulse(l)?;
++        }
+         Ok(())
+     }
+     fn ram_read(&self, a: u64, out: &mut [u8]) -> Result<(), String> {
+@@ -66,7 +71,7 @@ fn setup() -> (Decompressor, Ram, [irq::InterruptController; 2]) {
+         },
+         Wiring {
+             base: BASE,
+-            controllers: inputs.into_iter().enumerate().collect(),
++            controllers: inputs.iter().cloned().enumerate().collect(),
+         },
+     )
+     .unwrap();
+@@ -78,6 +83,8 @@ fn setup() -> (Decompressor, Ram, [irq::InterruptController; 2]) {
+             irqs: vec![],
+             writes: 0,
+             irq_writes: 0,
++            inputs,
++            deliver: false,
+         },
+         controllers,
+     )
+@@ -524,6 +531,41 @@ fn rerouting_or_ambiguous_irq_refuses_without_destination_writes() {
+     assert_eq!(h.writes, 0);
+     assert!(h.irqs.is_empty());
+ }
++#[test]
++fn completion_inside_an_enable_clear_stays_pending_until_reenabled() {
++    let (mut d, mut h, mut c) = setup();
++    h.deliver = true;
++    reset(&mut d, &mut h);
++    let register = |c: &mut [irq::InterruptController; 2], h: &mut Ram, o: u64, v: Option<u32>| {
++        let mut cx = Cx::new(h, 0, 0, 0);
++        let read = match v {
++            Some(v) => {
++                c[0].write(&mut cx, 0xfffb3000 + o, 4, v.into());
++                0
++            }
++            None => c[0].read(&mut cx, 0xfffb3000 + o, 4) as u32,
++        };
++        assert!(cx.take_refusal().is_none());
++        read
++    };
++    register(&mut c, &mut h, 0x400 + u64::from(IRQ) * 4, Some(0x10000 + IRQ * 4));
++    register(&mut c, &mut h, 0x800 + u64::from(IRQ) * 4, Some(3));
++    enabled(&mut c, &mut h, 0, true);
++    h.bytes[0x4000..0x4004].copy_from_slice(&[3, 11, 22, 33]);
++    lz(&mut d, &mut h, 0x4000, 0x8000, 4);
++    enabled(&mut c, &mut h, 0, false);
++    tick(&mut d, &mut h, 4).unwrap();
++    assert_eq!(&h.bytes[0x8000..0x8003], &[11, 22, 33]);
++    assert_eq!((d.r(0x4c), d.r(0x88)), (3, 1));
++    let mut cx = Cx::new(&mut h, 0, 0, 0);
++    c[0].advance(&mut cx);
++    assert!(cx.take_refusal().is_none());
++    assert!(!h.inputs[0].irq());
++    enabled(&mut c, &mut h, 0, true);
++    assert!(h.inputs[0].irq());
++    assert!(!h.inputs[1].irq());
++    assert_eq!(register(&mut c, &mut h, 0x200, None), 0x10000 + IRQ * 4);
++}
+ 
+ fn luma_conversion_words() -> [u32; 12] {
+     [

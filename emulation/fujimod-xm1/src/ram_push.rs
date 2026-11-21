@@ -18,6 +18,7 @@ use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
 use fujimod_xm1::reset_observation::{ResetObserver, Spec as ResetObservationSpec};
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
+use fujimod_emulator::board::bus::TransactionBatch;
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
@@ -51,6 +52,22 @@ const GPIO_PULSE: KeyPulse = KeyPulse::instructions(GPIO_HOLD, 8_000_000);
 const DIAL_PULSE: KeyPulse = KeyPulse::instructions(4_000_000, 1_000_000);
 const MAX_PHASE: u64 = 15_000_000;
 const MAX_READ: usize = 4096;
+
+const JPEG_OBSERVATION_RANGE: [u64; 2] = [0xfff6_3000, 0xfff6_312c];
+const JPEG_OBSERVATION_LIMIT: usize = 65536;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JpegObservationArguments {}
+
+struct JpegObservation;
+
+#[derive(Serialize)]
+struct JpegObservationBatch {
+    active: bool,
+    #[serde(flatten)]
+    batch: TransactionBatch,
+}
 
 /// Sites the retained bridge arms for every session.
 const FIXED_SITES: [(u32, &str); 9] = [
@@ -316,6 +333,9 @@ enum Request {
     ModalObservationResume,
     ModalObservationReport,
     ModalObservationEnd,
+    JpegObservationBegin(JpegObservationArguments),
+    JpegObservationDrain(JpegObservationArguments),
+    JpegObservationEnd(JpegObservationArguments),
     AfOwnershipArm,
     AfOwnershipEnd,
     MachineFingerprint,
@@ -381,6 +401,9 @@ enum RequestKind {
     ModalObservationResume,
     ModalObservationReport,
     ModalObservationEnd,
+    JpegObservationBegin,
+    JpegObservationDrain,
+    JpegObservationEnd,
     AfOwnershipArm,
     AfOwnershipEnd,
     MachineFingerprint,
@@ -436,6 +459,9 @@ impl Request {
             Request::ModalObservationResume => RequestKind::ModalObservationResume,
             Request::ModalObservationReport => RequestKind::ModalObservationReport,
             Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
+            Request::JpegObservationBegin(_) => RequestKind::JpegObservationBegin,
+            Request::JpegObservationDrain(_) => RequestKind::JpegObservationDrain,
+            Request::JpegObservationEnd(_) => RequestKind::JpegObservationEnd,
             Request::AfOwnershipArm => RequestKind::AfOwnershipArm,
             Request::AfOwnershipEnd => RequestKind::AfOwnershipEnd,
             Request::MachineFingerprint => RequestKind::MachineFingerprint,
@@ -512,6 +538,8 @@ struct Server {
     output: PathBuf,
     screenshots: Vec<Value>,
     watch: Option<Box<MemoryWatch>>,
+    jpeg_observation: Option<JpegObservation>,
+    jpeg_observation_tail: Option<JpegObservationBatch>,
     preservation: Option<Box<Preservation>>,
     key_log: Vec<Value>,
     requests: RequestProfile,
@@ -881,6 +909,27 @@ struct CaptureProgress<'a> {
 }
 
 impl Server {
+    fn begin_jpeg_observation(&mut self) -> Result<(), String> {
+        if self.jpeg_observation.is_some() {
+            return Err("a JPEG observation is already armed".into());
+        }
+        self.bridge.machine.session.board.transaction_watch_begin(
+            vec![(JPEG_OBSERVATION_RANGE[0], JPEG_OBSERVATION_RANGE[1])],
+            JPEG_OBSERVATION_LIMIT,
+        )?;
+        self.jpeg_observation = Some(JpegObservation);
+        Ok(())
+    }
+
+    fn end_jpeg_observation(&mut self) -> Result<JpegObservationBatch, String> {
+        if self.jpeg_observation.is_none() {
+            return Err("JPEG observation requires an armed observer".into());
+        }
+        let batch = self.bridge.machine.session.board.transaction_watch_end()?;
+        self.jpeg_observation = None;
+        Ok(JpegObservationBatch { active: false, batch })
+    }
+
     fn export_nand(&self, label: NandArtifactLabel) -> Result<Value, String> {
         let refused = |reason| serde_json::to_value(NandExport::Refused { reason }).map_err(|e| e.to_string());
         if self.pending_capture.is_some() || self.bridge.rendezvous_active() {
@@ -1181,6 +1230,7 @@ impl Server {
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
             | Request::ModalObservationReport | Request::ModalObservationEnd | Request::AfOwnershipEnd | Request::MachineFingerprint
             | Request::RenderStackDiagnosticReport | Request::RenderStackDiagnosticEnd);
+        let tail_request = tail_request || matches!(request, Request::JpegObservationEnd(_));
         let recovers = matches!(&request, Request::TraceHits { .. } | Request::SnapshotRestore { .. }
             | Request::SnapshotKey { .. } | Request::SnapshotDrop { .. });
         if self.bridge.machine.failure.is_some() && !tail_request && !recovers {
@@ -1189,6 +1239,7 @@ impl Server {
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
             | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. } | Request::NandRead { .. }
             | Request::WatchState | Request::PreservationState | Request::MediaState | Request::NandExport { .. } | Request::UiState);
+        let read_only = read_only || matches!(request, Request::JpegObservationBegin(_) | Request::JpegObservationDrain(_));
         if (self.pending_key.is_some() || self.bridge.machine.traces.paused) && !read_only
             && !matches!(request, Request::TraceResume { .. }) {
             return Err("trace continuation must resume before mutation".into());
@@ -1216,6 +1267,11 @@ impl Server {
             && matches!(&request, Request::SaveInstallCheckpoint { observation: InstallObservation::Unobserved, .. }) {
             return Err("active modal observation refuses checkpoint replacement".into());
         }
+        if self.jpeg_observation.is_some()
+            && matches!(request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. }
+                | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. } | Request::Finish) {
+            return Err("active JPEG observation must end before checkpoint replacement or finish".into());
+        }
         if matches!(&request, Request::SaveInstallCheckpoint { .. } | Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. })
             && self.bridge.machine.render_stack_diagnostic.as_ref().is_some_and(|collector| !collector.finished()) {
             return Err("unfinished render stack diagnostic refuses checkpoint replacement".into());
@@ -1233,6 +1289,21 @@ impl Server {
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         self.admit_request(&request)?;
         Ok(Some(match request {
+            Request::JpegObservationBegin(_) => {
+                self.begin_jpeg_observation()?;
+                json!({"armed": true, "range": JPEG_OBSERVATION_RANGE, "limit": JPEG_OBSERVATION_LIMIT})
+            }
+            Request::JpegObservationDrain(_) => {
+                let mut batch = self.end_jpeg_observation()?;
+                if let Err(error) = self.begin_jpeg_observation() {
+                    self.jpeg_observation_tail = Some(batch);
+                    return Err(error);
+                }
+                batch.active = true;
+                serde_json::to_value(batch).map_err(|error| error.to_string())?
+            }
+            Request::JpegObservationEnd(_) => serde_json::to_value(self.end_jpeg_observation()?)
+                .map_err(|error| error.to_string())?,
             Request::NandExport { label } => self.export_nand(label)?,
             Request::List => {
                 let c = &self.attachment.configuration;
@@ -1748,6 +1819,7 @@ impl Server {
             "screenshots": self.screenshots,
             "memory_watch": self.watch.as_ref().map(|watch| watch.records.borrow().state()).unwrap_or(Value::Null),
             "preservation": preservation,
+            "jpeg_observation_tail": self.jpeg_observation_tail,
             "sd_host": self.bridge.machine.card_state().unwrap_or_else(|error| json!({"error": error})),
             "boundary": {"instructions": self.bridge.machine.instructions(), "failure": self.bridge.machine.failure},
         }))
@@ -1831,11 +1903,13 @@ impl Server {
                         self.capture_evidence_error.get_or_insert(message);
                     } else if self.bridge.machine.failure.is_some()
                         || !(self.bridge.machine.traces.capture_observation_active()
-                            || self.bridge.machine.traces.modal_observation_active() || self.bridge.machine.traces.pauses_active()) {
+                            || self.bridge.machine.traces.modal_observation_active() || self.bridge.machine.traces.pauses_active()
+                            || self.jpeg_observation.is_some()) {
                         error = Some(message);
                     }
                     let observing = self.bridge.machine.traces.capture_observation_active()
-                        || self.bridge.machine.traces.modal_observation_active() || self.bridge.machine.traces.pauses_active();
+                        || self.bridge.machine.traces.modal_observation_active() || self.bridge.machine.traces.pauses_active()
+                        || self.jpeg_observation.is_some();
                     (Reply::Value(Some(response)), !observing)
                 }
             };
@@ -1854,6 +1928,10 @@ impl Server {
             }
             if finished { break; }
             waiting = Instant::now();
+        }
+        if self.jpeg_observation.is_some() {
+            error.get_or_insert_with(|| "producer ended with an active JPEG observation".into());
+            self.jpeg_observation_tail = Some(self.end_jpeg_observation()?);
         }
         std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
         let receipt = self.receipt(error.as_deref())?;
@@ -2076,6 +2154,8 @@ fn drive() -> Result<(), String> {
         output: arguments.output,
         screenshots: Vec::new(),
         watch: None,
+        jpeg_observation: None,
+        jpeg_observation_tail: None,
         preservation: None,
         key_log: Vec::new(),
         requests: RequestProfile::default(),
@@ -2113,6 +2193,168 @@ mod tests {
     use fujimod_xm1::reset_observation::AttachPhase;
     use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn jpeg_observation_commands_reject_all_arguments() {
+        for command in ["jpeg-observation-begin", "jpeg-observation-drain", "jpeg-observation-end"] {
+            assert!(serde_json::from_value::<Request>(json!({"command": command})).is_ok());
+            for argument in [
+                json!({"range": [0, 4]}), json!({"limit": 1}), json!({"active": true}),
+            ] {
+                let mut value = argument;
+                value["command"] = json!(command);
+                assert!(serde_json::from_value::<Request>(value).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_observation_wire_lifecycle_preserves_guest_boundary() {
+        let mut server = server(&[0xeaff_fffe]);
+        let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+        let mut output = Vec::new();
+        server.serve_io(concat!(
+            "{\"command\":\"jpeg-observation-begin\"}\n",
+            "{\"command\":\"jpeg-observation-drain\"}\n",
+            "{\"command\":\"jpeg-observation-drain\"}\n",
+            "{\"command\":\"jpeg-observation-end\"}\n",
+            "{\"command\":\"finish\"}\n",
+        ).as_bytes(), &mut output).unwrap();
+        let responses: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap()).collect();
+        assert_eq!(responses.len(), 6);
+        assert!(responses.iter().all(|response| response["ok"] == true));
+        assert_eq!(responses[1]["armed"], true);
+        assert_eq!(responses[1]["range"], json!([0xfff63000u64, 0xfff6312cu64]));
+        assert_eq!(responses[1]["limit"], 65536);
+        for (response, active) in responses[2..5].iter().zip([true, true, false]) {
+            assert_eq!(response["active"], active);
+            assert_eq!(response["transactions"], json!([]));
+            assert_eq!(response["omitted"], 0);
+        }
+        assert_eq!(responses[5]["finished"], true);
+        assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+        std::fs::remove_dir_all(&server.output).unwrap();
+    }
+
+    #[test]
+    fn jpeg_observation_refuses_invalid_sequences_and_snapshot_replacement() {
+        let mut server = server(&[0xeaff_fffe]);
+        for command in ["jpeg-observation-drain", "jpeg-observation-end"] {
+            assert!(server.handle(request(json!({"command": command}))).is_err());
+        }
+        server.handle(request(json!({"command": "snapshot-save", "name": "before"}))).unwrap();
+        server.handle(request(json!({"command": "jpeg-observation-begin"}))).unwrap();
+        for command in [
+            json!({"command": "jpeg-observation-begin"}),
+            json!({"command": "snapshot-save", "name": "during"}),
+            json!({"command": "snapshot-restore", "name": "before"}),
+            json!({"command": "snapshot-key", "name": "before", "key": "play"}),
+            json!({"command": "finish"}),
+        ] {
+            assert!(server.handle(request(command)).is_err());
+        }
+        let ended = server.handle(request(json!({"command": "jpeg-observation-end"}))).unwrap().unwrap();
+        assert_eq!(ended["active"], false);
+        server.handle(request(json!({"command": "snapshot-restore", "name": "before"}))).unwrap();
+        server.handle(request(json!({"command": "jpeg-observation-begin"}))).unwrap();
+        server.handle(request(json!({"command": "jpeg-observation-end"}))).unwrap();
+        assert!(server.handle(request(json!({"command": "jpeg-observation-end"}))).is_err());
+    }
+
+    #[test]
+    fn jpeg_observation_does_not_replace_an_existing_bus_observer() {
+        let mut server = server(&[0xeaff_fffe]);
+        server.bridge.machine.session.board.transaction_watch_begin(vec![(0, 4)], 1).unwrap();
+        assert!(server.handle(request(json!({"command": "jpeg-observation-begin"}))).is_err());
+        assert!(server.handle(request(json!({"command": "jpeg-observation-end"}))).is_err());
+        assert!(server.bridge.machine.session.board.transaction_watch_active().unwrap());
+        server.bridge.machine.session.board.transaction_watch_end().unwrap();
+        server.handle(request(json!({"command": "jpeg-observation-begin"}))).unwrap();
+        server.handle(request(json!({"command": "jpeg-observation-end"}))).unwrap();
+    }
+
+    fn jpeg_register_program(loop_accesses: bool) -> [u32; 9] {
+        [
+            0xe59f_0018, 0xe3a0_102a, 0xe580_1008, 0xe590_2008,
+            0xe3a0_360a, 0xe583_2000,
+            if loop_accesses { 0xeaff_fffa } else { 0xeaff_fffe },
+            0xe1a0_0000, 0xfff6_3000,
+        ]
+    }
+
+    #[test]
+    fn jpeg_observation_reports_actual_accepted_reads_and_writes_without_guest_effects() {
+        let mut baseline = server(&jpeg_register_program(false));
+        let mut observed = server(&jpeg_register_program(false));
+        observed.handle(request(json!({"command": "jpeg-observation-begin"}))).unwrap();
+        assert_eq!(baseline.bridge.machine.run(20), RunOutcome::Completed);
+        assert_eq!(observed.bridge.machine.run(20), RunOutcome::Completed);
+        let before = (observed.bridge.machine.instructions(), observed.bridge.machine.session.board.now());
+        let batch = observed.handle(request(json!({"command": "jpeg-observation-drain"}))).unwrap().unwrap();
+        assert_eq!((observed.bridge.machine.instructions(), observed.bridge.machine.session.board.now()), before);
+        assert_eq!(before, (baseline.bridge.machine.instructions(), baseline.bridge.machine.session.board.now()));
+        let expected = baseline.handle(request(json!({"command": "read-memory", "address": 0x00a00000, "count": 4}))).unwrap();
+        let actual = observed.handle(request(json!({"command": "read-memory", "address": 0x00a00000, "count": 4}))).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.unwrap()["bytes"], "2a000000");
+        assert_eq!(batch["active"], true);
+        assert_eq!(batch["omitted"], 0);
+        let rows = batch["transactions"].as_array().unwrap();
+        for (operation, pc) in [("write", 8u64), ("read", 12)] {
+            assert!(rows.iter().any(|row| row["operation"] == operation && row["pc"] == pc
+                && row["cpu"] == 0 && row["address"] == 0xfff63008u64 && row["size"] == 4
+                && row["value"] == 42 && row["accepted"] == true
+                && row["tick"].as_u64().is_some_and(|tick| tick <= before.1)));
+        }
+        assert!(rows.iter().all(|row| row["address"] == 0xfff63008u64));
+        let tail = observed.handle(request(json!({"command": "jpeg-observation-end"}))).unwrap().unwrap();
+        assert_eq!(tail["transactions"], json!([]));
+        assert_eq!(tail["omitted"], 0);
+    }
+
+    #[test]
+    fn jpeg_observation_reports_overflow_without_hiding_omitted_transactions() {
+        let mut server = server(&jpeg_register_program(true));
+        server.handle(request(json!({"command": "jpeg-observation-begin"}))).unwrap();
+        assert_eq!(server.bridge.machine.run(200_000), RunOutcome::Completed);
+        let batch = server.handle(request(json!({"command": "jpeg-observation-end"}))).unwrap().unwrap();
+        assert_eq!(batch["transactions"].as_array().unwrap().len(), 65536);
+        assert!(batch["omitted"].as_u64().is_some_and(|omitted| omitted > 0));
+    }
+
+    #[test]
+    fn jpeg_observation_terminal_failure_allows_end_but_not_begin_or_drain() {
+        let mut server = server(&jpeg_register_program(false));
+        server.handle(request(json!({"command": "jpeg-observation-begin"}))).unwrap();
+        assert_eq!(server.bridge.machine.run(20), RunOutcome::Completed);
+        server.bridge.machine.failure = Some("synthetic terminal fault".into());
+        let before = (server.bridge.machine.instructions(), server.bridge.machine.session.board.now());
+        for command in ["jpeg-observation-begin", "jpeg-observation-drain"] {
+            assert!(server.handle(request(json!({"command": command}))).is_err());
+        }
+        let batch = server.handle(request(json!({"command": "jpeg-observation-end"}))).unwrap().unwrap();
+        assert_eq!(batch["active"], false);
+        assert!(!batch["transactions"].as_array().unwrap().is_empty());
+        assert_eq!((server.bridge.machine.instructions(), server.bridge.machine.session.board.now()), before);
+        assert!(server.handle(request(json!({"command": "idle", "instructions": 1}))).is_err());
+        assert_eq!(server.bridge.machine.failure.as_deref(), Some("synthetic terminal fault"));
+    }
+
+    #[test]
+    fn jpeg_observation_eof_stops_observer_and_preserves_tail_in_receipt() {
+        let mut server = server(&[0xeaff_fffe]);
+        let mut output = Vec::new();
+        server.serve_io(b"{\"command\":\"jpeg-observation-begin\"}\n".as_slice(), &mut output).unwrap();
+        let receipt: Value = serde_json::from_slice(
+            &std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
+        assert!(receipt["bridge_error"].is_string());
+        assert_eq!(receipt["jpeg_observation_tail"]["active"], false);
+        assert_eq!(receipt["jpeg_observation_tail"]["transactions"], json!([]));
+        assert_eq!(receipt["jpeg_observation_tail"]["omitted"], 0);
+        assert!(!server.bridge.machine.session.board.transaction_watch_active().unwrap());
+        std::fs::remove_dir_all(&server.output).unwrap();
+    }
 
     #[test]
     fn nand_read_request_validates_row_count() {
@@ -2341,6 +2583,7 @@ mod tests {
             key: BootKey { key: BootIdentity::new(b"", b"", b"", b"", None, b"synthetic-capture").key(), inputs: Value::Null },
             root: output.clone(), output,
             screenshots: Vec::new(), watch: None, preservation: None,
+            jpeg_observation: None, jpeg_observation_tail: None,
             key_log: Vec::new(), requests: RequestProfile::default(),
             rendezvous, pending_capture: None,
             pending_key: None,
