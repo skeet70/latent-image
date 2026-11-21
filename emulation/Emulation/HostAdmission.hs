@@ -35,7 +35,7 @@ import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit, isHexDigit, isPrint, isSpace)
 import Data.Either (isRight)
 import Data.Function (on)
-import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, nub, nubBy, sortOn, stripPrefix)
+import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, nub, nubBy, sort, sortOn, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..))
 import GHC.Clock (getMonotonicTime)
@@ -114,9 +114,13 @@ legacyTokenRange = 256
 budgetVariable :: String
 budgetVariable = "XM1_HOST_MEMORY_BUDGET"
 
--- | RAM left outside every admission for the desktop, browser, sessions and page cache.
+-- | RAM left outside the token budget for the desktop, browser, sessions and page cache.
 hostReserveBytes :: Integer
 hostReserveBytes = 8 * 1024 * 1024 * 1024
+
+-- | @MemAvailable@ an admission leaves free beyond its reservation.
+liveHeadroomBytes :: Integer
+liveHeadroomBytes = 3 * 1024 * 1024 * 1024
 
 -- | Admissible tokens: physical RAM less 'hostReserveBytes' (at least one
 -- token), or a lower @XM1_HOST_MEMORY_BUDGET@. Offsets below 'censusTokens'
@@ -187,10 +191,17 @@ parseScopeName text
   | otherwise = Nothing
 
 -- | A history key: a slot run's label, or a host build's command and targets.
+-- Its first word names its class: @full-@, @native-@ or @host-build@.
 newtype MemoryKey = MemoryKey String
 
 memoryKey :: String -> MemoryKey
 memoryKey = MemoryKey . take 1024 . map (\character -> if isPrint character && character /= '\t' then character else '?')
+
+newtype KeyClass = KeyClass String
+  deriving (Eq)
+
+keyClass :: String -> KeyClass
+keyClass = KeyClass . takeWhile (/= ' ')
 
 -- | Whole tokens of RAM a scope holds against the budget; also its @MemoryHigh@.
 newtype Reservation = Reservation Int
@@ -211,8 +222,9 @@ pendingPeakDirectory directory = directory </> "peaks"
 historyLimit :: Int
 historyLimit = 1024
 
--- | 1.25 times the recorded peak of KEY's most recent completed scope, rounded
--- up to tokens and at most MEMORY; MEMORY when KEY has no record.
+-- | 1.25 times the recorded peak of KEY's most recent completed scope or, for
+-- a key without a record, the 90th-percentile recorded peak of its class,
+-- rounded up to tokens and at most MEMORY; MEMORY when the class has no record.
 expectedReservation :: MemoryKey -> MemoryMax -> IO Reservation
 expectedReservation (MemoryKey key) memory = do
   directory <- memoryDirectory
@@ -221,7 +233,12 @@ expectedReservation (MemoryKey key) memory = do
     waitToSetLock fd (WriteLock, AbsoluteSeek, 0, 0)
     foldPendingPeaks directory
   let cap = reservationTokens memory
-  pure $ Reservation $ case lookup key [(entry, peak) | (peak, entry) <- history] of
+      classPeaks = sort [peak | (peak, entry) <- history, keyClass entry == keyClass key]
+      classEstimate
+        | null classPeaks = Nothing
+        | otherwise = Just (classPeaks !! ((9 * length classPeaks + 9) `div` 10 - 1))
+      expected = maybe classEstimate Just (lookup key [(entry, peak) | (peak, entry) <- history])
+  pure $ Reservation $ case expected of
     Nothing -> cap
     Just peak -> max 1 (min cap (fromInteger ((peak * 5 + 4 * tokenBytes - 1) `div` (4 * tokenBytes))))
 
@@ -316,7 +333,7 @@ smallerWaiterPolls :: Int
 smallerWaiterPolls = 3
 
 -- | A new admission takes its tokens when they fit the budget, when
--- @MemAvailable@ less 'hostReserveBytes' covers them, and after deferring to
+-- @MemAvailable@ less 'liveHeadroomBytes' covers them, and after deferring to
 -- smaller waiters for 'smallerWaiterPolls'. A legacy scope already holds its
 -- memory and skips the last two conditions.
 reserveMemoryWithLegacy :: Maybe LegacyReservation -> Reservation -> ScopeName -> IO Fd
@@ -346,7 +363,7 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
             holders <- heldTokens fd budget
-            spare <- if admitting then subtract hostReserveBytes <$> availableMemoryBytes else pure (reservationBytes reservation)
+            spare <- if admitting then subtract liveHeadroomBytes <$> availableMemoryBytes else pure (reservationBytes reservation)
             smaller <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
             let occupied = nub (map fst holders ++ protected)
                 free = filter (`notElem` occupied) (map fromIntegral [0 .. censusTokens budget - 1])
@@ -362,7 +379,7 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
                 when (admitting && not registered) (setLock queue (WriteLock, AbsoluteSeek, place, 1))
                 hPutStrLn stderr ("host admission: waiting for host RAM (" ++ show tokens ++ " x 256MiB; "
                   ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held; "
-                  ++ show (max 0 spare) ++ " bytes available above the host reserve"
+                  ++ show (max 0 spare) ++ " bytes available above the live headroom"
                   ++ (if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
                   ++ show (nub (map snd holders)))
                 hFlush stderr

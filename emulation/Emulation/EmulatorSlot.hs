@@ -105,7 +105,8 @@ slotPolicyForClass execution = do
     _ -> ioError (userError (slotsName ++ " must be an integer 1.." ++ show maximumSlots))
   pure (SlotPolicy slots memory swap execution)
 
--- | Re-execs a pinned inode into a capped scope before taking resource locks.
+-- | Re-execs a pinned inode into a capped scope, which reserves its memory
+-- before taking its class slot, so a run waiting for memory holds no slot.
 reexecInSlot :: SlotPolicy -> [String] -> IO ()
 reexecInSlot policy arguments = do
   let resource = resourceClass (executionClass policy)
@@ -141,8 +142,8 @@ reexecInSlot policy arguments = do
             ioError (userError "admission scope does not contain this process")
           scope <- maybe (ioError (userError "invalid admission scope")) pure (parseScopeName unit)
           (Slot slot, pinned, reservation) <- withBinaryFile (runningImage executable) ReadMode $ \running -> do
-            acquired <- acquire directory (executionClass policy) (slotCount policy) (Just scope)
             (_, reserved) <- reserveMemory scope
+            acquired <- acquire directory (executionClass policy) (slotCount policy) (Just scope)
             pinned <- pinExecutable directory executable running
             pure (acquired, pinned, reserved)
           hPutStrLn stderr ("verification admission: class=" ++ show (executionClass policy)

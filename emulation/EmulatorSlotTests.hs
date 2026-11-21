@@ -62,6 +62,10 @@ run source builder wrapper = do
       bin = root </> "bin"
   createDirectoryIfMissing True home
   createDirectoryIfMissing True bin
+  -- Class peaks above every cap, so a new label or build reserves its cap.
+  createDirectoryIfMissing True (home </> ".cache" </> "xm1-host-memory")
+  writeFile (home </> ".cache" </> "xm1-host-memory" </> "history") (unlines
+    [show (32 * gib) ++ "\t" ++ prefix ++ " seed-" ++ show index | prefix <- ["full-", "native-", "host-build"], index <- [1 :: Int .. 200]])
   writeFile (bin </> "bazel") "#!/bin/sh\necho 'probe-in-slot build'\ncat >/dev/null\nexit 0\n"
   setFileMode (bin </> "bazel") 0o700
   inherited <- probeEnvironment home
@@ -143,6 +147,22 @@ run source builder wrapper = do
       expect (label ++ " requested slot count " ++ show limit ++ " bounds overlap and resumes after release")
         (all (admitted . snd) holders && blocked && admitted resumed
           && all (== Just ExitSuccess) completed)
+  let lowInfo = root </> "meminfo-low"
+      oneSlot = change "XM1_EMULATOR_SLOTS" "1" (change "XM1_EMULATOR_MEMORY_MAX" "1G" (change "XM1_EMULATOR_SWAP_MAX" "0" environment))
+  writeMeminfo lowInfo (64 * gib) (3 * gib)
+  memoryWaiter <- spawn (change "XM1_HOST_MEMINFO" lowInfo oneSlot)
+  memoryWaiterBlocked <- waiting memoryWaiter
+  slotUser <- spawn oneSlot
+  slotUserSeen <- admission slotUser
+  release slotUser
+  slotUserCode <- finish slotUser
+  writeMeminfo lowInfo (64 * gib) (64 * gib)
+  memoryWaiterSeen <- admission memoryWaiter
+  release memoryWaiter
+  memoryWaiterCode <- finish memoryWaiter
+  slotlessWait <- expect "a run waiting for memory holds no emulator slot"
+    (memoryWaiterBlocked && admitted slotUserSeen && admitted memoryWaiterSeen
+      && all (== Just ExitSuccess) [slotUserCode, memoryWaiterCode])
   let smallFull = change "XM1_EMULATOR_MEMORY_MAX" "2G" environment
   full <- forM [1 :: Int .. 4] $ \_ -> do
     job <- spawn smallFull
@@ -158,7 +178,7 @@ run source builder wrapper = do
   removeFile replacement
   writeFile replacement "#!/bin/sh\necho replacement-ran\nexit 42\n"
   setFileMode replacement 0o700
-  largeNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "8G" native)
+  largeNative <- spawn (change "XM1_NATIVE_MEMORY_MAX" "6G" native)
   Admission largeNativeLines largeNativeSlot <- admission largeNative
   largeNativeWaiter <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "1G" native))
   largeNativeBlocked <- waiting largeNativeWaiter
@@ -167,15 +187,15 @@ run source builder wrapper = do
   release largeNativeWaiter
   largeNativeCode <- finish largeNative
   nativeDefaultCode <- finish largeNativeWaiter
-  largeNativeOk <- expect "explicit 8 GiB native RAM consumes the remaining RAM budget and a 1 GiB scope waits for it"
-    (largeNativeSlot /= Nothing && "probe-memory-max 8589934592" `elem` largeNativeLines
+  largeNativeOk <- expect "explicit 6 GiB native RAM consumes the RAM budget left beside a slot waiter's reservation and a 1 GiB scope waits for it"
+    (largeNativeSlot /= Nothing && "probe-memory-max 6442450944" `elem` largeNativeLines
       && "probe-memory-swap-max 8589934592" `elem` largeNativeLines && largeNativeBlocked
       && nativeDefaultSlot /= Nothing && "probe-memory-max 1073741824" `elem` nativeDefaultLines
       && largeNativeCode == Just ExitSuccess && nativeDefaultCode == Just ExitSuccess)
   let fourNative = change "XM1_NATIVE_MEMORY_MAX" "4G" native
   firstNative <- spawn fourNative
   firstSeen <- admission firstNative
-  secondNative <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "2G" native))
+  secondNative <- spawn (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "1G" native))
   secondSeen <- admission secondNative
   overlap <- expect "two native suites overlap four full-system scopes while a full-system waiter waits"
     (admitted firstSeen && admitted secondSeen && fifthWaiting)
@@ -483,7 +503,7 @@ run source builder wrapper = do
         pure (seen, code)
   (firstRepeat, firstRepeatCode) <- repeatRun
   (secondRepeat, secondRepeatCode) <- repeatRun
-  repeatOk <- expect "a run label's first scope reserves its RAM cap as MemoryHigh and a repeat reserves 1.25 times the recorded peak in whole tokens"
+  repeatOk <- expect "a run label's first scope reserves its class estimate up to its RAM cap as MemoryHigh and a repeat reserves 1.25 times the recorded peak in whole tokens"
     (observedText "probe-memory-high " firstRepeat == Just "2147483648"
       && observedText "probe-memory-high " secondRepeat == Just "268435456"
       && observedText "probe-memory-max " secondRepeat == Just "2147483648"
@@ -567,7 +587,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and (concat requestedSlots) && and [nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, repeatOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and (concat requestedSlots) && and [slotlessWait, nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, repeatOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
