@@ -40,10 +40,7 @@ pub unsafe fn xm1_first_stage_fixed_image_load() -> Result<(), LoadError> {
     if length > BLOCK_BYTES {
         media::read_units(RECORD_FLASH + BLOCK_BYTES, IMAGE_BASE + BLOCK_BYTES, (length - 1) / BLOCK_BYTES).map_err(LoadError::Media)?;
     }
-    let mut crc = 0xffff_ffffu32;
-    for offset in HEADER_BYTES..length {
-        crc = fixed_crc::update(crc, read_volatile(((IMAGE_BASE | 0x4000_0000) + offset) as *const u8));
-    }
+    let crc = fixed_crc::update_range(0xffff_ffff, ((IMAGE_BASE | 0x4000_0000) + HEADER_BYTES) as usize, (length - HEADER_BYTES) as usize);
     if !crc != header(3) {
         return Err(LoadError::Integrity);
     }

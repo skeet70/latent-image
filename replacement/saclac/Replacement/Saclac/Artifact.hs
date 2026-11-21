@@ -263,7 +263,7 @@ taskStackRuntime :: Retained
 taskStackRuntime = Retained "__saclac_runtime_stack_words" 0x40a5b354
 
 taskStackBytes, taskCreateSite, taskCreateWord :: Word32
-taskStackBytes = 0x10000
+taskStackBytes = 0xb000
 taskCreateSite = 0xef8d1c
 taskCreateWord = 0xebe0b42d
 

@@ -75,3 +75,64 @@ fn resumed_input_rebases_history_into_the_same_buffer_the_calc_actor_reads() {
     machine.set_word(calculation::INPUT + 0x3c, u32::from_le_bytes([5, 8, 4, 7]));
     assert_eq!((state.exposure_columns(), state.exposure_rows()), (5, 8));
 }
+
+fn pattern(machine: &Fake, at: u32, bytes: u32) {
+    for offset in 0..bytes { machine.set_byte(at + offset, (offset * 7 + 3) as u8); }
+}
+
+fn bytes(machine: &Fake, at: u32, count: u32) -> Vec<u8> { (0..count).map(|offset| machine.byte(at + offset)).collect() }
+
+/// The bytes an ascending one-byte-at-a-time copy leaves at the destination.
+fn ascending_copy(machine: &Fake, to: u32, from: u32, count: u32) -> Vec<u8> {
+    let mut memory: std::collections::BTreeMap<u32, u8> = (0..count).map(|offset| (from + offset, machine.byte(from + offset))).collect();
+    for offset in 0..count {
+        let byte = memory.get(&(from + offset)).copied().unwrap_or_else(|| machine.byte(from + offset));
+        memory.insert(to + offset, byte);
+    }
+    (0..count).map(|offset| memory[&(to + offset)]).collect()
+}
+
+#[test]
+fn copy_between_plain_words_moves_every_byte() {
+    let machine = Fake::default();
+    let context = RefCell::new(ExposureContext::default());
+    let mut memory = ShotMemory(machine.clone(), &context);
+    pattern(&machine, layout::INPUT.get(), calculation::INPUT_BYTES as u32);
+    let expected = bytes(&machine, layout::INPUT.get(), calculation::INPUT_BYTES as u32);
+    memory.copy(layout::SAVED_INPUT, layout::INPUT, calculation::INPUT_BYTES);
+    assert_eq!(bytes(&machine, layout::SAVED_INPUT.get(), calculation::INPUT_BYTES as u32), expected);
+    memory.copy(layout::RETURN_ACTIVE, layout::SAVED_INPUT, 7);
+    let mut tail = expected[..7].to_vec();
+    tail.push(0);
+    assert_eq!(bytes(&machine, layout::RETURN_ACTIVE.get(), 8), tail);
+}
+
+#[test]
+fn copy_reads_and_writes_mapped_context_words() {
+    let machine = Fake::default();
+    let context = RefCell::new(ExposureContext::default());
+    context.borrow_mut().levels.curve = 0x1234_5678;
+    context.borrow_mut().levels.unmeasured = true;
+    let mut memory = ShotMemory(machine.clone(), &context);
+    memory.copy(layout::SAVED_INPUT, layout::EXPOSURE_TARGET_WORD, 8);
+    assert_eq!((machine.word(layout::SAVED_INPUT.get()), machine.word(layout::SAVED_INPUT.get() + 4)), (0x1234_5678, 1));
+    machine.set_word(layout::SAVED_INPUT.get(), 0x0bad_cafe);
+    machine.set_word(layout::SAVED_INPUT.get() + 4, 0);
+    memory.copy(layout::EXPOSURE_TARGET_WORD, layout::SAVED_INPUT, 8);
+    assert_eq!((context.borrow().levels.curve, context.borrow().levels.unmeasured), (0x0bad_cafe, false));
+    assert_eq!(machine.word(layout::EXPOSURE_TARGET_WORD.get()), 0);
+}
+
+#[test]
+fn overlapping_and_unaligned_copies_keep_ascending_byte_order() {
+    let machine = Fake::default();
+    let context = RefCell::new(ExposureContext::default());
+    let mut memory = ShotMemory(machine.clone(), &context);
+    let input = layout::INPUT.get();
+    for (to, from, count) in [(layout::EXPOSURE_COLUMNS, layout::INPUT, 0x40), (layout::INPUT, layout::EXPOSURE_COLUMNS, 0x40), (layout::SAVED_INPUT, layout::EXPOSURE_ROWS, 5)] {
+        pattern(&machine, input, calculation::INPUT_BYTES as u32);
+        let expected = ascending_copy(&machine, to.get(), from.get(), count);
+        memory.copy(to, from, count as usize);
+        assert_eq!(bytes(&machine, to.get(), count), expected, "{:#x} <- {:#x}", to.get(), from.get());
+    }
+}

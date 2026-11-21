@@ -5,7 +5,7 @@
   "rows": [
     {
       "id": "saclac-01",
-      "shim": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00a9f560`; unused retired extent bytes carry trap word `0xe7f000f0`",
+      "shim": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00a9e940`; unused retired extent bytes carry trap word `0xe7f000f0`",
       "kind": "veneer or carrier at a stock address",
       "other_side": "retained row-function callers, task constructor and nested stock action calls",
       "owned": "no",
@@ -21,7 +21,7 @@
             "xm1_saclac_driver_entry"
           ],
           "contract": "replacement/saclac/saclac.ld",
-          "requirement": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00a9f560`; unused retired extent bytes carry trap word `0xe7f000f0`. retained row-function callers, task constructor and nested stock action calls. every machine and retained entry caller is owned. Caller closure, direct owned API use and same-image comparison remain unestablished."
+          "requirement": "three four-byte image-5 veneers at `0xefca6c`, `0xefcb88` and `0xf01bc8`, with bodies in the shared fixed image beginning at `0x00a9e940`; unused retired extent bytes carry trap word `0xe7f000f0`. retained row-function callers, task constructor and nested stock action calls. every machine and retained entry caller is owned. Caller closure, direct owned API use and same-image comparison remain unestablished."
         },
         {
           "image": "//replacement/saclac:saclac-image",

@@ -200,7 +200,7 @@ stackEntryTests carriers admitted = do
       names = map fst manifest
   check "each bank entry is named once" (all (\name -> length (filter (== name) names) == 1) names)
   check "Root's task entries take task43's owned budget"
-    (all (\name -> budget name == Just 61440) ["xm1_saclac_dispatch", "xm1_saclac_router", "xm1_saclac_driver"])
+    (all (\name -> budget name == Just 40960) ["xm1_saclac_dispatch", "xm1_saclac_router", "xm1_saclac_driver"])
   check "the constructor and the loading task take their stock-created stacks' owned budgets"
     (budget "xm1_saclac_create_task" == Just 2688 && budget "xm1_loading_task" == Just 0xc00)
   check "the scanout entries take the unit budget" (budget "xm1_scanout_capture" == Just 2048 && budget "xm1_scanout_commit_one" == Just 2048)

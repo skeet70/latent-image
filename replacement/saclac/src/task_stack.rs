@@ -4,7 +4,7 @@ use core::{ptr::{addr_of_mut, read_volatile, write_volatile}, sync::atomic::{Ato
 
 const TASK: u32 = 43;
 const STOCK_STACK_BYTES: u32 = 0x1000;
-pub const STACK_BYTES: u32 = 0x10000;
+pub const STACK_BYTES: u32 = 0xb000;
 const HEAP_START: u32 = 0xa71a00;
 const ALLOCATING: u32 = 1;
 static STACK: AtomicU32 = AtomicU32::new(0);

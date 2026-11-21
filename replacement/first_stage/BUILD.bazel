@@ -94,10 +94,19 @@ xm1_rust_elf(
 genrule(
     name = "media-model-tests",
     testonly = True,
-    srcs = ["model.rs", "media.rs", "images.rs", "format.rs", "engine.rs", "fixed_crc.rs", "stock_core_init_addresses.rs"],
+    srcs = ["model.rs", "media.rs", "images.rs", "format.rs", "engine.rs", "stock_core_init_addresses.rs"],
     outs = ["media-model-tests-bin", "media-model-tests.passed"],
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location model.rs) -o $(@D)/media-model-tests-bin && $(@D)/media-model-tests-bin && touch $(@D)/media-model-tests.passed",
+)
+
+genrule(
+    name = "fixed-crc-tests",
+    testonly = True,
+    srcs = ["fixed_crc.rs", "fixed_crc_tests.rs", "//replacement/saclac:saclac-image.elf"],
+    outs = ["fixed-body.bin", "fixed-crc-tests-bin", "fixed-crc-tests.passed"],
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang", "//replacement/file_service:file-service-stage"],
+    cmd = "$(location //replacement/file_service:file-service-stage) body $(location //replacement/saclac:saclac-image.elf) $(location fixed-body.bin) > /dev/null && $(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location fixed_crc_tests.rs) -o $(location fixed-crc-tests-bin) && XM1_FIXED_BODY=$(location fixed-body.bin) $(location fixed-crc-tests-bin) && touch $(location fixed-crc-tests.passed)",
 )
 
 genrule(

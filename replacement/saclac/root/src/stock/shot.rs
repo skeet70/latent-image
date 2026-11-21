@@ -9,6 +9,25 @@ use xm1_saclac_shared::stock::Machine;
 /// wire buffer the external calc actor reads; no typed input copy persists in ExposureContext.
 pub struct ShotMemory<'a, M>(pub M, pub &'a RefCell<ExposureContext>);
 
+/// The exposure context bytes reads and writes go through `context_word` or are refused, except `INPUT`.
+const CONTEXT_END: u32 = EXPOSURE_CONTEXT + 0x126c;
+
+/// Machine words from word-aligned `address` to the next exposure-context word `copy` cannot move directly.
+#[inline(never)]
+fn plain_words(address: u32) -> usize {
+    let input_end = INPUT + INPUT_BYTES as u32;
+    let end = if address < EXPOSURE_CONTEXT {
+        u64::from(EXPOSURE_CONTEXT)
+    } else if (INPUT..input_end).contains(&address) {
+        u64::from(input_end)
+    } else if address >= CONTEXT_END {
+        1 << 32
+    } else {
+        return 0;
+    };
+    ((end - u64::from(address)) / 4) as usize
+}
+
 fn context_word(context: &ExposureContext, address: u32) -> Option<u32> {
     Some(match address.checked_sub(EXPOSURE_CONTEXT)? {
         0x04 => context.binding.mode,
@@ -58,7 +77,7 @@ impl<M: Machine> ShotMemory<'_, M> {
                 into[..width].copy_from_slice(&value.to_le_bytes()[offset..offset + width]);
                 width
             } else {
-                assert!(!(EXPOSURE_CONTEXT..EXPOSURE_CONTEXT + 0x126c).contains(&address) || (INPUT..INPUT + INPUT_BYTES as u32).contains(&address), "unmapped canonical exposure read");
+                assert!(!(EXPOSURE_CONTEXT..CONTEXT_END).contains(&address) || (INPUT..INPUT + INPUT_BYTES as u32).contains(&address), "unmapped canonical exposure read");
                 let width = if address & 3 == 0 && into.len() >= 4 { 4 } else if address & 1 == 0 && into.len() >= 2 { 2 } else { 1 };
                 let value = match width {
                     4 => self.0.read_u32(address),
@@ -87,7 +106,7 @@ impl<M: Machine> ShotMemory<'_, M> {
                 set_context_word(&mut context, aligned, u32::from_le_bytes(word));
                 width
             } else {
-                assert!(!(EXPOSURE_CONTEXT..EXPOSURE_CONTEXT + 0x126c).contains(&address) || (INPUT..INPUT + INPUT_BYTES as u32).contains(&address), "unmapped canonical exposure write");
+                assert!(!(EXPOSURE_CONTEXT..CONTEXT_END).contains(&address) || (INPUT..INPUT + INPUT_BYTES as u32).contains(&address), "unmapped canonical exposure write");
                 let width = if address & 3 == 0 && bytes.len() >= 4 { 4 } else if address & 1 == 0 && bytes.len() >= 2 { 2 } else { 1 };
                 match width {
                     4 => self.0.write_u32(address, u32::from_le_bytes(bytes[..4].try_into().expect("state word"))),
@@ -108,14 +127,26 @@ impl<M: Machine> StateMemory for ShotMemory<'_, M> {
     fn write(&mut self, at: StateAddress, bytes: &[u8]) { self.write_at(at.get(), bytes); }
 
     fn copy(&mut self, to: StateAddress, from: StateAddress, bytes: usize) {
-        let overlaps_forward = to.get() > from.get() && u64::from(to.get()) < u64::from(from.get()) + bytes as u64;
+        let (to, from) = (to.get(), from.get());
+        let overlaps_forward = to > from && u64::from(to) < u64::from(from) + bytes as u64;
+        let words_move = !overlaps_forward && (to | from) & 3 == 0;
         let mut offset = 0;
         while offset < bytes {
+            let (source, destination) = (from + offset as u32, to + offset as u32);
+            let run = if words_move { plain_words(source).min(plain_words(destination)).min((bytes - offset) / 4) } else { 0 };
+            if run != 0 {
+                for word in 0..run as u32 {
+                    let value = self.0.read_u32(source + 4 * word);
+                    self.0.write_u32(destination + 4 * word, value);
+                }
+                offset += 4 * run;
+                continue;
+            }
             // Preserve ascending byte-copy semantics when the destination overlaps ahead.
             let width = if overlaps_forward { 1 } else { (bytes - offset).min(4) };
             let mut buffer = [0; 4];
-            self.read_at(from.get() + offset as u32, &mut buffer[..width]);
-            self.write_at(to.get() + offset as u32, &buffer[..width]);
+            self.read_at(source, &mut buffer[..width]);
+            self.write_at(destination, &buffer[..width]);
             offset += width;
         }
     }

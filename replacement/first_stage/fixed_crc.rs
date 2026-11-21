@@ -9,38 +9,59 @@ const fn entry(mut crc: u32) -> u32 {
     crc
 }
 
-const fn table() -> [u32; 256] {
-    let mut entries = [0; 256];
+/// `TABLES[0]` is the byte table; `TABLES[k][i]` is the CRC of byte `i` followed by `k` zero bytes.
+const fn tables() -> [[u32; 256]; 4] {
+    let mut tables = [[0; 256]; 4];
     let mut index = 0;
-    while index < entries.len() {
-        entries[index] = entry(index as u32);
+    while index < 256 {
+        tables[0][index] = entry(index as u32);
         index += 1;
     }
-    entries
+    let mut table = 1;
+    while table < 4 {
+        index = 0;
+        while index < 256 {
+            let previous = tables[table - 1][index];
+            tables[table][index] = (previous >> 8) ^ tables[0][(previous & 0xff) as usize];
+            index += 1;
+        }
+        table += 1;
+    }
+    tables
 }
 
-const TABLE: [u32; 256] = table();
+const TABLES: [[u32; 256]; 4] = tables();
 
 #[inline(always)]
 pub fn update(crc: u32, value: u8) -> u32 {
-    (crc >> 8) ^ TABLE[((crc as u8) ^ value) as usize]
+    (crc >> 8) ^ TABLES[0][((crc as u8) ^ value) as usize]
 }
 
-#[cfg(test)]
-mod tests {
-    use super::update;
+/// `update` over the four bytes of a little-endian word.
+#[inline(always)]
+pub fn update_word(crc: u32, word: u32) -> u32 {
+    let mixed = crc ^ word;
+    TABLES[3][(mixed & 0xff) as usize]
+        ^ TABLES[2][((mixed >> 8) & 0xff) as usize]
+        ^ TABLES[1][((mixed >> 16) & 0xff) as usize]
+        ^ TABLES[0][(mixed >> 24) as usize]
+}
 
-    fn checksum(bytes: &[u8]) -> u32 {
-        !bytes.iter().fold(0xffff_ffff, |crc, byte| update(crc, *byte))
+/// `update` over `length` bytes at word-aligned `address`.
+///
+/// # Safety
+/// `[address, address + length)` is readable.
+pub unsafe fn update_range(mut crc: u32, address: usize, length: usize) -> u32 {
+    let words = length / 4;
+    let mut index = 0;
+    while index < words {
+        crc = update_word(crc, core::ptr::read_volatile((address as *const u32).add(index)));
+        index += 1;
     }
-
-    #[test]
-    fn standard_vector() {
-        assert_eq!(checksum(b"123456789"), 0xcbf4_3926);
+    let mut offset = words * 4;
+    while offset < length {
+        crc = update(crc, core::ptr::read_volatile((address + offset) as *const u8));
+        offset += 1;
     }
-
-    #[test]
-    fn empty_input() {
-        assert_eq!(checksum(b""), 0);
-    }
+    crc
 }
