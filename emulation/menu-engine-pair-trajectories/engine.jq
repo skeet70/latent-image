@@ -75,6 +75,8 @@ def frame_sites: if frame_enabled then [
 # and EGL entries VGLIB's render 0x6d724c calls, with the arrays their pointer arguments name, and the vector-engine
 # job boundary: each 104-byte payload at graphics_send_resource_signal 0x892054 and its result at 0x8920ac, each
 # 112-byte command task 72 dispatches at 0x8929f4, and the interrupt status 0x992934 when 0x892718 wakes.
+# `vg-geometry-request` is vgc_submit_thread_request's send 0x85560c: its payload and the 32-byte geometry
+# request whose heap address the payload carries at +0x2c.
 def submission_enabled: $ARGS.named.submission == true;
 def register_read($register; $bytes): {"register": $register, "offset": 0, "bytes": $bytes};
 def submission_sites: if submission_enabled then [
@@ -98,6 +100,7 @@ def submission_sites: if submission_enabled then [
   ["0088d620", "egl-copy-buffers"],
   ["00887280", "egl-get-error"],
   ["00892054", "vg-job-submit", {"reads": [register_read(0; 104)]}],
+  ["0085560c", "vg-geometry-request", {"reads": [register_read(0; 104), {"register": 0, "offset": 44, "bytes": 32, "indirect": true}]}],
   ["008920ac", "vg-job-submit-return"],
   ["008929f4", "vg-job-dispatch", {"reads": [register_read(0; 112)]}],
   ["00892728", "vg-job-completion", {"reads": [["00992934", 4]]}]

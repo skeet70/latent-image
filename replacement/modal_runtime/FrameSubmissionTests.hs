@@ -44,6 +44,17 @@ dispatch core kind = hit "vg-job-dispatch" core (0, 0, 0, 0) [B.pack (kind : rep
 phase :: [Hit] -> PhaseSubmission
 phase hits = either error id (phaseSubmission "picker-route" hits)
 
+-- | An opcode-0xc payload naming the geometry request at `address`.
+threadPayload :: Word32 -> B.ByteString
+threadPayload address = B.pack (le32 1 ++ le32 0xc ++ le32 0x49 ++ le32 0x49 ++ replicate 28 0 ++ le32 address ++ replicate 56 0)
+
+-- | vgc_submit_thread_request's send with the request bytes, then the job's submission and dispatch.
+geometryJob :: Word32 -> Word8 -> Integer -> [Hit]
+geometryJob address fill at =
+  [ hit "vg-geometry-request" 0 (0, 0, 0, 0) [threadPayload address, B.replicate 32 fill] at
+  , hit "vg-job-submit" 0 (0, 1, 0, 0) [threadPayload address] (at + 1)
+  , hit "vg-job-dispatch" 1 (0, 0, 0, 0) [threadPayload address <> B.pack (le32 0x47 ++ le32 0x47)] (at + 2) ]
+
 main :: IO ()
 main = do
   let stock = phase [entry (Just 0) 100, translate 1 110, scissor 0x9000 [1, 2, 3, 4] 120, dispatch 1 3 130, leave (Just 0) 400]
@@ -73,6 +84,12 @@ main = do
         , ("a dash pattern compares only its counted floats",
             compareSubmission [phase [hit "vg-set-vector" 0 (0x1114, 1, 0, 0) [B.pack (1 : replicate 31 0)] 1]]
                               [phase [hit "vg-set-vector" 0 (0x1114, 1, 0, 0) [B.pack ([1, 0, 0, 0] ++ replicate 28 9)] 1]] == Right Nothing)
+        , ("opcode-0xc jobs compare the geometry request they name, not its heap address",
+            compareSubmission [phase (geometryJob 0x00aa8100 5 1)] [phase (geometryJob 0x00af8168 5 1)] == Right Nothing)
+        , ("a different geometry request differs",
+            fmap (fmap mismatchIndex) (compareSubmission [phase (geometryJob 0x00aa8100 5 1)] [phase (geometryJob 0x00aa8100 6 1)]) == Right (Just 0))
+        , ("an opcode-0xc job without its geometry request is refused",
+            either (const True) (const False) (phaseSubmission "p" (drop 1 (geometryJob 0x00aa8100 5 1))))
         ]
   failures <- fmap concat . mapM (\(name, ok) -> if ok then pure [] else putStrLn ("FAIL: " ++ name) >> pure [name]) $ checks
   putStrLn (show (length checks - length failures) ++ " of " ++ show (length checks) ++ " frame submission checks passed")

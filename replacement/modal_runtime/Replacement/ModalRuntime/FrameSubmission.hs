@@ -140,6 +140,37 @@ frameInstructions frame = case (frameEntry frame, frameReturn frame) of
 
 data Open = Open { openRecord :: Maybe FrameRecord, openEntry :: Maybe InstructionCounter, openCalls :: [Operation], openEngine :: [Operation] }
 
+-- | The one declared normalization. `vgc_geometry_allocate_buffers` allocates a zeroed 32-byte request from the
+-- graphics heap, fills it and passes its address to `vgc_submit_thread_request` (`I4:82adf8-82ae84`), which sends
+-- a payload with flags 1 at +0, opcode 0xc at +4 and that address at +0x2c (`I4:8555f4-85560c`); the engine
+-- writes its results into the request, which the caller reads back (`I4:82ae8c-82aea0`). The heap address
+-- differs between roles, so an opcode-0xc payload or command is compared with the word at +0x2c replaced by the
+-- 32 bytes `vg-geometry-request` read through it at the send.
+geometryRequestHeader :: B.ByteString
+geometryRequestHeader = B.pack [1, 0, 0, 0, 0xc, 0, 0, 0]
+
+geometryRequestOffset :: Int
+geometryRequestOffset = 0x2c
+
+-- | The address word and the request bytes of a `vg-geometry-request` hit.
+geometryRequest :: Hit -> Either String (Word32, B.ByteString)
+geometryRequest hit = case hitMemory hit of
+  [payload, request] | B.length payload == 104, B.take 8 payload == geometryRequestHeader, B.length request == 32 ->
+    Right (payloadWord payload, request)
+  _ -> Left "vg-geometry-request lacks its opcode-0xc payload and 32-byte request reads"
+
+payloadWord :: B.ByteString -> Word32
+payloadWord payload = foldr (\byte word -> word * 256 + fromIntegral byte) 0 (B.unpack (B.take 4 (B.drop geometryRequestOffset payload)))
+
+-- | An opcode-0xc job submission or dispatch with its request address replaced by the request's bytes.
+resolveGeometry :: M.Map Word32 B.ByteString -> Operation -> Either String Operation
+resolveGeometry requests submitted@(Operation site values bytes)
+  | site `elem` [JobSubmit, JobDispatch] && B.take 8 bytes == geometryRequestHeader =
+      case M.lookup (payloadWord bytes) requests of
+        Just request -> Right (Operation site values (B.take geometryRequestOffset bytes <> request <> B.drop (geometryRequestOffset + 4) bytes))
+        Nothing -> Left (T.unpack (siteLabel site) ++ ": opcode-0xc job without its vg-geometry-request")
+  | otherwise = Right submitted
+
 label :: Hit -> T.Text
 label hit = case hitSite hit of
   OtherSite text -> text
@@ -156,17 +187,17 @@ frameRecordRead hit = case hitMemory hit of
 -- | One observation's frames in recording order, and its submitted work outside every frame step.
 phaseSubmission :: T.Text -> [Hit] -> Either String PhaseSubmission
 phaseSubmission phase hits = do
-  (open, frames, outsideCalls, outsideEngine) <- foldM step (M.empty, [], [], []) hits
+  (open, frames, outsideCalls, outsideEngine, _) <- foldM step (M.empty, [], [], [], M.empty) hits
   unless (M.null open) (Left (T.unpack phase ++ ": frame step without its dispatcher return"))
   pure (PhaseSubmission phase (reverse frames) (reverse outsideCalls) (reverse outsideEngine))
  where
-  step (open, frames, calls, engine) hit = let core = hitCore hit in case label hit of
+  step (open, frames, calls, engine, requests) hit = let core = hitCore hit in case label hit of
     "frame-step-entry" -> do
       when (M.member core open) (Left (T.unpack phase ++ ": nested frame step"))
       record <- frameRecordRead hit
-      pure (M.insert core (Open record (hitInstructions hit) [] []) open, frames, calls, engine)
+      pure (M.insert core (Open record (hitInstructions hit) [] []) open, frames, calls, engine, requests)
     "frame-dispatch-return" -> case M.lookup core open of
-      Nothing -> pure (open, frames, calls, engine)
+      Nothing -> pure (open, frames, calls, engine, requests)
       Just current -> do
         after <- frameRecordRead hit
         path <- case (openRecord current, after) of
@@ -176,18 +207,21 @@ phaseSubmission phase hits = do
             | otherwise -> Left "owned frame count changed by more than one in a step"
           _ -> Right StockStep
         let frame = SubmittedFrame path (reverse (openCalls current)) (reverse (openEngine current)) (openEntry current) (hitInstructions hit)
-        pure (M.delete core open, frame : frames, calls, engine)
+        pure (M.delete core open, frame : frames, calls, engine, requests)
+    "vg-geometry-request" -> do
+      (address, request) <- either (Left . ((T.unpack phase ++ ": ") ++)) Right (geometryRequest hit)
+      pure (open, frames, calls, engine, M.insert address request requests)
     text -> case submissionSite text of
-      Nothing -> pure (open, frames, calls, engine)
+      Nothing -> pure (open, frames, calls, engine, requests)
       Just site -> do
-        submitted <- either (Left . ((T.unpack phase ++ ": ") ++)) Right (operation site hit)
+        submitted <- either (Left . ((T.unpack phase ++ ": ") ++)) Right (operation site hit >>= resolveGeometry requests)
         case stream site of
           CallStream -> case M.lookup core open of
-            Just current -> pure (M.insert core current { openCalls = submitted : openCalls current } open, frames, calls, engine)
-            Nothing -> pure (open, frames, submitted : calls, engine)
+            Just current -> pure (M.insert core current { openCalls = submitted : openCalls current } open, frames, calls, engine, requests)
+            Nothing -> pure (open, frames, submitted : calls, engine, requests)
           EngineStream -> case M.toList open of
-            [(owner, current)] -> pure (M.insert owner current { openEngine = submitted : openEngine current } open, frames, calls, engine)
-            [] -> pure (open, frames, calls, submitted : engine)
+            [(owner, current)] -> pure (M.insert owner current { openEngine = submitted : openEngine current } open, frames, calls, engine, requests)
+            [] -> pure (open, frames, calls, submitted : engine, requests)
             _ -> Left (T.unpack phase ++ ": engine work while frame steps are open on both cores")
 
 -- | The first difference between the roles: phase, frame index (absent outside frame steps), stream, operation
