@@ -71,6 +71,7 @@ kernelObservation order =
     , nativeInstructions = InstructionCount 1
     , nativeEngineError = EngineError 0
     , nativeKernel = Just (KernelObservation (Just order) Nothing Nothing Nothing)
+    , nativeCoverage = Nothing
     }
 
 write :: Word32 -> Word32 -> Ordered

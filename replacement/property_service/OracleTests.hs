@@ -279,6 +279,7 @@ observation instructions status overrides provenance = NativeObservation
   , nativeInstructions = InstructionCount (fromIntegral instructions)
   , nativeEngineError = EngineError 0
   , nativeKernel = Nothing
+  , nativeCoverage = Nothing
   }
 
 report :: [Value] -> Value

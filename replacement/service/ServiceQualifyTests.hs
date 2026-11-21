@@ -197,6 +197,7 @@ goodObservation =
     , N.nativeInstructions = N.InstructionCount 100
     , N.nativeEngineError = N.EngineError 0
     , N.nativeKernel = Nothing
+    , N.nativeCoverage = Nothing
     }
   where
     stackBytes =

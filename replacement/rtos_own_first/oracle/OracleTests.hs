@@ -94,6 +94,7 @@ observation overrides callerFrame writes =
     , nativeInstructions = InstructionCount 1
     , nativeEngineError = EngineError 0
     , nativeKernel = Nothing
+    , nativeCoverage = Nothing
     }
 
 runFrom :: [(Register, Word32)] -> B.ByteString -> [WriteEvent] -> Either String Run

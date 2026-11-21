@@ -72,6 +72,7 @@ modelObservation c =
     , nativeInstructions = InstructionCount 1
     , nativeEngineError = EngineError 0
     , nativeKernel = Nothing
+    , nativeCoverage = Nothing
     }
   where
     expected = model hardware c

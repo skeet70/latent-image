@@ -335,6 +335,7 @@ main = do
         , Observation.nativeInstructions = Observation.InstructionCount 1
         , Observation.nativeEngineError = Observation.EngineError 0
         , Observation.nativeKernel = Nothing
+        , Observation.nativeCoverage = Nothing
         }
       different = baseline {Observation.nativeMemory = [(identifier,if identifier == Observation.RegionId "results" then B.singleton 1 <> B.drop 1 bytes else bytes) | (identifier,bytes) <- Observation.nativeMemory baseline]}
       witness reference subject = Custom.CustomControlWitness (CaseId "control-case")
