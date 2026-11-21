@@ -1,26 +1,31 @@
 {-# LANGUAGE GHC2021 #-}
 
--- | Serialized GVFF field evidence. This module does not establish admission.
+-- | Serialized GVFF field evidence and the closure of fields whose word lands in the retired
+-- setter's dispatch table. This module does not establish admission.
 module Replacement.PropertyService.RetainedGvff
   ( GvffFieldMap
   , GvffFieldRole (..)
   , GvffField (..)
   , GvffUnclosedPremise (..)
   , deriveGvffFieldMap
+  , gvffClosures
   , gvffFieldAt
   , gvffUnclosedPremises
   ) where
 
 import Control.Monad (foldM, guard, unless)
-import Data.Bits (shiftL, (.&.), (.|.))
+import Data.Bits (rotateR, shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map.Strict as M
+import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import Replacement.PropertyService.Classify (GuestAddress (..))
-import ServiceInventory (Image (..))
+import Replacement.PropertyService.Placement (ScanImage (..))
+import Replacement.PropertyService.RetainedClosure (ClosedRole (..), ClosedSite (..), imageFor)
+import ServiceInventory (Image (..), imageWord)
 
 -- | Neither field is loaded by 0x6da610..0x6dad8c.
 data GvffFieldRole = ReservedHeader04 | ReservedHeader24
@@ -46,6 +51,36 @@ gvffUnclosedPremises _ =
 
 gvffFieldAt :: GvffFieldMap -> GuestAddress -> Maybe GvffField
 gvffFieldAt (GvffFieldMap fields) site = M.lookup site fields
+
+-- | Every field word is 0x00624909: byte 1 of entry 143 of the table at 0x6246cc, which the
+-- setter body's `ldrls pc, [pc, r3, lsl #2]` at 0x6246c4 reads as aligned words only, after
+-- `cmp r3, #n` and before an unconditional `b` that keeps execution out of the table.
+gvffClosures :: [(ScanImage, Image)] -> [ClosedSite]
+gvffClosures images = fromMaybe [] $ do
+  image2 <- imageFor ScanImage2 images
+  image4 <- imageFor ScanImage4 images
+  plain <- imageFor ScanPlain images
+  loader <- imageFor ScanLoaderA images
+  GvffFieldMap fields <- deriveGvffFieldMap image2 image4 plain loader
+  (tableStart, tableEnd) <- setterDispatchTable image4
+  pure
+    [ ClosedSite ScanImage2 site word UnalignedTableTarget
+    | (site, GvffField _ word) <- M.toList fields
+    , word .&. 3 /= 0
+    , word > tableStart
+    , word < tableEnd
+    ]
+
+setterDispatchTable :: Image -> Maybe (Word32, Word32)
+setterDispatchTable image4 = do
+  compare' <- imageWord image4 0x6246c0
+  load <- imageWord image4 0x6246c4
+  skip <- imageWord image4 0x6246c8
+  guard (compare' .&. 0xfffff000 == 0xe3530000)
+  guard (load == 0x979ff103)
+  guard (skip .&. 0xff000000 == 0xea000000)
+  let entries = 1 + (compare' .&. 0xff) `rotateR` fromIntegral (2 * ((compare' `shiftR` 8) .&. 0xf))
+  pure (0x6246cc, 0x6246cc + 4 * entries)
 
 newtype Cursor = Cursor Integer deriving (Eq, Ord)
 newtype ByteCount = ByteCount Integer

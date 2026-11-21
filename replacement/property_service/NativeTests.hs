@@ -22,7 +22,7 @@ import Replacement.PropertyService.Artifact
 import Replacement.PropertyService.Classify
 import Replacement.PropertyService.Encoding (EncodedTables (..), EncodingError (..), encodeTables)
 import Replacement.PropertyService.Placement
-import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence (..), retiredReferences)
+import Replacement.PropertyService.PlacementNative (RetainedFieldEvidence (..), keptWords, retainedDependencies, retainedFieldEvidence, retiredReferences)
 import Replacement.PropertyService.RetainedGvff (GvffUnclosedPremise (..))
 import ServiceInventory (Image (..))
 import System.Environment (getArgs)
@@ -179,7 +179,7 @@ placementTests :: [Property] -> LinkedArtifact -> IO ()
 placementTests properties artifact = do
   let stock = syntheticImage4 properties
       image bytes = Image "image4" "" 0x61c400 bytes
-      stage bytes = stageNativePlacement properties (image bytes) artifact
+      stage bytes = stageNativePlacement S.empty properties (image bytes) artifact
       EntryAddresses (GuestAddress getter) (GuestAddress setter) = artifactEntries artifact
       changed address value = putWordAt 0x61c400 address value
   placement <- either (fail . show) pure (stage stock)
@@ -188,11 +188,12 @@ placementTests properties artifact = do
       word address = U.word32At staged (fromIntegral (address - 0x61c400))
   expect "owned public getter branch" (branchWord False 0x61e110 getter) (word 0x61e110)
   expect "owned public setter branch" (branchWord False 0x624694 setter) (word 0x624694)
-  expect "retired getter bytes are not reused" 0 (word 0x61e128)
-  expect "retired setter shared exit is not reused" 0 (word 0x630200)
+  expect "retired getter body is trapped" 0xe7f000f0 (word 0x61e128)
+  expect "retired setter body is trapped" 0xe7f000f0 (word 0x630200)
   expect "unaltered wrapper" 0 (word 0x6245f8)
-  expect "valid locally placed image" (Right ()) (validateLocalImage4 artifact stock staged)
-  let refusal label address value = expectRefusal label StagingRejected (validateLocalImage4 artifact stock (changed address value staged))
+  expect "stock word past the setter body" 0 (word 0x6309c4)
+  expect "valid locally placed image" (Right ()) (validateLocalImage4 S.empty artifact stock staged)
+  let refusal label address value = expectRefusal label StagingRejected (validateLocalImage4 S.empty artifact stock (changed address value staged))
   refusal "getter redirected" 0x61e110 (branchWord False 0x61e110 setter)
   refusal "setter redirected" 0x624694 (branchWord False 0x624694 getter)
   refusal "getter BL" 0x61e110 (branchWord True 0x61e110 getter)
@@ -200,6 +201,14 @@ placementTests properties artifact = do
   refusal "retained wrapper overwritten" 0x6245f8 1
   refusal "retired getter bytes changed" 0x624400 0xe12fff1e
   refusal "retired setter bytes changed" 0x630200 0xe12fff1e
+  let keptStock = changed 0x630060 0x00630062 stock
+      kept = S.singleton (GuestAddress 0x630060)
+  keptPlacement <- either (fail . show) pure (stageNativePlacement kept properties (image keptStock) artifact)
+  let keptStaged = placementBytes keptPlacement
+  expect "kept retired word stays stock" 0x00630062 (U.word32At keptStaged (fromIntegral (0x630060 - 0x61c400 :: Word32)))
+  expect "word after a kept word is trapped" 0xe7f000f0 (U.word32At keptStaged (fromIntegral (0x630064 - 0x61c400 :: Word32)))
+  expectRefusal "trapped kept word" StagingRejected (validateLocalImage4 kept artifact keptStock (changed 0x630060 0xe7f000f0 keptStaged))
+  expectRefusal "kept word without its dependency" StagingRejected (validateLocalImage4 S.empty artifact keptStock keptStaged)
   refusal "stock table changed" 0x61e12c 0x61eb40
   let referencedStock = changed 0x61c400 0x61eb40 stock
       hits = retiredReferences [(ScanImage4, Image "image4" "" 0x61c400 referencedStock)]
@@ -276,24 +285,49 @@ canonicalTests inputs paths = do
           expect "native readback identity" (Just (toJSON (SHA.sha256Hex (SHA.sha256 bytes)))) (KM.lookup "native_image4_sha256" identity)
         _ -> fail "native view identity is not an object"
       let hits = nativeRetiredReferences source
-      expect "strict canonical reference refusal" 188 (length hits)
+      expect "every canonical retired reference is closed or a named dependency" 0 (length hits)
+      expect "kept words are the retired words device-bound values coincide with"
+        (S.fromList (map GuestAddress [0x620004, 0x620060, 0x620154, 0x6207c8, 0x630060, 0x630064, 0x630168]))
+        (sourceKept source)
+      expect "native view keeps the stock word under a dependency" (U.word32At four (fromIntegral (0x630064 - 0x61c400 :: Word32))) (word 0x630064)
+      expect "native view traps the word after a kept word" 0xe7f000f0 (word 0x630068)
       let at label address hit = hitImage hit == label && hitSite hit == GuestAddress address
-          fields = sourceRetainedFieldEvidence source hits
           proved = [(ScanImage4,0x6a49ac),(ScanImage5,0xd96fac),(ScanImage5,0xee99e0),(ScanImage5,0xee9a2c),(ScanPlain,0x11126e0),(ScanPlain,0x1112764)]
       expect "six exact instruction encodings are not pointer fields" []
         [hit | hit <- hits, (hitImage hit,case hitSite hit of GuestAddress address -> address) `elem` proved]
-      expect "all GVFF findings remain diagnostic only" 93 (length fields)
-      expect "GVFF findings remain refused" True (all ((`elem` hits) . retainedFieldHit) fields)
-      expect "known GVFF alias and lifetime premises remain" True
-        (all (\field -> all (`elem` retainedFieldUnclosedPremises field) [Callback890facWriteClosure,LabelPayloadAliasClosure,ProductionFieldAndDispatchLifetime]) fields)
-      expect "FDL fields remain unproved" True
-        (all (\address -> any (at ScanImage3 address) hits) [0x3f8078,0x3f807c,0x3fadf0,0x3fb1e8,0x4031b8,0x3fb858])
-      expect "legacy entropy window cannot discharge a branch"
-        [ScanHit ScanPlain (GuestAddress 0x12ba48c) 0xcacdc8b4 (BranchInto (GuestAddress 0x62c764))]
+      expect "GVFF fields landing inside the setter dispatch table are not references" []
+        [hit | hit <- hits, hitImage hit == ScanImage2]
+      let withImage label change = [(name, if name == label then change image else image) | (name, image) <- sourceScanned source]
+          putImageWord address value image = image {imageBytes = putWordAt (imageBase image) address value (imageBytes image)}
+          alignedField = withImage ScanImage2 (putImageWord 0x137764 0x624908)
+          alignedHits = retiredReferences alignedField
+          alignedEvidence = retainedFieldEvidence alignedField alignedHits
+      expect "aligned GVFF field word stays refused with its premises" True
+        (any (\field -> at ScanImage2 0x137764 (retainedFieldHit field)
+            && all (`elem` retainedFieldUnclosedPremises field) [Callback890facWriteClosure,LabelPayloadAliasClosure,ProductionFieldAndDispatchLifetime]) alignedEvidence)
+      expect "changed setter dispatch withdraws the GVFF closure" True
+        (any (at ScanImage2 0x137764) (retiredReferences (withImage ScanImage4 (putImageWord 0x6246c4 0xe59ff103))))
+      expect "FDL format fields are not references" []
+        [hit | hit <- hits, hitImage hit == ScanImage3]
+      expect "WLAN firmware block bytes are not a branch" []
         [hit | hit <- hits, at ScanPlain 0x12ba48c hit]
       let changed = Image "image4" "" 0x61c400 (putWordAt 0x61c400 0x6a4918 0xe320f000 four)
       expect "changed retained function withdraws its instruction binding" True
         (any (at ScanImage4 0x6a49ac) (retiredReferences [(ScanImage4,changed)]))
+      let changedBlock = [(label, if label == ScanPlain then image {imageBytes = putWordAt (imageBase image) 0x12c0000 0 (imageBytes image)} else image) | (label, image) <- sourceScanned source]
+      expect "changed WLAN firmware block withdraws its closure" True
+        (any (at ScanPlain 0x12ba48c) (retiredReferences changedBlock))
+      let refusedAfter label address value (siteImage, site) = any (at siteImage site) (retiredReferences (withImage label (putImageWord address value)))
+      expect "changed imaging-config records withdraw their closures and dependencies" True
+        (refusedAfter ScanImage4 0x7c2e00 0 (ScanImage4, 0x7c3858) && refusedAfter ScanImage4 0x7c2e00 0 (ScanImage4, 0x7c5810))
+      expect "changed image-processor table withdraws its dependency" True
+        (refusedAfter ScanImage5 0x106f3e8 0 (ScanImage5, 0x10701c4))
+      expect "changed image-processor table keeps no word" False
+        (S.member (GuestAddress 0x630064) (keptWords (retainedDependencies (withImage ScanImage5 (putImageWord 0x106f3e8 0)))))
+      expect "changed log table withdraws its closure" True
+        (refusedAfter ScanImage5 0x101e134 0 (ScanImage5, 0x101e1bc))
+      expect "changed DFShaper blob withdraws its closure" True
+        (refusedAfter ScanPlain 0x1183610 0 (ScanPlain, 0x1183950))
     _ -> fail "canonical tests require seven input paths"
 
 admitImages :: [FilePath] -> IO ()

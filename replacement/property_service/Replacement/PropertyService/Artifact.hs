@@ -6,6 +6,7 @@ module Replacement.PropertyService.Artifact
   , ArtifactInput (..)
   , ArtifactPurpose (..)
   , StagedImage4
+  , RetirementAuthority (..)
   , NativeImage4View
   , StagedCandidate
   , StagedPlacement (..)
@@ -20,6 +21,7 @@ module Replacement.PropertyService.Artifact
   , sourceHull
   , sourceImage4
   , sourceScanned
+  , sourceKept
   , sourceRetainedFieldEvidence
   , deriveArtifact
   , derivePublicArtifact

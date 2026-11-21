@@ -1,23 +1,25 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | file-service-observe observe --role stock|owned --update DAT --image4 ID4 --run JSON
---     --boot-rom ROM --adjustment-nand NAND [--card IMG] --bridge BRIDGE --output NEW_DIR
+--     --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
 --   file-service-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the 29 file-service entries and
 -- the media task's request workers, a write watch over the result slot, mediamsg session and
 -- open set, and a fetch watch over the retired extents minus the entry veneer words. After
--- attach it presses PLAY and the playback route keys, idles a fixed budget after each, and
--- captures the screen.
+-- attach it presses the route keys (by default PLAY and the playback keys), idles a fixed budget
+-- after each, and captures the screen.
 --
 -- compare: the calls whose return address lies outside the retired extents and the owned body
 -- (`__fixed_body_start` to `__fixed_body_end` in OWNED_SYMBOLS) are the component's interface.
 -- Their ordered entries with arguments up to each owned entry's arity, returns with r0..r3
 -- except registers the stock entry clobbers or the caller does not read, worker entries with
--- r0..r3, state snapshots, the watched writes and the screens must be equal, and the owned role
--- must fetch nothing in the retired extents. Registers left out are reported, not compared.
--- Request payload bytes the stock posters leave undefined are masked in snapshots, request
--- reads and watched writes.
+-- r0..r3, the calls the component makes into the retained filesystem, path and media-state
+-- services (arguments and the bytes they point at, and r0 on return), state snapshots, the
+-- watched writes, the screens and the card's accepted writes, dirty sectors and final command
+-- history must be equal, and the owned role must fetch nothing in the retired extents.
+-- Registers left out are reported, not compared. Request payload bytes the stock posters leave
+-- undefined are masked in snapshots, request reads and watched writes.
 module Main (main) where
 
 import Control.Exception (SomeException, bracket, displayException, try)
@@ -40,6 +42,7 @@ import Data.Word (Word32, Word8)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import EmulatorUsb
 import Numeric (readHex, showHex)
+import Replacement.FileService.Payload (payloadDefined)
 import System.Directory (createDirectory, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
@@ -71,6 +74,7 @@ data Inputs = Inputs
   , inputCard :: Maybe FilePath
   , inputBridge :: FilePath
   , inputOutput :: FilePath
+  , inputRoute :: [CrawlKey]
   }
 
 entries :: [Entry]
@@ -89,15 +93,53 @@ entries =
       ]
   ]
 
+-- | The owned handle workers, traced as worker sites; their entry words are veneers.
+ownedWorkers :: [(Word32, String)]
+ownedWorkers =
+  [ (0x7115a4, "open_worker"), (0x7116e4, "write_worker"), (0x711768, "close_worker")
+  , (0x711840, "close_entry_worker"), (0x71eca4, "seek_worker"), (0x71f134, "release_worker")
+  ]
+
 retired :: [Span]
 retired =
   [ Span (Address s) (Address e)
   | (s, e) <-
-      [ (0x71bc2c, 0x71bcc8), (0x71be74, 0x71c504), (0x71c634, 0x71c81c), (0x71d450, 0x71d66c)
-      , (0x71ddf0, 0x71ded4), (0x71ea34, 0x71eba0), (0x71ef18, 0x71f078), (0x71fde4, 0x71fe2c)
-      , (0x71fe7c, 0x71ff3c), (0x721108, 0x721744), (0x7217f0, 0x721834)
+      [ (0x7115a4, 0x7118fc), (0x71bc2c, 0x71bcc8), (0x71be74, 0x71c504), (0x71c634, 0x71c81c)
+      , (0x71d450, 0x71d66c), (0x71ddf0, 0x71ded4), (0x71ea34, 0x71eba0), (0x71eca4, 0x71edbc)
+      , (0x71ef18, 0x71f078), (0x71f078, 0x71f418), (0x71fde4, 0x71fe2c), (0x71fe7c, 0x71ff3c)
+      , (0x721108, 0x721744), (0x7217f0, 0x721834)
       ]
   ]
+
+-- | The retained filesystem, path and media-state services the workers submit work to, and
+-- the pointed bytes each call's arguments name. Registers holding the caller's stack
+-- addresses are left out; their bytes are captured instead.
+data Backend = Backend {backendName :: String, backendArguments :: [T.Text], backendReads :: [Value]}
+
+backends :: [(Word32, Backend)]
+backends =
+  [ (0x701634, Backend "fs_open" ["r1", "r2", "r3"] [readSpec (register 0) 48])
+  , (0x6ff000, Backend "fs_write" ["r0", "r1", "r2"] [readSpec (register 1) 64])
+  , (0x6ff138, Backend "fs_seek" ["r0", "r1", "r2", "r3"] [readSpec (register 13) 4])
+  , (0x6ffff4, Backend "fs_close" ["r0"] [])
+  , (0x6ffdcc, Backend "fs_close_named" ["r0", "r1", "r2"] [readSpec (register 2) 20])
+  , (0x6ffb10, Backend "fs_close_entry" ["r0", "r1", "r2", "r3"] [readSpec (register 2) 20, readSpec (register 3) 12])
+  , (0x6ffc68, Backend "fs_release" ["r0"] [])
+  , (0x71e960, Backend "cache_claim" [] [])
+  , (0x71e9ec, Backend "cache_release" ["r0"] [])
+  , (0x71d66c, Backend "media_refresh" ["r0", "r1"] [])
+  , (0x71141c, Backend "after_written_close" ["r0"] [])
+  , (0x71985c, Backend "rescan" [] [])
+  , (0x71565c, Backend "register_written" ["r0"] [readSpec (register 1) 48])
+  , (0x7160b8, Backend "parse_path" ["r1"] [readSpec (register 1) 64])
+  , (0x715f0c, Backend "directory_slot" ["r0"] [])
+  , (0x71543c, Backend "split_path" ["r0"] [readSpec (register 13) 4])
+  , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
+  , (0x716184, Backend "make_directory" ["r0", "r1"] [])
+  ]
+
+backendCapture :: Backend -> Value
+backendCapture backend = object ["entry" .= backendReads backend, "returns" .= ([] :: [Value])]
 
 -- | The owned body's extent in the fixed image.
 readBody :: FilePath -> IO Span
@@ -116,9 +158,10 @@ image4Base, workerTable :: Word32
 image4Base = 0x61c400
 workerTable = 0x814740
 
--- | Playback opens DSCF3097 first; LEFT, LEFT, RIGHT, RIGHT then reads 3096, 3095, 3096, 3097.
-route :: [CrawlKey]
-route = [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]
+-- | The default route: playback opens DSCF3097 first; LEFT, LEFT, RIGHT, RIGHT then reads 3096,
+-- 3095, 3096, 3097.
+playbackRoute :: [CrawlKey]
+playbackRoute = [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]
 
 -- | The stock bridge session releases the power hold between 784M and 874M instructions after
 -- reset; attach is at about 399M and one playback file's open, reads and close finish within 13M.
@@ -139,7 +182,7 @@ inside (Span (Address s) (Address e)) a = s <= a && a < e
 fetchSpans :: [Span]
 fetchSpans = concatMap split retired
   where
-    veneers = [a | Entry (Address a) _ <- entries]
+    veneers = [a | Entry (Address a) _ <- entries] ++ map fst ownedWorkers
     split (Span (Address s) (Address e)) = go s (sort [v | v <- veneers, s <= v, v < e])
       where
         go from [] = [Span (Address from) (Address e) | from < e]
@@ -191,21 +234,31 @@ parseInputs arguments = do
   pairs <- collect arguments
   let values = M.fromList pairs
       names = ["role", "update", "image4", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
-  need (length pairs == M.size values && M.keys (M.delete "card" values) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card"
+  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --role --update --image4 --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
+  keys <- case M.lookup "route" values of
+    Nothing -> pure playbackRoute
+    Just text -> mapM crawlKey (splitOn text)
   pure
     Inputs
       { inputRole = role, inputUpdate = values M.! "update", inputImage4 = values M.! "image4"
       , inputRun = values M.! "run", inputRom = values M.! "boot-rom", inputNand = values M.! "adjustment-nand"
       , inputCard = M.lookup "card" values, inputBridge = values M.! "bridge", inputOutput = values M.! "output"
+      , inputRoute = keys
       }
   where
     collect [] = pure []
     collect (('-' : '-' : key) : value : rest) = ((key, value) :) <$> collect rest
     collect _ = ioError (userError "options require --name value")
+    splitOn text = case break (== ',') text of
+      (key, ',' : rest) -> key : splitOn rest
+      (key, _) -> [key]
+    crawlKey wire = case [key | key <- [minBound .. maxBound], crawlKeyWire key == wire] of
+      [key] -> pure key
+      _ -> ioError (userError ("--route names an unknown key: " ++ wire))
 
 readSpec :: Value -> Int -> Value
 readSpec base count = object ["base" .= base, "count" .= count]
@@ -247,8 +300,10 @@ workerCapture = object ["entry" .= [readSpec (register 0) 12, readSpec (register
 stateReads :: Value
 stateReads = A.toJSON [[s, e - s] | Span (Address s) (Address e) <- [resultSlot, sessionAndOpenSet]]
 
+-- | The result slot, the session and open set, and the tag map, tag slots, sequence and
+-- context pointer.
 writeSpans :: [Span]
-writeSpans = [resultSlot, sessionAndOpenSet]
+writeSpans = [resultSlot, sessionAndOpenSet, Span (Address 0x910140) (Address 0x910208)]
 
 mergedSpans :: [Span] -> [Span]
 mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
@@ -323,6 +378,7 @@ observe inputs directory record = do
   let sites =
         [(entryAddress e, "fs:" ++ entryName e, entryCapture (entryName e)) | e <- entries]
           ++ [(workerAddress w, "worker:" ++ hexWord (workerCode w), workerCapture) | w <- workers]
+          ++ [(Address a, "backend:" ++ backendName b, backendCapture b) | (a, b) <- backends]
       writes = map spanValue writeSpans
       fetches = map spanValue fetchSpans
       spec =
@@ -351,7 +407,7 @@ observe inputs directory record = do
         ++ maybe [] (\card -> ["--sd-card-image", card]) (M.lookup "card" paths)
   BL.writeFile specPath (A.encode spec <> "\n")
   record "workers" (A.toJSON [object ["code" .= workerCode w, "address" .= a] | w <- workers, let Address a = workerAddress w])
-  record "route" (A.toJSON (map crawlKeyWire route))
+  record "route" (A.toJSON (map crawlKeyWire (inputRoute inputs)))
   record "budget" (object ["settle_chunks" .= settleChunks, "final_chunks" .= finalChunks, "chunk_instructions" .= chunkInstructions])
   steps <- newIORef []
   cursor <- newIORef (0 :: Int)
@@ -381,7 +437,7 @@ observe inputs directory record = do
       record "hits_at_attach" (A.toJSON attached)
       shot <- emulatorCapture emulator "attached"
       record "attached_screen" shot
-      forM_ (zip [1 :: Int ..] route) $ \(index, key) -> do
+      forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> do
         first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator watch
         press <- emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire key])
@@ -401,7 +457,7 @@ observe inputs directory record = do
       observed <- emulatorWatchEnd emulator
       last' <- drain emulator
       screen <- emulatorCapture emulator "final"
-      modifyIORef' steps (object ["step" .= (length route + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary observed, "screen" .= screen] :)
+      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary observed, "screen" .= screen] :)
       saveSteps
       record "hit_count" (A.toJSON last')
 
@@ -432,6 +488,7 @@ clobbered name = case name of
   "map_lookup" -> ["r1", "r2", "r3"] -- 0x71eb5c, 0x71eb50, 0x71eb3c
   "tag_release" -> ["r1", "r2", "r3"] -- 0x71f008, 0x71f02c, 0x71f018
   "route" -> ["r1", "r2", "r3"] -- 0x721668, 0x72166c, 0x721580
+  "post" -> ["r1", "r2", "r3"] -- 0x71fe1c, 0x725058 (send), 0x71fdf0
   "intercept" -> ["r2", "r3"] -- 0x721820, 0x7217f8
   _ -> []
 
@@ -490,22 +547,6 @@ receivePayload = 0x910228
 
 payloadCapacity :: Int
 payloadCapacity = 0x50
-
--- | Which payload bytes are defined. The stock open (0x71c2b0) and close (0x71c134) posters
--- build the payload in an uninitialized stack frame and copy a string into it with 0x70e748:
--- open's path field +4..+0x34 and close's name field +0xc..+0x20 are undefined after the
--- terminator. Bytes at or past the payload length belong to no request.
-payloadDefined :: Word32 -> Int -> [Word8] -> [Bool]
-payloadDefined code len bytes = map defined [0 .. length bytes - 1]
-  where
-    string
-      | code `elem` [0x2c17, 0x2c2d] = Just (4, 0x34)
-      | code `elem` [0x2c1a, 0x2c30] = Just (0xc, 0x20)
-      | otherwise = Nothing
-    defined o
-      | o >= len = False
-      | Just (s, e) <- string, s <= o, o < e = notElem 0 (take (o - s) (drop s bytes))
-      | otherwise = True
 
 -- | The defined flags of a payload behind a 12-byte request header.
 requestDefined :: [Word8] -> [Word8] -> [Bool]
@@ -616,15 +657,40 @@ event body hit = do
            in Just (Event "entry" name (external body lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= registersOf live hit, "reads" .= captured] ++ common)) (registersOf dead hit))
       | "worker:" `isPrefixOf` label ->
           Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= requestReads hit] ++ common)) (object []))
+      | "backend:" `isPrefixOf` label, Just backend <- M.lookup address backendSites, not (external body lr) ->
+          Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf (backendArguments backend) hit, "reads" .= backendReadsOf backend hit] ++ common)) (object []))
+      | "backend:" `isPrefixOf` label -> Nothing
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
-          let name = fromMaybe (hexWord site) (M.lookup site entryNames)
+          case M.lookup site backendSites of
+            Just backend
+              | external body address -> Nothing
+              | otherwise -> Just (Event "backend-return" (backendName backend) True (object (["kind" .= ("backend-return" :: T.Text), "name" .= backendName backend, "result" .= registersOf ["r0"] hit] ++ common)) (object []))
+            Nothing -> returned site
+      | otherwise -> Nothing
+  where
+    returned site = do
+          address <- hexValue (field "address" hit)
+          let common = ["core" .= field "core" hit, "task" .= taskOf hit, "state" .= maskState (field "memory" hit)]
+              name = fromMaybe (hexWord site) (M.lookup site entryNames)
               kind = if M.member site entryNames then "return" else "worker-return"
               unread r = r `elem` clobbered name || (r == "r0" && address `elem` resultUnread)
               dead = if kind == "return" then filter unread argumentRegisters else argumentRegisters
               live = filter (`notElem` dead) argumentRegisters
           Just (Event kind name (kind == "worker-return" || external body address) (object (["kind" .= kind, "name" .= name, "result" .= registersOf live hit, "reads" .= readsOf hit] ++ common)) (registersOf dead hit))
-      | otherwise -> Nothing
+
+backendSites :: M.Map Word32 Backend
+backendSites = M.fromList backends
+
+-- | A backend call's captured bytes; a path read stops at its terminator, the bytes past it
+-- being whatever the poster's frame held.
+backendReadsOf :: Backend -> Value -> Value
+backendReadsOf backend hit
+  | backendName backend `elem` ["fs_open", "register_written", "parse_path", "directory_number", "fs_close_named", "fs_close_entry"] =
+      A.toJSON [String (maskedHex (terminated bytes) bytes) | r <- arrayOf (field "reads" (field "observation" hit)), String text <- [field "bytes" r], let bytes = hexBytes text]
+  | otherwise = readsOf hit
+  where
+    terminated bytes = scanl (\open b -> open && b /= 0) True (take (length bytes - 1) bytes)
 
 loadHits :: FilePath -> IO [Value]
 loadHits directory = do
@@ -646,7 +712,7 @@ firstDifferences limit stock owned =
     pad xs = take total (xs ++ repeat Null)
 
 counts :: [Event] -> M.Map String (Int, Int)
-counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0) else (0, 1)) | e <- events, eventKind e `elem` ["entry", "worker"]]
+counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0) else (0, 1)) | e <- events, eventKind e `elem` ["entry", "worker", "backend"]]
   where add (a, b) (c, d) = (a + c, b + d)
 
 compareMain :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
@@ -682,11 +748,19 @@ compareMain stockDir ownedDir symbols output = do
       writeDiff = firstDifferences 20 stockWrites ownedWrites
       screenDiff = firstDifferences 20 (screens stockReceipt stockSteps) (screens ownedReceipt ownedSteps)
       ownedFetches = fetchTotal ownedReceipt ownedSteps
+      card steps =
+        [ object ["accepted_writes" .= field "accepted_writes" media, "accepted_write_bytes" .= field "accepted_write_bytes" media, "dirty_sectors" .= field "dirty_sectors" media]
+        | s <- steps, idled <- take 1 (reverse (arrayOf (field "idle" s))), let media = field "media" idled
+        ]
+      finalHistory steps = [field "history" (field "media" idled) | s <- take 1 (reverse steps), idled <- take 1 (reverse (arrayOf (field "idle" s)))]
+      cardOf steps = card steps ++ finalHistory steps
+      cardDiff = firstDifferences 20 (cardOf stockSteps) (cardOf ownedSteps)
       behaviorEqual =
         interface stockEvents == interface ownedEvents
           && interfaceCounts stockCounts == interfaceCounts ownedCounts
           && stockWrites == ownedWrites
           && screens stockReceipt stockSteps == screens ownedReceipt ownedSteps
+          && cardOf stockSteps == cardOf ownedSteps
           && null (violations stockReceipt stockSteps) && null (violations ownedReceipt ownedSteps)
           && sharedInputs stockReceipt == sharedInputs ownedReceipt
       ownedRole = field "role" ownedReceipt == String (roleName Owned)
@@ -704,6 +778,7 @@ compareMain stockDir ownedDir symbols output = do
     , "dead_registers" .= firstDifferences 20 (dead stockEvents) (dead ownedEvents)
     , "watched_writes" .= writeDiff
     , "screens" .= object ["stock" .= screens stockReceipt stockSteps, "owned" .= screens ownedReceipt ownedSteps, "comparison" .= screenDiff]
+    , "card" .= object ["stock" .= card stockSteps, "owned" .= card ownedSteps, "comparison" .= cardDiff]
     , "owned_retired_fetches_by_extent" .= [field "fetches_by_extent" w | w <- watches ownedReceipt ownedSteps]
     , "stock_retired_fetches_by_extent" .= [field "fetches_by_extent" w | w <- watches stockReceipt stockSteps]
     , "watch_violations" .= object ["stock" .= violations stockReceipt stockSteps, "owned" .= violations ownedReceipt ownedSteps]

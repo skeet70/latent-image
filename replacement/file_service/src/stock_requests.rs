@@ -631,4 +631,10 @@ entry_veneer! {
     "map_lookup" => "xm1_file_service_map_lookup",
     "tag_allocate" => "xm1_file_service_tag_allocate",
     "tag_release" => "xm1_file_service_tag_release",
+    "open_worker" => "xm1_file_service_open_worker",
+    "write_worker" => "xm1_file_service_write_worker",
+    "close_worker" => "xm1_file_service_close_worker",
+    "close_entry_worker" => "xm1_file_service_close_entry_worker",
+    "seek_worker" => "xm1_file_service_seek_worker",
+    "release_worker" => "xm1_file_service_release_worker",
 }

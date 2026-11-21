@@ -4333,6 +4333,7 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:deepseq",
         "//host:directory",
         "//host:filepath",
     ],

@@ -11,7 +11,7 @@ import Data.Aeson.Types (parseMaybe)
 import Data.Bits (shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.List (zip5)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
@@ -65,6 +65,9 @@ setterCall = 0x620010
 
 branchLink :: Word32 -> Word32 -> Word32
 branchLink site target = 0xeb000000 .|. (((target - (site + 8)) `shiftR` 2) .&. 0xffffff)
+
+branchNotEqual :: Word32 -> Word32 -> Word32
+branchNotEqual site target = 0x1a000000 .|. (((target - (site + 8)) `shiftR` 2) .&. 0xffffff)
 
 -- | The four store accessors, then one body word.
 linked :: B.ByteString
@@ -178,6 +181,38 @@ hullContractBytes = case A.decodeStrict contractBytes of
     ]
   scanImage name base bytes = object ["image" .= (name :: T.Text), "base" .= base, "bytes" .= B.length bytes, "sha256" .= digestOf bytes]
 
+-- A schema-2 contract whose wider carrier holds the owned storage accessors instead of the raw
+-- bank/save accessors.
+storageCarrierEnd :: Word32
+storageCarrierEnd = carrierStart + 0x300
+
+storageBoundaries :: [(StoreAccessor,Word32,[Word32],Int)]
+storageBoundaries = take 5 composedBoundaries
+
+storageLinked :: B.ByteString
+storageLinked = foldl' (\bytes (_,address,instructions,_) -> foldl' (\image (index,instruction) -> placed (address+index*4) instruction image) bytes (zip [0..] instructions))
+  (B.replicate (fromIntegral (storageCarrierEnd - carrierStart)) 0) storageBoundaries
+  where placed address value image = let offset = fromIntegral (address-carrierStart) in B.take offset image <> littleWords [value] <> B.drop (offset+4) image
+
+storageHullBindings :: B.ByteString -> Bindings
+storageHullBindings bytes = bindings {bindContract = contractFor, bindLinked = bytes, bindImages = hullImages}
+  where
+    offset address = fromIntegral (address - image4Base)
+    kept address = any (\(start, end) -> start <= address && address < end) retainedSpans
+    hullWords = B.concat [if kept address then B.take 4 (B.drop (offset address) canonicalHull4) else littleWords [fillWord] | address <- [getterEntry, getterEntry + 4 .. hullEnd' - 4]]
+    filled = B.take (offset getterEntry) canonicalHull4 <> hullWords <> B.drop (offset hullEnd') canonicalHull4
+    fill = littleWords (replicate ((fromIntegral (storageCarrierEnd - carrierStart) - B.length bytes) `div` 4) fillWord)
+    spliced = B.take (offset carrierStart) filled <> bytes <> fill <> B.drop (offset storageCarrierEnd) filled
+    staged = putWord getterEntry getterAdapter (putWord setterEntry setterAdapter spliced)
+    contractFor = case A.decodeStrict hullContractBytes of
+      Just (Object fields) -> BL.toStrict (A.encode (Object (KM.union (KM.fromList
+        [ "carrier" .= object ["start" .= carrierStart, "end" .= storageCarrierEnd, "fill_word" .= fillWord]
+        , "linked_sha256" .= digestOf bytes, "linked_bytes" .= B.length bytes
+        , "staged_image4_sha256" .= digestOf staged
+        , "stack" .= object ["entries" .= [object ["name" .= storeAccessorName accessor, "entry" .= address] | (accessor,address,_,_) <- storageBoundaries]]
+        ]) fields)))
+      _ -> error "hullContractBytes is not an object"
+
 composedCodeStart :: Word32
 composedCodeStart = 0x627578
 
@@ -190,19 +225,19 @@ bankApplyFixture :: StorageBoundaries.BankApplyElfInput
 bankApplyFixture = bankApplyFixtureAt (Placement.GuestAddress bankApplyBody)
 composedBoundaries :: [(StoreAccessor,Word32,[Word32],Int)]
 composedBoundaries =
-  [ (StorageByte,carrierStart,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,33)
-  , (StorageHalf,carrierStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageHalf,33)
+  [ (StorageByte,carrierStart,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,8)
+  , (StorageHalf,carrierStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageHalf,8)
   , (OutputByte,carrierStart+0x200,StorageEncoding.storageOutputWords StorageEncoding.StorageByte,7)
   , (StatusWord,carrierStart+0x240,StorageEncoding.storageStatusWords,2)
   , (OutputHalf,carrierStart+0x280,StorageEncoding.storageOutputWords StorageEncoding.StorageHalf,12)
   , (CustomByte,composedCodeStart,StorageBoundaries.customStoreWords StorageBoundaries.CustomStoreByte,fromIntegral (StorageBoundaries.customStoreIndex StorageBoundaries.CustomStoreByte))
   , (CustomHalf,composedCodeStart+0x60,StorageBoundaries.customStoreWords StorageBoundaries.CustomStoreHalf,fromIntegral (StorageBoundaries.customStoreIndex StorageBoundaries.CustomStoreHalf))
   , (CustomWord,composedCodeStart+0xc0,StorageBoundaries.customStoreWords StorageBoundaries.CustomStoreWord,fromIntegral (StorageBoundaries.customStoreIndex StorageBoundaries.CustomStoreWord))
-  , (StorageByte,composedCodeStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,33) ]
+  , (StorageByte,composedCodeStart+0x100,StorageEncoding.storageStoreWords StorageEncoding.StorageByte,8) ]
 composedCanonical :: B.ByteString
 composedCanonical = foldl' (\image (address,instruction) -> putWord address instruction image)
   (canonicalHull4 <> B.replicate (0x100000-B.length canonicalHull4) 0)
-  (composedStatusWords ++ [(bankApplyRootCall,branchLink bankApplyRootCall 0x6309c4),(0x630a00,branchLink 0x630a00 setterEntry)])
+  (composedStatusWords ++ [(bankApplyRootCall,branchLink bankApplyRootCall 0x6309c4),(0x630a00,branchLink 0x630a00 setterEntry),(0x630a28,branchLink 0x630a28 setterEntry)])
 composedEntries :: [(Word32,Word32)]
 composedEntries = [(address,0xea000000 .|. (((target-address-8) `shiftR` 2) .&. 0xffffff))
   | (address,_) <- StorageBoundaries.bankEntries ++ StorageBoundaries.customEntries ++ StorageBoundaries.recordEntries
@@ -682,6 +717,18 @@ bankCallerCases =
   , ("a retained bank caller also requires its root entry", isLeft (bankQualified RetainedRole (drop 1 retained)))
   , ("retained caller LR must follow its actual property BL", isLeft (bankQualified RetainedRole
       (traceAt 1 (wireField ["lr"] (A.toJSON (hex 0x630a08))) retained)))
+  , ("a skip branch landing on the root return site is not a root return", isRight (landingQualified (owned ++ drop 3 owned)))
+  , ("an inactive-bank tail call and the retained inactive-bank call compare as one bank caller", case (tailRole RetainedRole inactive,tailQualified tailed) of
+      (Right left,Right right) -> isRight (compareRoles left right) && case (setter left,setter right) of
+        (Just old,Just new) -> callReturn old == 0x630a2c && callReturn new == bankApplyRootCall + 4
+          && case (callContext old,callContext new) of (BankApplyCaller _ _,BankApplyCaller _ _) -> True; _ -> False
+        _ -> False
+      _ -> False)
+  , ("a setter entry carrying the apply frame's LR is unarmed without an admitted tail branch", bankQualified OwnedRole tailed `refusedAs` UnarmedReturn 1)
+  , ("a tail-call setter must carry the apply frame's SP", tailQualified (traceAt 1 (sp 0x3ff8) tailed) `refusedAs` UnarmedReturn 1)
+  , ("a tail-call setter must carry the apply frame's LR", tailQualified (traceAt 1 (wireField ["lr"] (A.toJSON (hex (bankApplyRootCall + 8)))) tailed) `refusedAs` UnarmedReturn 1)
+  , ("a tail-call setter requires an open apply frame", tailQualified (drop 1 tailed) `refusedAs` UnarmedReturn 0)
+  , ("a tail-call setter requires the apply return", tailQualified (take 2 tailed) `refusedAs` BankApplyContextRefused 1 ApplyReturnMissing)
   ] ++ [(label,isLeft (bankQualified OwnedRole changed)) | (label,changed) <- negatives]
   where
     retained = bankHits RetainedRole
@@ -707,6 +754,37 @@ bankCallerCases =
     wrongCallee = bankArtifactBindings (putWord (bankApplyBody + 4) wrongWord composedImage)
       (B.take 0x104 elf <> littleWords [wrongWord] <> B.drop 0x108 elf) names
     missingFunction = bankArtifactBindings composedImage elf B.empty
+    skip = bankApplyRootCall - 4
+    landing = bankArtifactBindings (putWord skip (branchNotEqual skip (bankApplyRootCall + 4)) composedImage) elf names
+    landingQualified hits = do
+      context <- admitBindings landing
+      qualify context OwnedRole (reboundArtifactObservation landing (chainBound composedBindings OwnedRole [bankStep hits]))
+    inactive =
+      [ taskHit RetainedRole (StorageSite Storage.BankApplyEntry) 0x6309c4 [] 0x2000 (bankApplyRootCall + 4)
+      , taskHit RetainedRole SetterEntry setterEntry [5,1,1] 0x1fe0 0x630a2c
+      , taskHit RetainedRole SetterReturn 0x630a2c [0] 0x1fe0 0
+      , taskHit RetainedRole (StorageSite Storage.BankApplyReturn) (bankApplyRootCall + 4) [0] 0x2000 0
+      ]
+    tailed =
+      [ taskHit OwnedRole (StorageSite Storage.BankApplyEntry) bankApplyBody [] 0x4000 (bankApplyRootCall + 4)
+      , taskHit OwnedRole SetterEntry setterEntry [5,1,1] 0x4000 (bankApplyRootCall + 4)
+      , taskHit OwnedRole (StorageSite Storage.BankApplyReturn) (bankApplyRootCall + 4) [0] 0x4000 0
+      ]
+    tailWord = 0x1a000000 .|. (((0x624694 - (bankApplyBody + 16)) `shiftR` 2) .&. 0xffffff)
+    tailBound = bankArtifactBindings (putWord (bankApplyBody + 8) tailWord composedImage)
+      (B.take 0x108 elf <> littleWords [tailWord] <> B.drop 0x10c elf) names
+    tailQualified = tailRole OwnedRole
+    tailRole role hits = do
+      context <- admitBindings tailBound
+      let source = chainBound composedBindings role [bankStep hits]
+          rebound = reboundArtifactObservation tailBound source
+          receiptOf trace = maybe (error "tail fixture receipt is invalid") id (A.decodeStrict (obsReceipt trace))
+          roleImage = case receiptOf source of
+            Object fields | Just (Object inputs) <- KM.lookup "inputs" fields, Just value <- KM.lookup "role_image4_sha256" inputs -> value
+            _ -> error "tail fixture receipt lacks its role image"
+      qualify context role (if role == RetainedRole
+        then rebound {obsReceipt=BL.toStrict (A.encode (wireField ["inputs","role_image4_sha256"] roleImage (receiptOf rebound)))}
+        else rebound)
     negatives =
       [ ("bank caller without a root entry refuses", drop 1 owned)
       , ("bank caller without a root return refuses", take 3 owned)

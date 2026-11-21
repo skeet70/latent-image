@@ -86,6 +86,7 @@ module EmulatorUsb
   , NandExportLabel
   , nandExportLabel
   , emulatorNandExport
+  , emulatorPowerOff
   , emulatedClock
   ) where
 
@@ -952,6 +953,11 @@ nandExportLabel label
 
 emulatorNandExport :: Emulator -> NandExportLabel -> IO Value
 emulatorNandExport emulator (NandExportLabel label) = Object <$> rpc emulator (object ["command" .= String "nand-export", "label" .= label])
+
+-- | Switches POWER OFF and runs to the stock terminal within the instruction budget; the bridge
+-- then admits only reads, @watch-end@, @nand-export@ and @finish@.
+emulatorPowerOff :: Emulator -> Word64 -> IO Value
+emulatorPowerOff emulator budget = Object <$> rpc emulator (object ["command" .= String "power-off", "budget_instructions" .= budget])
 
 menuReading :: M.KeyMap Value -> IO MenuReading
 menuReading fields = objectField "menu" fields >>= \value -> case value of

@@ -1,0 +1,382 @@
+{
+ "schema": 1,
+ "kind": "settings-storage-lifecycle",
+ "source": {
+  "decomp_commit": "c44204c8c1c87e00ed15a7d33572968afadd1b29",
+  "image4_sha256": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+  "image5_sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a",
+  "catalog_commit": "1a92977f50f5bed7cd77a9bb1cb23271fdb0800c",
+  "controls_commit": "1a92977f50f5bed7cd77a9bb1cb23271fdb0800c"
+ },
+ "steps": [
+  {
+   "name": "dial-live",
+   "action": {
+    "kind": "mode-dial",
+    "position": "M"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-open",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-film-1",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-film-2",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-film-3",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-film-4",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-open-1",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-edit-1",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-select-1",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-open-2",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-edit-2",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-select-2",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": [
+    {
+     "kind": "repeat-setting",
+     "setting": "film-simulation"
+    },
+    {
+     "kind": "bank-copy",
+     "family": "alternate",
+     "direction": "capture"
+    }
+   ]
+  },
+  {
+   "name": "film-open-3",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-edit-3",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "film-cancel-restore",
+   "action": {
+    "kind": "key",
+    "key": "back"
+   },
+   "checks": [
+    {
+     "kind": "bank-copy",
+     "family": "alternate",
+     "direction": "restore"
+    }
+   ]
+  },
+  {
+   "name": "menu-down-custom-1",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-2",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-3",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-4",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-5",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-6",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-7",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-8",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "menu-down-custom-9",
+   "action": {
+    "kind": "key",
+    "key": "down"
+   },
+   "checks": []
+  },
+  {
+   "name": "custom-set-open-1",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "custom-set-confirm-1",
+   "action": {
+    "kind": "key",
+    "key": "up"
+   },
+   "checks": []
+  },
+  {
+   "name": "save-changed",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": [
+    {
+     "kind": "custom-commit",
+     "change": "changed"
+    },
+    {
+     "kind": "current-slot",
+     "slot": "live"
+    }
+   ]
+  },
+  {
+   "name": "custom-set-open-2",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": []
+  },
+  {
+   "name": "custom-set-confirm-2",
+   "action": {
+    "kind": "key",
+    "key": "up"
+   },
+   "checks": []
+  },
+  {
+   "name": "save-unchanged",
+   "action": {
+    "kind": "key",
+    "key": "ok"
+   },
+   "checks": [
+    {
+     "kind": "custom-commit",
+     "change": "unchanged"
+    }
+   ]
+  },
+  {
+   "name": "half-press-handback",
+   "action": {
+    "kind": "key",
+    "key": "half-press"
+   },
+   "checks": [
+    {
+     "kind": "ui-handback"
+    }
+   ]
+  },
+  {
+   "name": "select-custom",
+   "action": {
+    "kind": "mode-dial",
+    "position": "C"
+   },
+   "checks": [
+    {
+     "kind": "current-slot",
+     "slot": "custom"
+    },
+    {
+     "kind": "custom-payload",
+     "relation": "same",
+     "target": "active-bank",
+     "reference": {
+      "step": "save-changed",
+      "target": "working-record"
+     }
+    },
+    {
+     "kind": "custom-payload",
+     "relation": "same",
+     "target": "backing",
+     "reference": {
+      "step": "save-changed",
+      "target": "working-record"
+     }
+    }
+   ]
+  },
+  {
+   "name": "select-live",
+   "action": {
+    "kind": "mode-dial",
+    "position": "M"
+   },
+   "checks": [
+    {
+     "kind": "current-slot",
+     "slot": "live"
+    }
+   ]
+  },
+  {
+   "name": "select-custom-again",
+   "action": {
+    "kind": "mode-dial",
+    "position": "C"
+   },
+   "checks": [
+    {
+     "kind": "current-slot",
+     "slot": "custom"
+    },
+    {
+     "kind": "custom-payload",
+     "relation": "same",
+     "target": "active-bank",
+     "reference": {
+      "step": "save-changed",
+      "target": "working-record"
+     }
+    },
+    {
+     "kind": "custom-payload",
+     "relation": "same",
+     "target": "backing",
+     "reference": {
+      "step": "save-changed",
+      "target": "working-record"
+     }
+    }
+   ]
+  },
+  {
+   "name": "reboot-committed",
+   "action": {
+    "kind": "cold-reboot"
+   },
+   "checks": [
+    {
+     "kind": "cold-boot-record",
+     "reference": "save-changed"
+    }
+   ]
+  }
+ ]
+}
