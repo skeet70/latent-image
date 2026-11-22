@@ -649,7 +649,7 @@
         "scanout_leave_critical",
         "scanout_yield"
       ],
-      "expected_sha256": "a11d3c327608f5823d12dcb0f116ace68044cd31b513f79394f22539d0c609e9"
+      "expected_sha256": "b4ab331ff91deca1898889b9b318b7cd2acc8063d92f91a0c368e5c7587bd124"
     },
     {
       "id": "//replacement/display_scanout:display-scanout-panel",
@@ -673,7 +673,7 @@
         "xm1_power_restore_irq",
         "xm1_power_save_irq"
       ],
-      "expected_sha256": "f8f0ab497cc259eeeaa33a028e8f316a4c1921e2b6476d421345c9c38f59cbec"
+      "expected_sha256": "c7a3af366e65dacf19e36937a81a824a500c29e85e36d6d10cfd8b43051da787"
     },
     {
       "id": "//replacement/first_stage:first-stage-fixed-image",
@@ -698,7 +698,7 @@
         "xm1_vector_table_end",
         "xm1_vector_table_start"
       ],
-      "expected_sha256": "228b46a83bafd6f0fd3603dce6b1c3e76148d58dbc4d56c353dea9c0350ae24d"
+      "expected_sha256": "0529990243124a9a3cec4a511f587a76ebda3123a4c59b2c53f83c9a90160265"
     },
     {
       "id": "//replacement/first_stage:first-stage-image",
@@ -740,7 +740,7 @@
       "allowed_imports": [
         "xm1_fixed_test_resume"
       ],
-      "expected_sha256": "57aa7490d576c9ebda55fe619db30c99d790e7873c6ab55153b3e3fd185719b8"
+      "expected_sha256": "7122a1668fde7008cbb3ad42a2b8e938b7228772e729808f85361c88e3edf0a3"
     },
     {
       "id": "//replacement/general_heap:general-heap-fixed-image",
@@ -757,7 +757,7 @@
         "__heap_retained_lock",
         "__heap_retained_unlock"
       ],
-      "expected_sha256": "cec41ca1b57739626be86b2ddbeec7dbdd10ee0124c470b63759d70e5d7c3b45"
+      "expected_sha256": "6c05eba9ce9dfaae6d1d520a7caadb6bd8cfb9a561166ade155015c51f5c0f96"
     },
     {
       "id": "//replacement/general_heap:general-heap-image",
@@ -873,7 +873,7 @@
         "xm1_decoder_route",
         "xm1_decoder_take"
       ],
-      "expected_sha256": "31a5363fdd8fc3e61ae08391b14e8063998605234d5d37e96655a80701cee77d"
+      "expected_sha256": "d92d7b9f10a25e4348182eceb6d3643095e4ae28a97ecbd92cc702cfdbb603d5"
     },
     {
       "id": "//replacement/image5_load:image5-load-image",
@@ -1613,11 +1613,11 @@
         "xm1_task_mask_restore",
         "xm1_task_mask_save"
       ],
-      "expected_sha256": "c5563cdf8dd2061e44a676befc93e9b91af64bdd91dcec66c65211215fd00d51",
+      "expected_sha256": "aca5e32786bb1b976dd48726e28b777c55f034db7d9aa1ff842306ab657a6060",
       "qualified_artifacts": [
         {
           "path": "replacement/rtos_platform/platform-a.bin",
-          "sha256": "c22bd06359bdd4b4d97322c8c79456be1c1c8729f2f0845f9038901cef949513"
+          "sha256": "425c79861c25d851e388a671b344e9561052f6d50506ba5fc6809fd28c2a4172"
         }
       ]
     },
@@ -1721,11 +1721,11 @@
         "xm1_task_mask_restore",
         "xm1_task_mask_save"
       ],
-      "expected_sha256": "dd05ce60056e64a44b14522e36297c03faa75e37bd98db2e7425bdeabfb78c3e",
+      "expected_sha256": "6aa1580402c3dff5895c98178bbdf41b964e28f606921d5bd133387c0d42b37e",
       "qualified_artifacts": [
         {
           "path": "replacement/rtos_platform/platform-b.bin",
-          "sha256": "49a2e51b04d1defbaad0c361e26642035a76c4fdbda6dab43f33d7a94690c3fc"
+          "sha256": "b4d51fafdf987f65e9b45cd57658556b8e3a2aa269a173524c0685ab57265d58"
         }
       ]
     },
@@ -1914,7 +1914,7 @@
         "xm1_rtos_timer_remove_a",
         "xm1_rtos_timer_remove_b"
       ],
-      "expected_sha256": "5b35516e1ef2657c9d1edc1420145ad374618ea8dc268bc4a1824e5541d2677c"
+      "expected_sha256": "2e48a0a1f3a2e8eeb3d31893a363afb0b9881e82e149a510f22b0d25d0c98c68"
     },
     {
       "id": "//replacement/save:save-owned",
@@ -2324,7 +2324,7 @@
         "xm1_kernel_critical_enter",
         "xm1_kernel_critical_exit"
       ],
-      "expected_sha256": "02fe47c59cdc876a23763a35bc5c88b77843ad86d9f722c69180f78d0c4394ee"
+      "expected_sha256": "0e774bd0bf4f3cc5c2f1c4ffeeb99116004abfb4feb61db83e213c3d68758c11"
     },
     {
       "id": "//replacement/validator:area3-arm",

@@ -10,16 +10,16 @@ import System.Environment (getArgs)
 expected :: [(String, String)]
 expected =
   [ ( "saclac-image.elf"
-    , "ee7e28d678a52f0bee46337c0491d866b0154945291da7f3c20fa49a0544e6d0"
+    , "2e48a0a1f3a2e8eeb3d31893a363afb0b9881e82e149a510f22b0d25d0c98c68"
     )
   , ( "saclac-image.symbols"
-    , "70a29c7e903e28529426f62dc46d66713939664d111a1c8de31de46700ab7ddb"
+    , "156a45deee07715f2fef14f8bca050e56c4e994dabacbe838245e4ce22eee644"
     )
   , ( "saclac-image-wrong-driver-store.symbols"
-    , "c92c87146dc2a84c8f59e3ea9a8d72583dea247ccd93d909eafec820dddf4ff1"
+    , "03b593adec8bd0cd53102700b040af2915894a7e023361773fd40f2e74f64782"
     )
   , ( "saclac-image-wrong-wake-publication.symbols"
-    , "5fb944fcf77bacbfb2cc63646f7a32c25d1c6957d3fbe9f4ebf2a8374be8dbe2"
+    , "ba78c0673c08763624a54cd9aab611dafadefe5ccb395ad8ac4155bf09548948"
     )
   ]
 
