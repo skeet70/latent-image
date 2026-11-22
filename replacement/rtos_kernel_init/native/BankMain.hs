@@ -55,10 +55,10 @@ mutants DomainA =
   , Mutant "semaphores" "semaphores" 0x00ba_092c 0xe283_3010 0xe283_3014 -- add r3, r3, #16
   , Mutant "event-flags" "event-flags" 0x00ba_0a2c 0xe282_2010 0xe282_2014 -- add r2, r2, #16
   , Mutant "data-queues" "data-queues" 0x00ba_09b8 0xe282_2020 0xe282_2024 -- add r2, r2, #32
-  , Mutant "mailboxes" "mailboxes" 0x00ba_08bc 0xe282_2014 0xe282_2018 -- add r2, r2, #20
+  , Mutant "mailboxes" "mailboxes" 0x00ba_0890 0xe3a0_0000 0xe3a0_0001 -- mov r0, #0
   , Mutant "fixed-pools" "fixed-pools" 0x00ba_0a74 0xe3a0_3000 0xe3a0_3001 -- mov r3, #0
   , Mutant "initialize-objects" "initialize-objects" 0x00ba_0600 0xe3a0_e00f 0xe3a0_e00e -- mov lr, #15
-  , Mutant "tick-timer" "tick-timer-primary-00000000" 0x00ba_05a8 0xe3a0_0023 0xe3a0_0024 -- mov r0, #35
+  , Mutant "tick-timer" "tick-timer-primary-0x00000000" 0x00ba_05a8 0xe3a0_0023 0xe3a0_0024 -- mov r0, #35
   ]
 mutants DomainB =
   [ Mutant "publish" "publish" 0x00ba_0c14 0xe3a0_302c 0xe3a0_3030 -- mov r3, #44
@@ -73,10 +73,10 @@ mutants DomainB =
   , Mutant "semaphores" "semaphores" 0x00ba_092c 0xe283_3010 0xe283_3014 -- add r3, r3, #16
   , Mutant "event-flags" "event-flags" 0x00ba_0a2c 0xe282_2010 0xe282_2014 -- add r2, r2, #16
   , Mutant "data-queues" "data-queues" 0x00ba_09b4 0xe282_2020 0xe282_2024 -- add r2, r2, #32
-  , Mutant "mailboxes" "mailboxes" 0x00ba_08bc 0xe282_2014 0xe282_2018 -- add r2, r2, #20
+  , Mutant "mailboxes" "mailboxes" 0x00ba_0890 0xe3a0_0000 0xe3a0_0001 -- mov r0, #0
   , Mutant "fixed-pools" "fixed-pools" 0x00ba_0a64 0xe3a0_3000 0xe3a0_3001 -- mov r3, #0
   , Mutant "initialize-objects" "initialize-objects" 0x00ba_0600 0xe3a0_e00f 0xe3a0_e00e -- mov lr, #15
-  , Mutant "tick-timer" "tick-timer-primary-00000000" 0x00ba_05ac 0xe3a0_0023 0xe3a0_0024 -- mov r0, #35
+  , Mutant "tick-timer" "tick-timer-primary-0x00000000" 0x00ba_05ac 0xe3a0_0023 0xe3a0_0024 -- mov r0, #35
   ]
 
 main :: IO ()
