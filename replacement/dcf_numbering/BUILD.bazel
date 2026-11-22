@@ -1,0 +1,93 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["imports.ld"])
+
+_SOURCES = ["src/numbering.rs", "src/stock.rs"]
+
+DCF_CONTROLS = [
+    "full_block_kept",
+    "profile_ignored",
+    "written_unpersisted",
+    "folder_cluster_unrecorded",
+    "latch_kept",
+    "name_accepts_dash",
+]
+
+_VARIANTS = [("", [])] + [
+    ("-control-" + control.replace("_", "-"), ["--cfg", "dcf_control_" + control])
+    for control in DCF_CONTROLS
+]
+
+[xm1_rust_staticlib(
+    name = "dcf-numbering-rust" + suffix,
+    src = "src/lib.rs",
+    crate_name = "xm1_dcf_numbering",
+    data = _SOURCES,
+    rustc_flags = ["-C", "overflow-checks=off"] + flags,
+) for suffix, flags in _VARIANTS]
+
+[xm1_rust_elf(
+    name = "dcf-numbering-image" + suffix,
+    rust_staticlib = ":dcf-numbering-rust" + suffix,
+    asm_srcs = ["entry.S"],
+    entry = "dcf_entry_prepare_name",
+    link_script = "dcf-numbering.ld",
+    link_includes = ["imports.ld"],
+    extra_ldflags = ["-Wl,--gc-sections"],
+) for suffix, _ in _VARIANTS]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+haskell_library(
+    name = "cases",
+    srcs = ["Replacement/DcfNumbering/Cases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+haskell_binary(
+    name = "dcf-numbering-suite",
+    srcs = ["SuiteMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "SuiteMain.hs",
+    deps = [
+        ":cases",
+        "//emulation:case-sha256",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":dcf-numbering-suite",
+        ":host-tests",
+    ] + [":dcf-numbering-image" + suffix for suffix, _ in _VARIANTS],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)
