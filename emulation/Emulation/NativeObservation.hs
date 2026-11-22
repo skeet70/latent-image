@@ -24,7 +24,6 @@ module Emulation.NativeObservation
   , Provenance (..)
   , provenanceWrites
   , provenanceCount
-  , provenanceRetained
   , Barrier (..)
   , SystemRegister (..)
   , Maintenance (..)
@@ -183,10 +182,6 @@ provenanceCount :: Provenance -> ProvenanceTotal
 provenanceCount (Complete total _) = total
 provenanceCount (Truncated total) = total
 
-provenanceRetained :: Provenance -> Int
-provenanceRetained (Complete _ writes) = length writes
-provenanceRetained (Truncated _) = 4096
-
 data Barrier = Dmb | Dsb | Isb
   deriving (Eq, Show)
 
@@ -277,7 +272,8 @@ data ObservationError
   | MalformedProvenanceAddress
   | MalformedProvenanceSize
   | MalformedProvenanceValue
-  | ProvenanceRetentionMismatch Int
+  | MalformedProvenanceLimit
+  | ProvenanceRetentionMismatch Word64 Int
   | ProvenanceCountMismatch ProvenanceTotal Int
   | MalformedBarrier
   | MalformedSystemWrite
@@ -310,9 +306,12 @@ observeNative exit regions value = do
   when (status == Returned && errorWord /= 0) (Left (ReturnedWithEngineError errorWord))
   instructions <- requireCount "instructions" MissingInstructions MalformedInstructionCount value
   total <- requireCount "memory_provenance_total" MissingProvenanceTotal MalformedProvenanceTotal value
+  limit <- case get value "memory_provenance_limit" of
+    Null -> Right defaultProvenanceLimit
+    _ -> requireCount "memory_provenance_limit" MalformedProvenanceLimit MalformedProvenanceLimit value
   registers <- parseRegisters (get value "registers")
   memory <- parseMemory regions (get value "memory")
-  (provenance, ordered) <- parseProvenance total (get value "memory_provenance")
+  (provenance, ordered) <- parseProvenance limit total (get value "memory_provenance")
   kernel <- case get value "kernel" of
     Null -> do
       when (any kernelRow ordered) (Left KernelRowOutsideKernel)
@@ -345,7 +344,6 @@ evaluateObservation observation = do
   _ <- evaluate (sum (M.elems (nativeRegisters observation)))
   _ <- evaluate (sum [B.length bytes | (_, bytes) <- nativeMemory observation])
   _ <- evaluate (provenanceCount (nativeProvenance observation))
-  _ <- evaluate (provenanceRetained (nativeProvenance observation))
   case provenanceWrites (nativeProvenance observation) of
     Nothing -> pure ()
     Just writes -> do
@@ -409,8 +407,9 @@ renderObservationError errorValue = case errorValue of
   MalformedProvenanceAddress -> "malformed provenance address"
   MalformedProvenanceSize -> "provenance size out of range"
   MalformedProvenanceValue -> "malformed provenance write value"
-  ProvenanceRetentionMismatch retained ->
-    "provenance retention count " ++ show retained ++ " differs from 4096"
+  MalformedProvenanceLimit -> "malformed memory_provenance_limit"
+  ProvenanceRetentionMismatch limit retained ->
+    "provenance retention count " ++ show retained ++ " differs from " ++ show limit
   ProvenanceCountMismatch total retained ->
     "provenance count " ++ show retained ++ " differs from " ++ show (provenanceTotal total)
   MalformedBarrier -> "malformed provenance barrier"
@@ -479,8 +478,12 @@ parseMemory regions value = case value of
     pure pairs
   _ -> Left MissingMemory
 
-parseProvenance :: Word64 -> Value -> Either ObservationError (Provenance, [Ordered])
-parseProvenance total value = case value of
+-- | Rows the runner retains unless a kernel case declares its retention.
+defaultProvenanceLimit :: Word64
+defaultProvenanceLimit = 4096
+
+parseProvenance :: Word64 -> Word64 -> Value -> Either ObservationError (Provenance, [Ordered])
+parseProvenance limit total value = case value of
   Array _ -> do
     let entries = list value
     parsed <- forM entries $ \entry -> case str (get entry "kind") of
@@ -494,9 +497,9 @@ parseProvenance total value = case value of
     let ordered = [row | Just row <- parsed]
         writes = [write | OrderedWrite write _ <- ordered]
     provenance <-
-      if total > 4096
+      if total > limit
         then do
-          when (length entries /= 4096) (Left (ProvenanceRetentionMismatch (length entries)))
+          when (fromIntegral (length entries) /= limit) (Left (ProvenanceRetentionMismatch limit (length entries)))
           pure (Truncated (ProvenanceTotal total))
         else do
           when (fromIntegral (length entries) /= total) (Left (ProvenanceCountMismatch (ProvenanceTotal total) (length entries)))

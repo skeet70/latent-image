@@ -805,7 +805,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
-    , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [] Nothing)
+    , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [] Nothing Nothing)
     }
   where
     codeRegions
@@ -1384,7 +1384,7 @@ composeCaseFor facts d role stockImage otherImage timerImage timerSymbols s3dIma
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (if d == DomainA then 0x4003 else 0x4004)
-    , caseKernel = Just (KernelCase (InstructionLimit 40000) Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr, Pc, Cpsr] [] Nothing)
+    , caseKernel = Just (KernelCase (InstructionLimit 40000) Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr, Pc, Cpsr] [] Nothing Nothing)
     }
   where
     fixture = composeSetup one d (baseFixture facts d)

@@ -280,10 +280,10 @@ loadCaseWith reader input = do
    ensure(sum(map regionSize prior)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
    pure(done++[(Region item base size bytes,source)]))[] regionsInput
  let regions=map fst placed
- forM_ [contexts|PrivilegedEntry _ _ (Just(KernelEntry _ _ _ _ contexts _))<-[profile]] $ checkStackContexts regions (reg "sp")
+ forM_ [contexts|PrivilegedEntry _ _ (Just(KernelEntry _ _ _ _ contexts _ _))<-[profile]] $ checkStackContexts regions (reg "sp")
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
- forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _ _))<-[profile]]$ \stop->
+ forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _ _ _))<-[profile]]$ \stop->
    ensure(stop `mod` 4==0 && stop/=entry && stop/=exit && regionAt regions stop 4 'x') "stop address must be aligned, executable and differ from the entry and exit"
  functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
  functions<-foldM(\done item->do
@@ -300,7 +300,7 @@ loadCaseWith reader input = do
    fields item (if scripted then "address calls" else "address inputs outputs side_effects") "stub"
    target'<-address(get item "address")
    ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map stubAddress done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
-   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _ _))<-[profile]]) "stub address is the stop address"
+   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _ _ _))<-[profile]]) "stub address is the stop address"
    stub<-if scripted then do
      callsInput<-arrayCheck(get item "calls")0 eventCount "stub calls limit"
      calls<-forM callsInput$ \call->do
@@ -374,8 +374,14 @@ data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identi
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
 -- The value MRC p14, 0, Rt, c2, c0, 0 reads in a privileged case.
 newtype Cp14Identity = Cp14Identity Integer deriving (Eq,Show)
--- A kernel case's stop address, its TPIDRURW, CPACR and FPEXC values, its declared stack contexts and its cache registers.
-data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) [StackBounds] (Maybe CacheEntry) deriving (Eq,Show)
+-- A kernel case's stop address, its TPIDRURW, CPACR and FPEXC values, its declared stack contexts, its cache registers and its provenance retention.
+data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) [StackBounds] (Maybe CacheEntry) (Maybe ProvenanceRows) deriving (Eq,Show)
+-- Provenance rows the runner retains in place of its 4096.
+newtype ProvenanceRows = ProvenanceRows Integer deriving (Eq,Show)
+-- Bounds of a declared provenance retention.
+provenanceRowsMin, provenanceRowsMax :: Integer
+provenanceRowsMin=4097
+provenanceRowsMax=131072
 -- One declared private stack: @low < SP <= high@.
 data StackBounds = StackBounds {stackLow::Integer,stackHigh::Integer} deriving (Eq,Show)
 -- Initial SCTLR, CLIDR, initial CSSELR and one to sixteen @(CSSELR selector, CCSIDR)@ pairs with distinct selectors.
@@ -395,12 +401,13 @@ fpexcEnable :: Integer
 fpexcEnable=0x40000000
 kernelEntry :: Value -> IO KernelEntry
 kernelEntry v=do
- ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc","stack_contexts","cache"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr, fpexc, stack_contexts and cache"
+ ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc","stack_contexts","cache","provenance_rows"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr, fpexc, stack_contexts, cache and provenance_rows"
  let optionalAddress k=if k `elem` keys v then Just<$>address(get v k) else pure Nothing
  contexts<-if "stack_contexts" `elem` keys v then stackContexts(get v "stack_contexts") else pure []
  cache<-if "cache" `elem` keys v then Just<$>cacheEntry(get v "cache") else pure Nothing
- kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"<*>pure contexts<*>pure cache
- let KernelEntry _ _ cpacr fpexc _ _=kernel
+ rows<-if "provenance_rows" `elem` keys v then Just . ProvenanceRows<$>integer(get v "provenance_rows")provenanceRowsMin provenanceRowsMax "kernel provenance_rows" else pure Nothing
+ kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"<*>pure contexts<*>pure cache<*>pure rows
+ let KernelEntry _ _ cpacr fpexc _ _ _=kernel
  ensure(maybe True(\value->value .&. complement fpexcEnable==0)fpexc) "kernel fpexc may set EN only"
  ensure(fpexc==Nothing || cpacr/=Nothing) "kernel fpexc needs a cpacr"
  pure kernel
@@ -441,12 +448,14 @@ profileRows :: EntryProfile -> [String]
 profileRows UserEntry=[]
 profileRows(PrivilegedEntry _ identity kernel)=
  [maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]
- ++[row|Just(KernelEntry stop tpidrurw cpacr fpexc contexts cache)<-[kernel],row<-unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc]):contextRows contexts++cacheRows cache]
+ ++[row|Just(KernelEntry stop tpidrurw cpacr fpexc contexts cache rows)<-[kernel],row<-unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc]):contextRows contexts++cacheRows cache++provenanceRows rows]
  where
   contextRows []=[]
   contextRows contexts=[unwords("c":show(length contexts):concat[[hex low,hex high]|StackBounds low high<-contexts])]
   cacheRows Nothing=[]
   cacheRows(Just(CacheEntry sctlr clidr csselr table))=[unwords("p":hex sctlr:hex clidr:hex csselr:show(length table):concat[[hex selector,hex value]|(selector,value)<-table])]
+  provenanceRows Nothing=[]
+  provenanceRows(Just(ProvenanceRows count))=["l "++show count]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  envelope<-memoryProfile c
@@ -548,11 +557,23 @@ runCase runner path = do
    result<-try$do
     executable<-canonicalizePath runner
     hash<-runnerDigest executable
-    envelope<-memoryProfile c
-    (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))(profileOutputBytes envelope) executable [] wire
+    cap<-caseOutputBytes c
+    (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))cap executable [] wire
     let report'=set "runner_sha256" (s hash) report
     if timed then pure(1,merge report'[("status",s "host_timeout"),("stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]) else judgeRunner c regions report' exit out err
    case result of Left(e::IOException)->pure(1,merge report[("status",s "invalid_case"),("reason",s(show e))]);Right value->pure value
+
+-- A case's observation byte cap: its profile's, plus room for each declared provenance row.
+caseOutputBytes :: Value -> IO Int
+caseOutputBytes c=do
+ envelope<-memoryProfile c
+ let declared=if "kernel" `elem` keys c && "provenance_rows" `elem` keys(get c "kernel") then num(get(get c "kernel")"provenance_rows") else 0
+ pure(profileOutputBytes envelope+fromInteger declared*provenanceRowBytes)
+-- Bound on one serialized provenance row and its separator.
+provenanceRowBytes :: Int
+provenanceRowBytes=192
+maxCaseOutputBytes :: Int
+maxCaseOutputBytes=profileOutputBytes Resource8+fromInteger provenanceRowsMax*provenanceRowBytes
 
 -- Batches. The public batch contract: at most batchCaseCount cases, batchJsonBytes of batch
 -- and case JSON together, and batchArtifactBytes of distinct artifact bytes, by SHA256, read for
@@ -791,12 +812,12 @@ frameText out=do
  pure(B.take batchStreamBytes(B.concat(reverse frame++reverse pending++[buffered])))
 
 -- `FUJI_NATIVE_BATCH_CASE INDEX EXIT` and the observation line.
-readFrame :: Output -> MemoryProfile -> Int -> IO (Either (BatchStatus,String) (ExitCode,B.ByteString))
-readFrame out envelope index=do
+readFrame :: Output -> Int -> Int -> IO (Either (BatchStatus,String) (ExitCode,B.ByteString))
+readFrame out cap index=do
  header<-readLine out 128
  case BC.words<$>header of
   Right[tag,position,exit]|tag==BC.pack "FUJI_NATIVE_BATCH_CASE",position==BC.pack(show index),Just code<-frameExit exit->do
-   observation<-readLine out(profileOutputBytes envelope)
+   observation<-readLine out cap
    pure$case observation of
     Right line->Right(code,line)
     Left OutputEnded->Left(BatchRunnerFailure,"runner output ended inside a frame")
@@ -927,8 +948,8 @@ executeBatch executable hash batchDigest cases sink=do
        frames k((ident,Right a):rest)=do
         writeIORef(outputFrame(processOutput p))[]
         let wall=num(get(get(admittedValue a)"limits")"wall_ms")
-        envelope<-memoryProfile(admittedValue a)
-        frame<-timeout(fromInteger(wall*1000+2000000))(readFrame(processOutput p)envelope k)
+        cap<-caseOutputBytes(admittedValue a)
+        frame<-timeout(fromInteger(wall*1000+2000000))(readFrame(processOutput p)cap k)
         excess<-readIORef(processErrorsExcess p)
         case frame of
          Just(Right(exit,line))->do

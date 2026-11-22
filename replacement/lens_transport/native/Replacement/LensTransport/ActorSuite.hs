@@ -458,7 +458,7 @@ makeCase image elf role externals c = CaseSpec
   , caseExpectedMemory = []
   , caseIgnoredMemory = []
   , caseCp14Identity = Nothing
-  , caseKernel = Just (KernelCase plainLimit stop Nothing Nothing Nothing [] [] Nothing)
+  , caseKernel = Just (KernelCase plainLimit stop Nothing Nothing Nothing [] [] Nothing Nothing)
   }
   where
     guest = GuestAddress . fromIntegral

@@ -858,7 +858,7 @@ caseSpec env domain body label helper row =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
-    , caseKernel = Just (KernelCase instructionLimit Nothing Nothing Nothing Nothing (uncomparedRegisters helper row) [] Nothing)
+    , caseKernel = Just (KernelCase instructionLimit Nothing Nothing Nothing Nothing (uncomparedRegisters helper row) [] Nothing Nothing)
     }
   where
     layout = envLayout env

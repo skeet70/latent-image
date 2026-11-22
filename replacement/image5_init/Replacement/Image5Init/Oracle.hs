@@ -128,7 +128,7 @@ caseSpec role (Body bytes walk) row@(Row name _ table) stop = CaseSpec
   , caseExpectedMemory = []
   , caseIgnoredMemory = []
   , caseCp14Identity = Nothing
-  , caseKernel = Just (KernelCase (InstructionLimit 12000) (address <$> stop) Nothing Nothing Nothing [] [] Nothing)
+  , caseKernel = Just (KernelCase (InstructionLimit 12000) (address <$> stop) Nothing Nothing Nothing [] [] Nothing Nothing)
   }
   where external = nub (filter (/= Target 0xd9856c) targets ++ hooks)
 

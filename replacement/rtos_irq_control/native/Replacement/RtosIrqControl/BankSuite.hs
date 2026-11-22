@@ -368,7 +368,7 @@ caseSpec domain role loader owned bank suffix one =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)
-    , caseKernel = Just (KernelCase (InstructionLimit 40000) Nothing (caseTpidrurw one) Nothing Nothing [R1, R2, R3, R12, Lr] [] (caseCache one))
+    , caseKernel = Just (KernelCase (InstructionLimit 40000) Nothing (caseTpidrurw one) Nothing Nothing [R1, R2, R3, R12, Lr] [] (caseCache one) Nothing)
     }
   where
     entry = atDomain domain (caseEntryA one)

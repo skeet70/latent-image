@@ -184,6 +184,8 @@ const LOG_SIZE: usize = 64;
 /// rather than silently recorded.
 const EXECUTED_BITMAP_BUDGET: usize = 256 * 1024;
 const PROVENANCE_SIZE: usize = 4096;
+/// Largest provenance retention a kernel case may declare.
+const MAX_PROVENANCE_ROWS: u32 = 131_072;
 const PAGE: u64 = 4096;
 const TRANSLATION_CACHE_BYTES: u32 = 4 * 1024 * 1024;
 /// The PMSAv7 default map is execute-never from 0x80000000.
@@ -664,7 +666,8 @@ impl CacheRegisters {
     }
 }
 
-/// A kernel case's stop address and the system register values it serves.
+/// A kernel case's stop address, the system register values it serves and its declared
+/// provenance retention.
 #[derive(Debug)]
 struct Kernel {
     stop: Option<Address>,
@@ -672,7 +675,12 @@ struct Kernel {
     cpacr: Option<Cpacr>,
     fpexc: Option<Fpexc>,
     cache: Option<CacheRegisters>,
+    provenance: Option<ProvenanceRows>,
 }
+
+/// Provenance rows retained in place of `PROVENANCE_SIZE`, above it and at most `MAX_PROVENANCE_ROWS`.
+#[derive(Clone, Copy, Debug)]
+struct ProvenanceRows(u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1077,7 +1085,11 @@ impl Kernel {
         if fpexc.is_some() && cpacr.is_none() {
             return Err(WireError("a kernel case's FPEXC needs a CPACR"));
         }
-        Ok(Self { stop, tpidrurw, cpacr, fpexc, cache: None })
+        Ok(Self { stop, tpidrurw, cpacr, fpexc, cache: None, provenance: None })
+    }
+
+    fn provenance_limit(kernel: Option<&Self>) -> usize {
+        kernel.and_then(|kernel| kernel.provenance).map_or(PROVENANCE_SIZE, |rows| rows.0 as usize)
     }
 
     fn vfp(&self) -> bool {
@@ -1177,6 +1189,16 @@ fn parse_case(
         {
             tokens.next()?;
             kernel.cache = Some(CacheRegisters::parse(&mut tokens)?);
+        }
+        if let Some(kernel) = kernel.as_mut()
+            && tokens.peek() == Some(b"l")
+        {
+            tokens.next()?;
+            let rows = tokens.count(MAX_PROVENANCE_ROWS)?;
+            if rows as usize <= PROVENANCE_SIZE {
+                return Err(WireError("a kernel case's provenance retention must exceed 4096 rows"));
+            }
+            kernel.provenance = Some(ProvenanceRows(rows));
         }
         (Profile::Privileged { mode, identity, kernel }, stack_contexts)
     };
@@ -1872,6 +1894,9 @@ struct Observation<'a> {
     access_total: Count,
     accesses: Vec<AccessEntry>,
     memory_provenance_total: Count,
+    /// Present exactly when a kernel case declared its retention.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_provenance_limit: Option<Count>,
     memory_provenance: Vec<LogEntry>,
     /// One row per declared function extent: every word the case entered, and each word's
     /// condition outcome.
@@ -1914,6 +1939,7 @@ impl<'a> Observation<'a> {
             access_total: Count(0),
             accesses: Vec::new(),
             memory_provenance_total: Count(0),
+            memory_provenance_limit: None,
             memory_provenance: Vec::new(),
             executed: Vec::new(),
             executed_unobserved: Vec::new(),
@@ -2307,6 +2333,7 @@ struct State {
     accesses: [AccessEntry; LOG_SIZE],
     access_total: u64,
     provenance: Vec<LogEntry>,
+    provenance_limit: usize,
     provenance_total: u64,
     instruction: Instruction,
     monitor: Monitor,
@@ -2337,6 +2364,7 @@ impl State {
             accesses: [AccessEntry::default(); LOG_SIZE],
             access_total: 0,
             provenance: Vec::with_capacity(PROVENANCE_SIZE),
+            provenance_limit: Kernel::provenance_limit(kernel),
             provenance_total: 0,
             instruction: Instruction { pc: 0, word: 0, transfer: None },
             monitor: Monitor::Open,
@@ -2381,7 +2409,7 @@ impl State {
     }
 
     fn record(&mut self, entry: LogEntry) {
-        if self.provenance.len() < PROVENANCE_SIZE {
+        if self.provenance.len() < self.provenance_limit {
             self.provenance.push(entry);
         }
         self.provenance_total += 1;
@@ -3011,6 +3039,11 @@ impl State {
                 .map(|index| self.accesses[(index % LOG_SIZE as u64) as usize])
                 .collect(),
             memory_provenance_total: Count(self.provenance_total),
+            memory_provenance_limit: case
+                .profile
+                .kernel()
+                .and_then(|kernel| kernel.provenance)
+                .map(|rows| Count(u64::from(rows.0))),
             memory_provenance: std::mem::take(&mut self.provenance),
             executed,
             executed_unobserved,

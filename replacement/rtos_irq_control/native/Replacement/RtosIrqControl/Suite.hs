@@ -234,7 +234,7 @@ caseFor domain role loader owned symbols one =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)
-    , caseKernel = Just (KernelCase (InstructionLimit 2500) Nothing Nothing Nothing Nothing [R1, R2, R3, R12, Lr] [] Nothing)
+    , caseKernel = Just (KernelCase (InstructionLimit 2500) Nothing Nothing Nothing Nothing [R1, R2, R3, R12, Lr] [] Nothing Nothing)
     }
 
 seed :: Register -> Word32

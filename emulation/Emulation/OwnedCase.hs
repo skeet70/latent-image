@@ -16,6 +16,7 @@ module Emulation.OwnedCase
   , IgnoredReason (..)
   , KernelCase (..)
   , CacheRegisters (..)
+  , ProvenanceRows (..)
   , StackContext
   , mkStackContext
   , InstructionLimit (..)
@@ -59,7 +60,7 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Word (Word32, Word64, Word8)
-import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), MemoryProfile (..), Region (..), RegionViews (..), artifactCount, batchStatusLabel, loadCase, profileSizeBytes, regionViewsOf, runBatch, runCase)
+import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), MemoryProfile (..), ProvenanceRows (..), Region (..), RegionViews (..), artifactCount, batchStatusLabel, loadCase, profileSizeBytes, regionViewsOf, runBatch, runCase)
 import Emulation.NativeObservation
   ( Barrier
   , GuestAddress (..)
@@ -264,6 +265,8 @@ data KernelCase = KernelCase
     kernelStackContexts :: [StackContext]
   , -- | Admits the SCTLR, CLIDR, CSSELR and CCSIDR words and the cache maintenance writes.
     kernelCache :: Maybe CacheRegisters
+  , -- | Provenance rows the runner retains in place of 4096.
+    kernelProvenanceRows :: Maybe ProvenanceRows
   }
 
 -- | Initial SCTLR and CSSELR, CLIDR, and the CCSIDR each CSSELR selector reads. Selectors are
@@ -496,6 +499,7 @@ kernelJson kernel =
          | not (null (kernelStackContexts kernel))
          ]
       ++ ["cache" .= cacheJson cache | Just cache <- [kernelCache kernel]]
+      ++ ["provenance_rows" .= rows | Just (ProvenanceRows rows) <- [kernelProvenanceRows kernel]]
 
 cacheJson :: CacheRegisters -> Value
 cacheJson cache =

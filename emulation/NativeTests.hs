@@ -786,7 +786,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
 kernelOutcomes :: FilePath -> IO ()
 kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let acquire=[0xe1921f9f,0xe3510000,0x1afffffc,0xe3a01001,0xe1823f91,0xe3530000,0x1afffff8,0xe12fff1e]
-     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr],O.kernelStackContexts=[],O.kernelCache=Nothing}
+     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr],O.kernelStackContexts=[],O.kernelCache=Nothing,O.kernelProvenanceRows=Nothing}
      spec ident code lock word status=O.CaseSpec
       { O.caseId=ident
       , O.caseProvenance="NativeTests.hs: kernel-case outcomes"
@@ -843,6 +843,39 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let order=N.nativeKernel(observed!!5)>>=N.observedOrder
  ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))(N.WriteValue 0)])("kernel order: "++show order)
 
+-- 5000 ordered stores through the real runner: a kernel case declaring 8192 provenance rows
+-- observes all of them in order; without the declaration the order is truncated.
+provenanceRetention :: FilePath -> IO ()
+provenanceRetention runner=withTemporary "fuji-provenance-retention"$ \root->do
+ let storeLoop=[0xe5821000,0xe2811001,0xe1510003,0x1afffffb,0xe12fff1e]
+     spec ident rows=O.CaseSpec
+      { O.caseId=ident
+      , O.caseProvenance="NativeTests.hs: declared provenance retention"
+      , O.caseExclusion="retention control"
+      , O.caseEntry=N.GuestAddress 0x8000
+      , O.caseExit=N.GuestAddress 0xa000
+      , O.caseRegions=
+         [ O.mkRegion(N.RegionId "code")(N.GuestAddress 0x8000)(4*length storeLoop)O.ReadExecute(O.assemble storeLoop)
+         , O.mkRegion(N.RegionId "data")(N.GuestAddress 0x9000)4 O.ReadWrite(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "exit")(N.GuestAddress 0xa000)4 O.ReadExecute(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "stack")(N.GuestAddress 0xb000)32 O.ReadWrite(B.replicate 32 0)
+         ]
+      , O.caseFunctions=[(N.GuestAddress 0x8000,4*fromIntegral(length storeLoop))]
+      , O.caseInitial=[(r,case r of N.R2->0x9000;N.R3->5000;_->0)|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0xd3)]
+      , O.caseExpectedStatus=N.Returned
+      , O.caseExpectedRegisters=[(N.Sp,0xb020)]
+      , O.caseExpectedMemory=[]
+      , O.caseIgnoredMemory=[]
+      , O.caseCp14Identity=Nothing
+      , O.caseKernel=Just O.KernelCase{O.kernelLimit=O.InstructionLimit 30000,O.kernelStop=Nothing,O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[],O.kernelStackContexts=[],O.kernelCache=Nothing,O.kernelProvenanceRows=rows}
+      }
+ observed<-map snd<$>(O.writeBatch root[spec "declared"(Just(O.ProvenanceRows 8192)),spec "default"Nothing]>>=O.loadObservedBatch runner)
+ let order observation=N.nativeKernel observation>>=N.observedOrder
+     stores=[N.OrderedWrite(N.Write(N.GuestAddress 0x9000)(N.WriteBytes 4))(N.WriteValue value)|value<-[0..4999]]
+ ensure(map N.nativeStatus observed==[N.Returned,N.Returned])("retention statuses: "++show(map N.nativeStatus observed))
+ ensure(order(observed!!0)==Just stores)"a declared retention loses ordered stores"
+ ensure(order(observed!!1)==Nothing && N.provenanceCount(N.nativeProvenance(observed!!1))==N.ProvenanceTotal 5000)"an undeclared retention is not truncated at 4096 rows"
+
 -- Kernel cases with a device span and cache registers through the real runner: identical code has
 -- equal platform orders; a wrong device value, swapped device writes, and a wrong, missing or
 -- differently-operanded maintenance operation each differ. Cache words without a declaration and a
@@ -853,7 +886,7 @@ platformOrderRegressions runner checker=withTemporary "fuji-platform-order"$ \ro
  let deviceBase=0xfffb3080::Word32
      at=N.GuestAddress . fromIntegral
      cache=O.CacheRegisters{O.cacheSctlr=0x00c50878,O.cacheClidr=0x09200003,O.cacheCsselr=0,O.cacheCcsidr=[(0,0x700fe01a),(1,0x201fe01a)]}
-     kernel declared=O.KernelCase{O.kernelLimit=O.InstructionLimit 64,O.kernelStop=Nothing,O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[],O.kernelStackContexts=[],O.kernelCache=declared}
+     kernel declared=O.KernelCase{O.kernelLimit=O.InstructionLimit 64,O.kernelStop=Nothing,O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[],O.kernelStackContexts=[],O.kernelCache=declared,O.kernelProvenanceRows=Nothing}
      seeds=[(N.R0,0x9000),(N.R1,0x11),(N.R2,0x22),(N.R3,deviceBase),(N.R4,0x9040),(N.R6,1)]
      spec ident declared code=O.CaseSpec
       { O.caseId=ident
@@ -1153,7 +1186,7 @@ boundedKernelMemoryAdmission runner checker=withTemporary "fuji-kernel-memory-ad
       , O.caseExpectedMemory=[(N.RegionId "state",O.word32le 0x5a)]
       , O.caseIgnoredMemory=[]
       , O.caseCp14Identity=Nothing
-      , O.caseKernel=Just(O.KernelCase(O.InstructionLimit 64)Nothing Nothing Nothing Nothing [] [] Nothing)
+      , O.caseKernel=Just(O.KernelCase(O.InstructionLimit 64)Nothing Nothing Nothing Nothing [] [] Nothing Nothing)
       }
  path<-O.writeCase(root</>"valid")spec
  let schemaAccepts candidate wanted=do
@@ -1220,6 +1253,7 @@ main=do
  batchLimits runner
  ownedBatchApi runner
  kernelOutcomes runner
+ provenanceRetention runner
  platformOrderRegressions runner checker
  kernelStackContextRegressions runner
  withTemporary "fuji-native-tests"$ \root->do
@@ -1259,6 +1293,8 @@ main=do
    ,("unknown kernel field",nest "kernel"(set "clock"(s "0x00000000"))bankStore)
    ,("FPEXC other than EN",nest "kernel"(set "fpexc"(s "0x80000000") . set "cpacr"(s "0x00f00000"))bankStore)
    ,("FPEXC without CPACR",nest "kernel"(set "fpexc"(s "0x40000000"))bankStore)
+   ,("provenance rows at the default",nest "kernel"(set "provenance_rows"(n 4096))bankStore)
+   ,("provenance rows above the bound",nest "kernel"(set "provenance_rows"(n 131073))bankStore)
    ,("device region outside a kernel case",remove "kernel"bankStore)
    ,("device region outside the banks",modifyAt "regions" 2(set "address"(s "0xfffb5000"))bankStore)
    ,("device region crossing below the banks",modifyAt "regions" 2(set "address"(s "0xfffb2ffc") . set "size"(n 8))bankStore)
@@ -1308,5 +1344,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 12 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries, high region-count boundaries and schema agreement passed")
- putStrLn(show batched++"-case fixture batch, the wall-stop report comparison, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API, kernel-case outcomes and platform-order controls passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 14 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries, high region-count boundaries and schema agreement passed")
+ putStrLn(show batched++"-case fixture batch, the wall-stop report comparison, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API, kernel-case outcomes, declared provenance retention and platform-order controls passed")

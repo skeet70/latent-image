@@ -66,17 +66,12 @@ data Ending = Returns | StopsAt Retained | StopsWithArgument Retained
 
 data Retained = Rendezvous | Dispatch
 
--- | 'FinalState' cases log more accesses than the runner retains, so their write order and
--- platform order are not observed; every other part of the comparison is the same.
-data Check = OrderedLog | FinalState deriving (Eq)
-
 -- | Words are A addresses; 'ramAt' maps them. 'caseWords' override the pattern.
 data Case = Case
   { caseName :: String
   , caseAt :: Entry
   , caseIdentity :: Word32
   , caseEnding :: Ending
-  , caseCheck :: Check
   , caseWords :: [(Word32, Word32)]
   , caseTimerCount :: Word32
   }
@@ -152,6 +147,10 @@ primary, secondary :: Word32
 primary = 0x4003
 secondary = 0x4004
 
+-- | The largest retention; a `kernel_start` case logs about 112,400 rows.
+retainedRows :: ProvenanceRows
+retainedRows = ProvenanceRows 131072
+
 svcMasked :: Word32
 svcMasked = 0xd3
 
@@ -173,7 +172,7 @@ configPointer :: Domain -> Word32
 configPointer domain = ramAt domain 0x4005_46d4
 
 base :: String -> Entry -> Case
-base name entry = Case name entry primary Returns OrderedLog [] 0
+base name entry = Case name entry primary Returns [] 0
 
 configured :: Domain -> Case -> Case
 configured domain one = one {caseWords = (configPointer domain, ownConfig domain) : caseWords one}
@@ -181,8 +180,8 @@ configured domain one = one {caseWords = (configPointer domain, ownConfig domain
 cases :: Domain -> [Case]
 cases domain =
   [ base "publish" Publish
-  , (base "start-primary" Start) {caseEnding = StopsAt Rendezvous, caseCheck = FinalState}
-  , (base "start-peer" Start) {caseIdentity = secondary, caseEnding = StopsWithArgument Dispatch, caseCheck = FinalState, caseWords = peerReleased}
+  , (base "start-primary" Start) {caseEnding = StopsAt Rendezvous}
+  , (base "start-peer" Start) {caseIdentity = secondary, caseEnding = StopsWithArgument Dispatch, caseWords = peerReleased}
   , base "configure-core" ConfigureCore
   , base "owner-contexts" OwnerContexts
   , configured domain (base "initialize-tasks" InitializeTasks)
@@ -192,7 +191,7 @@ cases domain =
   , configured domain (base "data-queues" DataQueues)
   , configured domain (base "mailboxes" Mailboxes)
   , configured domain (base "fixed-pools" FixedPools)
-  , (configured domain (base "initialize-objects" Objects)) {caseCheck = FinalState}
+  , configured domain (base "initialize-objects" Objects)
   , (base "tick-timer-peer" TickTimer) {caseIdentity = secondary, caseTimerCount = 1234}
   ]
     ++ [ (base ("tick-timer-primary-" ++ hexWord32 count) TickTimer) {caseTimerCount = count}
@@ -316,7 +315,7 @@ caseSpec domain role loader owned bank suffix one =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)
-    , caseKernel = Just (KernelCase (InstructionLimit 4000000) (wire . retainedAddress domain <$> stopOf (caseEnding one)) Nothing Nothing Nothing [R0, R1, R2, R3, R12, Lr] [] Nothing)
+    , caseKernel = Just (KernelCase (InstructionLimit 4000000) (wire . retainedAddress domain <$> stopOf (caseEnding one)) Nothing Nothing Nothing [R0, R1, R2, R3, R12, Lr] [] Nothing (Just retainedRows))
     }
   where
     kernelAt = ramAt domain kernelBase
@@ -363,12 +362,9 @@ compareCase domain one spec stock owned =
     ++ registers
     ++ ["CPSR control differs" | fmap cpsrControl (N.lookupRegister Cpsr stock) /= fmap cpsrControl (N.lookupRegister Cpsr owned)]
     ++ [name ++ " bytes differ" | name <- comparedRegions, lookup (RegionId name) (nativeMemory stock) /= lookup (RegionId name) (nativeMemory owned)]
-    ++ case caseCheck one of
-      FinalState -> []
-      OrderedLog ->
-        ["ordered writes differ" | comparedWrites domain stock /= comparedWrites domain owned]
-          ++ ["ordered writes truncated" | comparedWrites domain stock == Nothing || comparedWrites domain owned == Nothing]
-          ++ ["ordered device operations and barriers differ" | platformOrder spec stock /= platformOrder spec owned]
+    ++ ["ordered writes differ" | comparedWrites domain stock /= comparedWrites domain owned]
+    ++ ["ordered writes truncated" | comparedWrites domain stock == Nothing || comparedWrites domain owned == Nothing]
+    ++ ["ordered device operations and barriers differ" | platformOrder spec stock /= platformOrder spec owned]
   where
     expected = case stopOf (caseEnding one) of
       Nothing -> OutcomeReturned

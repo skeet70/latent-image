@@ -56,9 +56,8 @@ import Emulation.NativeCase
   , batchCaseStatus
   , batchStatusLabel
   , judgeRunner
-  , memoryProfile
-  , profileOutputBytes
-  , MemoryProfile (Resource8)
+  , caseOutputBytes
+  , maxCaseOutputBytes
   , materialize
   , prepareBatch
   , readBatch
@@ -565,8 +564,8 @@ validateCachedWith destination identity key cases entry = do
       "cache recorded runner exit digest differs"
     exit <- either failH pure (parseExit exitBytes')
     ensure (exit == manifestCaseRunnerExit item) "cache recorded runner exit differs from its manifest"
-    profile <- memoryProfile (currentValue current)
-    ensure (manifestCaseRawBytes item <= profileOutputBytes profile) "cache payload exceeds case memory profile"
+    cap <- caseOutputBytes (currentValue current)
+    ensure (manifestCaseRawBytes item <= cap) "cache payload exceeds the case's observation cap"
     rawBytes <- readRawPayload caseDirectory (manifestCaseRawBytes item)
     ensure
       (B.length rawBytes == manifestCaseRawBytes item)
@@ -880,7 +879,7 @@ parseManifestCase value = do
   caseSha256 <- digestValue "cache manifest case identity" (get value "case_sha256")
   runnerExit <- exitValue "cache manifest runner exit" (get value "runner_exit")
   rawSha256 <- digestValue "cache manifest raw" (get value "raw_sha256")
-  rawBytes <- integer (get value "raw_bytes") 0 (fromIntegral (profileOutputBytes Resource8)) "cache manifest raw bytes"
+  rawBytes <- integer (get value "raw_bytes") 0 (fromIntegral maxCaseOutputBytes) "cache manifest raw bytes"
   exitSha256 <- digestValue "cache manifest exit" (get value "exit_sha256")
   provenanceSha256 <- digestValue "cache manifest provenance" (get value "provenance_sha256")
   pure

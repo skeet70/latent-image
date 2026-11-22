@@ -115,7 +115,7 @@ specification role entry code functions parameter gate = CaseSpec
   , caseRegions = code ++ [mkRegion (RegionId "state") (address 0x1698a00) 0x1400 ReadWrite state, mkRegion (RegionId "input") (address 0x200000) 200 ReadOnly input, mkRegion (RegionId "receipt") (address 0x210000) 128 ReadWrite (B.replicate 128 0), mkRegion (RegionId "stack") (address 0x300000) 0x1000 ReadWrite (B.replicate 0x1000 0), mkRegion (RegionId "exit") (address 0x220000) 4 ReadExecute (word32le 0xe12fff1e)] ++ [mkRegion (RegionId ("service-"++show a)) (address a) (B.length bytes) ReadExecute bytes | (a,bytes) <- callbacks]
   , caseFunctions = functions ++ [(address a,fromIntegral (B.length bytes)) | (a,bytes) <- callbacks]
   , caseInitial = [(R0,if parameter == Aliased then 0x1699580 else 0x200000),(Sp,0x300800),(Lr,0x220000),(Cpsr,0x13)] ++ [(r,0xa5000000+fromIntegral (fromEnum r)) | r <- [R1,R2,R3,R4,R5,R6,R7,R8,R9,R10,R11,R12]]
-  , caseExpectedStatus = Returned, caseExpectedRegisters = [(Sp,0x300800)] ++ [(r,0xa5000000+fromIntegral (fromEnum r)) | r <- [R4,R5,R6,R7,R8,R9,R10,R11]], caseExpectedMemory = [], caseCp14Identity = Nothing, caseKernel = Just (KernelCase plainLimit Nothing Nothing Nothing Nothing [] [] Nothing)
+  , caseExpectedStatus = Returned, caseExpectedRegisters = [(Sp,0x300800)] ++ [(r,0xa5000000+fromIntegral (fromEnum r)) | r <- [R4,R5,R6,R7,R8,R9,R10,R11]], caseExpectedMemory = [], caseCp14Identity = Nothing, caseKernel = Just (KernelCase plainLimit Nothing Nothing Nothing Nothing [] [] Nothing Nothing)
   , caseIgnoredMemory = []
   }
   where
@@ -392,7 +392,7 @@ runCache action runner imagePath elfPath out scenarioText = do
         , caseFunctions = functions++[(address a,fromIntegral (B.length bytes)) | (a,bytes) <- cacheCallbacks scenario]
         , caseInitial = [(R0,case scenario of Reload page -> page; _ -> 0),(Sp,0x300800),(Lr,0x220000),(Cpsr,0x13)]++abi++[(r,0xa5000000+fromIntegral (fromEnum r)) | r <- [R1,R2,R3,R12]]
         , caseExpectedStatus = Returned, caseExpectedRegisters = (R0,0):(Sp,0x300800):abi, caseExpectedMemory = [], caseCp14Identity = Nothing
-        , caseKernel = Just (KernelCase (InstructionLimit (if scenario `elem` [Fallback,DefaultTable] then 16000000 else 4000000)) Nothing Nothing Nothing Nothing [] [] Nothing)
+        , caseKernel = Just (KernelCase (InstructionLimit (if scenario `elem` [Fallback,DefaultTable] then 16000000 else 4000000)) Nothing Nothing Nothing Nothing [] [] Nothing Nothing)
         , caseIgnoredMemory = []
         }
       stockEntry = case scenario of Reload _ -> 0x69fe20; Accessors -> 0x230000; _ -> 0x69f204

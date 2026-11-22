@@ -40,9 +40,44 @@ carrierBases =
   , ("objects", 0x4cea0, 0xdce60)
   ]
 
--- | Offsets into each domain's bank body.
+-- | One instruction per entry in each domain's bank body, at its linked address; each comment is the instruction replaced.
 mutants :: Domain -> [Mutant]
-mutants _ = []
+mutants DomainA =
+  [ Mutant "publish" "publish" 0x00ba_0c1c 0xe3a0_302c 0xe3a0_3030 -- mov r3, #44
+  , Mutant "start-primary-release" "start-primary" 0x00ba_01f0 0xe3a0_1001 0xe3a0_1002 -- mov r1, #1
+  , Mutant "start-primary-dsb" "start-primary" 0x00ba_01fc 0xf57f_f04f 0xe320_f000 -- dsb sy
+  , Mutant "start-peer-started" "start-peer" 0x00ba_02b0 0xe3a0_4001 0xe3a0_4002 -- mov r4, #1
+  , Mutant "start-peer-dispatch-argument" "start-peer" 0x00ba_02cc 0xe3e0_0009 0xe3e0_0008 -- mvn r0, #9
+  , Mutant "configure-core" "configure-core" 0x00ba_031c 0xe3a0_2001 0xe3a0_2002 -- mov r2, #1
+  , Mutant "owner-contexts" "owner-contexts" 0x00ba_0b48 0xe280_403c 0xe280_4040 -- add r4, r0, #60
+  , Mutant "initialize-tasks" "initialize-tasks" 0x00ba_0438 0xe3a0_a001 0xe3a0_a002 -- mov r10, #1
+  , Mutant "autostart" "autostart" 0x00ba_039c 0xe311_0002 0xe311_0001 -- tst r1, #2
+  , Mutant "semaphores" "semaphores" 0x00ba_092c 0xe283_3010 0xe283_3014 -- add r3, r3, #16
+  , Mutant "event-flags" "event-flags" 0x00ba_0a2c 0xe282_2010 0xe282_2014 -- add r2, r2, #16
+  , Mutant "data-queues" "data-queues" 0x00ba_09b8 0xe282_2020 0xe282_2024 -- add r2, r2, #32
+  , Mutant "mailboxes" "mailboxes" 0x00ba_08bc 0xe282_2014 0xe282_2018 -- add r2, r2, #20
+  , Mutant "fixed-pools" "fixed-pools" 0x00ba_0a74 0xe3a0_3000 0xe3a0_3001 -- mov r3, #0
+  , Mutant "initialize-objects" "initialize-objects" 0x00ba_0600 0xe3a0_e00f 0xe3a0_e00e -- mov lr, #15
+  , Mutant "tick-timer" "tick-timer-primary-00000000" 0x00ba_05a8 0xe3a0_0023 0xe3a0_0024 -- mov r0, #35
+  ]
+mutants DomainB =
+  [ Mutant "publish" "publish" 0x00ba_0c14 0xe3a0_302c 0xe3a0_3030 -- mov r3, #44
+  , Mutant "start-primary-release" "start-primary" 0x00ba_01f0 0xe3a0_1001 0xe3a0_1002 -- mov r1, #1
+  , Mutant "start-primary-dsb" "start-primary" 0x00ba_01fc 0xf57f_f04f 0xe320_f000 -- dsb sy
+  , Mutant "start-peer-started" "start-peer" 0x00ba_02b0 0xe3a0_4001 0xe3a0_4002 -- mov r4, #1
+  , Mutant "start-peer-dispatch-argument" "start-peer" 0x00ba_02cc 0xe3e0_0009 0xe3e0_0008 -- mvn r0, #9
+  , Mutant "configure-core" "configure-core" 0x00ba_031c 0xe3a0_2002 0xe3a0_2003 -- mov r2, #2
+  , Mutant "owner-contexts" "owner-contexts" 0x00ba_0b44 0xe280_403c 0xe280_4040 -- add r4, r0, #60
+  , Mutant "initialize-tasks" "initialize-tasks" 0x00ba_043c 0xe3a0_a002 0xe3a0_a003 -- mov r10, #2
+  , Mutant "autostart" "autostart" 0x00ba_039c 0xe311_0002 0xe311_0001 -- tst r1, #2
+  , Mutant "semaphores" "semaphores" 0x00ba_092c 0xe283_3010 0xe283_3014 -- add r3, r3, #16
+  , Mutant "event-flags" "event-flags" 0x00ba_0a2c 0xe282_2010 0xe282_2014 -- add r2, r2, #16
+  , Mutant "data-queues" "data-queues" 0x00ba_09b4 0xe282_2020 0xe282_2024 -- add r2, r2, #32
+  , Mutant "mailboxes" "mailboxes" 0x00ba_08bc 0xe282_2014 0xe282_2018 -- add r2, r2, #20
+  , Mutant "fixed-pools" "fixed-pools" 0x00ba_0a64 0xe3a0_3000 0xe3a0_3001 -- mov r3, #0
+  , Mutant "initialize-objects" "initialize-objects" 0x00ba_0600 0xe3a0_e00f 0xe3a0_e00e -- mov lr, #15
+  , Mutant "tick-timer" "tick-timer-primary-00000000" 0x00ba_05ac 0xe3a0_0023 0xe3a0_0024 -- mov r0, #35
+  ]
 
 main :: IO ()
 main = do

@@ -78,7 +78,7 @@ fixture stock producer role scenario = CaseSpec
   , caseInitial = [(R0,0x200100),(Sp,0x308000),(Lr,0x100000),(Cpsr,0x13)] ++ [(r,0) | r <- [R1 .. R12]]
   , caseExpectedStatus = expectedStatus, caseExpectedRegisters = expectedRegisters
   , caseExpectedMemory = [], caseIgnoredMemory = [], caseCp14Identity = Nothing
-  , caseKernel = Just (KernelCase (InstructionLimit 20000) (Just (address 0x100004)) Nothing Nothing Nothing [] [] Nothing)
+  , caseKernel = Just (KernelCase (InstructionLimit 20000) (Just (address 0x100004)) Nothing Nothing Nothing [] [] Nothing Nothing)
   }
   where
     (base,size) = case scenario of

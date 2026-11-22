@@ -138,6 +138,10 @@
               }
             }
           }
+        },
+        "provenance_rows": {
+          "type": "integer", "minimum": 4097, "maximum": 131072,
+          "description": "memory_provenance rows the runner retains in place of 4096; the observation then carries memory_provenance_limit and its byte cap grows by 192 bytes per row."
         }
       }
     }

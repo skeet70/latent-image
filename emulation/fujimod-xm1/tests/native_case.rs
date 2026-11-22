@@ -107,6 +107,8 @@ struct Case {
     stack_contexts: Option<String>,
     /// The wire's cache-register row of a kernel case.
     cache: Option<String>,
+    /// The wire's provenance-retention row of a kernel case.
+    provenance: Option<String>,
     resource8: bool,
     /// Bases of regions whose wire row carries the uncached-alias marker.
     aliases: Vec<u32>,
@@ -167,6 +169,7 @@ impl Case {
             kernel: None,
             stack_contexts: None,
             cache: None,
+            provenance: None,
             resource8: false,
             aliases: Vec::new(),
         }
@@ -248,6 +251,11 @@ impl Case {
         self
     }
 
+    fn provenance_row(mut self, row: &str) -> Self {
+        self.provenance = Some(row.to_owned());
+        self
+    }
+
     /// Four regions sharing page 0x4000: r, rw, r, an unmapped gap, then rw.
     fn shared_page(self) -> Self {
         self.region(0x4000, READ, &[0x44, 0x33, 0x22, 0x11])
@@ -284,6 +292,9 @@ impl Case {
         }
         if let Some(cache) = &self.cache {
             text += &format!("\n{cache}");
+        }
+        if let Some(provenance) = &self.provenance {
+            text += &format!("\n{provenance}");
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len() + self.scripts.len());
         for (index, region) in self.regions.iter().enumerate() {
@@ -504,6 +515,8 @@ struct Observation {
     #[serde(default)]
     executed_unobserved: Vec<UnobservedExtent>,
     memory_provenance_total: String,
+    #[serde(default)]
+    memory_provenance_limit: Option<String>,
     memory_provenance: Vec<Row>,
     #[serde(default)]
     kernel: Option<KernelRegisters>,
@@ -2590,6 +2603,68 @@ fn malformed_kernel_cases_are_invalid() {
     for case in cases {
         let observed = case.run();
         assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
+    }
+}
+
+/// Stores R1 = 0, 1, ... R3 - 1 to the word at R2, then returns.
+const STORE_LOOP: [u32; 5] = [0xe582_1000, 0xe281_1001, 0xe151_0003, 0x1aff_fffb, BX_LR];
+
+fn store_loop(stores: u32) -> Case {
+    let mut case = Case::new(&STORE_LOOP)
+        .kernel(Kernel::default())
+        .region(DATA, READ_WRITE, &[0; 4])
+        .register(2, DATA)
+        .register(3, stores);
+    case.instructions = 4 * stores + 8;
+    case
+}
+
+fn stored_values(observed: &Observed) -> Vec<u32> {
+    observed
+        .observation
+        .memory_provenance
+        .iter()
+        .map(|row| match row {
+            Row::Access(access) if access.kind == Kind::Write && word(&access.address) == DATA => word(&access.value),
+            other => panic!("unexpected provenance row {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_declared_provenance_retention_keeps_every_row_in_order() {
+    let observed = store_loop(5000).provenance_row("l 8192").run();
+    observed.assert_returned();
+    assert_eq!(observed.observation.memory_provenance_total, "5000");
+    assert_eq!(observed.observation.memory_provenance_limit.as_deref(), Some("8192"));
+    assert_eq!(stored_values(&observed), (0..5000).collect::<Vec<_>>());
+
+    let bounded = store_loop(5000).provenance_row("l 4097").run();
+    bounded.assert_returned();
+    assert_eq!(bounded.observation.memory_provenance_total, "5000");
+    assert_eq!(stored_values(&bounded), (0..4097).collect::<Vec<_>>());
+}
+
+#[test]
+fn an_undeclared_retention_keeps_the_first_4096_rows() {
+    let observed = store_loop(5000).run();
+    observed.assert_returned();
+    assert_eq!(observed.observation.memory_provenance_total, "5000");
+    assert_eq!(observed.observation.memory_provenance_limit, None);
+    assert_eq!(stored_values(&observed), (0..4096).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_provenance_retention_outside_its_bounds_or_kernel_is_invalid() {
+    let mut unprivileged = store_loop(1).provenance_row("l 8192");
+    unprivileged.kernel = None;
+    for case in [
+        store_loop(1).provenance_row("l 4096"),
+        store_loop(1).provenance_row("l 131073"),
+        store_loop(1).provenance_row("l"),
+        unprivileged,
+    ] {
+        assert_eq!(case.run().status(), Status::InvalidCase, "{}", case.wire());
     }
 }
 
