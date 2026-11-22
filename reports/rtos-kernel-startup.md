@@ -82,14 +82,17 @@ Addresses are A; B is A + `0x8ffc0` for kernel RAM. Shared words (`0x400a....`, 
 
 ## Native comparison
 
-`//replacement/rtos_kernel_init:kernel-bank-cohort` runs each case on the stock loader and on the loader with the probe carriers written over it and the bank body mapped at `0x00ba0020`. Both roles run with the VFP enable `0x424f8`'s first word replaced by `bx lr`, because the runner refuses its CPACR write. Kernel RAM (`0x4004d000` / `0x400dd000`, 220 KiB), the shared window `[0x400a0000,0x400c1000)` and the controller banks start from a distinct word at every address, with bit 1 clear (`cyclic_initialize` schedules a cyclic whose attribute has it set); the timer words are memory, not a timer model.
+`//replacement/rtos_kernel_init:kernel-bank-cohort` runs each case on the stock loader and on the loader with the probe carriers written over it and the bank body mapped at `0x00ba0020`. Kernel RAM (`0x4004d000` / `0x400dd000`, 220 KiB), the shared window `[0x400a0000,0x400c1000)` and the controller banks start from a distinct word at every address, with bit 1 clear (`cyclic_initialize` schedules a cyclic whose attribute has it set); the timer words are memory, not a timer model.
 
 Cases per domain: publication; `kernel_start` on core 0, stopped at the rendezvous entry, and on core 1, stopped at the dispatcher entry with the release word, the core-sync magic and the peer flag preset; configuration; owner contexts; tasks; autostart over 120 slot ids in stride-7 order with every fifth definition autostarting; the five object initializers; `kernel_initialize_objects`; the tick timer on core 1 and on core 0 for counter values 0, 1, 1874, 1875, 123456789 and `0xffffffff`. The phase routine records each phase in a log region and returns `0x5100 + phase`.
 
-One comparator judges every case and every mutant: the outcome (return, or the stop address), callee-saved R4–R11 and SP after a return, R0 at the dispatcher stop, CPSR control bits, the final bytes of kernel RAM, the shared window, the timer, the controller banks, the vector-slot word and the phase log, and, where the runner retains the whole access log, the ordered writes into those regions and the ordered device accesses and barriers. The runner keeps 4,096 log rows; the two `kernel_start` cases and `kernel_initialize_objects` exceed that, so for them write order and barriers are not observed and the comparison is the final state.
+One comparator judges every case and every mutant: the outcome (return, or the stop address), callee-saved R4–R11 and SP after a return, R0 at the dispatcher stop, CPSR control bits, the final bytes of kernel RAM, the shared window, the timer, the controller banks, the vector-slot word and the phase log, the ordered writes into those regions, and the ordered device accesses and barriers. Every case declares a 131,072-row provenance log (the `kernel_start` cases record about 112,400 rows); a truncated log fails the case.
+
+Each domain also runs 16 bank mutants, one instruction each, on the case that executes it: the publication table stride, the release-word value and its `dsb`, the started flag and the dispatcher argument on core 1, the core configuration word, the owner-context field, the task-record domain word, the autostart attribute bit, one field or stride in each object initializer, the object-table constant in `kernel_initialize_objects` and the tick-timer control value. Results: [E-RTOS-KERNEL-STARTUP-BANK-NATIVE-150](../replacement/README.md#fixed-bank-kernel-startup).
+
+Harness limitation: the runner refuses CPACR writes, so the VFP enable `0x424f8` / `0xd24f8` returns at its first word in both roles and its effect is not compared.
 
 ## Open
 
 - Linking into the default bank waits for Root to land on main, and the from-reset pair needs a bank image.
 - Core 0's path after the rendezvous (owner contexts, tick timer, `phase(1)`, `phase(3)`) is compared through the single-entry cases, not inside `kernel_start`: a single-core case cannot pass the rendezvous after core 0 has reset the sync block.
-- The `kernel_start` and object-initialization cases compare final state only, under the runner's log cap.

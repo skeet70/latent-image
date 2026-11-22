@@ -415,6 +415,13 @@ Scope: Native cases on the pinned X-M1 1.50 loaders A 21366ffff7cebc6176b8a8125b
 
 <!-- /evidence-record E-RTOS-IRQ-CACHE-BANK-NATIVE-150 -->
 
+## Fixed-bank kernel startup
+
+The [kernel startup contract](../reports/rtos-kernel-startup.md) fixes the publication, `kernel_start`, tick-timer, core-configuration, owner-context, task, autostart and object-initializer entries of both domains, their callers and the cross-core ordering. `//replacement/rtos_kernel_init:kernel-bank-{a,b}` are the bank rlibs; `:kernel-bank-probe-{a,b}-split` give the carrier pieces and bank body that `:kernel-bank-cohort` compares against stock on the native runner, each case retaining its full ordered write and barrier log.
+
+<!-- evidence-record E-RTOS-KERNEL-STARTUP-BANK-NATIVE-150 -->
+<!-- /evidence-record E-RTOS-KERNEL-STARTUP-BANK-NATIVE-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
