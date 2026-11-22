@@ -101,11 +101,11 @@ route r = case r of
       voidWith s12290cc 8
       finish 0
 
--- | Request events the routing actions compare, and their neighbours.
+-- | Request events the routing actions compare, and one neighbour per gap between them.
 events :: [Word32]
 events =
-  [0 .. 13] ++ [15, 16, 17, 18, 19, 20, 21, 28, 29, 30, 32, 33, 34, 35, 36, 37, 39, 40, 41, 71, 72, 73, 74, 76, 77, 78]
-    ++ [139, 140, 141, 142, 143, 144, 145, 242, 243, 244, 245]
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 16, 17, 19, 20, 21, 29, 30, 33, 34, 35, 36, 37, 40, 41, 72, 73, 74]
+    ++ [77, 78, 140, 141, 143, 144, 145, 243, 244, 245]
 
 routed :: (Word32 -> Route) -> Action Word32
 routed classify = do
