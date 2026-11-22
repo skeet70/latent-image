@@ -1,6 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -36,6 +36,91 @@ xm1_rust_staticlib(
         entry = "xm1_rtos_timer_insert",
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
         link_script = "timer-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+# The fixed-bank bodies under domain-qualified symbols, with the aggregate's codegen.
+[
+    xm1_rust_rlib(
+        name = "timer-bank-%s" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_timer_bank_%s" % domain,
+        out = "arm/libxm1_rtos_timer_bank_%s.rlib" % domain,
+        data = [
+            "src/lib.rs",
+            "src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+            "--cfg",
+            "'feature=\"bank\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+# The same bodies linked at the fixed body origin behind stock-address veneers, with the
+# rest of the timer carrier filled, for the bank-free native cohort.
+[
+    xm1_rust_staticlib(
+        name = "timer-bank-probe-%s-rust" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_timer_bank_%s" % domain,
+        data = [
+            "src/lib.rs",
+            "src/tests.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+            "//replacement/rtos_reservation:src/lib.rs",
+        ],
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"component\"'",
+            "--cfg",
+            "'feature=\"bank\"'",
+            "--cfg",
+            "'feature=\"probe\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "timer-bank-probe-%s" % domain,
+        rust_staticlib = ":timer-bank-probe-%s-rust" % domain,
+        entry = "xm1_rtos_timer_insert",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_includes = ["//replacement/fixed_image:memory-region"],
+        link_script = "timer-bank-probe-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    genrule(
+        name = "timer-bank-probe-%s-split" % domain,
+        srcs = [":timer-bank-probe-%s.elf" % domain],
+        outs = [
+            "timer-bank-probe-%s-carrier.bin" % domain,
+            "timer-bank-probe-%s-bank.bin" % domain,
+        ],
+        cmd = " && ".join([
+            "$(location @lab_llvm//:bin/llvm-objcopy) -O binary " + " ".join(["-j " + section for section in [".timer_initialize", ".initialize_fill", ".timer_insert", ".insert_fill", ".timer_remove", ".remove_fill", ".timer_tick", ".tick_fill"]]) + " $(location :timer-bank-probe-%s.elf) $(location timer-bank-probe-%s-carrier.bin)" % (domain, domain),
+            "$(location @lab_llvm//:bin/llvm-objcopy) -O binary -j .bank $(location :timer-bank-probe-%s.elf) $(location timer-bank-probe-%s-bank.bin)" % (domain, domain),
+        ]),
+        tools = ["@lab_llvm//:bin/llvm-objcopy"],
     )
     for domain in ["a", "b"]
 ]

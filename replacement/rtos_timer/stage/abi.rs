@@ -1,10 +1,14 @@
 //! TIMER A32 stage adapter: the stock entries over the owned heap core.
+//!
+//! `bank` builds the bodies for the fixed bank: each is exported as
+//! `xm1_rtos_timer_<entry>_<domain>` and no stock-address veneer is emitted. `probe` adds
+//! those veneers to a bank build for a standalone link.
 #![cfg_attr(not(test), no_std)]
 
 #[path = "../src/lib.rs"]
 mod timer;
 
-use core::arch::{asm, global_asm};
+use core::arch::asm;
 use timer::layout::{Domain, GuestAddress, KernelContext, LockRecord, TimerArena};
 use timer::{
     insert, remove, tick, Capacity, Expiry, Machine, Scheduler, TimerEntry, TimerError, TimerHeap,
@@ -62,6 +66,7 @@ fn irq_masked() -> bool {
     cpsr & 0x80 != 0
 }
 
+#[cfg(not(feature = "bank"))]
 #[inline(always)]
 fn irq_set() {
     unsafe {
@@ -74,6 +79,7 @@ fn irq_set() {
     };
 }
 
+#[cfg(not(feature = "bank"))]
 #[inline(always)]
 fn irq_clear() {
     unsafe {
@@ -84,6 +90,19 @@ fn irq_clear() {
             out("r3") _,
         )
     };
+}
+
+// The fixed-bank stack admission refuses a CPSR write that is not a restored snapshot.
+#[cfg(feature = "bank")]
+#[inline(always)]
+fn irq_set() {
+    unsafe { asm!("cpsid i", options(nostack)) };
+}
+
+#[cfg(feature = "bank")]
+#[inline(always)]
+fn irq_clear() {
+    unsafe { asm!("cpsie i", options(nostack)) };
 }
 
 #[inline(always)]
@@ -142,28 +161,36 @@ fn heap(context: KernelContext) -> TimerHeap {
     TimerHeap::from_context(&Cpu, context, TIMER_CAPACITY)
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_timer_initialize_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_timer_initialize_b")]
 #[inline(never)]
 #[link_section = ".text.timer_body_initialize"]
 pub extern "C" fn xm1_rtos_timer_initialize_body() {
     timer::initialize(&Cpu, ENTRY, GuestAddress(read(CONFIGURATION_WORD)));
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_timer_insert_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_timer_insert_b")]
 #[inline(never)]
 #[link_section = ".text.timer_body_insert"]
 pub extern "C" fn xm1_rtos_timer_insert_body(context: KernelContext, entry: TimerEntry, expiry: u32) {
     let _ = insert(&Cpu, heap(context), entry, Expiry(expiry));
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_timer_remove_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_timer_remove_b")]
 #[inline(never)]
 #[link_section = ".text.timer_body_remove"]
 pub extern "C" fn xm1_rtos_timer_remove_body(context: KernelContext, entry: TimerEntry) {
     let _ = remove(&Cpu, heap(context), entry);
 }
 
-#[no_mangle]
+#[cfg_attr(not(feature = "bank"), no_mangle)]
+#[cfg_attr(all(feature = "bank", feature = "domain-a"), export_name = "xm1_rtos_timer_tick_a")]
+#[cfg_attr(all(feature = "bank", feature = "domain-b"), export_name = "xm1_rtos_timer_tick_b")]
 #[inline(never)]
 #[link_section = ".text.timer_body_tick"]
 pub extern "C" fn xm1_rtos_timer_tick_body() -> i32 {
@@ -182,7 +209,8 @@ pub extern "C" fn xm1_rtos_timer_tick_body() -> i32 {
     }
 }
 
-global_asm!(
+#[cfg(not(feature = "bank"))]
+core::arch::global_asm!(
     ".pushsection .text.timer_initialize, \"ax\", %progbits",
     ".arm",
     ".global xm1_rtos_timer_initialize",
@@ -217,7 +245,40 @@ global_asm!(
     ".popsection",
 );
 
-#[cfg(all(target_arch = "arm", not(test), not(feature = "component")))]
+#[cfg(feature = "probe")]
+macro_rules! probe_veneer {
+    ($entry:literal, $domain:literal) => {
+        concat!(
+            ".pushsection .text.timer_", $entry, ", \"ax\", %progbits\n",
+            ".arm\n",
+            ".global xm1_rtos_timer_", $entry, "\n",
+            ".type xm1_rtos_timer_", $entry, ", %function\n",
+            "xm1_rtos_timer_", $entry, ":\n",
+            "b xm1_rtos_timer_", $entry, "_", $domain, "\n",
+            ".size xm1_rtos_timer_", $entry, ", . - xm1_rtos_timer_", $entry, "\n",
+            ".popsection\n",
+        )
+    };
+}
+
+#[cfg(feature = "probe")]
+macro_rules! probe_veneers {
+    ($domain:literal) => {
+        concat!(
+            probe_veneer!("initialize", $domain),
+            probe_veneer!("insert", $domain),
+            probe_veneer!("remove", $domain),
+            probe_veneer!("tick", $domain),
+        )
+    };
+}
+
+#[cfg(all(feature = "probe", feature = "domain-a"))]
+core::arch::global_asm!(probe_veneers!("a"));
+#[cfg(all(feature = "probe", feature = "domain-b"))]
+core::arch::global_asm!(probe_veneers!("b"));
+
+#[cfg(all(target_arch = "arm", not(test), any(not(feature = "component"), feature = "probe")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}

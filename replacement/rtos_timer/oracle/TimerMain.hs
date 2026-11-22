@@ -3,7 +3,8 @@
 -- | Qualify timer ABI cases and controls over pinned stock loaders.
 -- Aggregate mode takes --aggregate-{a,b}-{bin,symbols,placements} and
 -- --aggregate-carriers. Standalone mode also takes --owned-{a,b}-{bin,symbols}
--- and --s3d-{a,b}-{bin,symbols}.
+-- and --s3d-{a,b}-{bin,symbols}; --bank-{a,b}-{bin,symbols} map a fixed-bank body
+-- that the owned entries branch to.
 -- Both modes require --runner, --layout, --loader-a, --loader-b and --results;
 -- --cache-root defaults to the shared private-data/cache/native. The last
 -- occurrence of an option overrides Bazel defaults.
@@ -50,6 +51,17 @@ main = do
   loaderBBytes <- B.readFile loaderB
   (ownedAImage, ownedBImage, ownedASymbols, ownedBSymbols, aggregates, ownedAPath, ownedBPath) <-
     loadInputs loaderABytes loaderBBytes aggregatePaths
+  bankPaths <- mapM optional ["--bank-a-bin", "--bank-a-symbols", "--bank-b-bin", "--bank-b-symbols"]
+  (bankA, bankASymbols, bankB, bankBSymbols) <- case bankPaths of
+    [Nothing, Nothing, Nothing, Nothing] -> pure (Nothing, [], Nothing, [])
+    [Just a, Just sa, Just b, Just sb] | null aggregates -> do
+      symbolsA <- parseBankSymbols sa
+      symbolsB <- parseBankSymbols sb
+      unless (not (null symbolsA) && not (null symbolsB)) (failH "bank timer symbols are empty")
+      bytesA <- B.readFile a
+      bytesB <- B.readFile b
+      pure (Just (Image (minimum (map ownedAddress symbolsA)) bytesA), symbolsA, Just (Image (minimum (map ownedAddress symbolsB)) bytesB), symbolsB)
+    _ -> failH "bank mode is standalone and requires --bank-{a,b}-{bin,symbols}"
   (s3dAImage, s3dASymbols, s3dBImage, s3dBSymbols) <-
     if null aggregates then do
       a <- required "--s3d-a-bin" >>= B.readFile
@@ -70,8 +82,8 @@ main = do
   createDirectoryIfMissing True (takeDirectory resultsPath)
   let stockA = Image 0x40000 loaderABytes
       stockB = Image 0xd0000 loaderBBytes
-  (runA, controlsA) <- runDomain scope runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA stockB ownedAImage ownedASymbols s3dAImage s3dASymbols aggregates
-  (runB, controlsB) <- runDomain scope runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB stockA ownedBImage ownedBSymbols s3dBImage s3dBSymbols aggregates
+  (runA, controlsA) <- runDomain scope runner cacheRoot (takeDirectory resultsPath </> "domain-a") facts DomainA stockA stockB ownedAImage (ownedASymbols ++ bankASymbols) bankA s3dAImage s3dASymbols aggregates
+  (runB, controlsB) <- runDomain scope runner cacheRoot (takeDirectory resultsPath </> "domain-b") facts DomainB stockB stockA ownedBImage (ownedBSymbols ++ bankBSymbols) bankB s3dBImage s3dBSymbols aggregates
   let runs = runA ++ runB
       controls = controlsA ++ controlsB
       failures =
@@ -119,6 +131,8 @@ main = do
                 , "owned_b_bin_sha256" .= sha256Hex ownedBDigest
                 , "s3d_a_bin_sha256" .= sha256Hex (sha256 (imageBytes s3dAImage))
                 , "s3d_b_bin_sha256" .= sha256Hex (sha256 (imageBytes s3dBImage))
+                , "bank_a_bin_sha256" .= fmap (sha256Hex . sha256 . imageBytes) bankA
+                , "bank_b_bin_sha256" .= fmap (sha256Hex . sha256 . imageBytes) bankB
                 ]
           , "cases" .= map caseValue runs
           , "controls" .= map controlValue controls

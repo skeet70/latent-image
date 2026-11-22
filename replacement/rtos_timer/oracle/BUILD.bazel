@@ -108,3 +108,65 @@ haskell_binary(
         "//replacement/rtos_platform:platform-artifact",
     ],
 )
+
+_BANK_INPUTS = [
+    ":layout.json",
+    "//emulation:native-runner",
+    "//replacement/rtos_timer:timer-bank-probe-a-carrier.bin",
+    "//replacement/rtos_timer:timer-bank-probe-a-bank.bin",
+    "//replacement/rtos_timer:timer-bank-probe-a.symbols",
+    "//replacement/rtos_timer:timer-bank-probe-b-carrier.bin",
+    "//replacement/rtos_timer:timer-bank-probe-b-bank.bin",
+    "//replacement/rtos_timer:timer-bank-probe-b.symbols",
+    "//replacement/rtos_scheduler:s3d-a.bin",
+    "//replacement/rtos_scheduler:s3d-a.symbols",
+    "//replacement/rtos_scheduler:s3d-b.bin",
+    "//replacement/rtos_scheduler:s3d-b.symbols",
+]
+
+# The timer cohorts with each owned entry a stock-address veneer into the bank-form body.
+haskell_binary(
+    name = "timer-bank-oracle",
+    srcs = ["TimerMain.hs"],
+    main_file = "TimerMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--layout",
+        "$(rootpath :layout.json)",
+    ] + [
+        argument
+        for domain in ["a", "b"]
+        for argument in [
+            "--owned-%s-bin" % domain,
+            "$(rootpath //replacement/rtos_timer:timer-bank-probe-%s-carrier.bin)" % domain,
+            "--owned-%s-symbols" % domain,
+            "$(rootpath //replacement/rtos_timer:timer-bank-probe-%s.symbols)" % domain,
+            "--bank-%s-bin" % domain,
+            "$(rootpath //replacement/rtos_timer:timer-bank-probe-%s-bank.bin)" % domain,
+            "--bank-%s-symbols" % domain,
+            "$(rootpath //replacement/rtos_timer:timer-bank-probe-%s.symbols)" % domain,
+            "--s3d-%s-bin" % domain,
+            "$(rootpath //replacement/rtos_scheduler:s3d-%s.bin)" % domain,
+            "--s3d-%s-symbols" % domain,
+            "$(rootpath //replacement/rtos_scheduler:s3d-%s.symbols)" % domain,
+        ]
+    ],
+    data = _BANK_INPUTS,
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":timer-oracle-lib",
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_platform:platform-artifact",
+    ],
+)

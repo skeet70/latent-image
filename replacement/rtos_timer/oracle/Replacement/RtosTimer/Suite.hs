@@ -12,6 +12,7 @@ module Replacement.RtosTimer.Suite
   , fixtureCodeExtents
   , parseS3dSymbols
   , parseAggregateSymbols
+  , parseBankSymbols
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -30,6 +31,21 @@ import Replacement.RtosTimer.Aggregate (Aggregate, aggregateFunctions, aggregate
 import System.FilePath ((</>))
 
 data Image = Image { imageBase :: Word32, imageBytes :: B.ByteString }
+
+-- | A fixed-bank body image of the owned role; its symbols join the owned symbols.
+bankRegions :: Role -> Maybe Image -> [CaseRegion]
+bankRegions Owned (Just bank) = [mkRegion (RegionId "bank") (GuestAddress (fromIntegral (imageBase bank))) (B.length (imageBytes bank)) ReadExecute (imageBytes bank)]
+bankRegions _ _ = []
+
+contains :: Image -> Word32 -> Bool
+contains image address = address >= imageBase image && toInteger address + 4 <= toInteger (imageBase image) + toInteger (B.length (imageBytes image))
+
+-- | Applies patches that fall inside the image and leaves the rest to other images.
+patchImage :: [(Word32, Word32)] -> Image -> Image
+patchImage patches image = image
+  { imageBytes = foldl (\bytes (address, word) -> poke bytes (address - imageBase image) (word32le word)) (imageBytes image)
+      [patch | patch@(address, _) <- patches, contains image address]
+  }
 
 data Scope = FullScope | PublicationSmoke deriving (Eq, Show)
 
@@ -766,8 +782,8 @@ maskRange offset size bytes
   | offset < 0 || size < 0 || offset + size > B.length bytes = bytes
   | otherwise = B.take offset bytes <> B.replicate size 0 <> B.drop (offset + size) bytes
 
-caseFor :: Facts -> Domain -> Role -> Image -> Image -> [OwnedSymbol] -> [Aggregate] -> Case -> CaseSpec
-caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
+caseFor :: Facts -> Domain -> Role -> Image -> Image -> [OwnedSymbol] -> Maybe Image -> [Aggregate] -> Case -> CaseSpec
+caseFor facts domain role stockImage ownedImage ownedSymbols bank aggregates one =
   CaseSpec
     { caseId = caseName one ++ "-" ++ domainLabel domain
     , caseProvenance = "X-M1 1.50 timer stock ABI, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic heap, entry and callback state"
@@ -811,7 +827,7 @@ caseFor facts domain role stockImage ownedImage ownedSymbols aggregates one =
     codeRegions
       | role == Owned && not (null aggregates) =
           concat [aggregateRegions ("aggregate-" ++ show index) aggregate | (index, aggregate) <- zip [0 :: Int ..] aggregates]
-      | otherwise = [mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (B.length codeBytes) ReadExecute codeBytes]
+      | otherwise = [mkRegion (RegionId "code") (GuestAddress (fromIntegral codeBase)) (B.length codeBytes) ReadExecute codeBytes] ++ bankRegions role bank
     entry = case caseCall one of
       Initialize -> wordAddress (initializeAddress domain)
       Insert -> insertEntry domain
@@ -884,6 +900,10 @@ parseS3dSymbols = parseSymbolsIn s3dSpans
 
 parseAggregateSymbols :: FilePath -> IO [OwnedSymbol]
 parseAggregateSymbols = parseSymbolsIn [(0, maxBound)]
+
+-- | Bodies inside the fixed image's reserved RAM range.
+parseBankSymbols :: FilePath -> IO [OwnedSymbol]
+parseBankSymbols = parseSymbolsIn [(0x00ba0020, 0x00be0000)]
 
 cohortOf :: Case -> String
 cohortOf one = case caseName one of
@@ -1313,10 +1333,10 @@ s3dDelayBody :: Domain -> Word32
 s3dDelayBody DomainA = 0x46e4c
 s3dDelayBody DomainB = 0xd6e0c
 
-composeOwnedCode :: Domain -> B.ByteString -> Image -> [OwnedSymbol] -> Image -> [(Word32, Word32)] -> B.ByteString
-composeOwnedCode d loader timerImage timerSymbols s3dImage extra =
+composeOwnedCode :: Domain -> B.ByteString -> Image -> Image -> [(Word32, Word32)] -> B.ByteString
+composeOwnedCode d loader timerImage s3dImage extra =
   let base = composeLoaderBase d
-      timerBase = minimum (map ownedAddress timerSymbols)
+      timerBase = imageBase timerImage
       s3dBase = imageBase s3dImage
       s3dBytes = imageBytes s3dImage
       withTimer = pokeSlice (padTo 0x10000 loader) (timerBase - base) (imageBytes timerImage)
@@ -1325,33 +1345,38 @@ composeOwnedCode d loader timerImage timerSymbols s3dImage extra =
         withTimer
         ([(entry, 4, entry) | entry <- s3dEntries d]
           ++ [(s3dDelayBody d, 0x180, s3dDelayBody d)])
-   in foldl (\bytes (address, word) -> poke bytes (address - base) (word32le word)) withS3d extra
+   in foldl (\bytes (address, word) -> poke bytes (address - base) (word32le word)) withS3d
+        [patch | patch@(address, _) <- extra, address >= base, address - base + 4 <= 0x10000]
 
-composeControlPatches :: Domain -> Image -> [OwnedSymbol] -> ComposeControl -> Either String [(Word32, Word32)]
-composeControlPatches _d timerImage timerSymbols control = do
-  body <- case [symbol | symbol <- timerSymbols, ownedName symbol == "xm1_rtos_timer_tick_body"] of
+-- | The bank build exports the tick body as @xm1_rtos_timer_tick_<domain>@.
+composeControlPatches :: Domain -> Image -> [OwnedSymbol] -> Maybe Image -> ComposeControl -> Either String [(Word32, Word32)]
+composeControlPatches d timerImage timerSymbols bank control = do
+  body <- case [symbol | symbol <- timerSymbols, ownedName symbol `elem` ["xm1_rtos_timer_tick_body", "xm1_rtos_timer_tick_" ++ suffix]] of
     [symbol] -> Right symbol
     [] -> Left "the timer tick body symbol is missing"
     _ -> Left "the timer tick body symbol is duplicated"
   let candidates = case control of
-        ControlRemoveCallback -> [(0x118, 0xe12fff38, 0xe1a00000), (0xd0, 0xe12fff35, 0xe1a00000), (0x124, 0xe12fff33, 0xe1a00000)]
-        ControlWrongLock -> [(0x124, 0xe1a00006, 0xe286000c), (0xd4, 0xe1a00006, 0xe286000c), (0x130, 0xe1a00006, 0xe286000c)]
-        ControlWrongDetach -> [(0xd4, 0xe5812000, 0xe1a00000), (0xb4, 0xe5801000, 0xe1a00000)]
+        ControlRemoveCallback -> [(0x118, 0xe12fff38, 0xe1a00000), (0xd0, 0xe12fff35, 0xe1a00000), (0x124, 0xe12fff33, 0xe1a00000), (0xd8, 0xe12fff35, 0xe1a00000)]
+        ControlWrongLock -> [(0x124, 0xe1a00006, 0xe286000c), (0xd4, 0xe1a00006, 0xe286000c), (0x130, 0xe1a00006, 0xe286000c), (0xdc, 0xe1a00006, 0xe286000c)]
+        ControlWrongDetach -> [(0xd4, 0xe5812000, 0xe1a00000), (0xb4, 0xe5801000, 0xe1a00000), (0xbc, 0xe5801000, 0xe1a00000)]
+      images = timerImage : maybe [] pure bank
       matches =
         [(address, replacement)
         | (offset, expected, replacement) <- candidates
         , offset + 4 <= ownedSize body
         , let address = ownedAddress body + offset
-        , address >= imageBase timerImage
-        , toInteger address + 4 <= toInteger (imageBase timerImage) + toInteger (B.length (imageBytes timerImage))
-        , readWordAt (imageBytes timerImage) (fromIntegral (address - imageBase timerImage)) == expected
+        , image <- images
+        , contains image address
+        , readWordAt (imageBytes image) (fromIntegral (address - imageBase image)) == expected
         ]
   case matches of
     [patch] -> Right [patch]
     _ -> Left ("the emitted timer tick has no unique " ++ composeControlName control ++ " instruction site")
+  where
+    suffix = if d == DomainA then "a" else "b"
 
-composeCaseFor :: Facts -> Domain -> Role -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> [Aggregate] -> [(Word32, Word32)] -> String -> ComposeCase -> CaseSpec
-composeCaseFor facts d role stockImage otherImage timerImage timerSymbols s3dImage s3dSymbols aggregates extra suffix one =
+composeCaseFor :: Facts -> Domain -> Role -> Image -> Image -> Image -> [OwnedSymbol] -> Maybe Image -> Image -> [OwnedSymbol] -> [Aggregate] -> [(Word32, Word32)] -> String -> ComposeCase -> CaseSpec
+composeCaseFor facts d role stockImage otherImage timerImage timerSymbols bank s3dImage s3dSymbols aggregates extra suffix one =
   CaseSpec
     { caseId = composeName one ++ suffix ++ "-" ++ domainLabel d
     , caseProvenance = "X-M1 1.50 timer tick plus S3d timeout/delay completion, x70view 55436fc85c0560dd252b0410af6f2427fe198cd3; synthetic scheduler state"
@@ -1397,10 +1422,10 @@ composeCaseFor facts d role stockImage otherImage timerImage timerSymbols s3dIma
       | otherwise =
           [ mkRegion (RegionId "code") (GuestAddress (fromIntegral (composeLoaderBase d))) 0x10000 ReadExecute codeBytes
           , mkRegion (RegionId "bodies") (GuestAddress (fromIntegral (composeBodyBase d))) 0x4000 ReadExecute bodies
-          ]
+          ] ++ bankRegions role (fmap (patchImage extra) bank)
     codeBytes = case role of
       Stock -> padTo 0x10000 (imageBytes stockImage)
-      Owned -> composeOwnedCode d (imageBytes stockImage) timerImage timerSymbols s3dImage extra
+      Owned -> composeOwnedCode d (imageBytes stockImage) timerImage s3dImage extra
     bodies = case role of
       Stock -> B.replicate 0x4000 0
       Owned -> slice (imageBase s3dImage) (imageBytes s3dImage) (composeBodyBase d) 0x4000
@@ -1453,8 +1478,8 @@ composeFrameEffects observation = case nativeKernel observation >>= observedOrde
         [composeStackTop, composeStackBase, composeStackBase + composeStackSize - 0x40]
     ]
 
-runDomain :: Scope -> FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [OwnedSymbol] -> Image -> [OwnedSymbol] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
-runDomain scope runner cacheRoot directory facts domain stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates = do
+runDomain :: Scope -> FilePath -> FilePath -> FilePath -> Facts -> Domain -> Image -> Image -> Image -> [OwnedSymbol] -> Maybe Image -> Image -> [OwnedSymbol] -> [Aggregate] -> IO ([CaseRun], [ControlRun])
+runDomain scope runner cacheRoot directory facts domain stockImage otherImage ownedImage ownedSymbols bank s3dImage s3dSymbols aggregates = do
   let selected = case scope of
         FullScope -> cases facts domain
         PublicationSmoke -> initializeCases facts domain
@@ -1470,8 +1495,8 @@ runDomain scope runner cacheRoot directory facts domain stockImage otherImage ow
   where
     runCohort _ [] _ = pure ([], [])
     runCohort cohort chosen base = do
-      let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols aggregates) chosen
-          ownedSpecs = map (caseFor facts domain Owned stockImage ownedImage ownedSymbols aggregates) chosen
+      let stockSpecs = map (caseFor facts domain Stock stockImage ownedImage ownedSymbols bank aggregates) chosen
+          ownedSpecs = map (caseFor facts domain Owned stockImage ownedImage ownedSymbols bank aggregates) chosen
       stockBatch <- writeBatch (base </> "stock") stockSpecs
       ownedBatch <- writeBatch (base </> "owned") ownedSpecs
       (stockReuse, stockRaw) <- cachedObservedBatch cacheRoot runner stockBatch
@@ -1518,10 +1543,10 @@ runDomain scope runner cacheRoot directory facts domain stockImage otherImage ow
       pure (map fst results, concatMap snd results)
     runComposeCohort [] _ = pure ([], [])
     runComposeCohort chosen base = do
-      let stockSpecs = [composeCaseFor facts domain Stock stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates [] "" one | one <- chosen]
-          ownedSpecs = [composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates [] "" one | one <- chosen]
+      let stockSpecs = [composeCaseFor facts domain Stock stockImage otherImage ownedImage ownedSymbols bank s3dImage s3dSymbols aggregates [] "" one | one <- chosen]
+          ownedSpecs = [composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols bank s3dImage s3dSymbols aggregates [] "" one | one <- chosen]
           controls =
-            [ (composeName one, control, composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols s3dImage s3dSymbols aggregates (either error id (composeControlPatches domain ownedImage ownedSymbols control)) ("-control-" ++ composeControlName control) one)
+            [ (composeName one, control, composeCaseFor facts domain Owned stockImage otherImage ownedImage ownedSymbols bank s3dImage s3dSymbols aggregates (either error id (composeControlPatches domain ownedImage ownedSymbols bank control)) ("-control-" ++ composeControlName control) one)
             | one <- chosen
             , control <- composeControls (composeKind one)
             ]
