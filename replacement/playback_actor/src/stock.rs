@@ -2,6 +2,7 @@
 //! rows name.
 
 use crate::machine0::{self, Call, Source, State, WorkState};
+#[cfg(playback_native_machines)]
 use crate::machine30;
 use crate::machine7;
 use crate::DevicePacket;
@@ -13,13 +14,16 @@ const PACKET_FRAME_WORDS: usize = 20;
 const MACHINE_STATES: u32 = 0x014e_a5ac;
 const MACHINE0_STATE: u32 = MACHINE_STATES;
 const MACHINE7_STATE: u32 = MACHINE_STATES + 2 * 7;
+#[cfg(playback_native_machines)]
 const MACHINE30_STATE: u32 = MACHINE_STATES + 2 * 30;
 const MODE_STATE: u32 = 0x014e_a678;
 const BUFFER_STEP: u32 = MODE_STATE + 0x18;
 const MODE_VALUE: u32 = MODE_STATE + 0x1c;
 const REQUEST: u32 = 0x014e_a6e4;
 const REQUEST_EVENT: u32 = REQUEST + 0x2c;
+#[cfg(playback_native_machines)]
 const TRANSFER: u32 = 0x014e_aed8;
+#[cfg(playback_native_machines)]
 const TRANSFER_STEP: u32 = TRANSFER + machine30::Word::Step as u32;
 const STEP: u32 = 0x014e_b5d0;
 const STEP_KIND: u32 = STEP + 4;
@@ -57,7 +61,28 @@ extern "C" {
     fn playback_notify_0825();
     fn playback_notify_0826();
     fn playback_device_notification(packet: *const u32) -> i32;
+    fn playback_service_0120ec28() -> i32;
+    fn playback_service_01212a48() -> i32;
+    fn playback_service_0120d618() -> i32;
+    fn playback_service_0120e6e8() -> i32;
+    fn playback_service_0120e964() -> i32;
+    fn playback_service_0120f328() -> i32;
+    fn playback_service_0120f420() -> i32;
+    fn playback_service_0120fc08() -> i32;
+    fn playback_service_0121164c() -> i32;
+    fn playback_service_01211c8c() -> i32;
+    fn playback_service_012128a0() -> i32;
+    fn playback_service_012138ac() -> i32;
+    fn playback_service_0121406c() -> i32;
+    fn playback_service_012290cc(argument: u32) -> i32;
+    fn playback_service_012290fc(argument: u32) -> i32;
+    fn playback_service_012390d4() -> i32;
+    fn playback_service_01239134() -> i32;
+    fn playback_service_01239178() -> i32;
+}
 
+#[cfg(playback_native_machines)]
+extern "C" {
     fn playback_dispatch_machine3_events() -> i32;
     fn playback_dispatch_machine46_events() -> i32;
     fn playback_select_source_kind22() -> i32;
@@ -65,9 +90,7 @@ extern "C" {
     fn playback_prepare_selected_source_event() -> i32;
     fn playback_prepare_selected_transfer_event() -> i32;
     fn playback_service_0120ce60() -> i32;
-    fn playback_service_0120ec28() -> i32;
     fn playback_service_012119a4() -> i32;
-    fn playback_service_01212a48() -> i32;
     fn playback_service_0121c9f8() -> i32;
     fn playback_service_012205e4() -> i32;
     fn playback_service_0122586c() -> i32;
@@ -109,22 +132,6 @@ extern "C" {
     fn playback_service_012431b8() -> i32;
     fn playback_service_01243868() -> i32;
     fn playback_service_01243e48() -> i32;
-    fn playback_service_0120d618() -> i32;
-    fn playback_service_0120e6e8() -> i32;
-    fn playback_service_0120e964() -> i32;
-    fn playback_service_0120f328() -> i32;
-    fn playback_service_0120f420() -> i32;
-    fn playback_service_0120fc08() -> i32;
-    fn playback_service_0121164c() -> i32;
-    fn playback_service_01211c8c() -> i32;
-    fn playback_service_012128a0() -> i32;
-    fn playback_service_012138ac() -> i32;
-    fn playback_service_0121406c() -> i32;
-    fn playback_service_012290cc(argument: u32) -> i32;
-    fn playback_service_012290fc(argument: u32) -> i32;
-    fn playback_service_012390d4() -> i32;
-    fn playback_service_01239134() -> i32;
-    fn playback_service_01239178() -> i32;
     fn playback_service_01243fa0() -> i32;
     fn playback_service_012441d0(argument: u32) -> i32;
     fn playback_service_012441f0() -> i32;
@@ -270,6 +277,7 @@ impl machine7::Services for Stock {
     }
 }
 
+#[cfg(playback_native_machines)]
 impl machine30::Services for Stock {
     fn call(&mut self, call: machine30::Call) -> i32 {
         use machine30::Call as C;
@@ -436,6 +444,7 @@ actions! { machine7 {
     xm1_playback_m7_action50 => action50,
 } }
 
+#[cfg(playback_native_machines)]
 actions! { machine30 {
     xm1_playback_m30_action02 => action02, xm1_playback_m30_action03 => action03,
     xm1_playback_m30_action04 => action04, xm1_playback_m30_action05 => action05,

@@ -50,9 +50,9 @@ requestState = Span 0x014ea6e4 0x014ea714
 transferState = Span 0x014eaed8 0x014eb5d0
 stepState = Span 0x014eb5d0 0x014eb5d8
 
--- | The owned machines' action extents.
+-- | The staged machines' action extents.
 retired :: [Span]
-retired = [Span 0x011e8ce4 0x011ea434, Span 0x011eb824 0x011ec980, Span 0x011f31bc 0x011f4810]
+retired = [Span 0x011e8ce4 0x011ea434, Span 0x011eb824 0x011ec980]
 
 none :: Capture
 none = Capture [] []
