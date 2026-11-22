@@ -58,8 +58,8 @@ runProduce source count directory = do
         (object ["phase" .= ("replay" :: T.Text), "reads" .= readRows])
         [TraceHitSource (TraceHitCursor 0) (TraceHitCursor count) (TraceHitSnapshot count) sourcePage_]
         (TraceHitFormat lrSites spSites sites)
-        (object ["menu_messages" .= ([] :: [Word32]), "d3_hook_r0" .= ([] :: [Word32]), "classic_chrome_site_entries" .= ([] :: [String])])
   ref <- writeObservationStream spec
+    (object ["menu_messages" .= ([] :: [Word32]), "d3_hook_r0" .= ([] :: [Word32]), "classic_chrome_site_entries" .= ([] :: [String])])
   print (encodeRef ref)
 
 runConsume :: FilePath -> FilePath -> Int -> IO ()

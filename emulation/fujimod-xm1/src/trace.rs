@@ -1054,7 +1054,10 @@ pub struct TraceSites {
     pause_labels: BTreeMap<String, u8>,
     pub paused: bool,
     pause_generation: u64,
+    /// Retained hits; `hits[0]` has absolute index `released`.
     pub hits: Vec<Hit>,
+    /// Hits removed by `release_hits` since the last capture observation began.
+    released: usize,
     /// Physical ranges each site's hits read at entry, by site address.
     pub site_reads: BTreeMap<u32, Vec<SiteRead>>,
     pub calls: calls::Calls,
@@ -1159,6 +1162,27 @@ impl TraceSites {
 
     pub fn bound_hits(&mut self, limit: std::num::NonZeroUsize) {
         self.hit_limit = Some(limit);
+    }
+
+    /// Hits recorded since the last capture observation began, released ones included.
+    pub fn hit_count(&self) -> usize {
+        self.released + self.hits.len()
+    }
+
+    /// The retained hits from absolute index `from`.
+    pub fn hits_from(&self, from: usize) -> Result<&[Hit], String> {
+        let start = from.checked_sub(self.released).ok_or("trace-hits index precedes acknowledged hits")?;
+        self.hits.get(start..).ok_or_else(|| "trace-hits requires a hit index within the recorded hits".into())
+    }
+
+    /// Removes the hits below absolute index `below`.
+    pub fn release_hits(&mut self, below: usize) -> Result<std::vec::Drain<'_, Hit>, String> {
+        let end = below.checked_sub(self.released).ok_or("trace-hits index precedes acknowledged hits")?;
+        if end > self.hits.len() {
+            return Err("trace-hits requires a hit index within the recorded hits".into());
+        }
+        self.released = below;
+        Ok(self.hits.drain(..end))
     }
 
     pub fn bound_registers(&mut self, limit: std::num::NonZeroUsize, registers: RegisterCapture) {
@@ -1313,6 +1337,7 @@ impl TraceSites {
         let mut sites = Vec::with_capacity(CAPTURE_SITE_LIMIT);
         sites.extend(self.sites.keys().map(|&address| SiteObservation { address, ..Default::default() }));
         self.hits = Vec::new();
+        self.released = 0;
         self.capture_observation = Some(CaptureObservation {
             sites,
             events: VecDeque::with_capacity(CAPTURE_DETAIL_LIMIT),
@@ -1936,7 +1961,7 @@ impl TraceSites {
                         stop = true;
                     }
                 }
-                if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
+                if self.hit_limit.is_some_and(|limit| self.hit_count() >= limit.get()) {
                     return Err("trace hit limit reached".into());
                 }
                 let instructions = counts.iter().sum();

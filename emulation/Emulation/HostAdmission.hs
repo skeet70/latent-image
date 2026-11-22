@@ -35,7 +35,7 @@ import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit, isHexDigit, isPrint, isSpace)
 import Data.Either (isRight)
 import Data.Function (on)
-import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, nub, nubBy, sortOn, stripPrefix)
+import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, nub, nubBy, sort, sortOn, stripPrefix)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Ord (Down (..))
 import GHC.Clock (getMonotonicTime)
@@ -114,9 +114,13 @@ legacyTokenRange = 256
 budgetVariable :: String
 budgetVariable = "XM1_HOST_MEMORY_BUDGET"
 
--- | RAM left outside every admission for the desktop, browser, sessions and page cache.
+-- | RAM left outside the token budget for the desktop, browser, sessions and page cache.
 hostReserveBytes :: Integer
 hostReserveBytes = 8 * 1024 * 1024 * 1024
+
+-- | @MemAvailable@ an admission leaves free beyond its reservation.
+liveHeadroomBytes :: Integer
+liveHeadroomBytes = 3 * 1024 * 1024 * 1024
 
 -- | Admissible tokens: physical RAM less 'hostReserveBytes' (at least one
 -- token), or a lower @XM1_HOST_MEMORY_BUDGET@. Offsets below 'censusTokens'
@@ -187,10 +191,17 @@ parseScopeName text
   | otherwise = Nothing
 
 -- | A history key: a slot run's label, or a host build's command and targets.
+-- Its first word names its class: @full-@, @native-@ or @host-build@.
 newtype MemoryKey = MemoryKey String
 
 memoryKey :: String -> MemoryKey
 memoryKey = MemoryKey . take 1024 . map (\character -> if isPrint character && character /= '\t' then character else '?')
+
+newtype KeyClass = KeyClass String
+  deriving (Eq)
+
+keyClass :: String -> KeyClass
+keyClass = KeyClass . takeWhile (/= ' ')
 
 -- | Whole tokens of RAM a scope holds against the budget; also its @MemoryHigh@.
 newtype Reservation = Reservation Int
@@ -211,8 +222,9 @@ pendingPeakDirectory directory = directory </> "peaks"
 historyLimit :: Int
 historyLimit = 1024
 
--- | 1.25 times the recorded peak of KEY's most recent completed scope, rounded
--- up to tokens and at most MEMORY; MEMORY when KEY has no record.
+-- | 1.25 times the recorded peak of KEY's most recent completed scope or, for
+-- a key without a record, the 90th-percentile recorded peak of its class,
+-- rounded up to tokens and at most MEMORY; MEMORY when the class has no record.
 expectedReservation :: MemoryKey -> MemoryMax -> IO Reservation
 expectedReservation (MemoryKey key) memory = do
   directory <- memoryDirectory
@@ -221,7 +233,12 @@ expectedReservation (MemoryKey key) memory = do
     waitToSetLock fd (WriteLock, AbsoluteSeek, 0, 0)
     foldPendingPeaks directory
   let cap = reservationTokens memory
-  pure $ Reservation $ case lookup key [(entry, peak) | (peak, entry) <- history] of
+      classPeaks = sort [peak | (peak, entry) <- history, keyClass entry == keyClass key]
+      classEstimate
+        | null classPeaks = Nothing
+        | otherwise = Just (classPeaks !! ((9 * length classPeaks + 9) `div` 10 - 1))
+      expected = maybe classEstimate Just (lookup key [(entry, peak) | (peak, entry) <- history])
+  pure $ Reservation $ case expected of
     Nothing -> cap
     Just peak -> max 1 (min cap (fromInteger ((peak * 5 + 4 * tokenBytes - 1) `div` (4 * tokenBytes))))
 
@@ -259,14 +276,16 @@ writePendingPeak (MemoryKey key) name peak = do
   renameFile temporary final
 
 -- | Records this scope's @memory.peak@ under KEY once this process, after any
--- exec, and every descendant that inherits the pipe have exited. A scope
--- stopped by systemd leaves no record.
+-- exec, and every descendant that inherits the pipe have exited. After an OOM
+-- kill in the scope it records @memory.peak@ plus @memory.swap.peak@, at least
+-- @memory.max@. A scope stopped by systemd otherwise leaves no record.
 startPeakRecorder :: MemoryKey -> ScopeName -> IO ()
 startPeakRecorder (MemoryKey key) (ScopeName unit) = do
   groups <- readStrict "/proc/self/cgroup"
   group <- case [drop 3 line | line <- lines groups, take 3 line == "0::"] of
     [found] -> pure found
     _ -> ioError (userError "cannot establish this process's cgroup")
+  root <- cgroupRoot
   pending <- pendingPeakDirectory <$> memoryDirectory
   createDirectoryIfMissing True pending
   (watchRead, watchWrite) <- createPipe
@@ -274,9 +293,29 @@ startPeakRecorder (MemoryKey key) (ScopeName unit) = do
   setFdOption watchWrite CloseOnExec False
   watch <- fdToHandle watchRead
   let final = pending </> unit
-      script = "while read -r _; do :; done; read -r peak < \"$1\" || exit 0; printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
-  void $ createProcess (proc "sh" ["-c", script, "sh", "/sys/fs/cgroup" ++ group ++ "/memory.peak", final ++ ".partial", final, key])
+      script = unlines
+        [ "trap '' TERM"
+        , "while read -r _; do :; done"
+        , "read -r peak < \"$1/memory.peak\" || exit 0"
+        , "kills=0"
+        , "while read -r name value; do [ \"$name\" != oom_kill ] || kills=$value; done < \"$1/memory.events\""
+        , "if [ \"$kills\" -gt 0 ]; then"
+        , "  read -r swap < \"$1/memory.swap.peak\" || swap=0"
+        , "  read -r cap < \"$1/memory.max\" || cap=0"
+        , "  [ \"$cap\" != max ] || cap=0"
+        , "  peak=$((peak + swap))"
+        , "  [ \"$cap\" -le \"$peak\" ] || peak=$cap"
+        , "elif [ \"$(systemctl --user show \"$5\" -p ActiveState --value)\" = deactivating ]; then"
+        , "  exit 0"
+        , "fi"
+        , "printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
+        ]
+  void $ createProcess (proc "sh" ["-c", script, "sh", root ++ group, final ++ ".partial", final, key, unit])
     { std_in = UseHandle watch, std_out = NoStream, std_err = NoStream, close_fds = True }
+
+-- | @/sys/fs/cgroup@, or @XM1_HOST_CGROUP_ROOT@.
+cgroupRoot :: IO FilePath
+cgroupRoot = fromMaybe "/sys/fs/cgroup" <$> lookupEnv "XM1_HOST_CGROUP_ROOT"
 
 -- | Reserves the scope's @MemoryHigh@, or its @MemoryMax@ when that is lower
 -- or @MemoryHigh@ is unset, inside the already-started scope. Swap caps are
@@ -316,9 +355,9 @@ smallerWaiterPolls :: Int
 smallerWaiterPolls = 3
 
 -- | A new admission takes its tokens when they fit the budget, when
--- @MemAvailable@ less 'hostReserveBytes' covers them, and after deferring to
--- smaller waiters for 'smallerWaiterPolls'. A legacy scope already holds its
--- memory and skips the last two conditions.
+-- @MemAvailable@ less 'liveHeadroomBytes' and 'outstandingBytes' covers them,
+-- and after deferring to smaller waiters for 'smallerWaiterPolls'. A legacy
+-- scope already holds its memory and skips the last two conditions.
 reserveMemoryWithLegacy :: Maybe LegacyReservation -> Reservation -> ScopeName -> IO Fd
 reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
   budget <- memoryBudget
@@ -346,7 +385,10 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
             holders <- heldTokens fd budget
-            spare <- if admitting then subtract hostReserveBytes <$> availableMemoryBytes else pure (reservationBytes reservation)
+            spare <- if admitting
+              then (\available outstanding -> available - liveHeadroomBytes - outstanding)
+                <$> availableMemoryBytes <*> outstandingBytes directory holders
+              else pure (reservationBytes reservation)
             smaller <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
             let occupied = nub (map fst holders ++ protected)
                 free = filter (`notElem` occupied) (map fromIntegral [0 .. censusTokens budget - 1])
@@ -362,7 +404,7 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
                 when (admitting && not registered) (setLock queue (WriteLock, AbsoluteSeek, place, 1))
                 hPutStrLn stderr ("host admission: waiting for host RAM (" ++ show tokens ++ " x 256MiB; "
                   ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held; "
-                  ++ show (max 0 spare) ++ " bytes available above the host reserve"
+                  ++ show (max 0 spare) ++ " bytes available above the live headroom and outstanding reservations"
                   ++ (if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
                   ++ show (nub (map snd holders)))
                 hFlush stderr
@@ -390,6 +432,27 @@ heldTokens fd budget = do
   owners <- mapM (\index -> (,) index <$> getLock fd (WriteLock, AbsoluteSeek, index, 1))
     (map fromIntegral [0 .. censusTokens budget - 1])
   pure [(index, pid) | (index, Just (pid, _)) <- owners]
+
+-- | Over admitted scopes holding HOLDERS, the reservation not yet in use:
+-- held tokens less @memory.current@ plus @memory.swap.current@, at least zero.
+-- A scope whose cgroup is gone counts zero.
+outstandingBytes :: FilePath -> [(FileOffset, ProcessID)] -> IO Integer
+outstandingBytes directory holders = do
+  root <- cgroupRoot
+  groups <- forM holders $ \(index, _) ->
+    (fmap (\(ScopeIdentity _ _ (ScopeCgroup group _)) -> group) <$> readScopeRecord (directory </> ("scope-" ++ show index)))
+      `catchIOError` const (pure Nothing)
+  fmap sum . forM (nub [group | Just group <- groups]) $ \group -> do
+    let reserved = toInteger (length (filter (== Just group) groups)) * tokenBytes
+    current <- counter (root ++ group </> "memory.current")
+    case current of
+      Nothing -> pure 0
+      Just used -> do
+        swapped <- fromMaybe 0 <$> counter (root ++ group </> "memory.swap.current")
+        pure (max 0 (reserved - used - swapped))
+  where
+    counter path = (readMaybe . trim <$> readStrict path)
+      `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
 
 claimScopeRecord :: FilePath -> ScopeName -> IO ()
 claimScopeRecord record = claimScopeRecords [record]
@@ -647,7 +710,10 @@ admit requestedBase command rest = do
   when running (removeIfPresent script)
   setEnv admittedVariable "1"
   (admitted, outcome) <- runContained memory swap reservation scoped unit takeLane bazelArguments
-  case (admitted, unitMemoryPeak (outcomeState outcome)) of
+  let state = outcomeState outcome
+      killed = unitResult state == "oom-kill"
+  case (admitted, unitMemoryPeak state) of
+    (Just _, Just peak) | killed -> writePendingPeak key unit (max (peak + fromMaybe 0 (unitMemorySwapPeak state)) (memoryMaxBytes memory))
     (Just _, Just peak) -> writePendingPeak key unit peak
     _ -> pure ()
   let verdict = judge outcome
@@ -1028,6 +1094,7 @@ data UnitState = UnitState
   { unitResult :: String
   , unitCpuNanos :: Maybe Integer
   , unitMemoryPeak :: Maybe Integer
+  , unitMemorySwapPeak :: Maybe Integer
   }
 
 data DaemonCounters = DaemonCounters
@@ -1092,7 +1159,7 @@ runContained memoryCap swapCap reservation scoped unit admission bazelArguments 
   state <-
     if scoped
       then unitState unit (isNothing exitStatus)
-      else pure (UnitState "uncapped" Nothing Nothing)
+      else pure (UnitState "uncapped" Nothing Nothing Nothing)
   after <- daemonCounters
   _ <- try (hClose releaseHandle) :: IO (Either IOException ())
   _ <- waitForProcess handle
@@ -1118,12 +1185,12 @@ unitState unit died = do
   let field name = lookup name properties
       number name = field name >>= readMaybe
   pure $ case field "LoadState" of
-    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak")
-    _ -> UnitState "unknown" Nothing Nothing
+    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak") (number "MemorySwapPeak")
+    _ -> UnitState "unknown" Nothing Nothing Nothing
   where
     showUnit = do
       (_, out, _) <- readProcessWithExitCode "systemctl"
-        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak"] ""
+        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak", "-p", "MemorySwapPeak"] ""
       pure [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
     settle 0 = pure ()
     settle remaining = do
