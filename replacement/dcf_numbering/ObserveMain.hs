@@ -520,6 +520,7 @@ compareMain stockDir otherDir symbols output = do
     , "stock" .= summary stockReceipt stockEvents stockFetches
     , "other" .= summary otherReceipt otherEvents otherFetches
     , "owned_fetches_outside_owned_functions" .= object [K.fromString (hexWord a) .= n | (a, n) <- M.toList stray]
+    , "owned_stray_fetches" .= sum (M.elems stray)
     , "interface_sequence" .= firstDifferences 20 (interface stockEvents) (interface otherEvents)
     , "watched_writes" .= firstDifferences 20 (writesOf stockReceipt stockSteps) (writesOf otherReceipt otherSteps)
     , "numbering_state" .= firstDifferences 5 (states stockReceipt stockSteps) (states otherReceipt otherSteps)

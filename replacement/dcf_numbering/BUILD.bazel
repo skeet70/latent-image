@@ -148,6 +148,24 @@ haskell_binary(
     ],
 )
 
+haskell_test(
+    name = "observe-compare-tests",
+    size = "small",
+    srcs = ["ObserveCompareTests.hs"],
+    args = ["$(rootpath :dcf-numbering-observe)"],
+    data = [":dcf-numbering-observe"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+    ],
+)
+
 filegroup(
     name = "all",
     srcs = [
