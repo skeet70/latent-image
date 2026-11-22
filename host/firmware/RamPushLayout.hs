@@ -483,7 +483,7 @@ menuEngineRegionStartFor variant base
 
 menuEngineRegionExtentFor :: BankVariant -> Word32
 menuEngineRegionExtentFor variant
-  | hasPublicationGroup MenuValuePublication variant = 0x16000
+  | hasPublicationGroup MenuValuePublication variant = 0x20000
   | otherwise = menuEngineRegionStart 0 + menuEngineRegionExtent - menuEngineRegionStartFor variant 0
 
 lifecycleHookAddresses :: [PublicationAddress]

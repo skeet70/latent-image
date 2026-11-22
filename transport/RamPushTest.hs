@@ -250,7 +250,7 @@ main = do
         , (bankLifecyclePayload, lifecycleBankVariant, RecipeBankLifecycle, 0x1dcd8, 226, "build-recipe-bank-lifecycle-ram.sh", "bank-lifecycle.a")
         , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a")
         , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a")
-        , (bankModalValuePayload, modalValueBankVariant, RecipeBankModal75MenuEngine, 0x33d00, 226, "build-recipe-bank-modal-value-ram.sh", "bank-modal.a")
+        , (bankModalValuePayload, modalValueBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 226, "build-recipe-bank-modal-value-ram.sh", "bank-modal.a")
         , (bankModalRenderPayload, modalRenderBankVariant, RecipeBankModal75MenuEngine, 0x3dd00, 228, "build-recipe-bank-modal-render-ram.sh", "bank-modal.a") ]
   _ <- parse standard
   forM_ [0, 1, 8, 9, 17] $ \hooks -> do
@@ -320,15 +320,15 @@ main = do
   makeDir renderStateDirectory
   renderStatePath <- writeStateFile renderStateDirectory renderState
   readRamPushState renderStatePath >>= check "render state retains its explicit identity and 228 publications" . (== renderState)
-  let valueRuntime = B.replicate 0x33d00 0
+  let valueRuntime = B.replicate 0x3dd00 0
       valuePublications = take 226 renderPublications
       valueManifest = standard
-        { allocationSize = 0x33d00, runtimeBytes = valueRuntime, runtimeDigest = sha256 valueRuntime
+        { allocationSize = 0x3dd00, runtimeBytes = valueRuntime, runtimeDigest = sha256 valueRuntime
         , manifestPublications = valuePublications, manifestBankVariant = Just modalValueBankVariant }
   valueParsed <- parse valueManifest
   check "value manifest retains its explicit identity and 226 publications"
     (manifestBankVariant valueParsed == Just modalValueBankVariant)
-  let valueState = RamPushState (manifestDigest valueParsed) (runtimeDigest valueParsed) (Address base) 0x33d00
+  let valueState = RamPushState (manifestDigest valueParsed) (runtimeDigest valueParsed) (Address base) 0x3dd00
         (manifestEntries valueParsed) valuePublications callbackStockWord bootstrapBytes 1 (Just modalValueBankVariant)
   let valueStateDirectory = root </> "value-state"
   makeDir valueStateDirectory

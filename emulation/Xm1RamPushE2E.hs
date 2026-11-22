@@ -2,7 +2,7 @@
 module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankModalRenderPayload, bankModalValuePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, sessionBridge, warmAttachCheckpoint, KeeperSessionId, keeperSessionId, KeeperState (..), KeeperAction (..), keeperTransition, checkPropertyAllocationSource, runPropertyAllocationKeeper, validateAfResetProof, validateAfResetPair, AfArchiveBinding (..), validateAfArchiveBinding, ObservedInstallProof, parseObservedInstallProof, checkObservedInstallProof) where
 
 import Control.Applicative ((<|>))
-import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, throwIO, try)
+import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, mask, onException, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Parser, parseEither)
@@ -427,7 +427,7 @@ completeStep emulator pulse step = case stepCompletion step of
 
 press :: Emulator -> Maybe KeyPulse -> Step -> IO ()
 press emulator pulse step = do
-  forM_ (stepIdle step) (emulatorIdle emulator)
+  beforePress emulator step
   (_, actual) <- completeStep emulator pulse step
   require (actual == stepExpected step)
     ("menu trajectory after " ++ stepKey step ++ ": expected " ++ show (stepExpected step) ++ ", got " ++ show actual)
@@ -435,12 +435,17 @@ press emulator pulse step = do
 presses :: Emulator -> Maybe KeyPulse -> [Step] -> IO ()
 presses emulator pulse = mapM_ (press emulator pulse)
 
+beforePress :: Emulator -> Step -> IO ()
+beforePress emulator step = do
+  forM_ (stepOutputClock step) (emulatorOutputClock emulator)
+  forM_ (stepIdle step) (emulatorIdle emulator)
+
 -- | Presses every step and records the key presses, expected and actual state and wall seconds
 -- without requiring the state.
 observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
 observe emulator pulse = mapM $ \step -> do
   let MenuState em es ec = stepExpected step
-  forM_ (stepIdle step) (emulatorIdle emulator)
+  beforePress emulator step
   started <- getMonotonicTime
   (pressed, MenuState am as ac) <- completeStep emulator pulse step
   ended <- getMonotonicTime
@@ -758,7 +763,7 @@ runPropertyAllocationKeeper settings python installedMedia adjustmentNand image4
       require (bootStart start `elem` [ColdStart, FreshBootStart]) "property allocation keeper refuses a restored session"
       emulatorTraceSitesReading emulator [(unAddress bootstrapAddress, "property-allocation-bootstrap",
         [SiteRead 0x40054760 4, SiteRead 0x400545a4 4])]
-      (traceStart, _) <- emulatorTraceHits emulator 0
+      traceStart <- emulatorTraceHitTotal emulator
       before <- emulatorReadMemory emulator 0x00829a08 4
       clock <- emulatedClock
       outcome <- stagedSession allocationDirectory
@@ -914,7 +919,7 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
       "modal observation requires the retained-film-route physical-key trajectory"
   either (ioError . userError) pure (checkAfOwnershipRoute (isJust (afOwnershipPlanFile given)) (beforeUnload trajectories) (afterUnload trajectories))
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
-                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) || stepCompletion step /= PacketCompletion ]
+                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) || isJust (stepOutputClock step) || stepCompletion step /= PacketCompletion ]
   case emulationRuntime given of
     RetainedRuntime | not (null settleCaps) ->
       ioError (userError "step timing and presented-frame completion require the FujiMod bridge")
@@ -970,6 +975,17 @@ seconds value = showFFloat (Just 1) value " s"
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
   stackDiagnostic <- lookupEnv "XM1_RENDER_STACK_DIAGNOSTIC" >>= traverse readRenderStackDiagnosticConfig
+  shadowPlan <- lookupEnv "XM1_MODAL_PRESERVATION_SHADOW_PLAN" >>= traverse (\path -> do
+    bytes <- B.readFile path
+    require (B.length bytes <= 4096) "preservation shadow plan exceeds4KiB"
+    either (ioError . userError . ("invalid preservation shadow plan: " ++)) pure (eitherDecodeStrict' bytes))
+  when (isJust shadowPlan) $ do
+    require (pushMode settings == RamPush && (modalLifetimeGuard settings == ContinuousModalLifetimeGuard
+      || payloadKind (e2ePayload settings) `elem` [RecipeBankModal75, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]))
+      "preservation shadow requires the installed modal lifetime observer"
+    case emulationRuntime settings of
+      FujiModRuntime _ -> pure ()
+      _ -> ioError (userError "preservation shadow requires FujiMod")
   splitPath <- lookupEnv "XM1_MODAL_INSTALL_CHECKPOINT"
   splitProof <- forM splitPath $ \path -> do
     present <- doesFileExist path
@@ -1192,7 +1208,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       _ -> do
         fetchStart <- if null fetchSites then pure Nothing else do
           emulatorTraceSites emulator fetchSites
-          Just . fst <$> emulatorTraceHits emulator 0
+          Just <$> emulatorTraceHitTotal emulator
         breakBefore <- heapBreak
         allocationClock <- emulatedClock
         allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory
@@ -1243,7 +1259,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         else do
           request <- either (ioError . userError) pure (modalRequest stock Nothing (either error id (modalLimit 65536)))
           pure (request, Null)
-      request <- either (ioError . userError) pure (lifetimeModalRequest baseRequest lifetimeSource)
+      lifetimeRequest <- either (ioError . userError) pure (lifetimeModalRequest baseRequest lifetimeSource)
+      request <- either (ioError . userError) pure (maybe (Right lifetimeRequest)
+        (\shadow -> preservationShadowRequest shadow lifetimeRequest) shadowPlan)
       forM_ afPlan $ \af -> do
         bridge <- case emulationRuntime settings of
           FujiModRuntime bridge -> pure bridge
@@ -1331,8 +1349,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         requireLiveSettings "ram-push" settingsBeforePush
         installMailbox <- readMailbox
         forM_ fetchStart $ \from -> do
-          (_, hits) <- emulatorTraceHits emulator from
-          let fetched = [hit | hit <- hits, traceSite hit `elem` map snd fetchSites]
+          -- The first segment reads from hit 0, below fetchStart.
+          (_, hits) <- emulatorTraceHits emulator 0
+          let fetched = [hit | hit <- drop from hits, traceSite hit `elem` map snd fetchSites]
           writePrivateBytes (e2e </> "e2e-fetch-watch.json") (BL.toStrict (encode (object
             [ "scope" .= String "Classic Chrome entry words and hook sites, attach checkpoint to the end of ram-push"
             , "sites" .= object [K.fromString label .= hexAddress address | (address, label) <- fetchSites]
@@ -1516,8 +1535,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
               requireLiveSettings "ram-unload" settingsBeforeUnload
               recordModalLifetimeBoundary lifetimeSession RollbackReadback
-              previousHits <- readIORef (runnerHits runner)
-              unloadedHits <- emulatorTraceHitCount emulator (TraceHitCursor previousHits)
+              unloadedHits <- emulatorTraceHitTotal emulator
               writeIORef (runnerHits runner) unloadedHits
               Just <$> readMailbox
             else pure Nothing
@@ -2168,26 +2186,31 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, liste
   let trailingSources = if after > cursorInt resume then [emulatorTraceHitSource emulator resume (TraceHitCursor after) (TraceHitSnapshot after)] else []
       sources = leadingSources ++ trailingSources
       format = TraceHitFormat (runnerLrLabels runner) (runnerSpLabels runner) (runnerTraceLabels runner)
-  effects <- foldTraceHitSources sources (\effects hit -> pure (addHitEffect runner effects hit)) emptyEffects
+      prefix = object
+        [ "phase" .= segmentPhase segment, "capture" .= segmentCapture segment
+        , "steps" .= observed, "reads" .= windows ]
+      spec = ObservationSpec (runnerReceipt runner) ("e2e-observation-" ++ show observationIndex)
+        (segmentPhase segment) prefix sources format
+  (effects, pending) <- readObservationSources spec (addHitEffect runner) emptyEffects
     `catch` \(failure :: IOException) -> throwIO (userError ("segment " ++ T.unpack (segmentPhase segment) ++ " from hit "
       ++ show before ++ ", leading " ++ show [(sourceStart source, sourceEnd source) | source <- leadingSources]
       ++ ": " ++ ioeGetErrorString failure))
-  forM_ (segmentTraceRequires segment) $ \label ->
-    unless (label `elem` effectLabels effects) $
-      stop (segmentPhase segment) ("trace site " ++ label ++ " was not entered")
-  when (segmentObserve segment || not (null (segmentReads segment)) || not (null (effectHookRows effects))
-        || not (null (effectCcHits effects)) || effectDeclared effects > 0 || not (null film)) $ do
-    provenance <- emulatorRenderObjectProvenance emulator
-    let prefix = object
-          [ "phase" .= segmentPhase segment, "capture" .= segmentCapture segment
-          , "steps" .= observed, "reads" .= windows ]
-        suffix = effectsSuffix effects provenance (maybe [] pure film)
-        spec = ObservationSpec (runnerReceipt runner) ("e2e-observation-" ++ show observationIndex)
-          (segmentPhase segment) prefix sources format suffix
-    ref <- writeObservationStream spec
-    when (effectDeclared effects /= traceHitRefCount (observationRefTraceHits ref)) $
-      stop (segmentPhase segment) "declared trace-hit count differs from the written observation reference"
-    modifyIORef' (runnerObservations runner) (++ [ref])
+  kept <- (do
+    forM_ (segmentTraceRequires segment) $ \label ->
+      unless (label `elem` effectLabels effects) $
+        stop (segmentPhase segment) ("trace site " ++ label ++ " was not entered")
+    if segmentObserve segment || not (null (segmentReads segment)) || not (null (effectHookRows effects))
+        || not (null (effectCcHits effects)) || effectDeclared effects > 0 || not (null film)
+      then Just <$> emulatorRenderObjectProvenance emulator
+      else pure Nothing)
+    `onException` discardObservation pending
+  case kept of
+    Nothing -> discardObservation pending
+    Just provenance -> do
+      ref <- publishObservation pending (effectsSuffix effects provenance (maybe [] pure film))
+      when (effectDeclared effects /= traceHitRefCount (observationRefTraceHits ref)) $
+        stop (segmentPhase segment) "declared trace-hit count differs from the written observation reference"
+      modifyIORef' (runnerObservations runner) (++ [ref])
   writeIORef (runnerHits runner) after
   forM_ film $ \(expected, actual) ->
     unless (actual == filmStoredCode expected) $
@@ -2207,15 +2230,14 @@ writeRendezvousExit runner segment step observed atExit afterExit = do
   let emulator = runnerEmulator runner
       sources = if afterExit > atExit then [emulatorTraceHitSource emulator (TraceHitCursor atExit) (TraceHitCursor afterExit) (TraceHitSnapshot afterExit)] else []
       format = TraceHitFormat (runnerLrLabels runner) (runnerSpLabels runner) (runnerTraceLabels runner)
-  effects <- foldTraceHitSources sources (\effects hit -> pure (addHitEffect runner effects hit)) emptyEffects
-    `catch` \(failure :: IOException) -> throwIO (userError ("rendezvous exit " ++ T.unpack (segmentPhase segment)
-      ++ ": " ++ ioeGetErrorString failure))
   index <- length <$> readIORef (runnerRendezvousExits runner)
   let prefix = object ["phase" .= segmentPhase segment, "key" .= stepKey step, "steps" .= observed]
-      suffix = effectsSuffix effects Nothing []
       spec = ObservationSpec (runnerReceipt runner) ("e2e-rendezvous-exit-" ++ show index)
-        (segmentPhase segment) prefix sources format suffix
-  ref <- writeObservationStream spec
+        (segmentPhase segment) prefix sources format
+  (effects, pending) <- readObservationSources spec (addHitEffect runner) emptyEffects
+    `catch` \(failure :: IOException) -> throwIO (userError ("rendezvous exit " ++ T.unpack (segmentPhase segment)
+      ++ ": " ++ ioeGetErrorString failure))
+  ref <- publishObservation pending (effectsSuffix effects Nothing [])
   pure (object
     ( [ "phase" .= segmentPhase segment, "key" .= stepKey step, "steps" .= observed
       , "observation" .= ref, "trace_hits" .= observationRefTraceHits ref ]
@@ -2324,7 +2346,7 @@ runMenuCrawlE2E given python workspace configFile installedMedia adjustmentNand 
   withScreenProbe "menu crawl" given python workspace "crawl-config.json" installedMedia adjustmentNand receipt configBytes $
     \emulator inputs -> do
       emulatorTraceSites emulator [(Crawl.crawlSiteAddress site, Crawl.crawlSiteLabel site) | site <- Crawl.crawlSites]
-      hitCursor <- newIORef . fst =<< emulatorTraceHits emulator 0
+      hitCursor <- newIORef =<< emulatorTraceHitTotal emulator
       let screenshot label = receipt </> "screenshots" </> (label ++ ".png")
           word bytes offset = foldr (\index value -> (value `shiftL` 8) .|. fromIntegral (B.index bytes (offset + index))) 0 [0 .. 3] :: Word32
           observeScreen label = do
@@ -2509,7 +2531,7 @@ runMenuObserveE2E given python workspace configFile installedMedia adjustmentNan
                MenuObserve.StackRead offset count -> StackRead offset count
             | read_ <- MenuObserve.traceSiteReads site])
         | site <- MenuObserve.observeSites config ]
-      (mark, _) <- emulatorTraceHits emulator 0
+      mark <- emulatorTraceHitTotal emulator
       ranges <- either (ioError . userError) pure (sequence
         [ watchRange (watchAddress (Crawl.rangeStart range)) (watchAddress (Crawl.rangeEnd range)) | range <- MenuObserve.observeWrites config ])
       limit <- either (ioError . userError) pure (watchLimit (MenuObserve.observeLimit config))

@@ -15,9 +15,10 @@ import Replacement.FileService.Native (Extent (..), extentContains, hexWord)
 data Publication = Publication {publicationAddress :: Word32, publicationOld :: Word32, publicationNew :: Word32}
   deriving (Eq, Show)
 
--- | retired-memory.ld's RETIRED_WORKERS and RETIRED regions.
+-- | retired-memory.ld's regions.
 retiredRegions :: [Extent]
-retiredRegions = [Extent 0x7115a4 0x7118fc, Extent 0x71bc2c 0x721834]
+retiredRegions =
+  [Extent 0x7115a4 0x712890, Extent 0x715a58 0x715f0c, Extent 0x718a8c 0x71b9e8, Extent 0x71bc2c 0x721834]
 
 -- | The linked sections retired.ld places in 'retiredRegions'.
 retiredExtents :: E.Elf -> [Extent]

@@ -13,7 +13,7 @@ import Emulation.PreservationObservation
 import Emulation.Symbols
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
-import EmulatorUsb (CrawlKey (..), KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming)
+import EmulatorUsb (CrawlKey (..), KeyPulse (..), KeyTiming (..), ModeDial (..), OutputClockTicks (..), SettleBudget (..), defaultKeyTiming)
 import Numeric (showHex)
 import System.Directory (listDirectory)
 import System.Exit (exitFailure)
@@ -262,6 +262,11 @@ main = do
     , expect "a zero or over-cap idle is refused" $
         stepsOf "[\"up\",1,246,0,{\"idle_instructions\":0}]" == Nothing
           && stepsOf "[\"up\",1,246,0,{\"idle_instructions\":90000001}]" == Nothing
+    , expect "a step's output clock decodes to the ticks set before its press" $
+        fmap (map stepOutputClock) (stepsOf "[\"right\",1,246,1,{\"output_clock_ticks\":200000}],[\"right\",1,246,1]")
+          == Just [Just (OutputClockTicks 200000), Nothing]
+    , expect "a zero output clock is refused" $
+        stepsOf "[\"right\",1,246,1,{\"output_clock_ticks\":0}]" == Nothing
     , expect "a read address decodes to a fixed guest window" $
         fmap segmentReads (segmentOf (segmentDocument ",\"reads\":[[\"mode\",\"00956838\",4]]"))
           == Just [("mode", FixedAddress 0x00956838, 4 :: Int)]

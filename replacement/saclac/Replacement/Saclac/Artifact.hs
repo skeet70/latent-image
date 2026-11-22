@@ -217,6 +217,64 @@ unitImports =
   , Retained "file_service_media_refresh" 0x71d66c
   , Retained "file_service_after_written_close" 0x71141c
   , Retained "file_service_rescan" 0x71985c
+  , Retained "file_service_fill_memory" 0x70e664
+  , Retained "file_service_copy_memory" 0x70e6c4
+  , Retained "file_service_little_endian" 0x70e650
+  , Retained "file_service_divide" 0x4d978
+  , Retained "file_service_format_timestamp" 0x71d214
+  , Retained "file_service_find_first" 0x7008a4
+  , Retained "file_service_find_next" 0x700b10
+  , Retained "file_service_find_first_entry" 0x7004b0
+  , Retained "file_service_find_next_entry" 0x700768
+  , Retained "file_service_name_rejected" 0x7131a0
+  , Retained "file_service_volume_record" 0x71f4b8
+  , Retained "file_service_volume_release" 0x71f4d8
+  , Retained "file_service_volume_switch" 0x71f418
+  , Retained "file_service_volume_other" 0x71f4f8
+  , Retained "file_service_volume_attach" 0x71f7dc
+  , Retained "file_service_volume_reattach" 0x71fcbc
+  , Retained "file_service_volume_detach" 0x71fa9c
+  , Retained "file_service_volume_format" 0x71e100
+  , Retained "file_service_volume_reformat" 0x71e1bc
+  , Retained "file_service_media_snapshot" 0x712b4c
+  , Retained "file_service_set_level" 0x6fae80
+  , Retained "file_service_flagged_prepare" 0x6f535c
+  , Retained "file_service_catalog_rebuild" 0x719de0
+  , Retained "file_service_flagged_select" 0x6f5330
+  , Retained "file_service_no_volume_status" 0x6ed770
+  , Retained "file_service_extension_key" 0x713264
+  , Retained "file_service_extension_byte4" 0x713508
+  , Retained "file_service_extension_byte5" 0x713488
+  , Retained "file_service_page_cluster" 0x713d60
+  , Retained "file_service_cluster_path" 0x713db8
+  , Retained "file_service_text_difference" 0x70e884
+  , Retained "file_service_catalog_locate" 0x7189b4
+  , Retained "file_service_file_number" 0x713360
+  , Retained "file_service_marked_before" 0x7153a8
+  , Retained "file_service_page_counted" 0x715f80
+  , Retained "file_service_page_selected" 0x715918
+  , Retained "file_service_catalog_window" 0x717a24
+  , Retained "file_service_catalog_window_visit" 0x712a4c
+  , Retained "file_service_catalog_find" 0x71a93c
+  , Retained "file_service_directory_reserved" 0x7158a8
+  , Retained "file_service_delete_file_request" 0x71df30
+  , Retained "file_service_delete_directory_request" 0x71e08c
+  , Retained "file_service_readonly_request" 0x71e288
+  , Retained "file_service_path_wildcard" 0x71d1b8
+  , Retained "file_service_entry_update" 0x714940
+  , Retained "file_service_entry_update_one" 0x713ef4
+  , Retained "file_service_device_state" 0x6f52e4
+  , Retained "file_service_fs_delete" 0x6ff84c
+  , Retained "file_service_volume_geometry" 0x701090
+  , Retained "file_service_volume_flag" 0x7012a0
+  , Retained "file_service_volume_units" 0x7012c0
+  , Retained "file_service_query_path" 0x701e18
+  , Retained "file_service_read_pages" 0x700cd8
+  , Retained "file_service_write_pages" 0x700d20
+  , Retained "file_service_pattern_pass" 0x715b34
+  , Retained "file_service_fs_read" 0x6feeec
+  , Retained "file_service_local_size" 0x6aa4ec
+  , Retained "file_service_local_read" 0x6aa52c
   , Retained "scanout_enter_critical" 0x7235d8
   , Retained "scanout_leave_critical" 0x7236b0
   , Retained "scanout_yield" 0x723ce8

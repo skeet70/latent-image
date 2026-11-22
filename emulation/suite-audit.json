@@ -982,32 +982,6 @@
    "cases_verified": false
   },
   {
-   "name": "menu-value",
-   "note": "Menu-value original/owned pairs over the twelve tokens; all cases enter the same stock caller entry 0xc2d920.",
-   "image": {
-    "path": "private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin",
-    "base": "0xbf1a00",
-    "sha256": "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
-   },
-   "bound": {
-    "kind": "declared",
-    "source": "emulation/MenuValueCases.hs:scenarioCaller",
-    "entries": [
-     {
-      "address": "0x00c2d920",
-      "size": "0x00000100",
-      "name": "value-caller"
-     }
-    ],
-    "derived_at": "49489f81",
-    "verified": false
-   },
-   "cases": "emulation/suite-audit-cases/menu-value.json",
-   "cases_source": "emulation/MenuValueCases.hs:scenarioCaller",
-   "cases_derived_at": "49489f81",
-   "cases_verified": false
-  },
-  {
    "name": "menu-engine-refusal",
    "note": "Menu-engine refusal probes over the stock dispatch 0xbfa234 and change-level 0xbfab98 seams.",
    "image": {

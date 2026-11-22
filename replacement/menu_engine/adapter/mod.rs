@@ -9,11 +9,6 @@ extern crate menu_engine;
 
 use owned_menu::owned_menu;
 
-#[cfg(rb_menu_value_owned)]
-extern crate menu_value;
-#[cfg(rb_menu_value_owned)]
-use menu_value::adapter as menu_value_adapter;
-
 #[cfg(target_arch = "arm")]
 core::arch::global_asm!(include_str!("entry.S"), options(raw));
 
@@ -157,21 +152,6 @@ impl EngineServices for Stock {
         write_state(state);
         match effect {
             Effect::Notify(notify) => {
-                #[cfg(rb_menu_value_owned)]
-                {
-                    if notify.kind == StageKind::Pop {
-                        let restore = matches!(notify.id.get(), 0x1a | 0x1c);
-                        let ended = if restore {
-                            crate::menu_value_adapter::rb_menu_value_cancel() != 0
-                        } else {
-                            crate::menu_value_adapter::rb_menu_value_confirm() != 0
-                        };
-                        if ended {
-                            crate::menu_value_adapter::rb_menu_value_retained(if restore { 1 } else { 0 });
-                            return;
-                        }
-                    }
-                }
                 unsafe {
                     rb_menu_engine_call_notify(notify.kind.raw(), notify.node.get(), notify.id.get(), notify.class.get())
                 }
@@ -289,18 +269,9 @@ pub extern "C" fn rb_menu_engine_apply(kind: u32, node: u32, id: u32, extra: u32
         Err(_) => 0,
         Ok(()) => {
             let event = MenuEvent::decode(StageEvent { kind, node, id, extra }, &TREE, &state);
-            let push = matches!(&event, MenuEvent::Push { .. });
             match apply(&TREE, StaticState, event, &mut Stock) {
                 Err(_) => 0,
                 Ok(result) => {
-                    #[cfg(rb_menu_value_owned)]
-                    if push {
-                        if let Some(node) = state.node {
-                            if let Some(record) = TREE.node(node) {
-                                let _ = crate::menu_value_adapter::rb_menu_value_begin(record.class.get());
-                            }
-                        }
-                    }
                     write_state(&state);
                     match result {
                         EngineResult::Rejected => 1,

@@ -30,8 +30,8 @@ main = do
       , check "a bank without retired-extent rows is refused" $
           isLeft (stockRolePublications extents (map row [0x6ae1dc, 0x73ac74]))
       , check "rows just outside the region are kept" $
-          stockRolePublications extents (map row [0x7115a0, 0x7118fc, 0x71bc28, 0x71fde4, 0x721834])
-            == Right (map row [0x7115a0, 0x7118fc, 0x71bc28, 0x721834])
+          stockRolePublications extents (map row [0x7115a0, 0x712890, 0x715a54, 0x715f0c, 0x718a88, 0x71b9e8, 0x71bc28, 0x71fde4, 0x721834])
+            == Right (map row [0x7115a0, 0x712890, 0x715a54, 0x715f0c, 0x718a88, 0x71b9e8, 0x71bc28, 0x721834])
       ]
   unless (and results) exitFailure
   putStrLn ("stock-role tests passed: " ++ show (length results))

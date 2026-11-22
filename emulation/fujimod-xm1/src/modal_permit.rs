@@ -7,6 +7,7 @@
 //! Owned observations require the source-bound task-execution boundary.
 
 use crate::{
+    modal_certificate::AuthenticatedIrqReturn,
     modal_task::{TaskExecution, PhysicalExtent, TaskError, TaskIdentity},
     provenance::Guest,
 };
@@ -212,6 +213,8 @@ pub enum Failure {
     UnresolvedHandoff(CoreId),
     NonNestedContext(CoreId),
     HandoffState { core: CoreId, component: StateComponent },
+    UnexpectedCertificate(CoreId),
+    InvalidCertificate(CoreId),
     HandoffStack { core: CoreId, expected: Guest, observed: Guest },
     MissingStockFrame(CoreId),
     WrongReturnStack { core: CoreId, expected: Guest, observed: Guest },
@@ -339,13 +342,33 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
 
     /// A failure is sticky; rejected observations do not change the receipt.
     pub fn observe(&mut self, snapshot: Snapshot) -> Result<Observation, Failure> {
+        self.observe_with_certificate(snapshot, None)
+    }
+
+    pub fn observe_authenticated(
+        &mut self,
+        snapshot: Snapshot,
+        certificate: AuthenticatedIrqReturn,
+    ) -> Result<Observation, Failure> {
+        self.observe_with_certificate(snapshot, Some(certificate))
+    }
+
+    fn observe_with_certificate(
+        &mut self,
+        snapshot: Snapshot,
+        certificate: Option<AuthenticatedIrqReturn>,
+    ) -> Result<Observation, Failure> {
         if let Some(failure) = self.failure { return Err(failure); }
-        let result = self.observe_inner(&snapshot);
+        let result = self.observe_inner(&snapshot, certificate);
         if let Err(failure) = result { self.failure = Some(failure); }
         result
     }
 
-    fn observe_inner(&mut self, snapshot: &Snapshot) -> Result<Observation, Failure> {
+    fn observe_inner(
+        &mut self,
+        snapshot: &Snapshot,
+        mut certificate: Option<AuthenticatedIrqReturn>,
+    ) -> Result<Observation, Failure> {
         let core = snapshot.core;
         if core.0 >= CORE_COUNT { return Err(Failure::InvalidCore(core)); }
         if snapshot.pc.0 % 4 != 0 { return Err(Failure::MisalignedPc(snapshot.pc)); }
@@ -365,6 +388,12 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
             .filter(|count| *count <= self.limit.0.get()).ok_or(Failure::CounterOverflow)?;
         let depth = self.depths[core.0];
         let top = depth.checked_sub(1).and_then(|index| self.frames[core.0][index].as_ref());
+        if certificate.is_some() && !top.is_some_and(|frame| {
+            matches!(frame.phase, Phase::AwaitingHandoff)
+                && Some(snapshot.pc) == self.layout.handoff(frame.route)
+        }) {
+            return Err(Failure::UnexpectedCertificate(core));
+        }
         self.check_ownership(snapshot)?;
         let observation = if snapshot.pc == STOCK_ENTRY {
             self.enter(snapshot)?
@@ -393,7 +422,7 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
                 .any(|older| older.entry.lr == snapshot.pc) {
                 return Err(Failure::WrongReturnOrder(core));
             } else {
-                self.in_context(snapshot, depth)?
+                self.in_context(snapshot, depth, certificate.take())?
             }
         } else if self.layout.in_seam(snapshot.pc) || self.layout.body_route(snapshot.pc).is_some() {
             return Err(Failure::MissingPermit { core, pc: snapshot.pc });
@@ -454,7 +483,8 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
         Ok(Observation::Entry { core, route, arm_return: snapshot.lr })
     }
 
-    fn in_context(&mut self, snapshot: &Snapshot, depth: usize) -> Result<Observation, Failure> {
+    fn in_context(&mut self, snapshot: &Snapshot, depth: usize,
+        certificate: Option<AuthenticatedIrqReturn>) -> Result<Observation, Failure> {
         let core = snapshot.core;
         let frame = self.frames[core.0][depth - 1].as_ref()
             .ok_or(Failure::MissingPermit { core, pc: snapshot.pc })?;
@@ -466,7 +496,7 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
                 if Some(snapshot.pc) != self.layout.handoff(frame.route) {
                     return Err(Failure::MissingPermit { core, pc: snapshot.pc });
                 }
-                self.check_handoff(snapshot, frame)?;
+                self.check_handoff(snapshot, frame, certificate.as_ref())?;
                 let route = frame.route;
                 let target = self.frames[core.0][depth - 1].as_mut()
                     .ok_or(Failure::MissingPermit { core, pc: snapshot.pc })?;
@@ -541,7 +571,8 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
         Ok(())
     }
 
-    fn check_handoff(&self, snapshot: &Snapshot, frame: &Frame) -> Result<(), Failure> {
+    fn check_handoff(&self, snapshot: &Snapshot, frame: &Frame,
+        certificate: Option<&AuthenticatedIrqReturn>) -> Result<(), Failure> {
         let core = snapshot.core;
         if let Some(index) = snapshot.registers.iter().zip(frame.entry.registers.iter())
             .position(|(observed, expected)| observed != expected) {
@@ -550,8 +581,18 @@ impl<const CAPACITY: usize> Monitor<CAPACITY> {
         if snapshot.lr != frame.entry.lr {
             return Err(Failure::HandoffState { core, component: StateComponent::LinkRegister });
         }
-        if snapshot.cpsr != frame.entry.cpsr {
-            return Err(Failure::HandoffState { core, component: StateComponent::Cpsr });
+        match (snapshot.cpsr == frame.entry.cpsr, certificate) {
+            (true, None) => {}
+            (true, Some(_)) => return Err(Failure::UnexpectedCertificate(core)),
+            (false, None) => return Err(Failure::HandoffState { core, component: StateComponent::Cpsr }),
+            (false, Some(certificate)) => {
+                if frame.route != Route::StockFallback || !certificate.matches_monitor_entry(
+                    core, frame.entry.registers, frame.entry.sp, frame.entry.lr,
+                    frame.entry.cpsr, snapshot,
+                ) {
+                    return Err(Failure::InvalidCertificate(core));
+                }
+            }
         }
         if snapshot.sp != frame.handoff_sp {
             return Err(Failure::HandoffStack { core, expected: frame.handoff_sp, observed: snapshot.sp });

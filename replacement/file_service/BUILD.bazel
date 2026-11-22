@@ -6,16 +6,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["retired.ld", "retired-memory.ld"])
 
-_SOURCES = [
-    "src/completion.rs",
-    "src/handles.rs",
-    "src/requests.rs",
-    "src/routing.rs",
-    "src/stock.rs",
-    "src/stock_requests.rs",
-    "src/stock_workers.rs",
-    "src/workers.rs",
-]
+_SOURCES = glob(["src/*.rs"], exclude = ["src/lib.rs", "src/*tests.rs"])
 
 [xm1_rust_rlib(
     name = "arm" + suffix,
@@ -31,7 +22,7 @@ _SOURCES = [
 
 genrule(
     name = "host-tests",
-    srcs = ["src/lib.rs", "src/routing_tests.rs", "src/tests.rs", "src/workers_tests.rs"] + _SOURCES,
+    srcs = ["src/lib.rs"] + glob(["src/*tests.rs"]) + _SOURCES,
     outs = ["host-tests.passed"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
     tools = ["@lab_xm1_rust//:bin/rustc"],
@@ -39,13 +30,7 @@ genrule(
 
 haskell_library(
     name = "native-lib",
-    srcs = [
-        "Replacement/FileService/Handles.hs",
-        "Replacement/FileService/Native.hs",
-        "Replacement/FileService/Requests.hs",
-        "Replacement/FileService/StockRole.hs",
-        "Replacement/FileService/Workers.hs",
-    ],
+    srcs = glob(["Replacement/FileService/*.hs"], exclude = ["Replacement/FileService/Payload.hs"]),
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
@@ -130,7 +115,7 @@ haskell_test(
 haskell_binary(
     name = "file-service-observe",
     srcs = ["ObserveMain.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
     main_file = "ObserveMain.hs",
     deps = [
         ":payload",
@@ -141,10 +126,30 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:deepseq",
         "//host:directory",
         "//host:filepath",
         "//host:text",
         "//host:vector",
+        "//replacement/fixed_image:contract",
+    ],
+)
+
+haskell_test(
+    name = "observe-compare-tests",
+    size = "small",
+    srcs = ["ObserveCompareTests.hs"],
+    args = ["$(rootpath :file-service-observe)"],
+    data = [":file-service-observe"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
     ],
 )
 

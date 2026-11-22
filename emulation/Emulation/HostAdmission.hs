@@ -51,6 +51,7 @@ import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (fileID, getFdStatus, readSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadOnly, ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock, waitToSetLock)
 import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.Time (epochTime)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
 import System.Posix.Types (Fd (..), FileID, FileOffset, ProcessID)
 import System.Process (CreateProcess (..), StdStream (NoStream, UseHandle), createProcess, proc, readProcessWithExitCode, waitForProcess)
@@ -276,14 +277,16 @@ writePendingPeak (MemoryKey key) name peak = do
   renameFile temporary final
 
 -- | Records this scope's @memory.peak@ under KEY once this process, after any
--- exec, and every descendant that inherits the pipe have exited. A scope
--- stopped by systemd leaves no record.
+-- exec, and every descendant that inherits the pipe have exited. After an OOM
+-- kill in the scope it records @memory.peak@ plus @memory.swap.peak@, at least
+-- @memory.max@. A scope stopped by systemd otherwise leaves no record.
 startPeakRecorder :: MemoryKey -> ScopeName -> IO ()
 startPeakRecorder (MemoryKey key) (ScopeName unit) = do
   groups <- readStrict "/proc/self/cgroup"
   group <- case [drop 3 line | line <- lines groups, take 3 line == "0::"] of
     [found] -> pure found
     _ -> ioError (userError "cannot establish this process's cgroup")
+  root <- cgroupRoot
   pending <- pendingPeakDirectory <$> memoryDirectory
   createDirectoryIfMissing True pending
   (watchRead, watchWrite) <- createPipe
@@ -291,9 +294,29 @@ startPeakRecorder (MemoryKey key) (ScopeName unit) = do
   setFdOption watchWrite CloseOnExec False
   watch <- fdToHandle watchRead
   let final = pending </> unit
-      script = "while read -r _; do :; done; read -r peak < \"$1\" || exit 0; printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
-  void $ createProcess (proc "sh" ["-c", script, "sh", "/sys/fs/cgroup" ++ group ++ "/memory.peak", final ++ ".partial", final, key])
+      script = unlines
+        [ "trap '' TERM"
+        , "while read -r _; do :; done"
+        , "read -r peak < \"$1/memory.peak\" || exit 0"
+        , "kills=0"
+        , "while read -r name value; do [ \"$name\" != oom_kill ] || kills=$value; done < \"$1/memory.events\""
+        , "if [ \"$kills\" -gt 0 ]; then"
+        , "  read -r swap < \"$1/memory.swap.peak\" || swap=0"
+        , "  read -r cap < \"$1/memory.max\" || cap=0"
+        , "  [ \"$cap\" != max ] || cap=0"
+        , "  peak=$((peak + swap))"
+        , "  [ \"$cap\" -le \"$peak\" ] || peak=$cap"
+        , "elif [ \"$(systemctl --user show \"$5\" -p ActiveState --value)\" = deactivating ]; then"
+        , "  exit 0"
+        , "fi"
+        , "printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
+        ]
+  void $ createProcess (proc "sh" ["-c", script, "sh", root ++ group, final ++ ".partial", final, key, unit])
     { std_in = UseHandle watch, std_out = NoStream, std_err = NoStream, close_fds = True }
+
+-- | @/sys/fs/cgroup@, or @XM1_HOST_CGROUP_ROOT@.
+cgroupRoot :: IO FilePath
+cgroupRoot = fromMaybe "/sys/fs/cgroup" <$> lookupEnv "XM1_HOST_CGROUP_ROOT"
 
 -- | Reserves the scope's @MemoryHigh@, or its @MemoryMax@ when that is lower
 -- or @MemoryHigh@ is unset, inside the already-started scope. Swap caps are
@@ -332,21 +355,40 @@ waitingStride = 4194304
 smallerWaiterPolls :: Int
 smallerWaiterPolls = 3
 
+-- | @waiting.lock@ offsets from here are priority waiters: one that has waited
+-- 'agingSeconds' locks @priorityBase + arrival * waitingStride + pid@, with
+-- @arrival@ in epoch seconds.
+priorityBase :: FileOffset
+priorityBase = 2 ^ (40 :: Int)
+
+-- | @XM1_HOST_ADMISSION_AGING_SECONDS@, or 20 minutes.
+agingSeconds :: IO Int
+agingSeconds = do
+  raw <- lookupEnv "XM1_HOST_ADMISSION_AGING_SECONDS"
+  case raw of
+    Nothing -> pure 1200
+    Just text | Just seconds <- readMaybe text, seconds >= 0 -> pure seconds
+    _ -> ioError (userError "XM1_HOST_ADMISSION_AGING_SECONDS must be a non-negative integer")
+
 -- | A new admission takes its tokens when they fit the budget, when
--- @MemAvailable@ less 'liveHeadroomBytes' covers them, and after deferring to
--- smaller waiters for 'smallerWaiterPolls'. A legacy scope already holds its
--- memory and skips the last two conditions.
+-- @MemAvailable@ less 'liveHeadroomBytes' and 'outstandingBytes' covers them,
+-- when no priority waiter arrived before it, and, unless it is itself a
+-- priority waiter, after deferring to smaller waiters for 'smallerWaiterPolls'.
+-- A legacy scope already holds its memory and skips the last three conditions.
 reserveMemoryWithLegacy :: Maybe LegacyReservation -> Reservation -> ScopeName -> IO Fd
 reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
   budget <- memoryBudget
   unless (tokens <= budgetTokens budget) $
     ioError (userError ("a reservation of " ++ show (reservationBytes reservation) ++ " bytes exceeds the host RAM budget of "
       ++ show (toInteger (budgetTokens budget) * tokenBytes) ++ " bytes"))
+  aging <- agingSeconds
+  arrival <- epochTime
   directory <- memoryDirectory
   pid <- getProcessID
   queue <- openFd (directory </> "waiting.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
   setFdOption queue CloseOnExec True
   let place = fromIntegral tokens * waitingStride + fromIntegral pid
+      priorityPlace = priorityBase + fromIntegral (fromEnum arrival) * waitingStride + fromIntegral pid
       admitting = isNothing legacy
       attempt registered deferred = do
         gate <- openFd (directory </> "gate.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
@@ -363,13 +405,19 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
             holders <- heldTokens fd budget
-            spare <- if admitting then subtract liveHeadroomBytes <$> availableMemoryBytes else pure (reservationBytes reservation)
-            smaller <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
+            spare <- if admitting
+              then (\available outstanding -> available - liveHeadroomBytes - outstanding)
+                <$> availableMemoryBytes <*> outstandingBytes directory holders
+              else pure (reservationBytes reservation)
+            now <- epochTime
+            let aged = admitting && fromEnum now - fromEnum arrival >= aging
+            older <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, priorityBase, priorityPlace - priorityBase) else pure False
+            smaller <- if admitting && not aged then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
             let occupied = nub (map fst holders ++ protected)
                 free = filter (`notElem` occupied) (map fromIntegral [0 .. censusTokens budget - 1])
                 fits = length occupied + tokens <= budgetTokens budget && spare >= reservationBytes reservation
                 deferring = fits && smaller && deferred < smallerWaiterPolls
-            chosen <- if fits && not deferring
+            chosen <- if fits && not deferring && not older
               then collect fd (take tokens free)
               else pure Nothing
             case chosen of
@@ -377,10 +425,11 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
                 closeFd fd
                 closeFd gate
                 when (admitting && not registered) (setLock queue (WriteLock, AbsoluteSeek, place, 1))
+                when aged (setLock queue (WriteLock, AbsoluteSeek, priorityPlace, 1))
                 hPutStrLn stderr ("host admission: waiting for host RAM (" ++ show tokens ++ " x 256MiB; "
                   ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held; "
-                  ++ show (max 0 spare) ++ " bytes available above the live headroom"
-                  ++ (if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
+                  ++ show (max 0 spare) ++ " bytes available above the live headroom and outstanding reservations"
+                  ++ (if older then "; behind a priority waiter that arrived earlier" else if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
                   ++ show (nub (map snd holders)))
                 hFlush stderr
                 threadDelay 500_000
@@ -407,6 +456,27 @@ heldTokens fd budget = do
   owners <- mapM (\index -> (,) index <$> getLock fd (WriteLock, AbsoluteSeek, index, 1))
     (map fromIntegral [0 .. censusTokens budget - 1])
   pure [(index, pid) | (index, Just (pid, _)) <- owners]
+
+-- | Over admitted scopes holding HOLDERS, the reservation not yet in use:
+-- held tokens less @memory.current@ plus @memory.swap.current@, at least zero.
+-- A scope whose cgroup is gone counts zero.
+outstandingBytes :: FilePath -> [(FileOffset, ProcessID)] -> IO Integer
+outstandingBytes directory holders = do
+  root <- cgroupRoot
+  groups <- forM holders $ \(index, _) ->
+    (fmap (\(ScopeIdentity _ _ (ScopeCgroup group _)) -> group) <$> readScopeRecord (directory </> ("scope-" ++ show index)))
+      `catchIOError` const (pure Nothing)
+  fmap sum . forM (nub [group | Just group <- groups]) $ \group -> do
+    let reserved = toInteger (length (filter (== Just group) groups)) * tokenBytes
+    current <- counter (root ++ group </> "memory.current")
+    case current of
+      Nothing -> pure 0
+      Just used -> do
+        swapped <- fromMaybe 0 <$> counter (root ++ group </> "memory.swap.current")
+        pure (max 0 (reserved - used - swapped))
+  where
+    counter path = (readMaybe . trim <$> readStrict path)
+      `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
 
 claimScopeRecord :: FilePath -> ScopeName -> IO ()
 claimScopeRecord record = claimScopeRecords [record]
@@ -664,7 +734,10 @@ admit requestedBase command rest = do
   when running (removeIfPresent script)
   setEnv admittedVariable "1"
   (admitted, outcome) <- runContained memory swap reservation scoped unit takeLane bazelArguments
-  case (admitted, unitMemoryPeak (outcomeState outcome)) of
+  let state = outcomeState outcome
+      killed = unitResult state == "oom-kill"
+  case (admitted, unitMemoryPeak state) of
+    (Just _, Just peak) | killed -> writePendingPeak key unit (max (peak + fromMaybe 0 (unitMemorySwapPeak state)) (memoryMaxBytes memory))
     (Just _, Just peak) -> writePendingPeak key unit peak
     _ -> pure ()
   let verdict = judge outcome
@@ -1045,6 +1118,7 @@ data UnitState = UnitState
   { unitResult :: String
   , unitCpuNanos :: Maybe Integer
   , unitMemoryPeak :: Maybe Integer
+  , unitMemorySwapPeak :: Maybe Integer
   }
 
 data DaemonCounters = DaemonCounters
@@ -1109,7 +1183,7 @@ runContained memoryCap swapCap reservation scoped unit admission bazelArguments 
   state <-
     if scoped
       then unitState unit (isNothing exitStatus)
-      else pure (UnitState "uncapped" Nothing Nothing)
+      else pure (UnitState "uncapped" Nothing Nothing Nothing)
   after <- daemonCounters
   _ <- try (hClose releaseHandle) :: IO (Either IOException ())
   _ <- waitForProcess handle
@@ -1135,12 +1209,12 @@ unitState unit died = do
   let field name = lookup name properties
       number name = field name >>= readMaybe
   pure $ case field "LoadState" of
-    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak")
-    _ -> UnitState "unknown" Nothing Nothing
+    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak") (number "MemorySwapPeak")
+    _ -> UnitState "unknown" Nothing Nothing Nothing
   where
     showUnit = do
       (_, out, _) <- readProcessWithExitCode "systemctl"
-        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak"] ""
+        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak", "-p", "MemorySwapPeak"] ""
       pure [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
     settle 0 = pure ()
     settle remaining = do

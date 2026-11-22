@@ -7,11 +7,28 @@ const TAGS: u32 = 0x9101c0;
 const SEQUENCE: u32 = 0x910200;
 pub(crate) const TAG_SEMAPHORE: u32 = 0x3c;
 pub(crate) const FOREVER: u32 = 0xffff_ffff;
+/// The word the attach worker compares with -1 and the page workers set to all ones.
+pub(crate) const ATTACH_STATE: u32 = 0x910208;
 
 extern "C" {
     pub(crate) fn file_service_semaphore_wait(semaphore: u32, timeout: u32) -> i32;
     pub(crate) fn file_service_semaphore_signal(semaphore: u32) -> i32;
     fn file_service_cache_claim() -> u32;
+}
+
+// Retained services more than one worker group calls; pointer arguments are guest addresses.
+extern "C" {
+    pub(crate) fn file_service_fill_memory(destination: u32, value: u32, length: u32);
+    pub(crate) fn file_service_copy_memory(destination: u32, source: u32, length: u32) -> u32;
+    pub(crate) fn file_service_extension_key(extension: u32) -> u32;
+    pub(crate) fn file_service_catalog_find(mode: u32, commit: u32, step: u32, word: u32, name: u32, record: u32) -> u32;
+    pub(crate) fn file_service_catalog_locate(query: u32, position: u32) -> u32;
+    pub(crate) fn file_service_catalog_window(query: u32, visit: u32, window: u32) -> u32;
+}
+
+/// The guest address of owned storage passed to a retained service.
+pub(crate) fn address<T>(pointer: *const T) -> u32 {
+    pointer as usize as u32
 }
 
 pub(crate) fn read_word(address: u32) -> u32 {
