@@ -44,17 +44,32 @@
 //! local monitor, DMB/DSB with a defined option, ISB SY and CP15 c7 c10 5/4,
 //! TPIDRURW, CPACR and FPEXC accesses when the case declares that register (FPEXC
 //! also needs CPACR cp10 and cp11 granting equal access), `mov pc, lr` as a tracked
-//! return, a stop address, and device regions that are single interrupt-controller
-//! bank words taking word writes only. Barriers and TPIDRURW/FPEXC writes are rows
-//! of the provenance log in execution order. The code hook performs the exclusives,
-//! barriers and register accesses and advances the PC itself.
+//! return, a stop address, and device regions: word-aligned, word-multiple spans
+//! of the two interrupt-controller banks `[0xfffb3000,0xfffb5000)` taking aligned
+//! word reads and writes, backed by memory with no register model. Barriers,
+//! device reads (`device_read`), TPIDRURW/FPEXC/SCTLR/CSSELR writes and cache
+//! maintenance operations are rows of the provenance log in execution order. The
+//! code hook performs the exclusives, barriers and register accesses and advances
+//! the PC itself.
 //!
 //! A kernel case may declare up to sixteen private stacks; its `ldr pc, [Rn, #imm]`
 //! then also resumes the context holding SP, which may be the active one.
 //!
 //! # Cache admission prerequisite
 //!
-//! Cache identification and maintenance remain unsupported in both role cases.
+//! A kernel case that declares cache registers is served, by conditional CP15 words
+//! with Rt not PC: SCTLR read/write `p15,0,c1,c0,0`, CLIDR read `p15,1,c0,c0,1`,
+//! CSSELR read/write `p15,2,c0,c0,0`, and CCSIDR read `p15,1,c0,c0,0` from the case's
+//! table at the current CSSELR, where an undeclared selector stops the case as
+//! `unsupported_instruction`. It records, with its Rt operand, each of ICIALLU `c7,c5,0`,
+//! ICIMVAU `c7,c5,1`, DCIMVAC `c7,c6,1`, DCISW `c7,c6,2`, DCCMVAC `c7,c10,1`,
+//! DCCSW `c7,c10,2`, DCCIMVAC `c7,c14,1`, DCCISW `c7,c14,2` and the R4 invalidate-all-data
+//! `p15,0,c15,c5,0`. Identification values are case declarations, not X-M1 evidence.
+//! Without a declaration every one of these words is refused.
+//!
+//! There is no cache model: maintenance changes no memory, SCTLR enable bits change no
+//! access, and the uncached alias views above stay coherent. Equal maintenance rows
+//! therefore establish the same requested operations, not their effect on data.
 //! `build-support/fujimod.nix` pins FujiMod `3d90035d7d8d651e126f89f94f30765506e6f53f`,
 //! whose Unicorn gitlink is `ba96845e5c8dcb650a66b07d6d6f0e48ca03440a`.
 //! At that pin, FULL `rprofile/core/backend.rs:90-120` substitutes TCM and PMU only;
@@ -64,24 +79,20 @@
 //! Its explicit set/way entries at `helper.c:4607-4618` are also ARM_CP_NOP.
 //! FujiMod's XP4 CCSIDR override is Cortex-A7-specific, not an R4 cache model.
 //!
-//! Source proposal, not admitted behavior: a shared R-profile cache owner must
-//! mediate CPU loads/stores, instruction fetch, uncached aliases and DMA backing,
-//! replacing the coherent alias views above.
+//! Source proposal for cache effects, not admitted behavior: a shared R-profile cache
+//! owner must mediate CPU loads/stores, instruction fetch, uncached aliases and DMA
+//! backing, replacing the coherent alias views above.
 //! Each core needs selector state and tagged lines with valid/dirty data.
 //! Cleaning publishes a selected dirty line to backing and clears dirty;
 //! invalidation discards the selected line; clean-and-invalidate publishes then
 //! discards. DMA uses backing, not another core's private cache.
 //! The closed configuration must bind geometry, reset state, allocation/replacement
-//! and memory attributes to X-M1 evidence and the reviewed model revision.
-//! CLIDR is `p15,1,c0,c0,1`; CSSELR read/write is `p15,2,c0,c0,0`;
-//! CCSIDR is `p15,1,c0,c0,0`. Set/way writes are `p15,0,c7,c6,2`
-//! (invalidate), `p15,0,c7,c10,2` (clean), and `p15,0,c7,c14,2`
-//! (clean-and-invalidate). Operand level/set/way bounds must follow that geometry.
-//! Admission must retain condition handling, privilege checks, PC-register refusal,
-//! ordered maintenance provenance and refusal of every undeclared selector.
+//! and memory attributes to X-M1 evidence and the reviewed model revision, and bound
+//! set/way operands by that geometry.
 //! Missing prerequisites are evidence-bound R4 geometry and this stateful CPU/DMA
-//! memory integration in the pinned FULL model. Shared-backing coherence and zero
-//! cache identifiers do not establish those laws or qualify a whole-CPU claim.
+//! memory integration in the pinned FULL model. Recorded maintenance, shared-backing
+//! coherence and declared identifiers do not establish those laws or qualify a
+//! whole-CPU claim.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -221,8 +232,18 @@ const FPEXC_EN: u32 = 1 << 30;
 /// `ldrex Rt, [Rn]` and `strex Rd, Rt, [Rn]` without cond and registers.
 const LDREX: u32 = 0x0190_0f9f;
 const STREX: u32 = 0x0180_0f90;
-/// Set-pending and clear-pending words of the two interrupt-controller banks.
-const BANK_WORDS: [u32; 4] = [0xfffb_30cc, 0xfffb_40cc, 0xfffb_30ec, 0xfffb_40ec];
+/// The two interrupt-controller banks, primary at 0xfffb3000 and secondary at 0xfffb4000.
+const DEVICE_BANKS: Span = Span { base: 0xfffb_3000, bytes: 0x2000 };
+/// `mrc`/`mcr p15, 0, Rt, c1, c0, 0` (SCTLR), `mrc p15, 1, Rt, c0, c0, 1` (CLIDR),
+/// `mrc`/`mcr p15, 2, Rt, c0, c0, 0` (CSSELR) and `mrc p15, 1, Rt, c0, c0, 0` (CCSIDR)
+/// without cond and Rt.
+const SCTLR_READ: u32 = 0x0e11_0f10;
+const SCTLR_WRITE: u32 = 0x0e01_0f10;
+const CLIDR_READ: u32 = 0x0e30_0f30;
+const CSSELR_READ: u32 = 0x0e50_0f10;
+const CSSELR_WRITE: u32 = 0x0e40_0f10;
+const CCSIDR_READ: u32 = 0x0e30_0f10;
+const MAX_CACHE_SELECTORS: u32 = 16;
 
 /// Page permission bits as taken by `Cpu::map_zeroed`.
 const PAGE_READ: u32 = 1;
@@ -412,7 +433,7 @@ enum Permission {
     Read,
     ReadWrite,
     ReadExecute,
-    /// One bank word of a kernel case: aligned word writes only.
+    /// A word-aligned span of `DEVICE_BANKS` in a kernel case: aligned word reads and writes only.
     Device,
 }
 
@@ -426,7 +447,7 @@ enum Need {
 impl Permission {
     fn grants(self, need: Need) -> bool {
         match need {
-            Need::Read => self != Self::Device,
+            Need::Read => true,
             Need::Write => matches!(self, Self::ReadWrite | Self::Device),
             Need::Execute => self == Self::ReadExecute,
         }
@@ -591,7 +612,7 @@ impl PrivilegedMode {
 #[derive(Clone, Copy, Debug)]
 struct Cp14Identity(u32);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 enum Profile {
     User,
     Privileged { mode: PrivilegedMode, identity: Option<Cp14Identity>, kernel: Option<Kernel> },
@@ -621,13 +642,36 @@ impl Fpexc {
     }
 }
 
-/// A kernel case's stop address and the system register values it serves.
+/// One CCSIDR a kernel case serves and the CSSELR value that selects it.
 #[derive(Clone, Copy, Debug)]
+struct CacheSize {
+    selector: u32,
+    ccsidr: u32,
+}
+
+/// A kernel case's initial SCTLR and CSSELR, its CLIDR and its CCSIDR table, with distinct selectors.
+#[derive(Debug)]
+struct CacheRegisters {
+    sctlr: u32,
+    clidr: u32,
+    csselr: u32,
+    sizes: Box<[CacheSize]>,
+}
+
+impl CacheRegisters {
+    fn ccsidr(&self, selector: u32) -> Option<u32> {
+        self.sizes.iter().find(|size| size.selector == selector).map(|size| size.ccsidr)
+    }
+}
+
+/// A kernel case's stop address and the system register values it serves.
+#[derive(Debug)]
 struct Kernel {
     stop: Option<Address>,
     tpidrurw: Option<Tpidrurw>,
     cpacr: Option<Cpacr>,
     fpexc: Option<Fpexc>,
+    cache: Option<CacheRegisters>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -644,6 +688,44 @@ enum SystemRegister {
     Tpidrurw,
     Cpacr,
     Fpexc,
+    Sctlr,
+    Clidr,
+    Csselr,
+    Ccsidr,
+}
+
+/// A CP15 cache maintenance write a kernel case with cache registers records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Maintenance {
+    Iciallu,
+    Icimvau,
+    Dcimvac,
+    Dcisw,
+    Dccmvac,
+    Dccsw,
+    Dccimvac,
+    Dccisw,
+    /// The Cortex-R4 `mcr p15, 0, Rt, c15, c5, 0`.
+    InvalidateAllData,
+}
+
+impl Maintenance {
+    /// The operation of an `mcr p15` word without cond and Rt.
+    fn of(word: u32) -> Option<Self> {
+        Some(match word {
+            0x0e07_0f15 => Self::Iciallu,
+            0x0e07_0f35 => Self::Icimvau,
+            0x0e07_0f36 => Self::Dcimvac,
+            0x0e07_0f56 => Self::Dcisw,
+            0x0e07_0f3a => Self::Dccmvac,
+            0x0e07_0f5a => Self::Dccsw,
+            0x0e07_0f3e => Self::Dccimvac,
+            0x0e07_0f5e => Self::Dccisw,
+            0x0e0f_0f15 => Self::InvalidateAllData,
+            _ => return None,
+        })
+    }
 }
 
 /// A kernel-case word the code hook performs; register fields are core indices.
@@ -655,10 +737,11 @@ enum KernelWord {
     ClearExclusive,
     Read { target: usize, register: SystemRegister },
     Write { source: usize, register: SystemRegister },
+    Maintenance { source: usize, operation: Maintenance },
 }
 
 impl Kernel {
-    fn classify(self, word: u32) -> Option<ProfileWord> {
+    fn classify(&self, word: u32) -> Option<ProfileWord> {
         let kernel = |op| Some(ProfileWord::Kernel(op));
         match word {
             NOP => return Some(ProfileWord::Ordinary),
@@ -679,7 +762,9 @@ impl Kernel {
         }
         let read = |register| kernel(KernelWord::Read { target: rt, register });
         let write = |register| kernel(KernelWord::Write { source: rt, register });
-        match word & 0x0fff_0fff {
+        let cached = self.cache.is_some();
+        let masked = word & 0x0fff_0fff;
+        match masked {
             CP15_DMB => return kernel(KernelWord::Barrier(Barrier::Dmb)),
             CP15_DSB => return kernel(KernelWord::Barrier(Barrier::Dsb)),
             TPIDRURW_READ if self.tpidrurw.is_some() => return read(SystemRegister::Tpidrurw),
@@ -687,7 +772,16 @@ impl Kernel {
             CPACR_READ if self.cpacr.is_some() => return read(SystemRegister::Cpacr),
             FPEXC_READ if self.vfp() => return read(SystemRegister::Fpexc),
             FPEXC_WRITE if self.vfp() => return write(SystemRegister::Fpexc),
+            SCTLR_READ if cached => return read(SystemRegister::Sctlr),
+            SCTLR_WRITE if cached => return write(SystemRegister::Sctlr),
+            CLIDR_READ if cached => return read(SystemRegister::Clidr),
+            CSSELR_READ if cached => return read(SystemRegister::Csselr),
+            CSSELR_WRITE if cached => return write(SystemRegister::Csselr),
+            CCSIDR_READ if cached => return read(SystemRegister::Ccsidr),
             _ => {}
+        }
+        if cached && let Some(operation) = Maintenance::of(masked) {
+            return kernel(KernelWord::Maintenance { source: rt, operation });
         }
         if rn == 15 {
             return None;
@@ -741,21 +835,21 @@ impl CpsMask {
 }
 
 impl Profile {
-    fn mode(self) -> u32 {
+    fn mode(&self) -> u32 {
         match self {
             Self::User => USER_MODE,
             Self::Privileged { mode, .. } => mode.bits(),
         }
     }
 
-    fn kernel(self) -> Option<Kernel> {
+    fn kernel(&self) -> Option<&Kernel> {
         match self {
             Self::User => None,
-            Self::Privileged { kernel, .. } => kernel,
+            Self::Privileged { kernel, .. } => kernel.as_ref(),
         }
     }
 
-    fn classify(self, word: u32) -> ProfileWord {
+    fn classify(&self, word: u32) -> ProfileWord {
         let Self::Privileged { identity, kernel, .. } = self else {
             return if excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary };
         };
@@ -767,14 +861,14 @@ impl Profile {
             return ProfileWord::ControlWrite(word & 15);
         }
         let target = (word >> 12 & 15) as usize;
-        if let Some(identity) = identity
+        if let Some(identity) = *identity
             && conditional
             && word & 0x0fff_0fff == MRC_P14_IDENTITY
             && target != 15
         {
             return ProfileWord::IdentityRead(target, identity);
         }
-        if let Some(class) = kernel.and_then(|kernel| kernel.classify(word)) {
+        if let Some(class) = kernel.as_ref().and_then(|kernel| kernel.classify(word)) {
             return class;
         }
         if privileged_refused(word) || excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary }
@@ -834,6 +928,14 @@ impl Case {
 
     fn stops_at(&self, address: u32) -> bool {
         self.profile.kernel().and_then(|kernel| kernel.stop).is_some_and(|stop| stop.0 == address)
+    }
+
+    fn device(&self, address: u64) -> bool {
+        self.regions.iter().any(|region| region.permission == Permission::Device && region.holds(address, 1))
+    }
+
+    fn cache(&self) -> Option<&CacheRegisters> {
+        self.profile.kernel().and_then(|kernel| kernel.cache.as_ref())
     }
 
     fn function_at(&self, address: u32) -> Option<usize> {
@@ -975,11 +1077,31 @@ impl Kernel {
         if fpexc.is_some() && cpacr.is_none() {
             return Err(WireError("a kernel case's FPEXC needs a CPACR"));
         }
-        Ok(Self { stop, tpidrurw, cpacr, fpexc })
+        Ok(Self { stop, tpidrurw, cpacr, fpexc, cache: None })
     }
 
-    fn vfp(self) -> bool {
+    fn vfp(&self) -> bool {
         self.fpexc.is_some() && self.cpacr.is_some_and(Cpacr::grants_vfp)
+    }
+}
+
+impl CacheRegisters {
+    /// `SCTLR CLIDR CSSELR COUNT SELECTOR CCSIDR ...`, one to sixteen distinct selectors.
+    fn parse(tokens: &mut Tokens<'_>) -> Result<Self, WireError> {
+        let (sctlr, clidr, csselr) = (tokens.word()?, tokens.word()?, tokens.word()?);
+        let count = tokens.count(MAX_CACHE_SELECTORS)?;
+        if count == 0 {
+            return Err(WireError("a cache-register row needs at least one CCSIDR"));
+        }
+        let mut sizes: Vec<CacheSize> = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let size = CacheSize { selector: tokens.word()?, ccsidr: tokens.word()? };
+            if sizes.iter().any(|prior| prior.selector == size.selector) {
+                return Err(WireError("a cache-register row repeats a CSSELR selector"));
+            }
+            sizes.push(size);
+        }
+        Ok(Self { sctlr, clidr, csselr, sizes: sizes.into() })
     }
 }
 
@@ -1038,7 +1160,7 @@ fn parse_case(
             b"i" => Some(Cp14Identity(tokens.word()?)),
             _ => return Err(WireError("a privileged case's CP14 identity must be n or i <word>")),
         };
-        let kernel = if tokens.peek() == Some(b"k") {
+        let mut kernel = if tokens.peek() == Some(b"k") {
             tokens.next()?;
             Some(Kernel::parse(&mut tokens)?)
         } else {
@@ -1050,6 +1172,12 @@ fn parse_case(
         } else {
             None
         };
+        if let Some(kernel) = kernel.as_mut()
+            && tokens.peek() == Some(b"p")
+        {
+            tokens.next()?;
+            kernel.cache = Some(CacheRegisters::parse(&mut tokens)?);
+        }
         (Profile::Privileged { mode, identity, kernel }, stack_contexts)
     };
     if core[13] % 8 != 0 || core[14] != exit.0 {
@@ -1078,8 +1206,10 @@ fn parse_case(
             10 if profile.kernel().is_some() => Permission::Device,
             _ => return Err(WireError("region permission must be 1, 3 or 5, or 10 in a kernel case")),
         };
-        if permission == Permission::Device && (bytes != 4 || !BANK_WORDS.contains(&base)) {
-            return Err(WireError("a device region is one interrupt-controller bank word"));
+        if permission == Permission::Device
+            && (base % 4 != 0 || bytes % 4 != 0 || !DEVICE_BANKS.contains(u64::from(base), u64::from(bytes)))
+        {
+            return Err(WireError("a device region is a word-aligned span of the interrupt-controller banks"));
         }
         let views = if tokens.peek() == Some(b"u") {
             tokens.next()?;
@@ -1647,6 +1777,7 @@ struct AccessEntry {
 enum ProvenanceKind {
     Read,
     Write,
+    DeviceRead,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -1689,11 +1820,27 @@ struct SystemEntry {
 }
 
 #[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MaintenanceKind {
+    Maintenance,
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct MaintenanceEntry {
+    pc: Word,
+    instruction: Word,
+    kind: MaintenanceKind,
+    operation: Maintenance,
+    value: Word,
+}
+
+#[derive(Clone, Copy, Serialize)]
 #[serde(untagged)]
 enum LogEntry {
     Access(ProvenanceEntry),
     Barrier(BarrierEntry),
     System(SystemEntry),
+    Maintenance(MaintenanceEntry),
 }
 
 /// A kernel case's final TPIDRURW and FPEXC, each when the case declares it, and
@@ -2120,20 +2267,28 @@ impl Monitor {
     }
 }
 
-/// A kernel case's current TPIDRURW, CPACR and FPEXC.
+/// A kernel case's current TPIDRURW, CPACR, FPEXC, SCTLR, CLIDR and CSSELR.
 #[derive(Clone, Copy)]
 struct SystemState {
     tpidrurw: Option<Tpidrurw>,
     cpacr: Option<Cpacr>,
     fpexc: Option<Fpexc>,
+    sctlr: Option<u32>,
+    clidr: Option<u32>,
+    csselr: Option<u32>,
 }
 
 impl SystemState {
+    /// `None` for CCSIDR, which the case's table serves at the current CSSELR.
     fn read(self, register: SystemRegister) -> Option<u32> {
         match register {
             SystemRegister::Tpidrurw => self.tpidrurw.map(|value| value.0),
             SystemRegister::Cpacr => self.cpacr.map(|value| value.0),
             SystemRegister::Fpexc => self.fpexc.map(|value| value.0),
+            SystemRegister::Sctlr => self.sctlr,
+            SystemRegister::Clidr => self.clidr,
+            SystemRegister::Csselr => self.csselr,
+            SystemRegister::Ccsidr => None,
         }
     }
 }
@@ -2190,6 +2345,9 @@ impl State {
                 tpidrurw: kernel.and_then(|kernel| kernel.tpidrurw),
                 cpacr: kernel.and_then(|kernel| kernel.cpacr),
                 fpexc: kernel.and_then(|kernel| kernel.fpexc),
+                sctlr: case.cache().map(|cache| cache.sctlr),
+                clidr: case.cache().map(|cache| cache.clidr),
+                csselr: case.cache().map(|cache| cache.csselr),
             },
         }
     }
@@ -2361,6 +2519,11 @@ impl State {
                 write(cpu, arm::CORE[status], u32::from(!stored))?;
                 self.monitor = Monitor::Open;
             }
+            KernelWord::Read { target, register: SystemRegister::Ccsidr } => {
+                let selector = self.system.csselr.ok_or_else(|| Step::Host("CSSELR is not declared".to_owned()))?;
+                let value = case.cache().and_then(|cache| cache.ccsidr(selector)).ok_or(Step::Stop(Status::UnsupportedInstruction))?;
+                write(cpu, arm::CORE[target], value)?;
+            }
             KernelWord::Read { target, register } => {
                 let value = self.system.read(register).ok_or_else(|| Step::Host(format!("{register:?} is not declared")))?;
                 write(cpu, arm::CORE[target], value)?;
@@ -2372,10 +2535,19 @@ impl State {
                     SystemRegister::Fpexc => {
                         self.system.fpexc = Some(Fpexc::new(value).ok_or(Step::Stop(Status::UnsupportedInstruction))?);
                     }
-                    SystemRegister::Cpacr => return Err(Step::Host("CPACR is read-only".to_owned())),
+                    SystemRegister::Sctlr => self.system.sctlr = Some(value),
+                    SystemRegister::Csselr => self.system.csselr = Some(value),
+                    SystemRegister::Cpacr | SystemRegister::Clidr | SystemRegister::Ccsidr => {
+                        return Err(Step::Host(format!("{register:?} is read-only")));
+                    }
                 }
                 let (pc, instruction) = (Word(self.instruction.pc), Word(self.instruction.word));
                 self.record(LogEntry::System(SystemEntry { pc, instruction, kind: SystemKind::System, register, value: Word(value) }));
+            }
+            KernelWord::Maintenance { source, operation } => {
+                let value = read(cpu, arm::CORE[source])?;
+                let (pc, instruction) = (Word(self.instruction.pc), Word(self.instruction.word));
+                self.record(LogEntry::Maintenance(MaintenanceEntry { pc, instruction, kind: MaintenanceKind::Maintenance, operation, value: Word(value) }));
             }
         }
         Ok(())
@@ -2699,7 +2871,8 @@ impl State {
         } else {
             let mut bytes = [0u8; 8];
             cpu.read_memory(address, &mut bytes[..size as usize])?;
-            (ProvenanceKind::Read, u64::from_le_bytes(bytes))
+            let kind = if case.device(address) { ProvenanceKind::DeviceRead } else { ProvenanceKind::Read };
+            (kind, u64::from_le_bytes(bytes))
         };
         self.record_access(kind, address as u32, size, observed);
         Ok(())

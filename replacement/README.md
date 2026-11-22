@@ -403,6 +403,18 @@ Scope: Current staged-effective loader union and complete named native matrix, n
 
 <!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
 
+## Fixed-bank interrupt and cache services
+
+The [interrupt and cache contract](../reports/rtos-irq-cache-services.md) fixes the retained kernel0 interrupt-controller, interrupt-mask and cache-maintenance entries of both domains, their callers and raw consumers. `//replacement/rtos_irq_control:irq-bank-{a,b}` are the bank rlibs; `:irq-bank-probe-{a,b}-split` give the carrier pieces and bank body that `:irq-bank-cohort` compares against stock on the native runner, with controller banks admitted as device regions and CP15 maintenance recorded against case-declared cache registers.
+
+<!-- evidence-record E-RTOS-IRQ-CACHE-BANK-NATIVE-150 -->
+
+E-RTOS-IRQ-CACHE-BANK-NATIVE-150: The fixed-bank IRQ, mask and cache bodies of both domains, every retained kernel0 interrupt-controller, interrupt-mask and cache-maintenance entry plus the +0x158/+0x15c/+0x160 slots, linked at the fixed body origin behind stock-entry veneers with the rest of each retained extent filled, match stock on 366 native cases. One comparator covers the return, callee-saved registers, SP, CPSR control, the kernel-table, packet and controller bytes, the ordered kernel writes, the ordered controller-bank reads and writes with CP15 maintenance, system-register writes and barriers, and TPIDRURW; the same comparator runs 20 bank mutants (device store value and order, CP15 operation, missing CP15 operation, missing barrier, mask restore, TPIDRURW write and core identity). Failures, counting mismatched cases and undetected mutants: 0. Stock and owned observations are BatchExecuted in domain A and BatchExecuted in domain B. Bank bodies A c3277d98a06bf721c76203ddf76769ce2996415f046e821abbe548bc9905f341 and B 137c6abb64d5f2089c97c6cc5bc8cea4393f7ad6b84fbca7b394583a188d3ad1.
+
+Scope: Native cases on the pinned X-M1 1.50 loaders A 21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882 and B 8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec (firmware 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490) with synthetic kernel, controller and case-declared SCTLR/CLIDR/CSSELR/CCSIDR state. Controller banks are memory-backed device regions and cache maintenance is recorded, not modeled. Not bank placement, joint bank/loader admission, the vector bodies, X-M1 cache geometry or a from-reset boot.
+
+<!-- /evidence-record E-RTOS-IRQ-CACHE-BANK-NATIVE-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->

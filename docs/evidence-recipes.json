@@ -7427,5 +7427,29 @@
         "pointer": ["verdict"]
       }
     ]
+  },
+  {
+    "id": "E-RTOS-IRQ-CACHE-BANK-NATIVE-150",
+    "claim": "The fixed-bank IRQ, mask and cache bodies of both domains, every retained kernel0 interrupt-controller, interrupt-mask and cache-maintenance entry plus the +0x158/+0x15c/+0x160 slots, linked at the fixed body origin behind stock-entry veneers with the rest of each retained extent filled, match stock on {{comparisons}} native cases. One comparator covers the return, callee-saved registers, SP, CPSR control, the kernel-table, packet and controller bytes, the ordered kernel writes, the ordered controller-bank reads and writes with CP15 maintenance, system-register writes and barriers, and TPIDRURW; the same comparator runs {{mutants}} bank mutants (device store value and order, CP15 operation, missing CP15 operation, missing barrier, mask restore, TPIDRURW write and core identity). Failures, counting mismatched cases and undetected mutants: {{failures}}. Stock and owned observations are {{reuse_a}} in domain A and {{reuse_b}} in domain B. Bank bodies A {{bank_a}} and B {{bank_b}}.",
+    "scope": "Native cases on the pinned X-M1 1.50 loaders A {{loader_a}} and B {{loader_b}} (firmware {{firmware_sha256}}) with synthetic kernel, controller and case-declared SCTLR/CLIDR/CSSELR/CCSIDR state. Controller banks are memory-backed device regions and cache maintenance is recorded, not modeled. Not bank placement, joint bank/loader admission, the vector bodies, X-M1 cache geometry or a from-reset boot.",
+    "notes": "Declared differences in reports/rtos-irq-cache-services.md: negative-line enable/disable refusal, the priority & 15 slot index of enter/leave, cps-form mask restore, owned stack frames and the set/way masks. The stock cache enables invalidate the other cache (mcreq after tst), which the decomp comment states the other way round; the owned bodies follow the bytes.",
+    "artifacts": [
+      "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json",
+      "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/inputs.sha256",
+      "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/firmware.json",
+      "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/run.json"
+    ],
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/firmware.json", "pointer": ["firmware_sha256"]},
+      {"name": "comparisons", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["comparisons"]},
+      {"name": "failures", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["failures"]},
+      {"name": "mutants", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["mutants"]},
+      {"name": "reuse_a", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["reuse", "0", "stock"]},
+      {"name": "reuse_b", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["reuse", "1", "stock"]},
+      {"name": "bank_a", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["inputs", "bank_a_sha256"]},
+      {"name": "bank_b", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["inputs", "bank_b_sha256"]},
+      {"name": "loader_a", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["inputs", "loader_a_sha256"]},
+      {"name": "loader_b", "path": "private-data/scratch/IrqCache/runs/20261122T213719Z-irq-bank-cohort/result/results.json", "pointer": ["inputs", "loader_b_sha256"]}
+    ]
   }
 ]

@@ -786,7 +786,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
 kernelOutcomes :: FilePath -> IO ()
 kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let acquire=[0xe1921f9f,0xe3510000,0x1afffffc,0xe3a01001,0xe1823f91,0xe3530000,0x1afffff8,0xe12fff1e]
-     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr],O.kernelStackContexts=[]}
+     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr],O.kernelStackContexts=[],O.kernelCache=Nothing}
      spec ident code lock word status=O.CaseSpec
       { O.caseId=ident
       , O.caseProvenance="NativeTests.hs: kernel-case outcomes"
@@ -842,6 +842,128 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  ensure(compared(withCpsr(`xor`0x20000000)spin)==[])("CPSR C change: "++show(compared(withCpsr(`xor`0x20000000)spin)))
  let order=N.nativeKernel(observed!!5)>>=N.observedOrder
  ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))(N.WriteValue 0)])("kernel order: "++show order)
+
+-- Kernel cases with a device span and cache registers through the real runner: identical code has
+-- equal platform orders; a wrong device value, swapped device writes, and a wrong, missing or
+-- differently-operanded maintenance operation each differ. Cache words without a declaration and a
+-- CCSIDR read at an undeclared selector stop; device spans outside the banks or off word alignment
+-- and malformed cache declarations are invalid in both the adapter and the runner.
+platformOrderRegressions :: FilePath -> FilePath -> IO ()
+platformOrderRegressions runner checker=withTemporary "fuji-platform-order"$ \root->do
+ let deviceBase=0xfffb3080::Word32
+     at=N.GuestAddress . fromIntegral
+     cache=O.CacheRegisters{O.cacheSctlr=0x00c50878,O.cacheClidr=0x09200003,O.cacheCsselr=0,O.cacheCcsidr=[(0,0x700fe01a),(1,0x201fe01a)]}
+     kernel declared=O.KernelCase{O.kernelLimit=O.InstructionLimit 64,O.kernelStop=Nothing,O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[],O.kernelStackContexts=[],O.kernelCache=declared}
+     seeds=[(N.R0,0x9000),(N.R1,0x11),(N.R2,0x22),(N.R3,deviceBase),(N.R4,0x9040),(N.R6,1)]
+     spec ident declared code=O.CaseSpec
+      { O.caseId=ident
+      , O.caseProvenance="NativeTests.hs: platform order"
+      , O.caseExclusion="platform-order API control"
+      , O.caseEntry=at 0x8000
+      , O.caseExit=at 0xa000
+      , O.caseRegions=
+         [ O.mkRegion(N.RegionId "code")(at 0x8000)(4*length code)O.ReadExecute(O.assemble code)
+         , O.mkRegion(N.RegionId "exit")(at 0xa000)4 O.ReadExecute(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "bank")(at deviceBase)16 O.Device(O.assemble[0,0,0x5a5a1234,0])
+         , O.mkRegion(N.RegionId "stack")(at 0xb000)32 O.ReadWrite(B.replicate 32 0)
+         ]
+      , O.caseFunctions=[(at 0x8000,4*fromIntegral(length code))]
+      , O.caseInitial=[(r,fromMaybe 0(lookup r seeds))|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0xd3)]
+      , O.caseExpectedStatus=N.Returned
+      , O.caseExpectedRegisters=[(N.Sp,0xb020)]
+      , O.caseExpectedMemory=[(N.RegionId "bank",O.assemble[0x11,0x22,0x5a5a1234,0])]
+      , O.caseIgnoredMemory=[]
+      , O.caseCp14Identity=Nothing
+      , O.caseKernel=Just(kernel declared)
+      }
+     -- ldr r5,[r3,#8]; mcr p15,2,r6,c0,c0,0 (CSSELR); isb; mrc p15,1,r7,c0,c0,0 (CCSIDR)
+     prologue=[0xe5935008,0xee406f10,0xf57ff06f,0xee307f10]
+     -- str r1,[r3]; str r2,[r3,#4]; str r1,[r3,#4]
+     (store1,store2,store2wrong)=(0xe5831000,0xe5832004,0xe5831004)
+     -- mcr p15,0,r0,c7,c14,1 (DCCIMVAC r0); mcr p15,0,r0,c7,c10,1 (DCCMVAC r0); mcr p15,0,r4,c7,c14,1
+     (clean,cleanOnly,cleanR4)=(0xee070f3e,0xee070f3a,0xee074f3e)
+     (dsb,ret)=(0xf57ff04f,0xe12fff1e)
+     body stores operation=prologue++stores++[dsb]++operation++[dsb,ret]
+     reference=body[store1,store2][clean]
+     variants=
+      [("same",reference)
+      ,("wrong-value",body[store1,store2wrong][clean])
+      ,("swapped",body[store2,store1][clean])
+      ,("wrong-operation",body[store1,store2][cleanOnly])
+      ,("missing-operation",body[store1,store2][])
+      ,("wrong-operand",body[store1,store2][cleanR4])]
+     refusals=
+      [spec "maintenance-undeclared" Nothing [clean,ret]
+      ,spec "ccsidr-undeclared" Nothing [0xee307f10,ret]
+      -- mcr p15,2,r4,c0,c0,0 selects 0x9040, which the table does not declare
+      ,spec "selector-undeclared"(Just cache)[0xee404f10,0xee307f10,ret]]
+     referenceSpec=spec "reference"(Just cache)reference
+ observed<-map snd<$>(O.writeBatch(root</>"batch")(referenceSpec:[spec ident(Just cache)code|(ident,code)<-variants]++refusals)>>=O.loadObservedBatch runner)
+ let (referenceObserved,rest)=splitAt 1 observed
+     (variantObserved,refusalObserved)=splitAt(length variants)rest
+     order=O.platformOrder referenceSpec
+     expected=
+      [O.PlatformDeviceRead(at 0xfffb3088)0x5a5a1234,O.PlatformSystemWrite N.Csselr 1,O.PlatformBarrier N.Isb
+      ,O.PlatformDeviceWrite(at 0xfffb3080)0x11,O.PlatformDeviceWrite(at 0xfffb3084)0x22
+      ,O.PlatformBarrier N.Dsb,O.PlatformMaintenance N.Dccimvac 0x9000,O.PlatformBarrier N.Dsb]
+ [referenceRun]<-pure referenceObserved
+ ensure(N.nativeStatus referenceRun==N.Returned && map(O.registerValue referenceRun)[N.R5,N.R7]==[0x5a5a1234,0x201fe01a])("platform reference run: "++show referenceRun)
+ ensure(order referenceRun==Just expected)("platform reference order: "++show(order referenceRun))
+ forM_(zip variants variantObserved)$ \((ident,_),run)->
+  ensure((order run==order referenceRun)==(ident=="same"))(ident++" platform order: "++show(order run))
+ ensure(O.WritesDiffer `elem` O.compareKernelCase referenceSpec referenceRun(variantObserved!!4))"compareKernelCase misses a missing maintenance operation"
+ forM_(zip refusals refusalObserved)$ \(refused,run)->
+  ensure(N.nativeStatus run==N.UnsupportedInstruction)(O.caseId refused++": "++show(N.nativeStatus run))
+ let selected=refusalObserved!!2
+ ensure(O.registerValue selected N.Pc==0x8004 && O.registerValue selected N.R7==0 && order selected==Just[O.PlatformSystemWrite N.Csselr 0x9040])("undeclared selector: "++show selected)
+ ensure(all(\run->O.registerValue run N.Pc==0x8000 && order run==Just[])(take 2 refusalObserved))"undeclared cache words had an effect"
+ path<-O.writeCase(root</>"valid")referenceSpec
+ (validCode,validReport)<-runCase runner path
+ ensure(validCode==0 && get validReport "status"==s "passed")("platform reference case: "++show validReport)
+ (schemaTimed,schemaCode,_,_)<-runBounded 15000000(1024*1024)checker["--schemafile","schemas/native-case.schema.json",path]B.empty
+ ensure(not schemaTimed && schemaCode==ExitSuccess)"the schema refuses a cache-register case"
+ valid<-B.readFile path>>=jsonRead
+ let invalid label item=do
+      let candidate=takeDirectory path</>(label<.>"json")
+      B.writeFile candidate(encodeCanonical item)
+      (code,report)<-runCase runner candidate
+      ensure(code==1 && get report "status"==s "invalid_case")(label++": "++show report)
+     region change=modifyAt "regions" 2 change valid
+     cacheField change=set "kernel"(set "cache"(change(get(get valid "kernel")"cache"))(get valid "kernel"))valid
+     entry selector=obj[("selector",hexWord selector),("value",hexWord 0)]
+ forM_
+  [("device-outside",region(set "address"(s "0xfffb5000")))
+  ,("device-crossing",region(set "address"(s "0xfffb4ff8")))
+  ,("device-unaligned",region(set "address"(s "0xfffb3082")))
+  ,("cache-empty",cacheField(set "ccsidr"(arr[])))
+  ,("cache-seventeen",cacheField(set "ccsidr"(arr(map entry[0..16]))))
+  ,("cache-duplicate",cacheField(set "ccsidr"(arr[entry 1,entry 1])))
+  ,("cache-unknown-field",cacheField(set "level"(hexWord 0)))
+  ,("cache-missing-clidr",cacheField(remove "clidr"))
+  ](uncurry invalid)
+ (_,_,wire,_)<-loadCase path
+ let rows=lines(BC.unpack wire)
+     cacheRow row=take 2 row=="p "
+     deviceRow row=take 9 row=="fffb3080 "
+     edit selected change=unlines[if selected row then change row else row|row<-rows]
+     runWire input=do
+      (timed,code,out,_)<-runBounded 3000000(8*1024*1024)runner[](BC.pack input)
+      result<-jsonRead out
+      pure(not timed,code,str(get result "status"))
+ ensure(filter cacheRow rows==["p c50878 9200003 0 2 0 700fe01a 1 201fe01a"])("cache-register wire row: "++show rows)
+ (_,_,plainWire,_)<-O.writeCase(root</>"plain")(spec "plain" Nothing reference)>>=loadCase
+ ensure(not(any cacheRow(lines(BC.unpack plainWire))))"a kernel case without cache registers gained a p row"
+ admitted<-runWire(edit(const False)id)
+ ensure(admitted==(True,ExitSuccess,"returned"))("the runner refused the cache-register wire: "++show admitted)
+ forM_
+  [edit deviceRow(\row->"fffb5000"++drop 8 row)
+  ,edit deviceRow(\row->"fffb4ff8"++drop 8 row)
+  ,edit deviceRow(\row->"fffb3082"++drop 8 row)
+  ,edit cacheRow(const "p c50878 9200003 0 0")
+  ,edit cacheRow(const "p c50878 9200003 0 2 1 0 1 0")
+  ]$ \input->do
+   refused<-runWire input
+   ensure(refused==(True,ExitFailure 1,"invalid_case"))("the runner admitted a malformed wire: "++show refused++"\n"++input)
 
 kernelStackContextRegressions :: FilePath -> IO ()
 kernelStackContextRegressions runner=withTemporary "fuji-kernel-contexts"$ \root->do
@@ -1031,7 +1153,7 @@ boundedKernelMemoryAdmission runner checker=withTemporary "fuji-kernel-memory-ad
       , O.caseExpectedMemory=[(N.RegionId "state",O.word32le 0x5a)]
       , O.caseIgnoredMemory=[]
       , O.caseCp14Identity=Nothing
-      , O.caseKernel=Just(O.KernelCase(O.InstructionLimit 64)Nothing Nothing Nothing Nothing [] [])
+      , O.caseKernel=Just(O.KernelCase(O.InstructionLimit 64)Nothing Nothing Nothing Nothing [] [] Nothing)
       }
  path<-O.writeCase(root</>"valid")spec
  let schemaAccepts candidate wanted=do
@@ -1081,6 +1203,7 @@ main=do
   when(name=="instruction-budget.json")$ensure(get result "instructions"==s "3" && get result "trace"==arr(replicate 3(obj[("pc",s "0x00001004"),("instruction",s "0xeafffffe")])) )"exact budget trace"
   when(name=="wall-budget.json")$ensure(num(get result "elapsed_ns")<1000000000)"wall bound"
   when(name=="kernel-barriers.json")$ensure(map(\p->(get p "kind",get p "barrier"))provenance==[(s "write",Null),(s "barrier",s "dmb"),(s "barrier",s "dsb"),(s "barrier",s "isb")])"barrier markers in execution order"
+  when(name=="kernel-device-load.json")$ensure(map(\p->(get p "kind",get p "address",get p "value"))provenance==[(s "device_read",s "0xfffb30cc",s "0x0000000000000000")])"device load provenance"
  dispatchRegressions runner
  functionLimitRegressions runner
  instructionLimitRegressions runner checker
@@ -1097,6 +1220,7 @@ main=do
  batchLimits runner
  ownedBatchApi runner
  kernelOutcomes runner
+ platformOrderRegressions runner checker
  kernelStackContextRegressions runner
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
@@ -1136,8 +1260,10 @@ main=do
    ,("FPEXC other than EN",nest "kernel"(set "fpexc"(s "0x80000000") . set "cpacr"(s "0x00f00000"))bankStore)
    ,("FPEXC without CPACR",nest "kernel"(set "fpexc"(s "0x40000000"))bankStore)
    ,("device region outside a kernel case",remove "kernel"bankStore)
-   ,("device region off a bank word",modifyAt "regions" 2(set "address"(s "0xfffb30d0"))bankStore)
-   ,("device region wider than a word",modifyAt "regions" 2(set "size"(n 8))bankStore)
+   ,("device region outside the banks",modifyAt "regions" 2(set "address"(s "0xfffb5000"))bankStore)
+   ,("device region crossing below the banks",modifyAt "regions" 2(set "address"(s "0xfffb2ffc") . set "size"(n 8))bankStore)
+   ,("device region off word alignment",modifyAt "regions" 2(set "address"(s "0xfffb30ce"))bankStore)
+   ,("device region not a word multiple",modifyAt "regions" 2(set "size"(n 6))bankStore)
    ,("stop address at the entry",nest "kernel"(set "stop"(s "0x00001004"))bankStore)
    ,("stop address outside executable bytes",nest "kernel"(set "stop"(s "0x00003000"))bankStore)
    ,("expected kernel registers outside a kernel case",nest "expected"(set "kernel"(obj[]))original)
@@ -1182,5 +1308,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries, high region-count boundaries and schema agreement passed")
- putStrLn(show batched++"-case fixture batch, the wall-stop report comparison, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 12 kernel-case rejections, kernel stack-context declaration boundaries, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries, high region-count boundaries and schema agreement passed")
+ putStrLn(show batched++"-case fixture batch, the wall-stop report comparison, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API, kernel-case outcomes and platform-order controls passed")

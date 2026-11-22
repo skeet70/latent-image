@@ -21,7 +21,7 @@ _SETTINGS_SOURCES = [
 _RECORD = "//replacement/settings_storage:record-store-host-rlib"
 _VALIDATOR = "//replacement/settings_storage:area3-validator-host-rlib"
 
-_IRQ_SOURCES = ["//replacement/rtos_irq_control:src/lib.rs", "//replacement/rtos_irq_control:src/tests.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"]
+_IRQ_SOURCES = ["//replacement/rtos_irq_control:src/lib.rs", "//replacement/rtos_irq_control:src/tests.rs", "//replacement/rtos_irq_control:src/cache.rs", "//replacement/rtos_irq_control:src/controller.rs", "//replacement/rtos_irq_control:src/mask.rs", "//replacement/rtos_layout:src/lib.rs", "//replacement/rtos_reservation:src/lib.rs"]
 _SCHEDULER_SOURCES = [
     "//replacement/rtos_scheduler:src/s3d.rs",
     "//replacement/rtos_scheduler:src/s3d_cpu.rs",

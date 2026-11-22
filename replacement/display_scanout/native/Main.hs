@@ -514,7 +514,7 @@ makeSpec role entry code functions c = CaseSpec
   , caseExpectedStatus=if held c then InstructionBudget else Returned
   , caseExpectedRegisters=if held c then [] else [(Sp,0x303000)]++abi++maybe [] (\v -> [(R0,v)]) (result c)
   , caseExpectedMemory=[(RegionId name,bytesAt (expected c) a n) | (name,a,n) <- regionLayout c,name/="yield-receipt"]
-  , caseIgnoredMemory=[],caseCp14Identity=Nothing,caseKernel=Just (KernelCase (InstructionLimit (if held c then 4096 else 200000)) Nothing Nothing Nothing Nothing [] []) }
+  , caseIgnoredMemory=[],caseCp14Identity=Nothing,caseKernel=Just (KernelCase (InstructionLimit (if held c then 4096 else 200000)) Nothing Nothing Nothing Nothing [] [] Nothing) }
   where
     abi=[(r,0xa5000000+fromIntegral (fromEnum r)) | r <- [R4,R5,R6,R7,R8,R9,R10,R11]]
     boundaries=[service | service@(a,_) <- services c,role/="owned" || a/=0x69f8fc]

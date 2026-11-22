@@ -1,11 +1,16 @@
 //! IRQ enable, disable and handler definition for the X-M1 1.50 root slots `+0x158`,
-//! `+0x15c` and `+0x160`. The slot's loader domain selects the 128-entry registration
-//! table; the executing core selects the controller bank.
+//! `+0x15c` and `+0x160`, and the retained controller, CPSR mask and cache entries they
+//! sit beside. The slot's loader domain selects the 128-entry registration table; the
+//! executing core selects the controller bank.
 
 #![cfg_attr(not(test), no_std)]
 
 #[path = "../../rtos_layout/src/lib.rs"]
 pub mod layout;
+
+pub mod cache;
+pub mod controller;
+pub mod mask;
 
 #[cfg(test)]
 mod tests;
@@ -34,6 +39,17 @@ const PRIORITY: u32 = 0x800;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
 pub struct SavedInterrupts(pub u32);
+
+/// A32 register-specified `lsl`: the low byte of `amount` is the shift; 32 or more gives 0.
+#[inline(always)]
+pub const fn shift_left_register(value: u32, amount: u32) -> u32 {
+    let amount = amount & 0xff;
+    if amount >= 32 {
+        0
+    } else {
+        value << amount
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Bank {

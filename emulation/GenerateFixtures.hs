@@ -292,7 +292,9 @@ main=do
  let bank=at "regions" 2(\v->merge v[("id",s "bank"),("address",h 0xfffb30cc),("permissions",s "device")]) . nest "registers"(set "r2"(h 0xfffb30cc))
  store<-make "kernel-bank-store" [0xf57ff04f,0xe5821000,0xe12fff1e] "returned"
  finish$nest "expected"(set "memory"(arr[memory "bank" 0 "05000000"]))$expectedRegs[("pc",h 0x1080)]$bank$kernel[]store
- load<-make "kernel-bank-load-refused" [0xe5920000,0xe12fff1e] "memory_guard"
- finish$expectedRegs[("pc",h 0x1004)]$bank$kernel[]load
+ load<-make "kernel-device-load" [0xe5920000,0xe12fff1e] "returned"
+ finish$expectedRegs[("r0",h 0),("pc",h 0x1080)]$nest "registers"(set "r0"(h 0x77))$bank$kernel[]load
+ narrow<-make "kernel-device-byte-load-refused" [0xe5d20000,0xe12fff1e] "memory_guard"
+ finish$expectedRegs[("pc",h 0x1004)]$bank$kernel[]narrow
  generated<-length.filter((==".json").takeExtension)<$>listDirectory root
  putStrLn("Generated "++show generated++" structurally identical independent cases and exact instruction binaries; JSON uses canonical Haskell serialization. Historical JSON bytes were preserved.")

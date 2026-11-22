@@ -263,7 +263,7 @@ loadCaseWith reader input = do
    base<-address(get item "address"); size<-integer(get item "size")1(fromIntegral sizeBytes) "region size"
    ensure(base+size<=4294967296) "region address overflow"
    ensure(get item "permissions" `elem` map s ["r","rw","rx","device"]) "permissions must be r/rw/rx/device"
-   ensure(get item "permissions"/=s "device" || (isKernel profile && size==4 && base `elem` bankWords)) "a device region is one interrupt-controller bank word of a kernel case"
+   ensure(get item "permissions"/=s "device" || (isKernel profile && deviceSpan base size)) "a device region is a word-aligned, word-multiple span of the interrupt-controller banks [0xfffb3000,0xfffb5000) in a kernel case"
    when aliased$ensure(version==2 && get item "uncached_alias"==b True && get item "permissions"/=s "device" && base `mod` aliasPage==0 && size `mod` aliasPage==0 && base+size<=uncachedAlias) "an uncached alias needs schema version 2 and a non-device, page-aligned region below 0x40000000"
    let placedRegion=Region item base size B.empty
    ensure(get item "permissions"/=s "rx" || all(\(low,extent)->low+extent<=0x7ffffffc)(regionSpans placedRegion)) "executable region must end by 0x7ffffffc: PMSAv7 default map is execute-never from 0x80000000"
@@ -280,10 +280,10 @@ loadCaseWith reader input = do
    ensure(sum(map regionSize prior)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
    pure(done++[(Region item base size bytes,source)]))[] regionsInput
  let regions=map fst placed
- forM_ [contexts|PrivilegedEntry _ _ (Just(KernelEntry _ _ _ _ contexts))<-[profile]] $ checkStackContexts regions (reg "sp")
+ forM_ [contexts|PrivilegedEntry _ _ (Just(KernelEntry _ _ _ _ contexts _))<-[profile]] $ checkStackContexts regions (reg "sp")
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
- forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]$ \stop->
+ forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _ _))<-[profile]]$ \stop->
    ensure(stop `mod` 4==0 && stop/=entry && stop/=exit && regionAt regions stop 4 'x') "stop address must be aligned, executable and differ from the entry and exit"
  functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
  functions<-foldM(\done item->do
@@ -300,7 +300,7 @@ loadCaseWith reader input = do
    fields item (if scripted then "address calls" else "address inputs outputs side_effects") "stub"
    target'<-address(get item "address")
    ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map stubAddress done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
-   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _))<-[profile]]) "stub address is the stop address"
+   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _ _ _))<-[profile]]) "stub address is the stop address"
    stub<-if scripted then do
      callsInput<-arrayCheck(get item "calls")0 eventCount "stub calls limit"
      calls<-forM callsInput$ \call->do
@@ -374,29 +374,45 @@ data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identi
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
 -- The value MRC p14, 0, Rt, c2, c0, 0 reads in a privileged case.
 newtype Cp14Identity = Cp14Identity Integer deriving (Eq,Show)
--- A kernel case's stop address, its TPIDRURW, CPACR and FPEXC values, and its declared stack contexts.
-data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) [StackBounds] deriving (Eq,Show)
+-- A kernel case's stop address, its TPIDRURW, CPACR and FPEXC values, its declared stack contexts and its cache registers.
+data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) [StackBounds] (Maybe CacheEntry) deriving (Eq,Show)
 -- One declared private stack: @low < SP <= high@.
 data StackBounds = StackBounds {stackLow::Integer,stackHigh::Integer} deriving (Eq,Show)
+-- Initial SCTLR, CLIDR, initial CSSELR and one to sixteen @(CSSELR selector, CCSIDR)@ pairs with distinct selectors.
+data CacheEntry = CacheEntry Integer Integer Integer [(Integer,Integer)] deriving (Eq,Show)
 isKernel :: EntryProfile -> Bool
 isKernel(PrivilegedEntry _ _ (Just _))=True
 isKernel _=False
--- Set-pending and clear-pending words of the two interrupt-controller banks.
-bankWords :: [Integer]
-bankWords=[0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec]
+-- The two interrupt-controller banks, primary at 0xfffb3000 and secondary at 0xfffb4000.
+deviceBanks :: (Integer,Integer)
+deviceBanks=(0xfffb3000,0xfffb5000)
+deviceSpan :: Integer -> Integer -> Bool
+deviceSpan base size=let (low,high)=deviceBanks in base `mod` 4==0 && size `mod` 4==0 && low<=base && base+size<=high
+cacheSelectorCount :: Int
+cacheSelectorCount=16
 -- FPEXC.EN, the only FPEXC bit a kernel case may set.
 fpexcEnable :: Integer
 fpexcEnable=0x40000000
 kernelEntry :: Value -> IO KernelEntry
 kernelEntry v=do
- ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc","stack_contexts"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr, fpexc and stack_contexts"
+ ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc","stack_contexts","cache"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr, fpexc, stack_contexts and cache"
  let optionalAddress k=if k `elem` keys v then Just<$>address(get v k) else pure Nothing
  contexts<-if "stack_contexts" `elem` keys v then stackContexts(get v "stack_contexts") else pure []
- kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"<*>pure contexts
- let KernelEntry _ _ cpacr fpexc _=kernel
+ cache<-if "cache" `elem` keys v then Just<$>cacheEntry(get v "cache") else pure Nothing
+ kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"<*>pure contexts<*>pure cache
+ let KernelEntry _ _ cpacr fpexc _ _=kernel
  ensure(maybe True(\value->value .&. complement fpexcEnable==0)fpexc) "kernel fpexc may set EN only"
  ensure(fpexc==Nothing || cpacr/=Nothing) "kernel fpexc needs a cpacr"
  pure kernel
+cacheEntry :: Value -> IO CacheEntry
+cacheEntry v=do
+ fields v "sctlr clidr csselr ccsidr" "kernel cache"
+ items<-arrayCheck(get v "ccsidr")1 cacheSelectorCount "kernel cache ccsidr must have one to sixteen entries"
+ table<-forM items$ \item->do
+  fields item "selector value" "kernel cache ccsidr entry"
+  (,)<$>address(get item "selector")<*>address(get item "value")
+ ensure(nub(map fst table)==map fst table) "kernel cache ccsidr selectors must be distinct"
+ CacheEntry<$>address(get v "sctlr")<*>address(get v "clidr")<*>address(get v "csselr")<*>pure table
 -- A non-empty array of eight-byte aligned, disjoint @low < high@ bounds.
 stackContexts :: Value -> IO [StackBounds]
 stackContexts v=do
@@ -425,10 +441,12 @@ profileRows :: EntryProfile -> [String]
 profileRows UserEntry=[]
 profileRows(PrivilegedEntry _ identity kernel)=
  [maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]
- ++[row|Just(KernelEntry stop tpidrurw cpacr fpexc contexts)<-[kernel],row<-unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc]):contextRows contexts]
+ ++[row|Just(KernelEntry stop tpidrurw cpacr fpexc contexts cache)<-[kernel],row<-unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc]):contextRows contexts++cacheRows cache]
  where
   contextRows []=[]
   contextRows contexts=[unwords("c":show(length contexts):concat[[hex low,hex high]|StackBounds low high<-contexts])]
+  cacheRows Nothing=[]
+  cacheRows(Just(CacheEntry sctlr clidr csselr table))=[unwords("p":hex sctlr:hex clidr:hex csselr:show(length table):concat[[hex selector,hex value]|(selector,value)<-table])]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  envelope<-memoryProfile c

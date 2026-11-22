@@ -27,6 +27,7 @@ module Emulation.NativeObservation
   , provenanceRetained
   , Barrier (..)
   , SystemRegister (..)
+  , Maintenance (..)
   , WriteValue (..)
   , Ordered (..)
   , KernelObservation (..)
@@ -190,19 +191,41 @@ data Barrier = Dmb | Dsb | Isb
   deriving (Eq, Show)
 
 -- | A system register a kernel case writes.
-data SystemRegister = Tpidrurw | Fpexc
+data SystemRegister = Tpidrurw | Fpexc | Sctlr | Csselr
   deriving (Eq, Ord, Show)
+
+-- | A CP15 cache maintenance operation a kernel case with cache registers records.
+data Maintenance
+  = Iciallu
+  | Icimvau
+  | Dcimvac
+  | Dcisw
+  | Dccmvac
+  | Dccsw
+  | Dccimvac
+  | Dccisw
+  | -- | The Cortex-R4 @mcr p15, 0, Rt, c15, c5, 0@.
+    InvalidateAllData
+  deriving (Bounded, Enum, Eq, Ord, Show)
 
 -- | The value a write stored, zero-extended.
 newtype WriteValue = WriteValue Word64
   deriving (Eq, Ord, Show)
 
-data Ordered = OrderedWrite Write WriteValue | OrderedBarrier Barrier | OrderedSystemWrite SystemRegister Word32
+data Ordered
+  = OrderedWrite Write WriteValue
+  | -- | A read of a device region, with the value it loaded.
+    OrderedDeviceRead Write WriteValue
+  | OrderedBarrier Barrier
+  | OrderedSystemWrite SystemRegister Word32
+  | -- | A maintenance operation and its Rt operand.
+    OrderedMaintenance Maintenance Word32
   deriving (Eq, Show)
 
 -- | What a kernel case reports beyond a privileged case.
 data KernelObservation = KernelObservation
-  { -- | The provenance log's writes, barriers and system register writes in execution order; Nothing when truncated.
+  { -- | The provenance log's writes, device reads, barriers, system register writes and maintenance
+    -- operations in execution order; Nothing when truncated.
     observedOrder :: Maybe [Ordered]
   , -- | Final TPIDRURW and FPEXC, each when the case declares it.
     observedTpidrurw :: Maybe Word32
@@ -258,6 +281,7 @@ data ObservationError
   | ProvenanceCountMismatch ProvenanceTotal Int
   | MalformedBarrier
   | MalformedSystemWrite
+  | MalformedMaintenance
   | KernelRowOutsideKernel
   | MalformedKernelRegisters
   deriving (Eq, Show)
@@ -348,8 +372,10 @@ writeWeight write = fromIntegral (guestAddress (writeAddress write)) + fromInteg
 orderedWeight :: Ordered -> Int
 orderedWeight ordered = case ordered of
   OrderedWrite write (WriteValue value) -> writeWeight write + fromIntegral value
+  OrderedDeviceRead loaded (WriteValue value) -> writeWeight loaded + fromIntegral value
   OrderedBarrier _ -> 1
   OrderedSystemWrite _ word -> fromIntegral word
+  OrderedMaintenance operation word -> fromEnum operation + fromIntegral word
 
 renderObservationError :: ObservationError -> String
 renderObservationError errorValue = case errorValue of
@@ -389,7 +415,8 @@ renderObservationError errorValue = case errorValue of
     "provenance count " ++ show retained ++ " differs from " ++ show (provenanceTotal total)
   MalformedBarrier -> "malformed provenance barrier"
   MalformedSystemWrite -> "malformed provenance system register write"
-  KernelRowOutsideKernel -> "provenance barrier or system register write outside a kernel case"
+  MalformedMaintenance -> "malformed provenance maintenance operation"
+  KernelRowOutsideKernel -> "provenance device read, barrier, system register write or maintenance operation outside a kernel case"
   MalformedKernelRegisters -> "malformed kernel registers"
 
 parseStatus :: Value -> Either ObservationError RunnerStatus
@@ -459,8 +486,10 @@ parseProvenance total value = case value of
     parsed <- forM entries $ \entry -> case str (get entry "kind") of
       "write" -> (\row stored -> Just (OrderedWrite row stored)) <$> access entry <*> writeValue entry
       "read" -> Nothing <$ access entry
+      "device_read" -> (\row loaded -> Just (OrderedDeviceRead row loaded)) <$> access entry <*> writeValue entry
       "barrier" -> Just . OrderedBarrier <$> barrier (str (get entry "barrier"))
       "system" -> Just <$> systemWrite entry
+      "maintenance" -> Just <$> maintenance entry
       _ -> Left MalformedProvenanceKind
     let ordered = [row | Just row <- parsed]
         writes = [write | OrderedWrite write _ <- ordered]
@@ -497,9 +526,25 @@ parseProvenance total value = case value of
       register <- case str (get entry "register") of
         "tpidrurw" -> Right Tpidrurw
         "fpexc" -> Right Fpexc
+        "sctlr" -> Right Sctlr
+        "csselr" -> Right Csselr
         _ -> Left MalformedSystemWrite
       written <- maybe (Left MalformedSystemWrite) Right (parseWord32 (str (get entry "value")))
       pure (OrderedSystemWrite register written)
+    maintenance entry = do
+      operation <- case str (get entry "operation") of
+        "iciallu" -> Right Iciallu
+        "icimvau" -> Right Icimvau
+        "dcimvac" -> Right Dcimvac
+        "dcisw" -> Right Dcisw
+        "dccmvac" -> Right Dccmvac
+        "dccsw" -> Right Dccsw
+        "dccimvac" -> Right Dccimvac
+        "dccisw" -> Right Dccisw
+        "invalidate_all_data" -> Right InvalidateAllData
+        _ -> Left MalformedMaintenance
+      operand <- maybe (Left MalformedMaintenance) Right (parseWord32 (str (get entry "value")))
+      pure (OrderedMaintenance operation operand)
 
 parseKernelRegisters :: Value -> Either ObservationError (Maybe Word32, Maybe Word32, Maybe GuestAddress)
 parseKernelRegisters value = case value of

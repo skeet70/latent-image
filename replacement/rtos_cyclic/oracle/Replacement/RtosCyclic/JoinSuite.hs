@@ -979,7 +979,7 @@ buildCase layout inputs role variant state =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (lCp14 layout)
-    , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
+    , caseKernel = Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [] Nothing)
     }
   where
     entry = case variant of
@@ -1097,7 +1097,7 @@ interfacesPrepCase inputs =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Nothing
-    , caseKernel = Just (KernelCase plainLimit (Just (GuestAddress 0x725a34)) Nothing Nothing Nothing [R1, R2, R3, R12, Lr] [])
+    , caseKernel = Just (KernelCase plainLimit (Just (GuestAddress 0x725a34)) Nothing Nothing Nothing [R1, R2, R3, R12, Lr] [] Nothing)
     }
 
 runBatch :: FilePath -> FilePath -> FilePath -> [CaseSpec] -> IO (BatchReuse, [(CaseId, NativeObservation)])
