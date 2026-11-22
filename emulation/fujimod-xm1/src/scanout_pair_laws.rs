@@ -146,6 +146,12 @@ pub struct Call {
     /// The instruction counter at entry and at return.
     #[serde(default)]
     pub instructions: [u64; 2],
+    /// The board tick at entry and at return.
+    #[serde(default)]
+    pub ticks: [u64; 2],
+    /// Core 0's and core 1's instruction counters at entry.
+    #[serde(default)]
+    pub core_instructions: [u64; 2],
 }
 
 impl Call {

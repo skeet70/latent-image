@@ -118,6 +118,10 @@ fn core_words(machine: &Machine, core: usize, address: u32, count: usize) -> Res
     Ok(bytes.chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect())
 }
 
+fn core_instructions(machine: &Machine) -> Result<[u64; 2], String> {
+    machine.session.board.instruction_counts().try_into().map_err(|_| "expected two cores".into())
+}
+
 fn region_words(machine: &Machine) -> Result<Vec<(u32, u32)>, String> {
     let mut result = Vec::new();
     for (start, length) in REGIONS {
@@ -295,6 +299,7 @@ impl Observer {
                 record.result = Some(register(machine, core, 0)?);
                 record.returned = true;
                 record.instructions[1] = machine.instructions();
+                record.ticks[1] = machine.session.board.now();
                 if let (Entry::SchedulerRegister, [_, output]) = (record.entry, record.arguments.as_slice()) {
                     record.output = Some(core_words(machine, core, *output, 1)?[0]);
                 }
@@ -360,7 +365,7 @@ impl Observer {
                 front: match engine { Some(engine) if head => Some(front_state(machine, engine)?), _ => None },
                 saved: Vec::new(), before_drain: 0, bus: Vec::new(), callbacks: Vec::new(), changes: Vec::new(), item, returned: false,
                 request: None, output: None, stack: sp, entry_words: Vec::new(), reads: BTreeSet::new(), writes: BTreeSet::new(),
-                instructions: [machine.instructions(), 0],
+                instructions: [machine.instructions(), 0], ticks: [machine.session.board.now(), 0], core_instructions: core_instructions(machine)?,
             };
             call.slots = drain_words(machine, &call)?;
             if let (Entry::SchedulerRegister, [request, _]) = (entry, call.arguments.as_slice()) {

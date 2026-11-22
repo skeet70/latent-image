@@ -278,7 +278,8 @@ impl<S: SchedulerState> Scheduler<S> {
             if self.state.activity() == Activity::Inactive { self.release(handler, hardware); }
             Phase::Zero
         };
-        for slot in SlotIndex::ALL {
+        for index in 0..SlotIndex::ALL.len() {
+            let slot = SlotIndex::ALL[index];
             if let Some(callback) = self.state.slot_callback(List::OneShot, slot) {
                 if self.state.slot_phase(List::OneShot, slot).matches(phase) {
                     if phase == Phase::One { self.state.set_phase_count(PhaseCount(self.state.phase_count().0.wrapping_sub(1))); }
@@ -291,7 +292,8 @@ impl<S: SchedulerState> Scheduler<S> {
             }
         }
         let mut activity = Activity::Inactive;
-        for slot in SlotIndex::ALL {
+        for index in 0..SlotIndex::ALL.len() {
+            let slot = SlotIndex::ALL[index];
             if self.state.slot_handle(List::Persistent, slot) == Handle(0) { break; }
             activity = Activity::Active;
             if let Some(callback) = self.state.slot_callback(List::Persistent, slot) {

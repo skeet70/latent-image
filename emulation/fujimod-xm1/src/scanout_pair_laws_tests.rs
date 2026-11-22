@@ -7,7 +7,7 @@ fn call(entry: Entry) -> Call {
         entry, caller: Caller::Retained, head: engine.is_some(), engine, arguments: Vec::new(), result: None, selection: [1, 0], slots: Vec::new(),
         pending: 0, front: None, saved: Vec::new(), before_drain: 0, bus: Vec::new(), callbacks: Vec::new(), changes: Vec::new(), item: None, returned: true,
         request: None, output: None, stack: 0, entry_words: vec![0; region_addresses().count()], reads: BTreeSet::new(), writes: BTreeSet::new(),
-        instructions: [0, 0],
+        instructions: [0, 0], ticks: [0, 0], core_instructions: [0, 0],
     }
 }
 
