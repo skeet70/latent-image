@@ -91,7 +91,7 @@ run source builder wrapper = do
   writeMeminfo smallHostInfo (24 * gib) (24 * gib)
   serial <- newIORef (0 :: Int)
   let next = atomicModifyIORef' serial (\count -> (count + 1, count + 1))
-      environment = change "XM1_HOST_MEMINFO" hostInfo (change "XM1_HOST_MEMORY_BUDGET" "16G" (change "XM1_HOST_BUILD_MEMORY_MAX" "2G"
+      environment = change "XM1_HOST_CGROUP_ROOT" (root </> "cgroup") $ change "XM1_HOST_MEMINFO" hostInfo (change "XM1_HOST_MEMORY_BUDGET" "16G" (change "XM1_HOST_BUILD_MEMORY_MAX" "2G"
         (change "PATH" (bin ++ ":" ++ fromMaybe "" (lookup "PATH" inherited)) inherited)))
       native = change "XM1_PROBE_CLASS" "native" environment
       labelled count env = if any ((== "XM1_RUN_LABEL") . fst) env then env else change "XM1_RUN_LABEL" ("probe-" ++ show count) env

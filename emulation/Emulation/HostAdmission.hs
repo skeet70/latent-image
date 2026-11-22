@@ -333,9 +333,9 @@ smallerWaiterPolls :: Int
 smallerWaiterPolls = 3
 
 -- | A new admission takes its tokens when they fit the budget, when
--- @MemAvailable@ less 'liveHeadroomBytes' covers them, and after deferring to
--- smaller waiters for 'smallerWaiterPolls'. A legacy scope already holds its
--- memory and skips the last two conditions.
+-- @MemAvailable@ less 'liveHeadroomBytes' and 'outstandingBytes' covers them,
+-- and after deferring to smaller waiters for 'smallerWaiterPolls'. A legacy
+-- scope already holds its memory and skips the last two conditions.
 reserveMemoryWithLegacy :: Maybe LegacyReservation -> Reservation -> ScopeName -> IO Fd
 reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
   budget <- memoryBudget
@@ -363,7 +363,10 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
             holders <- heldTokens fd budget
-            spare <- if admitting then subtract liveHeadroomBytes <$> availableMemoryBytes else pure (reservationBytes reservation)
+            spare <- if admitting
+              then (\available outstanding -> available - liveHeadroomBytes - outstanding)
+                <$> availableMemoryBytes <*> outstandingBytes directory holders
+              else pure (reservationBytes reservation)
             smaller <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
             let occupied = nub (map fst holders ++ protected)
                 free = filter (`notElem` occupied) (map fromIntegral [0 .. censusTokens budget - 1])
@@ -379,7 +382,7 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
                 when (admitting && not registered) (setLock queue (WriteLock, AbsoluteSeek, place, 1))
                 hPutStrLn stderr ("host admission: waiting for host RAM (" ++ show tokens ++ " x 256MiB; "
                   ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held; "
-                  ++ show (max 0 spare) ++ " bytes available above the live headroom"
+                  ++ show (max 0 spare) ++ " bytes available above the live headroom and outstanding reservations"
                   ++ (if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
                   ++ show (nub (map snd holders)))
                 hFlush stderr
@@ -407,6 +410,28 @@ heldTokens fd budget = do
   owners <- mapM (\index -> (,) index <$> getLock fd (WriteLock, AbsoluteSeek, index, 1))
     (map fromIntegral [0 .. censusTokens budget - 1])
   pure [(index, pid) | (index, Just (pid, _)) <- owners]
+
+-- | Over admitted scopes holding HOLDERS, the reservation not yet in use:
+-- held tokens less @memory.current@ plus @memory.swap.current@, at least zero.
+-- A scope whose cgroup is gone counts zero. The cgroup root is
+-- @/sys/fs/cgroup@, or @XM1_HOST_CGROUP_ROOT@.
+outstandingBytes :: FilePath -> [(FileOffset, ProcessID)] -> IO Integer
+outstandingBytes directory holders = do
+  root <- fromMaybe "/sys/fs/cgroup" <$> lookupEnv "XM1_HOST_CGROUP_ROOT"
+  groups <- forM holders $ \(index, _) ->
+    (fmap (\(ScopeIdentity _ _ (ScopeCgroup group _)) -> group) <$> readScopeRecord (directory </> ("scope-" ++ show index)))
+      `catchIOError` const (pure Nothing)
+  fmap sum . forM (nub [group | Just group <- groups]) $ \group -> do
+    let reserved = toInteger (length (filter (== Just group) groups)) * tokenBytes
+    current <- counter (root ++ group </> "memory.current")
+    case current of
+      Nothing -> pure 0
+      Just used -> do
+        swapped <- fromMaybe 0 <$> counter (root ++ group </> "memory.swap.current")
+        pure (max 0 (reserved - used - swapped))
+  where
+    counter path = (readMaybe . trim <$> readStrict path)
+      `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
 
 claimScopeRecord :: FilePath -> ScopeName -> IO ()
 claimScopeRecord record = claimScopeRecords [record]
