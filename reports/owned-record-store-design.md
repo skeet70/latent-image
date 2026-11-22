@@ -100,7 +100,7 @@ The retained old single-slot candidate fails `sequence-ab-a-second-a-fails` in `
 ## 6. Cutover pair
 
 - One stock-versus-owned pair for the cutover, each role from a zero-instruction reset of its DAT (canonical and candidate), as `E-PROPERTY-SERVICE-NATURAL-150`: once with erased record areas and once with `--record-nand` holding the hardware area-2 banks.
-- Routes: cold boot to the shooting screen (registrations, area-2 gate, area-3 recovery), the property-service routes that append area 3, CUSTOM SET and the defaults reset. No identified route reaches the kind 0, 1 or 4 writes or the queue-2 lifecycle save that appends area 2 (`E-ENDING-RESET-CALLER-150`); those are host-only until a route exists.
+- Routes: cold boot to the shooting screen (registrations, area-2 gate, area-3 recovery), the property-service routes that append area 3, CUSTOM SET and the defaults reset. The power-cycle routes below add POWER OFF, whose lifecycle save appends kind 0 and area 2 and closes all five kinds. No identified route reaches the kind 1 or 4 writes; those are host-only until a route exists.
 - Compared: ordered entry calls with arguments (handles at the same addresses) and results, program and erase requests at `0x6fb7c8`/`0x6fb57c`, returned records, final record-area blocks, settings images and menus; fetch and access traps on the retired span and data.
 - Prerequisite: a bridge request that reads NAND pages, for the final record blocks.
 
@@ -140,9 +140,16 @@ The step decoder consumes one JSON object at a time, forces only its new evidenc
 
 Current integration at `a8691be8` passes all seven affected host test targets and reproduces the exact qualified DAT, contract, linked image and symbols. It re-admits and compares all 378 cached native cases with zero differences, then reproduces the erased and populated verdicts above with the original cohort observer and SDK identities. No firmware is rerun. The current terminal and review packet are `private-data/scratch/Issue117Integration/record-current-2/results.json` and `private-data/scratch/Issue117Integration/record-current-2/review-packet.json`; the integration-conflict continuation of the same technical review has no outstanding findings.
 
-The injected-input endpoint does not establish render quiescence, future timer stability or complete application handling of every key. Unreached record operations and the kind 0/1/4 and area-2 lifecycle-save routes retain their native-only scope. Physical NAND timing, ECC, partial program, power-cut and bad-block laws remain open.
+The injected-input endpoint does not establish render quiescence, future timer stability or complete application handling of every key. Unreached record operations and the kind 1 and 4 write routes retain their native-only scope. Physical NAND timing, ECC, partial program, power-cut and bad-block laws remain open.
 
 The old one-region policy is withdrawn in §3.2. Stock-only timing offsets did not reproduce its continuation (`E-RECORD-STORE-PICKER246-CONTROL-150`); matching aggregate entered instructions does not align board-clock phase. The earlier reset-to-attach event-phase origin remains unexplained. Historical mismatches and strict-drain refusals keep their original identities and are not qualification of this two-slot carrier. The intended-functionality policy corrects the observed emulator mismatch without claiming its exclusive timing cause or broader picker acceptance.
+
+### Power cycle
+
+`emulation/record-store-pair-power-off-routes.json` changes a setting, switches POWER OFF at board tick 500,000,000 in both roles, drains to the stock power-off terminal, exports the committed NAND and cold-boots each role's DAT from its own export to the bridge's attach. The checker compares the boot, POWER OFF and reboot intervals separately with the same strictness as the finite pair: ordered record calls, arguments, results, NAND program and erase requests, record-area blocks and settings regions. On the current carrier the erased and populated pairs match, and the unsealed-append control DAT differs (`E-RECORD-STORE-POWER-CYCLE-PAIR-150`). The control differs before POWER OFF, so no control isolates a divergence confined to POWER OFF or the reboot.
+
+The owned reboot first failed at USB attach, which traced to the RAM-push bridge's enumeration, not owned code: both images lose a control stage at some bus-reset offsets after activation, and no owned record code runs then. The bridge now waits the 100 ms attach debounce and resets the port and re-enumerates after a lost stage, at most three enumerations, as a Linux host does. Over a reset-offset sweep every boot of both roles attaches; owned needs a second enumeration at three offsets and stock at none (`E-RECORD-STORE-REBOOT-ATTACH-150`).
+
 ## 7. Shims
 
 | Shim | What it does | Removal condition |
@@ -177,4 +184,5 @@ The cutover pair (§6) runs once 1-3 compose.
 ## 10. Open questions
 
 - Whether any client keeps a staging pointer across another read of the same kind.
-- Routes for the kind 0, 1 and 4 writes and the area-2 lifecycle save.
+- Routes for the kind 1 and 4 writes.
+- Why the owned boot meets the bridge's lost enumeration stages at more reset offsets than stock (`E-RECORD-STORE-REBOOT-ATTACH-150`).
