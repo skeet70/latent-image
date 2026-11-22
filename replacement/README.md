@@ -369,6 +369,24 @@ Scope: Host-only X-M1 1.50. Per-case runs of the ten entries, alone and in seque
 
 <!-- /evidence-record E-DCF-NUMBERING-NATIVE-150 -->
 
+### Staged image and card routes
+
+`stage-dcf-numbering ENCODER REBUILD DECODER DAT IMAGE4 IMAGE5 PLAIN LOADER_A LOADER_B IMAGE2 LINKED SYMBOLS SCRATCH OUT_DAT OUT_CONTRACT` splices the linked image over the five extents of the canonical image 4, zero past its end, and rebuilds the DAT the way the record-store carrier does. It refuses a symbol outside the extents or an entry that is not a branch to its owned function. Before staging it runs the reference census of `Replacement/DcfNumbering/Carrier.hs` over image 4, image 5, the plain image, both loaders, image 2 and image 3 (`//host/firmware:reference-scan-model` with every extent address as a target). It refuses any reference into the extents that is not an A32 branch or aligned pointer word to an entry, a word whose value is not word-aligned, a word at a halfword-aligned site, or one of the reviewed data words. The contract lists every kept reference.
+
+`dcf-numbering-observe observe` fresh-boots the RAM-push bridge with trace sites at the ten entries, with returns and their output bytes, and at every A32 branch from the numbering code to a retained service, read from the canonical image 4 for stock and from `--linked BIN` for owned. It watches writes to `0x910204` and the profile header `0x9c281c` and fetches in the extents, and reads the context's numbering fields and the profile header after attach and after each key. `compare STOCK_DIR OTHER_DIR OWNED_SYMBOLS OUTPUT_JSON` requires equal interface entries and returns, service calls, watched writes, numbering state, screens and card summary, and for an owned role no fetch in the extents outside the functions of `OWNED_SYMBOLS`. It reports the entries each role reached from outside and internally. `:observe-compare-tests` covers it on synthetic observations.
+
+```sh
+devenv shell -- host-build build //replacement/dcf_numbering:all //replacement/dcf_numbering:observe-compare-tests //replacement/dcf_numbering:carrier-tests
+devenv shell -- host-build run //replacement/dcf_numbering:stage-dcf-numbering -- \
+  DAT IMAGE4 IMAGE5 PLAIN LOADER_A LOADER_B IMAGE2 LINKED_BIN SYMBOLS PRIVATE_SCRATCH OUT_DAT OUT_CONTRACT
+emulator-slot dcf-numbering-observe observe --role owned --update OUT_DAT --linked LINKED_BIN --image4 IMAGE4 \
+  --run RUN_JSON --boot-rom ROM --adjustment-nand NAND --card CARD [--route KEY,...] --bridge RAM_PUSH --output NEW_DIR
+```
+
+<!-- evidence-record E-DCF-NUMBERING-CARD-PAIR-150 -->
+
+<!-- /evidence-record E-DCF-NUMBERING-CARD-PAIR-150 -->
+
 ## Stimulus clock for stock-against-owned scenarios
 
 Full-system comparisons of a subsystem that changes guest timing fire their scenario stimuli on board ticks ([stimulus clock](../emulation/checkpoint-runs.md#stimulus-clock)).
