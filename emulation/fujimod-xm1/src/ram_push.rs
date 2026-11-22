@@ -32,7 +32,7 @@ use fujimod_emulator_exr2_isp_output::OutputChannel;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    io::{BufRead, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     time::Instant,
@@ -568,6 +568,75 @@ struct Server {
     installed_observation: Option<ObservedInstall>,
     /// The guest reached the stock POWER OFF terminal.
     powered_off: bool,
+    released_hits: Option<ReleasedHits>,
+}
+
+const RELEASED_HITS: &str = "trace-hits-released.jsonl";
+
+/// Trace hits a client acknowledged, one JSON line each in hit order, until the receipt embeds them.
+struct ReleasedHits {
+    path: PathBuf,
+    file: BufWriter<std::fs::File>,
+}
+
+impl ReleasedHits {
+    fn create(output: &Path) -> Result<Self, String> {
+        std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
+        let path = output.join(RELEASED_HITS);
+        let file = std::fs::File::create(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        Ok(Self { path, file: BufWriter::new(file) })
+    }
+
+    fn append(&mut self, hit: &Hit) -> Result<(), String> {
+        serde_json::to_writer(&mut self.file, hit).map_err(|error| error.to_string())?;
+        self.file.write_all(b"\n").map_err(|error| error.to_string())
+    }
+
+    fn finish(mut self) -> Result<PathBuf, String> {
+        self.file.flush().map_err(|error| error.to_string())?;
+        Ok(self.path)
+    }
+}
+
+/// The receipt's `contexts`: the released hits read back from disk, then the retained ones.
+struct Contexts<'a> {
+    released: Option<&'a Path>,
+    retained: &'a [Hit],
+}
+
+impl Serialize for Contexts<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeSeq};
+        let mut sequence = serializer.serialize_seq(None)?;
+        if let Some(path) = self.released {
+            let file = std::fs::File::open(path).map_err(|error| S::Error::custom(format!("{}: {error}", path.display())))?;
+            for line in BufReader::new(file).lines() {
+                let line = line.map_err(S::Error::custom)?;
+                sequence.serialize_element(&serde_json::from_str::<Value>(&line).map_err(S::Error::custom)?)?;
+            }
+        }
+        for hit in self.retained {
+            sequence.serialize_element(&serde_json::to_value(hit).map_err(S::Error::custom)?)?;
+        }
+        sequence.end()
+    }
+}
+
+/// A receipt whose `contexts` entry is written from `Contexts`.
+struct SessionReceipt<'a> {
+    fields: &'a serde_json::Map<String, Value>,
+    contexts: Contexts<'a>,
+}
+
+impl Serialize for SessionReceipt<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.fields.len()))?;
+        for (key, value) in self.fields {
+            if key == "contexts" { map.serialize_entry(key, &self.contexts)?; } else { map.serialize_entry(key, value)?; }
+        }
+        map.end()
+    }
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -1393,14 +1462,16 @@ impl Server {
                 if self.bridge.machine.failure.is_some() {
                     if let Some(collector) = &mut self.bridge.machine.render_provenance { collector.refuse_coverage(); }
                 }
-                let hits = &self.bridge.machine.traces.hits;
-                if from > hits.len() {
+                if from > self.bridge.machine.traces.hit_count() {
                     return Err("trace-hits requires a hit index within the recorded hits".into());
                 }
-                let end = limit.map_or(hits.len(), |limit| hits.len().min(from.saturating_add(limit.get())));
+                self.release_trace_hits(from)?;
+                let traces = &self.bridge.machine.traces;
+                let hits = traces.hits_from(from)?;
+                let hits = &hits[..limit.map_or(hits.len(), |limit| hits.len().min(limit.get()))];
                 let provenance = self.bridge.machine.render_provenance.as_mut()
                     .map(|collector| collector.drain(&self.bridge.machine.session)).transpose()?;
-                json!({"count": hits.len(), "hits": &hits[from..end], "render_object_provenance": provenance})
+                json!({"count": traces.hit_count(), "hits": hits, "render_object_provenance": provenance})
             }
             Request::RenderStackDiagnosticBegin(request) => {
                 self.bridge.machine.begin_render_stack_diagnostic(request)?;
@@ -1464,6 +1535,9 @@ impl Server {
             Request::MachineFingerprint => fujimod_xm1::machine_fingerprint::fingerprint(&self.bridge.machine.session)?,
             Request::CaptureObservationBegin { scope } => {
                 self.bridge.begin_capture_observation(scope)?;
+                if let Some(released) = self.released_hits.take() {
+                    std::fs::remove_file(&released.path).map_err(|error| format!("{}: {error}", released.path.display()))?;
+                }
                 json!({"protocol": 2, "active": true, "scope": scope, "bounds": CAPTURE_OBSERVATION_BOUNDS})
             }
             Request::CaptureObservationHits { from } => {
@@ -1851,7 +1925,8 @@ impl Server {
             "request_profile": self.requests,
             "rendezvous_activity": self.bridge.rendezvous,
             "keepalive_inputs": self.bridge.keepalive_inputs,
-            "contexts": self.bridge.machine.traces.hits,
+            // Written from `Contexts` by `write_receipt`.
+            "contexts": Value::Null,
             "modal_observation": self.bridge.machine.traces.modal_observation_report(),
             "screenshots": self.screenshots,
             "memory_watch": self.watch.as_ref().map(|watch| watch.records.borrow().state()).unwrap_or(Value::Null),
@@ -1970,9 +2045,39 @@ impl Server {
             error.get_or_insert_with(|| "producer ended with an active JPEG observation".into());
             self.jpeg_observation_tail = Some(self.end_jpeg_observation()?);
         }
+        self.write_receipt(error.as_deref())
+    }
+
+    /// Moves the hits below `below` from memory to the released-hit file.
+    fn release_trace_hits(&mut self, below: usize) -> Result<(), String> {
+        let mut released = self.bridge.release_trace_hits(below)?.peekable();
+        if released.peek().is_none() {
+            return Ok(());
+        }
+        let file = match self.released_hits.take() {
+            Some(file) => file,
+            None => ReleasedHits::create(&self.output)?,
+        };
+        let file = self.released_hits.insert(file);
+        released.try_for_each(|hit| file.append(&hit))
+    }
+
+    fn write_receipt(&mut self, error: Option<&str>) -> Result<(), String> {
         std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
-        let receipt = self.receipt(error.as_deref())?;
-        write(&self.output.join("emulator-session.json"), format!("{receipt:#}\n").as_bytes())
+        let receipt = self.receipt(error)?;
+        let fields = receipt.as_object().ok_or("receipt must be an object")?;
+        let released = self.released_hits.take().map(ReleasedHits::finish).transpose()?;
+        let path = self.output.join("emulator-session.json");
+        let file = std::fs::File::create(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let mut file = BufWriter::new(file);
+        let contexts = Contexts { released: released.as_deref(), retained: &self.bridge.machine.traces.hits };
+        serde_json::to_writer_pretty(&mut file, &SessionReceipt { fields, contexts })
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        file.write_all(b"\n").and_then(|()| file.flush()).map_err(|error| format!("{}: {error}", path.display()))?;
+        match released {
+            Some(released) => std::fs::remove_file(&released).map_err(|error| format!("{}: {error}", released.display())),
+            None => Ok(()),
+        }
     }
 }
 
@@ -2206,6 +2311,7 @@ fn drive() -> Result<(), String> {
         modal_request: None,
         installed_observation,
         powered_off: false,
+        released_hits: None,
     };
     server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites), None)?;
     server.serve()
@@ -2631,6 +2737,7 @@ mod tests {
             modal_request: None,
             installed_observation: None,
             powered_off: false,
+            released_hits: None,
         }
     }
 
@@ -3871,6 +3978,110 @@ mod tests {
         }
         assert_eq!(&paged, whole["hits"].as_array().unwrap());
         assert!(serde_json::from_value::<Request>(json!({"command": "trace-hits", "from": 0, "limit": 0})).is_err());
+    }
+
+    fn loop_server() -> Server {
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"}}))).unwrap();
+        server
+    }
+
+    /// Pages from `cursor` until it reaches the recorded count, `limit` hits a request; returns the count.
+    fn page_hits(server: &mut Server, cursor: &mut usize, limit: usize, mut each: impl FnMut(&Value)) -> usize {
+        loop {
+            let page = server.handle(request(json!({"command": "trace-hits", "from": *cursor, "limit": limit}))).unwrap().unwrap();
+            let hits = page["hits"].as_array().unwrap();
+            hits.iter().for_each(&mut each);
+            *cursor += hits.len();
+            let count = page["count"].as_u64().unwrap() as usize;
+            if *cursor == count {
+                return count;
+            }
+        }
+    }
+
+    #[test]
+    fn acknowledged_trace_hits_keep_absolute_pages_and_the_whole_receipt() {
+        let mut paged = loop_server();
+        let mut whole = loop_server();
+        let mut cursor = 0;
+        let mut hits = Vec::new();
+        for _ in 0..5 {
+            assert_eq!(paged.bridge.advance(100), Ok(RunOutcome::Completed));
+            assert_eq!(whole.bridge.advance(100), Ok(RunOutcome::Completed));
+            page_hits(&mut paged, &mut cursor, 7, |hit| hits.push(hit.clone()));
+        }
+        let reference = whole.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        assert!(cursor > 7);
+        assert_eq!(&hits, reference["hits"].as_array().unwrap());
+        let at_end = paged.handle(request(json!({"command": "trace-hits", "from": cursor, "limit": 1}))).unwrap().unwrap();
+        assert_eq!((at_end["count"].as_u64(), at_end["hits"].as_array().map(Vec::len)), (reference["count"].as_u64(), Some(0)));
+        assert!(paged.handle(request(json!({"command": "trace-hits", "from": cursor - 1}))).is_err());
+        let receipts = [&mut paged, &mut whole].map(|server| {
+            server.write_receipt(None).unwrap();
+            let files: Vec<_> = std::fs::read_dir(&server.output).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+            let receipt: Value = serde_json::from_slice(&read(&server.output.join("emulator-session.json")).unwrap()).unwrap();
+            std::fs::remove_dir_all(&server.output).unwrap();
+            (files, receipt["contexts"].clone())
+        });
+        assert_eq!(receipts[0], receipts[1]);
+        assert_eq!(receipts[0].1, reference["hits"]);
+    }
+
+    /// Hits the high-hit loop records while a client pages it.
+    const HIGH_HIT_LOOP: usize = 1_000_000;
+    /// Hits the loop records while the client only asks for the count.
+    const UNACKNOWLEDGED_HITS: usize = 400_000;
+    /// Peak resident growth admitted while a client pages the high-hit loop.
+    const PAGED_GROWTH_LIMIT_KIB: u64 = 64 * 1024;
+
+    fn status_kib(field: &str) -> u64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let line = status.lines().find_map(|line| line.strip_prefix(field)).unwrap();
+        line.trim().trim_end_matches("kB").trim().parse().unwrap()
+    }
+
+    /// The process's peak resident growth over `work`.
+    fn peak_growth_kib(work: impl FnOnce()) -> u64 {
+        std::fs::write("/proc/self/clear_refs", "5").unwrap();
+        let baseline = status_kib("VmRSS:");
+        work();
+        status_kib("VmHWM:") - baseline
+    }
+
+    #[test]
+    fn a_paged_high_hit_loop_keeps_bridge_memory_bounded() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["tests::paged_high_hit_loop", "--exact", "--ignored", "--test-threads", "1"])
+            .status().unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    #[ignore = "measures its process's peak memory; a_paged_high_hit_loop_keeps_bridge_memory_bounded runs it alone"]
+    fn paged_high_hit_loop() {
+        let mut server = loop_server();
+        let mut cursor = 0;
+        let mut previous = 0;
+        let mut check = |hit: &Value| {
+            let instructions = hit["instructions"].as_u64().unwrap();
+            assert!(hit["site"] == "loop" && instructions >= previous);
+            previous = instructions;
+        };
+        assert_eq!(server.bridge.advance(20_000), Ok(RunOutcome::Completed));
+        page_hits(&mut server, &mut cursor, 4096, &mut check);
+        let paged = peak_growth_kib(|| while cursor < HIGH_HIT_LOOP {
+            assert_eq!(server.bridge.advance(20_000), Ok(RunOutcome::Completed));
+            page_hits(&mut server, &mut cursor, 4096, &mut check);
+        });
+        let unacknowledged = peak_growth_kib(|| loop {
+            assert_eq!(server.bridge.advance(20_000), Ok(RunOutcome::Completed));
+            let reply = server.handle(request(json!({"command": "trace-hits", "from": cursor, "limit": 1}))).unwrap().unwrap();
+            if reply["count"].as_u64().unwrap() as usize >= cursor + UNACKNOWLEDGED_HITS { break; }
+        });
+        std::fs::remove_dir_all(&server.output).unwrap();
+        assert!(paged < PAGED_GROWTH_LIMIT_KIB, "peak resident growth {paged} KiB over {cursor} paged hits");
+        assert!(unacknowledged > 4 * PAGED_GROWTH_LIMIT_KIB, "peak resident growth {unacknowledged} KiB over {UNACKNOWLEDGED_HITS} unacknowledged hits");
     }
 
     #[test]
