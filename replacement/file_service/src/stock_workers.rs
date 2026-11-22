@@ -1,7 +1,7 @@
 //! The stock boundary of the handle workers: the media-state context, the request header
 //! the media task passes, and the retained path, filesystem and media-state services.
 
-use crate::completion::{self, RawStatus};
+use crate::completion::RawStatus;
 use crate::handles::FileIndex;
 use crate::requests::Callback;
 use crate::stock::{read_byte, read_word, write_word};
@@ -20,7 +20,7 @@ extern "C" {
     fn file_service_cache_release(index: u32);
     fn file_service_parse_path(parsed: *mut u32, path: u32) -> u32;
     fn file_service_directory_slot(parsed: u32) -> u32;
-    fn file_service_split_path(path: u32, directory: *mut u8, name: *mut u8, word: *mut u32, zero: u32, flag: *mut u32);
+    pub(crate) fn file_service_split_path(path: u32, directory: *mut u8, name: *mut u8, word: *mut u32, prefix: *mut u8, flag: *mut u32) -> u32;
     fn file_service_directory_number(directory: *const u8, word: u32) -> u32;
     fn file_service_make_directory(directory: u32, record: u32);
     fn file_service_fs_open(name: *const u8, mode: u32, index: u32, word: u32) -> u32;
@@ -158,7 +158,7 @@ impl Port for StockWorker {
 
     fn split_path(&mut self, path: u32, frame: &mut PathFrame) {
         unsafe {
-            file_service_split_path(path, frame.directory.as_mut_ptr(), frame.name.as_mut_ptr(), &mut frame.split_word, 0, &mut frame.split_flag)
+            file_service_split_path(path, frame.directory.as_mut_ptr(), frame.name.as_mut_ptr(), &mut frame.split_word, core::ptr::null_mut(), &mut frame.split_flag);
         }
     }
 
