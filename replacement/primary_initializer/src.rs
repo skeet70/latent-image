@@ -100,6 +100,7 @@ pub(crate) unsafe extern "C" fn xm1_primary_initializer_publish() {
     }
 }
 
+#[cfg(not(feature = "bank"))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}

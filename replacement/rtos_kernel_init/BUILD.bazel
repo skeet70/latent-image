@@ -1,0 +1,175 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+_MODULES = [
+    "src/interfaces_b.rs",
+    "src/lib.rs",
+    "src/tests.rs",
+    "//replacement/primary_initializer:src.rs",
+    "//replacement/rtos_layout:src/lib.rs",
+    "//replacement/rtos_reservation:src/lib.rs",
+]
+
+_PIECES = [
+    "start",
+    "tick",
+    "core",
+    "tasks",
+    "autostart",
+    "semaphores",
+    "event_flags",
+    "data_queues",
+    "mailboxes",
+    "fixed_pools",
+    "objects",
+]
+
+# The bank bodies under domain-qualified symbols.
+[
+    xm1_rust_rlib(
+        name = "kernel-bank-%s" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_kernel_bank_%s" % domain,
+        out = "arm/libxm1_rtos_kernel_bank_%s.rlib" % domain,
+        data = _MODULES,
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"bank\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+# The same bodies at the fixed body origin behind stock-address veneers, with the rest of
+# each retained extent filled.
+[
+    xm1_rust_staticlib(
+        name = "kernel-bank-probe-%s-rust" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_kernel_bank_%s" % domain,
+        data = _MODULES,
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"bank\"'",
+            "--cfg",
+            "'feature=\"probe\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "kernel-bank-probe-%s" % domain,
+        rust_staticlib = ":kernel-bank-probe-%s-rust" % domain,
+        entry = "xm1_rtos_kernel_start",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_includes = ["//replacement/fixed_image:memory-region"],
+        link_script = "kernel-bank-probe-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+# One carrier binary per retained extent, and the bank.
+[
+    genrule(
+        name = "kernel-bank-probe-%s-split" % domain,
+        srcs = [":kernel-bank-probe-%s.elf" % domain],
+        outs = ["kernel-bank-probe-%s-%s.bin" % (domain, piece) for piece in _PIECES] + ["kernel-bank-probe-%s-bank.bin" % domain],
+        cmd = " && ".join(
+            ["objcopy=$(location @lab_llvm//:bin/llvm-objcopy) elf=$(location :kernel-bank-probe-%s.elf)" % domain] +
+            ["$$objcopy -O binary -j .kernel_%s $$elf $(location kernel-bank-probe-%s-%s.bin)" % (piece, domain, piece) for piece in _PIECES] +
+            ["$$objcopy -O binary -j .bank $$elf $(location kernel-bank-probe-%s-bank.bin)" % domain],
+        ),
+        tools = ["@lab_llvm//:bin/llvm-objcopy"],
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "kernel-init-host-tests-build",
+    srcs = _MODULES,
+    outs = ["kernel-init-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "kernel-init-host-tests",
+    size = "small",
+    srcs = ["run-host-tests.sh"],
+    args = ["$(location :kernel-init-host-tests-build)"],
+    data = [":kernel-init-host-tests-build"],
+)
+
+haskell_library(
+    name = "kernel-bank-suite",
+    srcs = ["native/Replacement/RtosKernelInit/BankSuite.hs"],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+# Stock against the bank-form bodies behind stock-entry veneers, with bank mutants.
+haskell_binary(
+    name = "kernel-bank-cohort",
+    srcs = ["native/BankMain.hs"],
+    main_file = "native/BankMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+    ] + [
+        argument
+        for domain in ["a", "b"]
+        for piece in _PIECES + ["bank"]
+        for argument in [
+            "--bank-%s" % domain if piece == "bank" else "--carrier-%s-%s" % (domain, piece),
+            "$(rootpath :kernel-bank-probe-%s-%s.bin)" % (domain, piece),
+        ]
+    ],
+    data = [
+        ":kernel-bank-probe-%s-%s.bin" % (domain, piece)
+        for domain in ["a", "b"]
+        for piece in _PIECES + ["bank"]
+    ] + ["//emulation:native-runner"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":kernel-bank-suite",
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

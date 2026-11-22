@@ -1,0 +1,6 @@
+{
+  "unit": "rtos_kernel_init",
+  "summary": "Bank-form bodies of the kernel startup group in both loaders: interface publication, kernel_start, per-core configuration, owner contexts, the primary tick timer, task initialization and autostart, and the object-table initializers. No production image links them until a bank root does; the probe images place them behind stock-entry veneers for native comparison only.",
+  "classification": "module",
+  "rows": []
+}

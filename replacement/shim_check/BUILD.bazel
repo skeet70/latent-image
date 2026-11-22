@@ -138,6 +138,7 @@ filegroup(
         "//replacement/rtos_fixed_pool:shim-catalog-data",
         "//replacement/rtos_global_lock:shim-catalog-data",
         "//replacement/rtos_irq_control:shim-catalog-data",
+        "//replacement/rtos_kernel_init:shim-catalog-data",
         "//replacement/rtos_objects:shim-catalog-data",
         "//replacement/rtos_own_first:shim-catalog-data",
         "//replacement/rtos_platform:shim-catalog-data",
