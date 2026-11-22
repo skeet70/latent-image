@@ -310,9 +310,9 @@ caseSpec domain role loader owned bank suffix one =
     , caseExpectedStatus = case caseEnding one of
         Returns -> Returned
         _ -> StopAddress
-    , caseExpectedRegisters = case caseEnding one of
-        Returns -> (Sp, stackPointer) : [(register, seed register) | register <- [R4 .. R11]]
-        _ -> []
+    , caseExpectedRegisters = case stopOf (caseEnding one) of
+        Nothing -> (Sp, stackPointer) : [(register, seed register) | register <- [R4 .. R11]]
+        Just retained -> [(Pc, retainedAddress domain retained)]
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)
