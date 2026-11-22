@@ -521,6 +521,18 @@ Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26a
 
 <!-- /evidence-record E-PROPERTY-SERVICE-RETIREMENT-ADMITTED-150 -->
 
+## Record-store power cycle
+
+[Power-cycle pair](../reports/owned-record-store-design.md#power-cycle) and the [bridge's enumeration](../emulation/README.md#usb-toggle-on-fujimod).
+
+<!-- evidence-record E-RECORD-STORE-POWER-CYCLE-PAIR-150 -->
+
+<!-- /evidence-record E-RECORD-STORE-POWER-CYCLE-PAIR-150 -->
+
+<!-- evidence-record E-RECORD-STORE-REBOOT-ATTACH-150 -->
+
+<!-- /evidence-record E-RECORD-STORE-REBOOT-ATTACH-150 -->
+
 ## Authoritative references
 
 | Question | Home |

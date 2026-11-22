@@ -6953,7 +6953,8 @@
       "private-data/scratch/RecordStore/runs/20261122T071712Z-reboot-drop/result/summary.txt",
       "private-data/scratch/RecordStore/runs/20261122T101018Z-reboot-timing/result/summary.txt",
       "private-data/scratch/RecordStore/inputs/aligned-power-off/stock.nand.gz",
-      "private-data/scratch/RecordStore/inputs/aligned-power-off/owned.nand.gz"
+      "private-data/scratch/RecordStore/inputs/aligned-power-off/owned.nand.gz",
+      "private-data/scratch/RecordStore/diag-retry/emulation/fujimod-xm1/src/ff80.rs"
     ],
     "facts": [
       {"name": "firmware_sha256", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-stock-summary.json", "pointer": ["inputs", "update", "sha256"]},
