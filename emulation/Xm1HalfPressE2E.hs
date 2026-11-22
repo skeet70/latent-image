@@ -286,7 +286,7 @@ run options = do
       lensBefore <- captureLens emulator
       baseline <- captureStore emulator (directory </> "before-store.bin")
       emulatorTraceSites emulator refusalTraceSites
-      (traceStart, _) <- emulatorTraceHits emulator 0
+      traceStart <- emulatorTraceHitTotal emulator
       response <- emulatorKey emulator (KeyTiming (Just (KeyPulse 8000000 8000000)) Nothing) "half-press"
       lensAfter <- captureLens emulator
       after <- captureStore emulator (directory </> "after-store.bin")

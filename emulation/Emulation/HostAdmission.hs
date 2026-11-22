@@ -1,4 +1,4 @@
--- | Host-wide class limits and a shared budget of physical RAM.
+-- | Host-wide class limits and a shared budget of physical RAM less a host reserve.
 module Emulation.HostAdmission
   ( ResourceClass (..)
   , MemoryMax (..)
@@ -15,7 +15,13 @@ module Emulation.HostAdmission
   , hostBuildMain
   , ScopeName
   , parseScopeName
+  , MemoryKey
+  , memoryKey
+  , Reservation
+  , reservationBytes
+  , expectedReservation
   , reserveMemory
+  , startPeakRecorder
   , claimScopeRecord
   , lockOwnerText
   ) where
@@ -23,29 +29,32 @@ module Emulation.HostAdmission
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, bracket, catch, evaluate, onException, try)
-import Control.Monad (forM_, unless, void, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit, isHexDigit, isPrint, isSpace)
 import Data.Either (isRight)
-import Data.List (dropWhileEnd, isPrefixOf, nub, stripPrefix)
-import Data.Maybe (isNothing)
+import Data.Function (on)
+import Data.List (dropWhileEnd, isPrefixOf, isSuffixOf, nub, nubBy, sort, sortOn, stripPrefix)
+import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Ord (Down (..))
 import GHC.Clock (getMonotonicTime)
 import FujiAF.StorageBudget (StorageFailure, checkStorageBudget)
 import System.Info (os)
 import Numeric (showFFloat)
-import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, getHomeDirectory, listDirectory, removeFile, renameFile)
+import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, getHomeDirectory, getModificationTime, listDirectory, removeFile, renameFile)
 import System.Environment (getExecutablePath, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (isAbsolute, splitDirectories, takeDirectory, takeFileName, (</>))
-import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hFlush, hGetContents, hGetLine, hPutStrLn, stderr, withBinaryFile)
+import System.IO (IOMode (ReadMode), SeekMode (AbsoluteSeek), hClose, hFlush, hGetContents, hGetLine, hPutStrLn, stderr, withBinaryFile)
 import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (fileID, getFdStatus, readSymbolicLink)
-import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadOnly, ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock)
+import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadOnly, ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock, waitToSetLock)
 import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.Time (epochTime)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
 import System.Posix.Types (Fd (..), FileID, FileOffset, ProcessID)
-import System.Process (CreateProcess (..), createProcess, proc, readProcessWithExitCode, waitForProcess)
+import System.Process (CreateProcess (..), StdStream (NoStream, UseHandle), createProcess, proc, readProcessWithExitCode, waitForProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
@@ -106,9 +115,17 @@ legacyTokenRange = 256
 budgetVariable :: String
 budgetVariable = "XM1_HOST_MEMORY_BUDGET"
 
--- | Admissible tokens: physical RAM, or a lower @XM1_HOST_MEMORY_BUDGET@.
--- Offsets below 'censusTokens' are counted when held and are the only ones
--- allocated.
+-- | RAM left outside the token budget for the desktop, browser, sessions and page cache.
+hostReserveBytes :: Integer
+hostReserveBytes = 8 * 1024 * 1024 * 1024
+
+-- | @MemAvailable@ an admission leaves free beyond its reservation.
+liveHeadroomBytes :: Integer
+liveHeadroomBytes = 3 * 1024 * 1024 * 1024
+
+-- | Admissible tokens: physical RAM less 'hostReserveBytes' (at least one
+-- token), or a lower @XM1_HOST_MEMORY_BUDGET@. Offsets below 'censusTokens'
+-- are counted when held and are the only ones allocated.
 data MemoryBudget = MemoryBudget
   { budgetTokens :: Int
   , censusTokens :: Int
@@ -117,29 +134,43 @@ data MemoryBudget = MemoryBudget
 memoryBudget :: IO MemoryBudget
 memoryBudget = do
   physical <- physicalMemoryBytes
+  let defaultBudget = max 1 ((physical - hostReserveBytes) `div` tokenBytes) * tokenBytes
   requested <- lookupEnv budgetVariable
   admissible <- case requested of
-    Nothing -> pure physical
+    Nothing -> pure defaultBudget
     Just text | Just value <- parseMemoryMax text
-      , memoryMaxBytes value >= tokenBytes, memoryMaxBytes value <= physical -> pure (memoryMaxBytes value)
-    _ -> ioError (userError (budgetVariable ++ " must be between 256M and physical RAM (" ++ show physical ++ " bytes)"))
+      , memoryMaxBytes value >= tokenBytes, memoryMaxBytes value <= defaultBudget -> pure (memoryMaxBytes value)
+    _ -> ioError (userError (budgetVariable ++ " must be between 256M and physical RAM less the 8 GiB host reserve ("
+      ++ show defaultBudget ++ " bytes)"))
   pure (MemoryBudget (fromInteger (admissible `div` tokenBytes)) (max legacyTokenRange (fromInteger (physical `div` tokenBytes))))
+
+-- | @/proc/meminfo@, or the file named by @XM1_HOST_MEMINFO@.
+meminfoBytes :: String -> IO Integer
+meminfoBytes field = do
+  path <- fromMaybe "/proc/meminfo" <$> lookupEnv "XM1_HOST_MEMINFO"
+  text <- readStrict path
+  case [kib | [name, value, "kB"] <- map words (lines text), name == field ++ ":", Just kib <- [readMaybe value]] of
+    [kib] | kib >= 0 -> pure (kib * 1024)
+    _ -> ioError (userError ("cannot read " ++ field ++ " from " ++ path))
 
 -- | Linux @MemTotal@ or macOS @hw.memsize@.
 physicalMemoryBytes :: IO Integer
 physicalMemoryBytes = case os of
   "linux" -> do
-    text <- readFile "/proc/meminfo"
-    _ <- evaluate (length text)
-    case [kib | ["MemTotal:", value, "kB"] <- map words (lines text), Just kib <- [readMaybe value]] of
-      [kib] | kib > 0 -> pure (kib * 1024)
-      _ -> ioError (userError "cannot read MemTotal from /proc/meminfo")
+    total <- meminfoBytes "MemTotal"
+    if total > 0 then pure total else ioError (userError "MemTotal is zero")
   "darwin" -> do
     (code, out, _) <- readProcessWithExitCode "/usr/sbin/sysctl" ["-n", "hw.memsize"] ""
     case (code, readMaybe (trim out)) of
       (ExitSuccess, Just bytes) | bytes > 0 -> pure bytes
       _ -> ioError (userError "cannot read hw.memsize")
   other -> ioError (userError ("no physical memory probe for " ++ other))
+
+-- | Linux @MemAvailable@. Reservations happen only inside systemd scopes.
+availableMemoryBytes :: IO Integer
+availableMemoryBytes = case os of
+  "linux" -> meminfoBytes "MemAvailable"
+  other -> ioError (userError ("no available memory probe for " ++ other))
 
 reservationTokens :: MemoryMax -> Int
 reservationTokens memory = fromInteger ((memoryMaxBytes memory + tokenBytes - 1) `div` tokenBytes)
@@ -148,7 +179,8 @@ refuseOverBudget :: MemoryBudget -> MemoryMax -> IO ()
 refuseOverBudget budget memory@(MemoryMax text) =
   unless (reservationTokens memory <= budgetTokens budget) $
     ioError (userError ("MemoryMax " ++ text ++ " exceeds the host RAM budget of "
-      ++ show (toInteger (budgetTokens budget) * tokenBytes) ++ " bytes"))
+      ++ show (toInteger (budgetTokens budget) * tokenBytes) ++ " bytes (physical RAM less the 8 GiB host reserve, or "
+      ++ budgetVariable ++ ")"))
 
 newtype ScopeName = ScopeName String
   deriving (Eq)
@@ -159,10 +191,148 @@ parseScopeName text
   , reverse (take 6 (reverse text)) == ".scope" = Just (ScopeName text)
   | otherwise = Nothing
 
--- | Reservations are acquired inside an already-started scope. Swap caps are
+-- | A history key: a slot run's label, or a host build's command and targets.
+-- Its first word names its class: @full-@, @native-@ or @host-build@.
+newtype MemoryKey = MemoryKey String
+
+memoryKey :: String -> MemoryKey
+memoryKey = MemoryKey . take 1024 . map (\character -> if isPrint character && character /= '\t' then character else '?')
+
+newtype KeyClass = KeyClass String
+  deriving (Eq)
+
+keyClass :: String -> KeyClass
+keyClass = KeyClass . takeWhile (/= ' ')
+
+-- | Whole tokens of RAM a scope holds against the budget; also its @MemoryHigh@.
+newtype Reservation = Reservation Int
+
+reservationBytes :: Reservation -> Integer
+reservationBytes (Reservation tokens) = toInteger tokens * tokenBytes
+
+memoryDirectory :: IO FilePath
+memoryDirectory = do
+  directory <- (</> ".cache" </> "xm1-host-memory") <$> getHomeDirectory
+  createDirectoryIfMissing True directory
+  pure directory
+
+-- | Peak records not yet folded into @history@: a peak line, then a key line.
+pendingPeakDirectory :: FilePath -> FilePath
+pendingPeakDirectory directory = directory </> "peaks"
+
+historyLimit :: Int
+historyLimit = 1024
+
+-- | 1.25 times the recorded peak of KEY's most recent completed scope or, for
+-- a key without a record, the 90th-percentile recorded peak of its class,
+-- rounded up to tokens and at most MEMORY; MEMORY when the class has no record.
+expectedReservation :: MemoryKey -> MemoryMax -> IO Reservation
+expectedReservation (MemoryKey key) memory = do
+  directory <- memoryDirectory
+  history <- bracket (openFd (directory </> "history.lock") ReadWrite defaultFileFlags {creat = Just 0o600}) closeFd $ \fd -> do
+    setFdOption fd CloseOnExec True
+    waitToSetLock fd (WriteLock, AbsoluteSeek, 0, 0)
+    foldPendingPeaks directory
+  let cap = reservationTokens memory
+      classPeaks = sort [peak | (peak, entry) <- history, keyClass entry == keyClass key]
+      classEstimate
+        | null classPeaks = Nothing
+        | otherwise = Just (classPeaks !! ((9 * length classPeaks + 9) `div` 10 - 1))
+      expected = maybe classEstimate Just (lookup key [(entry, peak) | (peak, entry) <- history])
+  pure $ Reservation $ case expected of
+    Nothing -> cap
+    Just peak -> max 1 (min cap (fromInteger ((peak * 5 + 4 * tokenBytes - 1) `div` (4 * tokenBytes))))
+
+-- | Most recent first, one entry per key. Caller holds @history.lock@.
+foldPendingPeaks :: FilePath -> IO [(Integer, String)]
+foldPendingPeaks directory = do
+  let historyPath = directory </> "history"
+      pending = pendingPeakDirectory directory
+  stored <- (Just <$> readStrict historyPath)
+    `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
+  let history = [(peak, drop 1 key) | line <- maybe [] lines stored, let (rawPeak, key) = break (== '\t') line, Just peak <- [readMaybe rawPeak]]
+  names <- listDirectory pending
+    `catchIOError` \problem -> if isDoesNotExistError problem then pure [] else ioError problem
+  records <- fmap concat . forM [name | name <- names, not (".partial" `isSuffixOf` name)] $ \name -> do
+    let path = pending </> name
+    stamp <- getModificationTime path
+    text <- readStrict path
+    removeFile path
+    pure [(stamp, (peak, key)) | [rawPeak, key] <- [lines text], Just peak <- [readMaybe rawPeak]]
+  if null records then pure history else do
+    let merged = take historyLimit (nubBy ((==) `on` snd) (map snd (sortOn (Down . fst) records) ++ history))
+    pid <- getProcessID
+    let temporary = historyPath ++ "." ++ show pid
+    writeFile temporary (unlines [show peak ++ "\t" ++ key | (peak, key) <- merged])
+    renameFile temporary historyPath
+    pure merged
+
+writePendingPeak :: MemoryKey -> String -> Integer -> IO ()
+writePendingPeak (MemoryKey key) name peak = do
+  pending <- pendingPeakDirectory <$> memoryDirectory
+  createDirectoryIfMissing True pending
+  let final = pending </> name
+      temporary = final ++ ".partial"
+  writeFile temporary (unlines [show peak, key])
+  renameFile temporary final
+
+-- | Records this scope's @memory.peak@ under KEY once this process, after any
+-- exec, and every descendant that inherits the pipe have exited. After an OOM
+-- kill in the scope it records @memory.peak@ plus @memory.swap.peak@, at least
+-- @memory.max@. A scope stopped by systemd otherwise leaves no record.
+startPeakRecorder :: MemoryKey -> ScopeName -> IO ()
+startPeakRecorder (MemoryKey key) (ScopeName unit) = do
+  groups <- readStrict "/proc/self/cgroup"
+  group <- case [drop 3 line | line <- lines groups, take 3 line == "0::"] of
+    [found] -> pure found
+    _ -> ioError (userError "cannot establish this process's cgroup")
+  root <- cgroupRoot
+  pending <- pendingPeakDirectory <$> memoryDirectory
+  createDirectoryIfMissing True pending
+  (watchRead, watchWrite) <- createPipe
+  setFdOption watchRead CloseOnExec True
+  setFdOption watchWrite CloseOnExec False
+  watch <- fdToHandle watchRead
+  let final = pending </> unit
+      script = unlines
+        [ "trap '' TERM"
+        , "while read -r _; do :; done"
+        , "read -r peak < \"$1/memory.peak\" || exit 0"
+        , "kills=0"
+        , "while read -r name value; do [ \"$name\" != oom_kill ] || kills=$value; done < \"$1/memory.events\""
+        , "if [ \"$kills\" -gt 0 ]; then"
+        , "  read -r swap < \"$1/memory.swap.peak\" || swap=0"
+        , "  read -r cap < \"$1/memory.max\" || cap=0"
+        , "  [ \"$cap\" != max ] || cap=0"
+        , "  peak=$((peak + swap))"
+        , "  [ \"$cap\" -le \"$peak\" ] || peak=$cap"
+        , "elif [ \"$(systemctl --user show \"$5\" -p ActiveState --value)\" = deactivating ]; then"
+        , "  exit 0"
+        , "fi"
+        , "printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
+        ]
+  void $ createProcess (proc "sh" ["-c", script, "sh", root ++ group, final ++ ".partial", final, key, unit])
+    { std_in = UseHandle watch, std_out = NoStream, std_err = NoStream, close_fds = True }
+
+-- | @/sys/fs/cgroup@, or @XM1_HOST_CGROUP_ROOT@.
+cgroupRoot :: IO FilePath
+cgroupRoot = fromMaybe "/sys/fs/cgroup" <$> lookupEnv "XM1_HOST_CGROUP_ROOT"
+
+-- | Reserves the scope's @MemoryHigh@, or its @MemoryMax@ when that is lower
+-- or @MemoryHigh@ is unset, inside the already-started scope. Swap caps are
 -- not reserved.
-reserveMemory :: MemoryMax -> ScopeName -> IO Fd
-reserveMemory = reserveMemoryWithLegacy Nothing
+reserveMemory :: ScopeName -> IO (Fd, Reservation)
+reserveMemory scope@(ScopeName unit) = do
+  (_, out, _) <- readProcessWithExitCode "systemctl" ["--user", "show", unit, "-p", "MemoryMax", "-p", "MemoryHigh"] ""
+  let properties = [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
+      cap = lookup "MemoryMax" properties >>= parseMemoryMax
+  reservation <- case (cap, lookup "MemoryHigh" properties) of
+    (Just limit, Just "infinity") -> pure (Reservation (reservationTokens limit))
+    (Just limit, Just rawHigh) | Just high <- parseMemoryMax rawHigh ->
+      pure (Reservation (reservationTokens (if memoryMaxBytes high < memoryMaxBytes limit then high else limit)))
+    _ -> ioError (userError ("cannot read the memory limits of " ++ unit))
+  fd <- reserveMemoryWithLegacy Nothing reservation scope
+  pure (fd, reservation)
 
 newtype InvocationId = InvocationId String
   deriving (Eq)
@@ -174,57 +344,111 @@ data ScopeIdentity = ScopeIdentity ScopeName InvocationId ScopeCgroup
   deriving (Eq)
 data ScopeIdentityState = ScopeIdentityActive InvocationId MemoryMax | ScopeIdentityInactive
 
-reserveMemoryWithLegacy :: Maybe LegacyReservation -> MemoryMax -> ScopeName -> IO Fd
-reserveMemoryWithLegacy legacy memory scope = do
+-- | Offset stride in @waiting.lock@: a waiter locks @tokens * stride + pid@,
+-- so every lock below its own belongs to a smaller or earlier-numbered waiter.
+waitingStride :: FileOffset
+waitingStride = 4194304
+
+-- | Polls a waiter that fits spends deferring to smaller registered waiters.
+-- A smaller waiter that fits takes its tokens within one poll; one that stays
+-- registered longer does not fit under its own budget and is passed.
+smallerWaiterPolls :: Int
+smallerWaiterPolls = 3
+
+-- | @waiting.lock@ offsets from here are priority waiters: one that has waited
+-- 'agingSeconds' locks @priorityBase + arrival * waitingStride + pid@, with
+-- @arrival@ in epoch seconds.
+priorityBase :: FileOffset
+priorityBase = 2 ^ (40 :: Int)
+
+-- | @XM1_HOST_ADMISSION_AGING_SECONDS@, or 20 minutes.
+agingSeconds :: IO Int
+agingSeconds = do
+  raw <- lookupEnv "XM1_HOST_ADMISSION_AGING_SECONDS"
+  case raw of
+    Nothing -> pure 1200
+    Just text | Just seconds <- readMaybe text, seconds >= 0 -> pure seconds
+    _ -> ioError (userError "XM1_HOST_ADMISSION_AGING_SECONDS must be a non-negative integer")
+
+-- | A new admission takes its tokens when they fit the budget, when
+-- @MemAvailable@ less 'liveHeadroomBytes' and 'outstandingBytes' covers them,
+-- when no priority waiter arrived before it, and, unless it is itself a
+-- priority waiter, after deferring to smaller waiters for 'smallerWaiterPolls'.
+-- A legacy scope already holds its memory and skips the last three conditions.
+reserveMemoryWithLegacy :: Maybe LegacyReservation -> Reservation -> ScopeName -> IO Fd
+reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
   budget <- memoryBudget
-  refuseOverBudget budget memory
-  let tokens = reservationTokens memory
-  directory <- (</> ".cache" </> "xm1-host-memory") <$> getHomeDirectory
-  createDirectoryIfMissing True directory
-  let attempt = do
+  unless (tokens <= budgetTokens budget) $
+    ioError (userError ("a reservation of " ++ show (reservationBytes reservation) ++ " bytes exceeds the host RAM budget of "
+      ++ show (toInteger (budgetTokens budget) * tokenBytes) ++ " bytes"))
+  aging <- agingSeconds
+  arrival <- epochTime
+  directory <- memoryDirectory
+  pid <- getProcessID
+  queue <- openFd (directory </> "waiting.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
+  setFdOption queue CloseOnExec True
+  let place = fromIntegral tokens * waitingStride + fromIntegral pid
+      priorityPlace = priorityBase + fromIntegral (fromEnum arrival) * waitingStride + fromIntegral pid
+      admitting = isNothing legacy
+      attempt registered deferred = do
         gate <- openFd (directory </> "gate.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
         entered <- try (setLock gate (WriteLock, AbsoluteSeek, 0, 1)) :: IO (Either IOException ())
         case entered of
-          Left _ -> closeFd gate >> threadDelay 100_000 >> attempt
+          Left _ -> closeFd gate >> threadDelay 100_000 >> attempt registered deferred
           Right () -> do
             protected <- protectedLegacyTokens directory budget
             case legacy of
               Nothing -> pure ()
-              Just reservation -> do
-                recorded <- doesFileExist (legacyReservationPath directory reservation)
+              Just owner -> do
+                recorded <- doesFileExist (legacyReservationPath directory owner)
                 when recorded (ioError (userError "this legacy invocation already has a persistent reservation"))
             fd <- openFd (directory </> "memory.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
             setFdOption fd CloseOnExec False
             holders <- heldTokens fd budget
+            spare <- if admitting
+              then (\available outstanding -> available - liveHeadroomBytes - outstanding)
+                <$> availableMemoryBytes <*> outstandingBytes directory holders
+              else pure (reservationBytes reservation)
+            now <- epochTime
+            let aged = admitting && fromEnum now - fromEnum arrival >= aging
+            older <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, priorityBase, priorityPlace - priorityBase) else pure False
+            smaller <- if admitting && not aged then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
             let occupied = nub (map fst holders ++ protected)
                 free = filter (`notElem` occupied) (map fromIntegral [0 .. censusTokens budget - 1])
-            chosen <- if length occupied + tokens <= budgetTokens budget
+                fits = length occupied + tokens <= budgetTokens budget && spare >= reservationBytes reservation
+                deferring = fits && smaller && deferred < smallerWaiterPolls
+            chosen <- if fits && not deferring && not older
               then collect fd (take tokens free)
               else pure Nothing
             case chosen of
               Nothing -> do
                 closeFd fd
                 closeFd gate
+                when (admitting && not registered) (setLock queue (WriteLock, AbsoluteSeek, place, 1))
+                when aged (setLock queue (WriteLock, AbsoluteSeek, priorityPlace, 1))
                 hPutStrLn stderr ("host admission: waiting for host RAM (" ++ show tokens ++ " x 256MiB; "
-                  ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held); owners="
+                  ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held; "
+                  ++ show (max 0 spare) ++ " bytes available above the live headroom and outstanding reservations"
+                  ++ (if older then "; behind a priority waiter that arrived earlier" else if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
                   ++ show (nub (map snd holders)))
                 hFlush stderr
                 threadDelay 500_000
-                attempt
+                attempt (registered || admitting) (if deferring then deferred + 1 else 0)
               Just indices -> do
                 let records = [directory </> ("scope-" ++ show index) | index <- indices]
                 case legacy of
                   Nothing -> claimScopeRecords records scope
-                  Just reservation -> do
+                  Just owner -> do
                     current <- currentScopeIdentity scope
                     reclaimScopeRecords records current
-                    writeLegacyReservation directory reservation indices
+                    writeLegacyReservation directory owner indices
                 closeFd gate
+                closeFd queue
                 pure fd
       collect fd indices = do
         results <- mapM (\index -> try (setLock fd (WriteLock, AbsoluteSeek, index, 1)) :: IO (Either IOException ())) indices
         pure (if all isRight results then Just indices else Nothing)
-  attempt
+  attempt False 0
 
 -- | Offsets below 'censusTokens' locked by other processes, with their owners.
 heldTokens :: Fd -> MemoryBudget -> IO [(FileOffset, ProcessID)]
@@ -232,6 +456,27 @@ heldTokens fd budget = do
   owners <- mapM (\index -> (,) index <$> getLock fd (WriteLock, AbsoluteSeek, index, 1))
     (map fromIntegral [0 .. censusTokens budget - 1])
   pure [(index, pid) | (index, Just (pid, _)) <- owners]
+
+-- | Over admitted scopes holding HOLDERS, the reservation not yet in use:
+-- held tokens less @memory.current@ plus @memory.swap.current@, at least zero.
+-- A scope whose cgroup is gone counts zero.
+outstandingBytes :: FilePath -> [(FileOffset, ProcessID)] -> IO Integer
+outstandingBytes directory holders = do
+  root <- cgroupRoot
+  groups <- forM holders $ \(index, _) ->
+    (fmap (\(ScopeIdentity _ _ (ScopeCgroup group _)) -> group) <$> readScopeRecord (directory </> ("scope-" ++ show index)))
+      `catchIOError` const (pure Nothing)
+  fmap sum . forM (nub [group | Just group <- groups]) $ \group -> do
+    let reserved = toInteger (length (filter (== Just group) groups)) * tokenBytes
+    current <- counter (root ++ group </> "memory.current")
+    case current of
+      Nothing -> pure 0
+      Just used -> do
+        swapped <- fromMaybe 0 <$> counter (root ++ group </> "memory.swap.current")
+        pure (max 0 (reserved - used - swapped))
+  where
+    counter path = (readMaybe . trim <$> readStrict path)
+      `catchIOError` \problem -> if isDoesNotExistError problem then pure Nothing else ioError problem
 
 claimScopeRecord :: FilePath -> ScopeName -> IO ()
 claimScopeRecord record = claimScopeRecords [record]
@@ -437,9 +682,9 @@ hostBuildMain :: [String] -> IO ()
 hostBuildMain arguments = case arguments of
   ["--migrate-build-records"] -> migrateBuildRecords
   ["--reserve-legacy", name] | Just scope <- parseScopeName name -> reserveLegacy scope
-  "--scope-child" : report : release : unit : record : program : rest
+  "--scope-child" : report : release : unit : program : rest
     | Just reportFd <- readMaybe report, Just releaseFd <- readMaybe release ->
-        scopeChild (Fd reportFd) (Fd releaseFd) unit record program rest
+        scopeChild (Fd reportFd) (Fd releaseFd) unit program rest
   option : command : rest
     | Just base <- stripPrefix "--output_base=" option, not (null base), not ("-" `isPrefixOf` command) ->
         admit (Just base) command rest
@@ -448,6 +693,8 @@ hostBuildMain arguments = case arguments of
     hPutStrLn stderr "usage: host-build [--output_base=PATH] COMMAND [ARGUMENT...]\n       host-build --reserve-legacy UNIT.scope\n       host-build --migrate-build-records"
     exitWith (ExitFailure 2)
 
+-- | The scope reserves its memory before this process takes a build lane, so a
+-- build waiting for memory holds no lane.
 admit :: Maybe FilePath -> String -> [String] -> IO ()
 admit requestedBase command rest = do
   refuseNested
@@ -456,21 +703,16 @@ admit requestedBase command rest = do
   directory <- (</> ".cache" </> "xm1-host-build") <$> getHomeDirectory
   createDirectoryIfMissing True directory
   waitStart <- getMonotonicTime
-  (lock, lane) <- acquireBuildLock directory
-  waited <- subtract waitStart <$> getMonotonicTime
   scoped <- userScopeAvailable
   pid <- getProcessID
   let unit = "xm1-host-build-" ++ show pid ++ ".scope"
-  if scoped
-    then stopPreviousScope directory lane
-    else if os == "linux"
+      key = buildMemoryKey command rest
+  unless scoped $
+    if os == "linux"
       then ioError (userError "host-build requires a systemd user scope to enforce its memory cap")
       else let MemoryMax cap = memory
            in hPutStrLn stderr ("No systemd user session: host build runs without the " ++ cap ++ " memory cap") >> hFlush stderr
-  checkStorageBudget directory
-    `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
-    `catch` (\problem -> refuseAccounting (show (problem :: IOException)))
-  checkConfiguredAccounting
+  reservation <- expectedReservation key memory
   let script = directory </> ("run-" ++ show pid ++ ".sh")
       running = command == "run"
       bazelArguments =
@@ -480,14 +722,30 @@ admit requestedBase command rest = do
           ++ admittedFlags command
           ++ ["--script_path=" ++ script | running]
           ++ rest
+      takeLane = do
+        (lock, lane) <- acquireBuildLock directory
+        when scoped (stopPreviousScope directory lane)
+        checkStorageBudget directory
+          `catch` (\problem -> refuseAccounting (show (problem :: StorageFailure)))
+          `catch` (\problem -> refuseAccounting (show (problem :: IOException)))
+        checkConfiguredAccounting
+        waited <- subtract waitStart <$> getMonotonicTime
+        pure ((lock, waited), buildScopeRecord directory lane)
   when running (removeIfPresent script)
   setEnv admittedVariable "1"
-  outcome <- runContained memory swap scoped unit (buildScopeRecord directory lane) bazelArguments
+  (admitted, outcome) <- runContained memory swap reservation scoped unit takeLane bazelArguments
+  let state = outcomeState outcome
+      killed = unitResult state == "oom-kill"
+  case (admitted, unitMemoryPeak state) of
+    (Just _, Just peak) | killed -> writePendingPeak key unit (max (peak + fromMaybe 0 (unitMemorySwapPeak state)) (memoryMaxBytes memory))
+    (Just _, Just peak) -> writePendingPeak key unit peak
+    _ -> pure ()
   let verdict = judge outcome
-  hPutStrLn stderr ("host-build verdict " ++ renderVerdict memory swap command waited verdict outcome)
+      waited = maybe (outcomeWall outcome) snd admitted
+  hPutStrLn stderr ("host-build verdict " ++ renderVerdict memory swap reservation command waited verdict outcome)
   hFlush stderr
-  case (verdict, running) of
-    (Passed, True) -> do
+  case (verdict, running, admitted) of
+    (Passed, True, Just (lock, _)) -> do
       launcher <- readFile script
       _ <- evaluate (length launcher)
       removeFile script
@@ -497,6 +755,11 @@ admit requestedBase command rest = do
     _ -> do
       when running (removeIfPresent script)
       exitWith (verdictExit verdict outcome)
+
+-- | The command and its targets: arguments before @--@ that are not flags.
+buildMemoryKey :: String -> [String] -> MemoryKey
+buildMemoryKey command rest =
+  memoryKey (unwords ("host-build" : command : filter (not . isPrefixOf "-") (takeWhile (/= "--") rest)))
 
 -- | Waiting for the build lock while holding an emulator slot, or from inside an
 -- admitted command, can deadlock.
@@ -527,18 +790,18 @@ reserveLegacy :: ScopeName -> IO ()
 reserveLegacy scope@(ScopeName unit) = do
   refuseNested
   current <- currentScopeIdentity scope
-  let reservation = LegacyReservation current
+  let legacyOwner = LegacyReservation current
   state <- scopeIdentityState scope
   memory <- case state of
     ScopeIdentityActive _ cap -> pure cap
     ScopeIdentityInactive -> ioError (userError "legacy reservation requires an active scope")
-  active <- legacyReservationActive reservation
+  active <- legacyReservationActive legacyOwner
   unless active (ioError (userError "legacy reservation requires a populated capped scope"))
-  _ <- reserveMemoryWithLegacy (Just reservation) memory scope
+  _ <- reserveMemoryWithLegacy (Just legacyOwner) (Reservation (reservationTokens memory)) scope
   hPutStrLn stderr ("legacy reservation ready: " ++ unit ++ " RAM bytes=" ++ show (memoryMaxBytes memory))
   hFlush stderr
   let wait = do
-        occupied <- legacyReservationActive reservation
+        occupied <- legacyReservationActive legacyOwner
         when occupied (threadDelay 1_000_000 >> wait)
   wait
 
@@ -855,6 +1118,7 @@ data UnitState = UnitState
   { unitResult :: String
   , unitCpuNanos :: Maybe Integer
   , unitMemoryPeak :: Maybe Integer
+  , unitMemorySwapPeak :: Maybe Integer
   }
 
 data DaemonCounters = DaemonCounters
@@ -871,13 +1135,13 @@ data Outcome = Outcome
   , outcomeDaemonCpu :: Maybe Integer
   }
 
--- | Runs Bazel through a scope child that reports Bazel's exit status and
--- stays alive until the unit's result has been read; systemd collects a
--- successful scope once its last process exits.
-runContained :: MemoryMax -> MemorySwapMax -> Bool -> String -> FilePath -> [String] -> IO Outcome
-runContained memoryCap swapCap scoped unit record bazelArguments = do
-  before <- daemonCounters
-  start <- getMonotonicTime
+-- | Runs Bazel through a scope child. The child reports @reserved@ once it
+-- holds the scope's memory; ADMISSION then runs and names the scope record
+-- the child claims before starting Bazel. The child reports Bazel's exit
+-- status and stays alive until the unit's result has been read; systemd
+-- collects a successful scope once its last process exits.
+runContained :: MemoryMax -> MemorySwapMax -> Reservation -> Bool -> String -> IO (a, FilePath) -> [String] -> IO (Maybe a, Outcome)
+runContained memoryCap swapCap reservation scoped unit admission bazelArguments = do
   (reportRead, reportWrite) <- createPipe
   (releaseRead, releaseWrite) <- createPipe
   setFdOption reportRead CloseOnExec True
@@ -885,11 +1149,12 @@ runContained memoryCap swapCap scoped unit record bazelArguments = do
   self <- getExecutablePath
   let MemoryMax memory = memoryCap
       MemorySwapMax swap = swapCap
-      child = ["--scope-child", fdText reportWrite, fdText releaseRead, if scoped then unit else "-", record] ++ ("bazel" : bazelArguments)
+      child = ["--scope-child", fdText reportWrite, fdText releaseRead, if scoped then unit else "-"] ++ ("bazel" : bazelArguments)
       process
         | scoped = proc "systemd-run" $
             [ "--user", "--scope", "--quiet", "--unit=" ++ unit
             , "--property=MemoryMax=" ++ memory
+            , "--property=MemoryHigh=" ++ show (reservationBytes reservation)
             , "--property=MemorySwapMax=" ++ swap
             , "--property=OOMPolicy=stop"
             , "--", self
@@ -900,25 +1165,37 @@ runContained memoryCap swapCap scoped unit record bazelArguments = do
   closeFd reportWrite
   closeFd releaseRead
   reportHandle <- fdToHandle reportRead
-  reported <- try (hGetLine reportHandle) :: IO (Either IOException String)
+  releaseHandle <- fdToHandle releaseWrite
+  ready <- try (hGetLine reportHandle) :: IO (Either IOException String)
+  admitted <- case ready of
+    Right line | trim line == "reserved" -> do
+      (value, record) <- admission
+      sent <- try (hPutStrLn releaseHandle record >> hFlush releaseHandle) :: IO (Either IOException ())
+      pure (either (const Nothing) (const (Just value)) sent)
+    _ -> pure Nothing
+  before <- daemonCounters
+  start <- getMonotonicTime
+  reported <- case admitted of
+    Just _ -> try (hGetLine reportHandle) :: IO (Either IOException String)
+    Nothing -> pure (Left (userError "the scope child ended before admission"))
   end <- getMonotonicTime
   let exitStatus = either (const Nothing) (readMaybe . trim) reported
   state <-
     if scoped
       then unitState unit (isNothing exitStatus)
-      else pure (UnitState "uncapped" Nothing Nothing)
+      else pure (UnitState "uncapped" Nothing Nothing Nothing)
   after <- daemonCounters
-  closeFd releaseWrite
+  _ <- try (hClose releaseHandle) :: IO (Either IOException ())
   _ <- waitForProcess handle
   when scoped (void (readProcessWithExitCode "systemctl" ["--user", "reset-failed", unit] ""))
-  pure Outcome
+  pure (admitted, Outcome
     { outcomeExit = exitStatus
     , outcomeUnit = if scoped then Just unit else Nothing
     , outcomeState = state
     , outcomeWall = end - start
     , outcomeDaemonOom = (-) <$> daemonOomKills after <*> daemonOomKills before
     , outcomeDaemonCpu = (-) <$> daemonCpuMicros after <*> daemonCpuMicros before
-    }
+    })
 
 fdText :: Fd -> String
 fdText (Fd fd) = show fd
@@ -932,12 +1209,12 @@ unitState unit died = do
   let field name = lookup name properties
       number name = field name >>= readMaybe
   pure $ case field "LoadState" of
-    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak")
-    _ -> UnitState "unknown" Nothing Nothing
+    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak") (number "MemorySwapPeak")
+    _ -> UnitState "unknown" Nothing Nothing Nothing
   where
     showUnit = do
       (_, out, _) <- readProcessWithExitCode "systemctl"
-        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak"] ""
+        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak", "-p", "MemorySwapPeak"] ""
       pure [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
     settle 0 = pure ()
     settle remaining = do
@@ -959,32 +1236,39 @@ daemonCounters = do
         Right text -> lookup key [(name, value) | [name, raw] <- map words (lines text), Just value <- [readMaybe raw]]
         Left _ -> Nothing
 
--- | Runs inside the scope. Reports Bazel's exit status on @report@ and exits
--- once @release@ reaches end of file; an end of file while Bazel runs means
--- the admitting process died, and the scope is stopped.
-scopeChild :: Fd -> Fd -> String -> FilePath -> String -> [String] -> IO ()
-scopeChild report release unit record program arguments = do
+-- | Runs inside the scope. Reserves the scope's memory, reports @reserved@ on
+-- @report@, reads the scope record path from @release@, then runs PROGRAM and
+-- reports its exit status. Exits once @release@ reaches end of file; an end
+-- of file before then means the admitting process died, and the scope is
+-- stopped.
+scopeChild :: Fd -> Fd -> String -> String -> [String] -> IO ()
+scopeChild report release unit program arguments = do
   _ <- installHandler sigINT (Catch (pure ())) Nothing
   setFdOption report CloseOnExec True
   setFdOption release CloseOnExec True
   reportHandle <- fdToHandle report
   releaseHandle <- fdToHandle release
   scope <- maybe (ioError (userError "scope child requires a valid scope name")) pure (parseScopeName unit)
+  recordPath <- newEmptyMVar
   released <- newEmptyMVar
   _ <- forkIO $ do
+    line <- try (hGetLine releaseHandle) :: IO (Either IOException String)
+    putMVar recordPath (either (const Nothing) Just line)
     _ <- try (hGetContents releaseHandle >>= evaluate . length) :: IO (Either IOException Int)
     void (readProcessWithExitCode "systemctl" ["--user", "stop", "--no-block", unit] "")
     putMVar released ()
-  claimScopeRecord record scope
-  state <- scopeIdentityState scope
-  case state of
-    ScopeIdentityActive _ memory -> void (reserveMemory memory scope)
-    ScopeIdentityInactive -> ioError (userError "build scope became inactive before reservation")
-  (_, _, _, child) <- createProcess (proc program arguments)
-  code <- waitForProcess child
-  _ <- try (hPutStrLn reportHandle (show (exitNumber code)) >> hFlush reportHandle) :: IO (Either IOException ())
-  takeMVar released
-  exitWith code
+  _ <- reserveMemory scope
+  _ <- try (hPutStrLn reportHandle "reserved" >> hFlush reportHandle) :: IO (Either IOException ())
+  record <- takeMVar recordPath
+  case record of
+    Nothing -> takeMVar released >> exitWith (ExitFailure 1)
+    Just path -> do
+      claimScopeRecord path scope
+      (_, _, _, child) <- createProcess (proc program arguments)
+      code <- waitForProcess child
+      _ <- try (hPutStrLn reportHandle (show (exitNumber code)) >> hFlush reportHandle) :: IO (Either IOException ())
+      takeMVar released
+      exitWith code
 
 exitNumber :: ExitCode -> Int
 exitNumber ExitSuccess = 0
@@ -1011,8 +1295,8 @@ verdictExit verdict outcome = case verdict of
     Just code | code < 0 -> ExitFailure (128 - code)
     _ -> ExitFailure 1
 
-renderVerdict :: MemoryMax -> MemorySwapMax -> String -> Double -> Verdict -> Outcome -> String
-renderVerdict (MemoryMax memory) (MemorySwapMax swap) command waited verdict outcome =
+renderVerdict :: MemoryMax -> MemorySwapMax -> Reservation -> String -> Double -> Verdict -> Outcome -> String
+renderVerdict (MemoryMax memory) (MemorySwapMax swap) reservation command waited verdict outcome =
   "{" ++ commaSeparated
     [ field "verdict" (quoted verdictName)
     , field "resource_failure" resource
@@ -1022,7 +1306,7 @@ renderVerdict (MemoryMax memory) (MemorySwapMax swap) command waited verdict out
     , field "unit_result" (quoted (filter safe (unitResult state)))
     , field "memory_max" (quoted memory)
     , field "memory_swap_max" (quoted swap)
-    , field "reserved_memory_bytes" (show (memoryMaxBytes (MemoryMax memory)))
+    , field "reserved_memory_bytes" (show (reservationBytes reservation))
     , field "lock_wait_seconds" (seconds waited)
     , field "wall_seconds" (seconds (outcomeWall outcome))
     , field "scope_cpu_seconds" (maybe "null" (\nanos -> seconds (fromIntegral nanos / 1e9)) (unitCpuNanos state))
@@ -1046,6 +1330,12 @@ renderVerdict (MemoryMax memory) (MemorySwapMax swap) command waited verdict out
 
 trim :: String -> String
 trim = dropWhileEnd isSpace . dropWhile isSpace
+
+readStrict :: FilePath -> IO String
+readStrict path = do
+  text <- readFile path
+  _ <- evaluate (length text)
+  pure text
 
 removeIfPresent :: FilePath -> IO ()
 removeIfPresent path = removeFile path `catchIOError` \problem ->

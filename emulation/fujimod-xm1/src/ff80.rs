@@ -214,6 +214,7 @@ pub struct Ff80 {
     pub rendezvous: Vec<Rendezvous>,
     rendezvous_inputs: RendezvousInputs,
     rendezvous_complete: bool,
+    /// Absolute index of the next trace hit the rendezvous protocol reads.
     hits_seen: usize,
     pub transfer_log: Vec<Value>,
     /// Presses dial-push before every 32nd transfer; stock 1.50 live view
@@ -239,7 +240,7 @@ pub fn encode_hex(bytes: &[u8]) -> String {
 
 impl Ff80 {
     pub fn new(machine: Machine, rendezvous_inputs: RendezvousInputs) -> Self {
-        let hits_seen = machine.traces.hits.len();
+        let hits_seen = machine.traces.hit_count();
         Self {
             machine,
             rendezvous: Vec::new(),
@@ -294,7 +295,7 @@ impl Ff80 {
         if self.rendezvous_active() {
             return Err("capture observation cannot replace an active rendezvous trace".into());
         }
-        if self.hits_seen != self.machine.traces.hits.len() {
+        if self.hits_seen != self.machine.traces.hit_count() {
             return Err("capture observation requires consumed rendezvous trace hits".into());
         }
         self.machine.begin_capture_observation(scope)?;
@@ -302,10 +303,15 @@ impl Ff80 {
         Ok(())
     }
 
+    /// Removes the trace hits below `below` that the rendezvous protocol has read.
+    pub fn release_trace_hits(&mut self, below: usize) -> Result<std::vec::Drain<'_, crate::trace::Hit>, String> {
+        self.machine.traces.release_hits(below.min(self.hits_seen))
+    }
+
     /// Applies the rendezvous protocol to entries recorded since the last call.
     fn observe(&mut self) -> Result<(), String> {
-        while self.hits_seen < self.machine.traces.hits.len() {
-            let hit = self.machine.traces.hits[self.hits_seen].clone();
+        while self.hits_seen < self.machine.traces.hit_count() {
+            let hit = self.machine.traces.hits_from(self.hits_seen)?[0].clone();
             self.hits_seen += 1;
             let open = self.rendezvous.last().is_some_and(|event| event.released_instructions.is_none());
             match (RendezvousSite::parse(&hit.site), open) {
