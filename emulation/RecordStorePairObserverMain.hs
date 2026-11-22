@@ -323,7 +323,7 @@ observe options directory record = do
               let remaining = toInteger (tickValue target) - now
               need (remaining >= 0) "power-off tick precedes the final step"
               if remaining == 0 then pure state else do
-                let chunk = min remaining 20000000
+                let chunk = min remaining 833334
                 elapsed <- emulatorIdleTicks emulator (Tick (fromInteger chunk))
                 need (field "ticks" elapsed == A.toJSON chunk) "power-off alignment missed its tick boundary"
                 align
