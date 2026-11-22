@@ -293,7 +293,7 @@ observe inputs directory record = do
       sites =
         [(entryAddress e, "dcf:" ++ entryName e, entryCapture e) | e <- entries]
           ++ [(a, "call:" ++ serviceName (services M.! t), callCapture (services M.! t)) | (a, t) <- calls]
-      writeSpans = [profileHeader, Span contextSlot (contextSlot + 4)]
+      writeSpans = [Span contextSlot (contextSlot + 4), profileHeader]
       spec =
         object
           [ "schema" .= (1 :: Int)
@@ -310,7 +310,7 @@ observe inputs directory record = do
       watch =
         object
           [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
-          , "ranges" .= map spanValue (writeSpans ++ extents)
+          , "ranges" .= map spanValue (extents ++ writeSpans)
           , "write_ranges" .= map spanValue writeSpans, "fetch_ranges" .= map spanValue extents ]
       bridgeArguments =
         [ "--run", paths M.! "run", "--boot-rom", paths M.! "boot-rom", "--installed-dat", paths M.! "update"
