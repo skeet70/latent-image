@@ -372,10 +372,12 @@ fn allocate<G: Guest>(guest: &mut G, last: Pair, mut sequence: u32) -> Result<Ne
     let mut file = u32::from(last.file);
     if last_digit(previous) == thousands(file) {
         file = (file + 1) & 0xffff;
-        if (below_thousand(file) == 0 && !cfg!(dcf_control_full_block_kept)) || sequence_exhausted(guest, sequence) {
+        if below_thousand(file) == 0 || sequence_exhausted(guest, sequence) {
             directory = next_folder(guest, previous)?;
             file = block_start(directory);
-            sequence = restart_sequence(guest);
+            if !cfg!(dcf_control_block_sequence_kept) {
+                sequence = restart_sequence(guest);
+            }
         }
         return Ok(Next { directory, file, sequence });
     }

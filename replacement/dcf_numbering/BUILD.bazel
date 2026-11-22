@@ -8,7 +8,7 @@ exports_files(["imports.ld"])
 _SOURCES = ["src/numbering.rs", "src/stock.rs"]
 
 DCF_CONTROLS = [
-    "full_block_kept",
+    "block_sequence_kept",
     "profile_ignored",
     "written_unpersisted",
     "folder_cluster_unrecorded",
