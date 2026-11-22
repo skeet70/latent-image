@@ -97,39 +97,22 @@ wordAt bytes offset = sum [fromIntegral (B.index bytes (offset + i)) `shiftL` (8
 -- | A scanned word reviewed as data: its image, site and the word the site holds.
 data ReviewedData = ReviewedData {reviewedImage :: String, reviewedSite :: Word32, reviewedWord :: Word32, reviewedReason :: String}
 
--- | The aligned words whose value lies in an extent. None is loaded PC-relative by any A32 or
--- Thumb instruction of the scanned images; each sits in a table of like values.
+-- | The word-aligned values in an extent held by aligned words of the scanned images. None is
+-- loaded PC-relative by any A32 or Thumb instruction; each sits in a table of like values.
 reviewedData :: [ReviewedData]
 reviewedData =
-  [ ReviewedData "image4" 0x7bdfd0 0x0070f87c "image4 data: alternating 0xf0104cXX register table"
-  , ReviewedData "image4" 0x7c5574 0x0070fff1 "image4 data: odd value"
-  , ReviewedData "image4" 0x7c5598 0x0070ffe5 "image4 data: odd value"
-  , ReviewedData "image4" 0x7cfa00 0x0071000b "image4 data: odd value"
-  , ReviewedData "image4" 0x7d1878 0x00710005 "image4 data: odd value"
-  , ReviewedData "image4" 0x7d5a50 0x0070ffe6 "image4 data: value not word-aligned"
+  [ ReviewedData "image4" 0x7bdfd0 0x0070f87c "image4 data: alternating with 0xf0104cXX words"
   , ReviewedData "image4" 0x7dfd50 0x0070fd7c "image4 data: signed halfword coefficient table, repeated at 0x7ea76c"
-  , ReviewedData "image4" 0x7e4d90 0x0070ffee "image4 data: value not word-aligned"
   , ReviewedData "image4" 0x7ea76c 0x0070fd7c "image4 data: signed halfword coefficient table, repeated at 0x7dfd50"
-  , ReviewedData "image5" 0xd691c8 0x00710071 "image5 data: odd value"
-  , ReviewedData "image5" 0xd691cc 0x00710071 "image5 data: odd value"
-  , ReviewedData "image5" 0xf562dc 0x0071006e "image5 data: value not word-aligned"
-  , ReviewedData "image5" 0xf56520 0x0071006f "image5 data: odd value"
   , ReviewedData "image5" 0xf580bc 0x00710070 "image5 data: ascending halfword ramp 0x5c..0x88"
-  , ReviewedData "image5" 0x1070158 0x00710071 "image5 data: odd value"
-  , ReviewedData "image5" 0x10871b8 0x00710065 "image5 data: odd value"
-  , ReviewedData "image5" 0x1099f48 0x0070fc82 "image5 data: value not word-aligned"
-  , ReviewedData "plain" 0x13954cc 0x00716552 "overlay 47 data: value not word-aligned"
-  , ReviewedData "plain" 0x13954f0 0x00716552 "overlay 47 data: value not word-aligned"
-  , ReviewedData "plain" 0x1395514 0x00716552 "overlay 47 data: value not word-aligned"
-  , ReviewedData "plain" 0x13a2590 0x00716572 "overlay 47 data: value not word-aligned"
-  , ReviewedData "plain" 0x1449760 0x00716573 "overlay 47 data: odd value"
   ]
 
 data Verdict
   = EntryBranch
   | EntryPointer
+  | NotWordAddress
+  | HalfwordSite
   | Reviewed String
-  | Unaligned
   | Refused
   deriving (Eq, Show)
 
@@ -137,8 +120,10 @@ data Verdict
 data Finding = Finding {findingReference :: Reference, findingWord :: Word32, findingVerdict :: Verdict}
 
 -- | Every reference into the extents from a site outside them. An A32 branch or aligned pointer
--- word to an entry is admitted; a halfword-aligned word is a decode of two unrelated halfwords,
--- which no A32 load reads; a reviewed data word is admitted; anything else is refused.
+-- word to an entry is admitted. The extents hold A32 instructions and word literal pools, so a
+-- pointer word whose value is not word-aligned names neither; a word at a halfword-aligned site
+-- is read by no A32 or Thumb literal load. A reviewed data word is admitted; anything else is
+-- refused.
 census :: [Image] -> [Finding]
 census images = concatMap scan images
   where
@@ -152,7 +137,8 @@ census images = concatMap scan images
     verdict (Reference (Address target) kind name (Address site)) word
       | kind `elem` [ArmB, ArmBL] && target `elem` entrySet = EntryBranch
       | kind == PointerWord && word `elem` entrySet = EntryPointer
-      | kind == PointerHalfword = Unaligned
+      | kind == PointerWord && word .&. 3 /= 0 = NotWordAddress
+      | kind == PointerHalfword = HalfwordSite
       | kind == PointerWord, [reason] <- [reviewedReason r | r <- reviewedData, reviewedImage r == name, reviewedSite r == site, reviewedWord r == word] = Reviewed reason
       | otherwise = Refused
     siteWord (Image _ (Address base) bytes) site =
@@ -170,6 +156,7 @@ findingValue (Finding reference@(Reference (Address target) _ name (Address site
     verdictText = case verdict of
       EntryBranch -> "entry-branch"
       EntryPointer -> "entry-pointer"
+      NotWordAddress -> "not-word-aligned"
+      HalfwordSite -> "halfword-aligned-site"
       Reviewed reason -> "reviewed-data: " ++ reason
-      Unaligned -> "halfword-aligned-word"
       Refused -> "refused"

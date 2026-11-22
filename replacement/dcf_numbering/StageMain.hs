@@ -70,7 +70,7 @@ main = do
               , "entries" .= [object ["address" .= a, "name" .= n] | Entry a n <- entries]
               , "scanned" .= [object ["image" .= name, "base" .= base, "bytes" .= B.length bytes, "sha256" .= hash bytes] | Image name (Address base) bytes <- images]
               , "reference_counts" .= [object ["image" .= name, "verdict" .= verdict, "count" .= count] | ((name, verdict), count) <- summary]
-              , "references" .= [findingValue f | f <- findings, findingVerdict f /= Unaligned]
+              , "references" .= [findingValue f | f <- findings, findingVerdict f `notElem` [NotWordAddress, HalfwordSite]]
               , "refused_references" .= length refused
               ]
           )
@@ -81,6 +81,7 @@ main = do
     verdictKey verdict = case verdict of
       EntryBranch -> "entry-branch"
       EntryPointer -> "entry-pointer"
+      NotWordAddress -> "not-word-aligned"
+      HalfwordSite -> "halfword-aligned-site"
       Reviewed _ -> "reviewed-data"
-      Unaligned -> "halfword-aligned-word"
       Refused -> "refused"

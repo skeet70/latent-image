@@ -72,6 +72,7 @@ main = do
         , (0xbf2010, entryAt "last_used")
         , (0xbf2014, 0x716330)
         , (0xbf2020, 0xe3060330), (0xbf2024, 0xe3400071)
+        , (0xbf2030, 0x716332)
         , (0xf580bc, 0x00710070)
         , (0xf580c0, 0x00710074)
         ]
@@ -81,6 +82,7 @@ main = do
   check "a pointer word to an entry is admitted" (lookup 0xbf2010 found == Just EntryPointer)
   check "a pointer word into an extent refuses" (lookup 0xbf2014 found == Just Refused)
   check "a MOVW/MOVT pair into an extent refuses" (lookup 0xbf2024 found == Just Refused)
+  check "a word whose value is not word-aligned is admitted" (lookup 0xbf2030 found == Just NotWordAddress)
   check "a reviewed data word is admitted" (case lookup 0xf580bc found of Just (Reviewed _) -> True; _ -> False)
   check "an unreviewed word beside a reviewed one refuses" (lookup 0xf580c0 found == Just Refused)
   let four = placed image4Base 0x282800 [(0x70fc00, bl 0x70fc00 0x716330), (0x720000, bl 0x720000 0x716330)]
