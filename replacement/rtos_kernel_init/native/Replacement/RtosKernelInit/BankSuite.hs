@@ -316,7 +316,7 @@ caseSpec domain role loader owned bank suffix one =
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)
-    , caseKernel = Just (KernelCase (InstructionLimit 6000000) (wire . retainedAddress domain <$> stopOf (caseEnding one)) Nothing Nothing Nothing [R0, R1, R2, R3, R12, Lr] [] Nothing)
+    , caseKernel = Just (KernelCase (InstructionLimit 4000000) (wire . retainedAddress domain <$> stopOf (caseEnding one)) Nothing Nothing Nothing [R0, R1, R2, R3, R12, Lr] [] Nothing)
     }
   where
     kernelAt = ramAt domain kernelBase
