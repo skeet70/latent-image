@@ -1,56 +1,97 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Stock-against-owned cases for playback machine 0. Each case enters the retained dispatcher
--- 0x011e8bf8 for machine 0 with the event and state that select one action, over scripted
--- retained services, and expects the result, the ordered service calls and the final machine
--- and mode state of an independent model of the stock action bytes in
--- [0x011e8ce4,0x011ea434).
+-- | Stock-against-owned cases for the owned playback machines. Each case enters the retained
+-- dispatcher 0x011e8bf8 for one machine with the event and state that select one action, over
+-- scripted retained services, and expects the result, the ordered service calls and the final
+-- guest state of an independent model of the stock action bytes. Machine 0's model is below;
+-- the others are path models.
 module Replacement.PlaybackActor.Cases
   ( code
   , scenarios
-  , actionCount
+  , OwnedMachine (..)
+  , ownedMachines
   ) where
 
 import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import Data.Word (Word32)
 import Replacement.FileService.Native
+import Replacement.PlaybackActor.Machine30 (machine30)
+import Replacement.PlaybackActor.Model (machineScenarios)
 
 plainBase :: Word32
 plainBase = 0x01100000
 
--- | The dispatcher, the machine tables it reads and the machine-0 action extent and table rows.
+-- | An owned machine: its export prefix, its stock action starts in table order with the end of
+-- its extent, and its first republished table row.
+data OwnedMachine = OwnedMachine
+  { ownedName :: String
+  , ownedExport :: String
+  , ownedActions :: [Word32]
+  , ownedEnd :: Word32
+  , ownedRows :: Word32
+  }
+
+ownedMachines :: [OwnedMachine]
+ownedMachines =
+  [ OwnedMachine "machine0" "xm1_playback_m0_action" actionAddresses 0x011ea434 0x01218ec8
+  , OwnedMachine "machine30" "xm1_playback_m30_action"
+      [ 0x011f31bc, 0x011f31d4, 0x011f320c, 0x011f3244, 0x011f325c, 0x011f3278, 0x011f3294, 0x011f3338
+      , 0x011f3370, 0x011f33a8, 0x011f33c0, 0x011f33dc, 0x011f351c, 0x011f3530, 0x011f3620, 0x011f3644
+      , 0x011f37f4, 0x011f3868, 0x011f3a60, 0x011f3c3c, 0x011f3cac, 0x011f3d8c, 0x011f3f5c, 0x011f40cc
+      , 0x011f41a0, 0x011f41d8, 0x011f425c, 0x011f42f8, 0x011f4410, 0x011f44b0, 0x011f4524, 0x011f45e4
+      , 0x011f4698, 0x011f4758
+      ]
+      0x011f4810
+      0x01219890
+  ]
+
+rowsEnd :: OwnedMachine -> Word32
+rowsEnd m = ownedRows m + 4 * fromIntegral (length (ownedActions m))
+
+ownedLow :: OwnedMachine -> Word32
+ownedLow m = case ownedActions m of
+  low : _ -> low
+  [] -> ownedEnd m
+
+-- | The dispatcher, the machine tables it reads and each owned machine's action extent and
+-- table rows.
 code :: Code
 code = Code
   { codeImageBase = plainBase
   , codeExtents =
-      [ ("machine0-actions", Extent 0x011e8ce4 0x011ea434)
-      , ("machine0-table", Extent 0x01218ec8 0x01218f44)
-      ]
-  , codeStockFunctions = zip actionAddresses actionSizes
+      concat
+        [ [(ownedName m ++ "-actions", Extent (ownedLow m) (ownedEnd m)), (ownedName m ++ "-table", Extent (ownedRows m) (rowsEnd m))]
+        | m <- ownedMachines
+        ]
+  , codeStockFunctions =
+      concat [zip starts (zipWith (-) (drop 1 starts ++ [ownedEnd m]) starts) | m <- ownedMachines, let starts = ownedActions m]
   , codeRetained =
-      [ ("dispatcher", Extent dispatcher 0x011e8cd4)
-      , ("machine-tables-low", Extent 0x01215510 0x01218ec8)
-      , ("machine-tables-high", Extent 0x01218f44 0x0121a6dc)
-      ]
+      ("dispatcher", Extent dispatcher 0x011e8cd4)
+        : [ ("machine-tables-" ++ show n, Extent low high)
+          | (n, (low, high)) <- zip [0 :: Int ..] (gaps tablesLow [(ownedRows m, rowsEnd m) | m <- ownedMachines] tablesHigh)
+          , low < high
+          ]
   , codeRetainedFunctions = [(dispatcher, 220)]
   }
+  where
+    tablesLow = 0x01215510
+    tablesHigh = 0x0121a6dc
+    gaps low holes high = case [h | h <- holes, fst h >= low] of
+      [] -> [(low, high)]
+      hs -> let (s, e) = minimum hs in (low, s) : gaps e [h | h <- holes, fst h >= e] high
 
 dispatcher :: Word32
 dispatcher = 0x011e8bf8
 
--- | Table indices 2..32.
-actionAddresses, actionSizes :: [Word32]
+-- | Machine 0's table indices 2..32.
+actionAddresses :: [Word32]
 actionAddresses =
   [ 0x011e8ce4, 0x011e8da4, 0x011e8db8, 0x011e8e48, 0x011e8e9c, 0x011e8f3c, 0x011e8fd4, 0x011e906c
   , 0x011e9104, 0x011e9170, 0x011e919c, 0x011e91b4, 0x011e9370, 0x011e94c0, 0x011e95ac, 0x011e9768
   , 0x011e98d8, 0x011e99b4, 0x011e9b08, 0x011e9b88, 0x011e9d8c, 0x011e9fa0, 0x011ea01c, 0x011ea030
   , 0x011ea044, 0x011ea05c, 0x011ea070, 0x011ea088, 0x011ea09c, 0x011ea154, 0x011ea1dc
   ]
-actionSizes = zipWith (-) (drop 1 actionAddresses ++ [0x011ea434]) actionAddresses
-
-actionCount :: Int
-actionCount = length actionAddresses
 
 -- Retained services --------------------------------------------------------------------
 
@@ -353,10 +394,13 @@ preludeServices p = case p of
   Invoke address -> void address
   Discard address -> returning address 0x31
 
--- | Every action with every status; the action at 0x011e8e48 also with every second status
--- after navigation status 8.
 scenarios :: B.ByteString -> [Scenario]
-scenarios image = concat (zipWith cases [2 ..] actions)
+scenarios image = machine0Scenarios image ++ machineScenarios image machine30
+
+-- | Every machine-0 action with every status; the action at 0x011e8e48 also with every second
+-- status after navigation status 8.
+machine0Scenarios :: B.ByteString -> [Scenario]
+machine0Scenarios image = concat (zipWith cases [2 ..] actions)
   where
     named index suffix = "machine0-action" ++ show index ++ suffix
     run index suffix leading (effects, result) =

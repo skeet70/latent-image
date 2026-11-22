@@ -2,7 +2,7 @@
 
 -- | playback-actor-suite RUNNER PLAIN OWNED_ELF OUTPUT CONTROL=ELF ...
 --
--- Runs the machine-0 cases on the stock plain-image bytes, on the owned ELF and on each
+-- Runs the owned machines' cases on the stock plain-image bytes, on the owned ELF and on each
 -- deliberately wrong owned ELF. Equal requires every stock and owned case to meet its
 -- independent expectation with no stock/owned difference, and every control to fail at
 -- least one case after reaching the case exit.
@@ -15,7 +15,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.FileService.Native
-import Replacement.PlaybackActor.Cases (actionCount, code, scenarios)
+import Replacement.PlaybackActor.Cases (OwnedMachine (..), code, ownedMachines, scenarios)
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -24,21 +24,20 @@ import System.FilePath ((</>))
 plainDigest :: String
 plainDigest = "ee211bdaad39005b4f72e3443a76ca194905381a967cab787d6a4ef14e2d889d"
 
--- | The owned ELF's machine-0 table rows must name its own action exports in index order.
+-- | Each owned machine's table rows must name its own action exports in index order.
 loadElf :: FilePath -> IO (E.Elf, String)
 loadElf path = do
   bytes <- B.readFile path
   elf <- either fail pure (E.parseElf bytes)
-  let exports = [name index | index <- [2 .. actionCount + 1]]
-      name :: Int -> String
-      name index = "xm1_playback_m0_action" ++ (if index < 10 then "0" else "") ++ show index
-      addressOf export = case [E.symbolValue symbol | symbol <- E.elfSymbols elf, E.symbolName symbol == export, E.symbolKind symbol == E.FunctionSymbol] of
+  let addressOf export = case [E.symbolValue symbol | symbol <- E.elfSymbols elf, E.symbolName symbol == export, E.symbolKind symbol == E.FunctionSymbol] of
         [value] -> pure value
         _ -> fail (path ++ ": " ++ export ++ " is missing")
-      row index = B.pack [maybe 0 id (E.byteAt elf (0x01218ec8 + 4 * index + k)) | k <- [0 .. 3]]
-  forM_ (zip [0 ..] exports) $ \(index, export) -> do
-    value <- addressOf export
-    unless (row index == words32le [fromIntegral value]) (fail (path ++ ": table row " ++ show index ++ " does not name " ++ export))
+      name machine index = ownedExport machine ++ (if index < 10 then "0" else "") ++ show (index :: Int)
+      row machine index = B.pack [maybe 0 id (E.byteAt elf (ownedRows machine + 4 * index + k)) | k <- [0 .. 3]]
+  forM_ ownedMachines $ \machine ->
+    forM_ (zip [0 ..] [name machine index | index <- [2 .. length (ownedActions machine) + 1]]) $ \(index, export) -> do
+      value <- addressOf export
+      unless (row machine index == words32le [fromIntegral value]) (fail (path ++ ": table row " ++ show index ++ " does not name " ++ export))
   pure (elf, sha256Hex (sha256 bytes))
 
 splitControl :: String -> (String, FilePath)

@@ -5,6 +5,7 @@
 #![deny(unsafe_code)]
 
 pub mod machine0;
+pub mod machine30;
 #[cfg(target_arch = "arm")]
 #[allow(unsafe_code)]
 mod stock;

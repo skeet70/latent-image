@@ -42,14 +42,16 @@ data Service = Service
 dispatcher :: Word32
 dispatcher = 0x011e8bf8
 
-machineEvents, machineStates, modeState :: Span
+machineEvents, machineStates, modeState, requestState, transferState :: Span
 machineEvents = Span 0x014ea4ec 0x014ea5ac
 machineStates = Span 0x014ea5ac 0x014ea66c
 modeState = Span 0x014ea678 0x014ea6e4
+requestState = Span 0x014ea6e4 0x014ea714
+transferState = Span 0x014eaed8 0x014eb5d0
 
--- | Machine 0's action extent.
+-- | The owned machines' action extents.
 retired :: [Span]
-retired = [Span 0x011e8ce4 0x011ea434]
+retired = [Span 0x011e8ce4 0x011ea434, Span 0x011f31bc 0x011f4810]
 
 none :: Capture
 none = Capture [] []
@@ -59,6 +61,9 @@ status address name = Service address name [] ["r0"] none
 
 void :: Word32 -> String -> Service
 void address name = Service address name [] [] none
+
+withArgument :: Word32 -> String -> Service
+withArgument address name = Service address name ["r0"] ["r0"] none
 
 services :: [Service]
 services =
@@ -94,7 +99,61 @@ services =
   , void 0x0121eb94 "notify_0825"
   , void 0x0121ebc8 "notify_0826"
   , Service 0x0072b680 "device_notification" [] ["r0"] (Capture [(0, 8)] [])
+  , status 0x0120bc20 "dispatch_machine3_events"
+  , status 0x0120ce60 "service_0120ce60"
+  , status 0x0120ec28 "service_0120ec28"
+  , status 0x012101bc "dispatch_machine46_events"
+  , status 0x012119a4 "service_012119a4"
+  , status 0x01212a48 "service_01212a48"
+  , status 0x0121c9f8 "service_0121c9f8"
+  , status 0x012205e4 "service_012205e4"
+  , status 0x0122586c "service_0122586c"
+  , status 0x012258bc "service_012258bc"
+  , status 0x01225928 "service_01225928"
+  , withArgument 0x01225984 "service_01225984"
+  , withArgument 0x012259a4 "service_012259a4"
+  , status 0x01225a98 "service_01225a98"
+  , status 0x01225b20 "service_01225b20"
+  , status 0x01225bfc "service_01225bfc"
+  , status 0x01225d08 "service_01225d08"
+  , status 0x01225f64 "service_01225f64"
+  , status 0x01225fb0 "service_01225fb0"
+  , status 0x01225fdc "select_source_kind22"
+  , status 0x01226014 "service_01226014"
+  , status 0x01226230 "service_01226230"
+  , withArgument 0x012262fc "service_012262fc"
+  , status 0x012263ec "service_012263ec"
+  , status 0x012264fc "service_012264fc"
+  , status 0x01226518 "service_01226518"
+  , status 0x012265cc "service_012265cc"
+  , status 0x01226684 "service_01226684"
+  , status 0x0122669c "service_0122669c"
+  , status 0x01229038 "fill_control_mode_frame"
+  , status 0x01229068 "service_01229068"
+  , status 0x0122925c "prepare_selected_source_event"
+  , status 0x012292a4 "prepare_selected_transfer_event"
+  , withArgument 0x012293a8 "service_012293a8"
+  , status 0x012294cc "service_012294cc"
+  , status 0x0122962c "service_0122962c"
+  , status 0x0122968c "service_0122968c"
+  , withArgument 0x012296dc "service_012296dc"
+  , status 0x01229800 "service_01229800"
+  , status 0x01229824 "service_01229824"
+  , status 0x012298a4 "service_012298a4"
+  , status 0x01236698 "service_01236698"
+  , status 0x012377d4 "service_012377d4"
+  , status 0x0123c224 "service_0123c224"
+  , status 0x0123c268 "service_0123c268"
+  , withArgument 0x01242fa4 "service_01242fa4"
+  , withArgument 0x01243178 "service_01243178"
+  , withArgument 0x01243198 "service_01243198"
+  , status 0x012431b8 "service_012431b8"
+  , status 0x01243868 "service_01243868"
+  , status 0x01243e48 "service_01243e48"
+  , status 0x01243fa0 "service_01243fa0"
+  , withArgument 0x012441d0 "service_012441d0"
+  , status 0x012441f0 "service_012441f0"
   ]
 
 watchedWrites :: [Span]
-watchedWrites = [machineEvents, machineStates, modeState]
+watchedWrites = [machineEvents, machineStates, modeState, requestState, transferState]
