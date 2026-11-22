@@ -527,9 +527,17 @@ Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26a
 
 <!-- evidence-record E-RECORD-STORE-POWER-CYCLE-PAIR-150 -->
 
+E-RECORD-STORE-POWER-CYCLE-PAIR-150: The owned record store on candidate DAT f7ecada241a05d53e805fc4d288d7cadeb3113338cc7c0774bba7d8e235e3b79 matches stock across a settings change, POWER OFF at board tick 500000000 and a cold boot from each role's exported NAND: under stock-equality-v1 the erased pair compares matched and the populated pair (area-2 NAND eb33ae15ec676f5dfd9465223500c89179af5c90f14047b4e528a7db741e8682) matched. Each erased role makes 31 external record calls, 7 at POWER OFF (2 appends, 3 NAND programs) and 11 in the cold boot; each populated role makes 31. The reboots attach on enumeration 1 and 1 (erased stock, owned) and 1 and 1 (populated). The unsealed-append control DAT 544c59d0d6946ea4a13317175d2d6c427621ab7019ed0b0df320d29224fb285d on the erased medium compares different at intervals.0.calls.length (stock 13, control 15).
+
+Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490, one full-system observation per role and medium on emulation/record-store-pair-power-off-routes.json, through the RAM-push bridge with the attach debounce and enumeration retry of E-RECORD-STORE-REBOOT-ATTACH-150. Not the camera. The finite boot/settings cutover is E-RECORD-STORE-CUTOVER-PAIR-150.
+
 <!-- /evidence-record E-RECORD-STORE-POWER-CYCLE-PAIR-150 -->
 
 <!-- evidence-record E-RECORD-STORE-REBOOT-ATTACH-150 -->
+
+E-RECORD-STORE-REBOOT-ATTACH-150: Booting each role's DAT on its own power-off export, the RAM-push bridge's enumeration with the 100 ms attach debounce and up to three port-reset enumerations attaches stock 31/31 and owned 31/31 over the first-reset offsets. Stock attaches on the first enumeration at 31 offsets; owned at 28, on the second at 3 (offsets 160000,260000,270000) and on the third at 0, losing 3 control stages: the configuration descriptor's IN data or SET_CONFIGURATION's status stage. With the debounce and one enumeration, owned attaches 28/31 (fails at 160000,260000,270000) and stock 31/31 (fails at none); with neither, owned attaches 23/31 (fails at 10000,40000,60000,70000,80000,90000,100000,110000) and stock 30/31 (fails at 190000). The two power-off exports differ only in the installed DAT's flash base, the owned boot makes stock's record calls in stock's order with stock's results, and no owned record code runs after the boot's kind-3 read, so the losses are the harness's enumeration timing, not an owned divergence. Why the owned boot meets them more often is open.
+
+Scope: Emulated X-M1 1.50 DAT 43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490 and the record-store carrier candidate on the aligned erased power-off exports, fresh boots to the bridge's attach with the first bus reset N instructions after activation, N from 0 to 300,000 in steps of 10,000, activation polled every 1,000 instructions. The sweeps use diagnostic builds of the bridge that add only the offset and polling knobs; the retry sweep's build is the committed bridge otherwise. Not the camera or a USB host.
 
 <!-- /evidence-record E-RECORD-STORE-REBOOT-ATTACH-150 -->
 
