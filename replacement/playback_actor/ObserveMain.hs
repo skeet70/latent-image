@@ -128,7 +128,7 @@ mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
       | otherwise = Span s e : Span s' e' : rest
 
 -- | Fetch records per retired extent and per PC; write records without the role-specific PC,
--- instruction count and tick.
+-- instruction count and tick, and the writers' PCs apart, outside the comparison.
 watchSummary :: Value -> Value
 watchSummary watch =
   object
@@ -138,6 +138,7 @@ watchSummary watch =
     , "fetches_by_extent" .= object [K.fromString (hexWord s) .= n | (Span s _, n) <- byExtent, n > 0]
     , "fetches_by_pc" .= object [K.fromString (hexWord pc) .= n | (pc, n) <- M.toList byPc]
     , "writes" .= [object ["address" .= field "address" r, "size" .= field "size" r, "before" .= field "before" r, "value" .= field "value" r, "source" .= field "source" r, "core" .= field "core" r] | r <- writes]
+    , "write_pcs" .= [field "pc" r | r <- writes]
     ]
   where
     records = arrayOf (field "records" watch)
