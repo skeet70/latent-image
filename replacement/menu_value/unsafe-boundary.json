@@ -10,10 +10,6 @@
       "reason": "Retained property cells and commit-dispatch ABI."
     },
     {
-      "path": "adapter/image.rs",
-      "reason": "Standalone native value-entry ABI fixture."
-    },
-    {
       "path": "../bank/tables/menu-value-table.rs",
       "reason": "Generated conversion-table section placement."
     }

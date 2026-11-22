@@ -300,6 +300,10 @@ impl InstalledGuard {
         self.lifetime.config().source_site(pc).is_some()
     }
 
+    pub(crate) fn context_word(&self, pc: Guest) -> Option<Word> {
+        self.contexts.iter().find_map(|image| image_word(image, pc))
+    }
+
     pub(crate) fn source_word(&self, pc: Guest) -> Option<Word> {
         self.contexts.iter().find_map(|image| image_word(image, pc))
             .or_else(|| self.lifetime.config().readonly_images().find_map(|(extent, bytes)| {

@@ -35,41 +35,7 @@
       "address": "0x0063db24",
       "name": "rb_menu_value_call_change_marker",
       "source": "replacement/menu_value/adapter/entry.S; size-family change marker"
-    },
-    {
-      "address": "0x00637e5c",
-      "name": "rb_menu_value_call_snapshot_cells",
-      "source": "replacement/menu_value/adapter/entry.S; input snapshot selection"
-    },
-    {
-      "address": "0x0063220c",
-      "name": "rb_menu_value_call_snapshot_state",
-      "source": "replacement/menu_value/adapter/entry.S; system snapshot exchange"
-    },
-    {
-      "address": "0x0063647c",
-      "name": "rb_menu_value_call_restore_aux",
-      "source": "replacement/menu_value/adapter/entry.S; setting-flag copy"
     }
   ],
-  "stock_regions": [
-    {
-      "address": "0x00956888",
-      "bytes": 4,
-      "name": "menu value working size cell",
-      "source": "replacement/menu_value/adapter/mod.rs restore_cells"
-    },
-    {
-      "address": "0x00956898",
-      "bytes": 4,
-      "name": "menu value working aspect cell",
-      "source": "replacement/menu_value/adapter/mod.rs restore_cells"
-    },
-    {
-      "address": "0x00956890",
-      "bytes": 4,
-      "name": "menu value working third cell",
-      "source": "replacement/menu_value/adapter/mod.rs restore_cells"
-    }
-  ]
+  "stock_regions": []
 }
