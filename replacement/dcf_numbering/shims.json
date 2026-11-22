@@ -1,0 +1,122 @@
+{
+  "unit": "dcf_numbering",
+  "summary": "The DCF numbering carrier ELF: entry veneers at the stock image-4 entries and import stubs.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "dcf_numbering-01",
+      "shim": "`dcf_entry_*` in `entry.S` and `dcf-numbering.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock callers of the ten DCF numbering entries",
+      "owned": "no",
+      "removal": "every caller enters the owned numbering directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/dcf_numbering:dcf-numbering-image",
+          "kind": "publication",
+          "symbols": [
+            "dcf_entry_apply_continuous_numbering",
+            "dcf_entry_check_name",
+            "dcf_entry_create_folder",
+            "dcf_entry_last_used",
+            "dcf_entry_note_written",
+            "dcf_entry_prepare_name",
+            "dcf_entry_read_numbers",
+            "dcf_entry_read_profile",
+            "dcf_entry_set_prefix_mode",
+            "dcf_entry_write_profile"
+          ],
+          "contract": "replacement/dcf_numbering/dcf-numbering.ld",
+          "requirement": "`dcf_entry_*` in `entry.S` and `dcf-numbering.ld`. stock callers of the ten DCF numbering entries. every caller enters the owned numbering directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "dcf_numbering-03",
+      "shim": "Owned bodies behind the entry veneers in `dcf_numbering/src/stock.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "the veneers at the ten stock entries and the stock argument and return conventions of their callers",
+      "owned": "partly",
+      "removal": "every caller uses a typed owned numbering API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/dcf_numbering:dcf-numbering-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_dcf_apply_continuous_numbering",
+            "xm1_dcf_check_name",
+            "xm1_dcf_create_folder",
+            "xm1_dcf_last_used",
+            "xm1_dcf_note_written",
+            "xm1_dcf_prepare_name",
+            "xm1_dcf_read_numbers",
+            "xm1_dcf_read_profile",
+            "xm1_dcf_set_prefix_mode",
+            "xm1_dcf_write_profile"
+          ],
+          "contract": "replacement/dcf_numbering/dcf-numbering.ld",
+          "requirement": "The linker places every body inside the retired image-4 extents with no writable statics.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "dcf_numbering-02",
+      "shim": "`imports.ld` import stubs",
+      "kind": "trampoline into retained stock",
+      "other_side": "the retained media, profile, formatting and directory services",
+      "owned": "no",
+      "removal": "the owned file service, settings profile and filesystem replace them",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/dcf_numbering:dcf-numbering-image",
+          "kind": "retained-import",
+          "symbols": [
+            "dcf_configuration_byte",
+            "dcf_copy_bytes",
+            "dcf_copy_memory",
+            "dcf_current_drive",
+            "dcf_drive_prefix",
+            "dcf_entry_cluster",
+            "dcf_fill_bytes",
+            "dcf_format_decimal",
+            "dcf_format_number",
+            "dcf_group_index",
+            "dcf_media_status",
+            "dcf_open_directory",
+            "dcf_path_groups",
+            "dcf_profile_directory",
+            "dcf_profile_file",
+            "dcf_refresh_snapshot",
+            "dcf_report_event",
+            "dcf_reset_profile",
+            "dcf_store_profile_directory",
+            "dcf_store_profile_file",
+            "dcf_translate_status"
+          ],
+          "contract": "replacement/dcf_numbering/imports.ld",
+          "requirement": "`imports.ld` import stubs. the retained media, profile, formatting and directory services. the owned file service, settings profile and filesystem replace them",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}
