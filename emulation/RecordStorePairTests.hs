@@ -325,7 +325,7 @@ keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation rec
   inputs = set "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
   receipt = encode (set "inputs" inputs (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original))
 
-data CycleEvidence = CycleOriginal | CyclePayload | CycleRebootMedium | CycleRebootSettings | CycleOtherExport | CycleTruncatedTail | CycleNoTerminal | CycleMissingRebootMarker | CycleOpenAtPowerOff deriving (Eq, Show, Enum, Bounded)
+data CycleEvidence = CycleOriginal | CyclePayload | CycleRebootMedium | CycleRebootSettings | CycleOtherTick | CycleOtherExport | CycleTruncatedTail | CycleNoTerminal | CycleUnaligned | CycleMissingRebootMarker | CycleOpenAtPowerOff deriving (Eq, Show, Enum, Bounded)
 
 -- | One key route, then POWER OFF that programs one record and a cold boot that opens and registers.
 cycleFixture :: Role -> CycleEvidence -> (Bindings, Observation)
@@ -344,7 +344,9 @@ cycleFixture role evidence = (bound, Observation receipt files) where
   hits = keyHits <> B.concat [encode event <> "\n" | event <- powerEvents]
   powerEnd = keyCount + length powerEvents - (if evidence == CycleTruncatedTail then 1 else 0)
   exported = object ["status" .= ("exported"::T.Text),"boundary" .= (1::Int),"after" .= (1::Int),"artifact" .= object ["sha256" .= hash "exported-nand","bytes" .= (4::Int)]]
-  powerOff = object ["power_off" .= object ["switched" .= (10::Int),"terminal" .= (if evidence == CycleNoTerminal then 10 else 20::Int)]
+  declaredTick = if evidence == CycleOtherTick then 600000000 else 500000000 :: Int
+  powerOff = object ["aligned" .= object ["tick" .= (if evidence == CycleUnaligned then declaredTick - 1 else declaredTick)]
+    ,"power_off" .= object ["switched" .= (10::Int),"terminal" .= (if evidence == CycleNoTerminal then 10 else 20::Int)]
     ,"hits" .= [keyCount,powerEnd],"watch" .= set "views" (String "fixed") (watch role LiveViewPhase Original)
     ,"regions_before" .= regions Original,"regions_after" .= regions Original,"medium_after" .= medium Original,"export" .= exported]
   rebootEvents = trace role Original OpenAndRegister
@@ -361,8 +363,8 @@ cycleFixture role evidence = (bound, Observation receipt files) where
   arrayOf _ = error "fixture array required"
   files = M.union (M.fromList [(Hits,hits),(PowerOffFile,encode powerOff),(RebootReset,encode rebootResetFixed)
     ,(RebootHits,B.intercalate "\n" (map encode rebootEvents) <> "\n"),(RebootSession,"{}")]) keyFiles
-  receipt = encode (set "schema" (Number 3) (set "power_off_budget" (Number 1000000000) (set "reboot" reboot
-    (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) (decode keyReceipt)))))
+  receipt = encode (set "schema" (Number 3) (set "power_off_budget" (Number 1000000000) (set "power_off_tick" (A.toJSON declaredTick) (set "reboot" reboot
+    (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) (decode keyReceipt))))))
 
 data ImageSizePoint = RootPoint | ParentPoint | EntryPoint | DownPoint | UpPoint | BackPoint deriving (Eq, Show, Enum, Bounded)
 data ImageSizeEvidence = IntendedChoice | StalledChoice | ErasedStalledChoice | NoDownChange | WrongEntryCursor | WrongBackCursor | ChangedOtherSetting | ChangedAspect | UnpublishedBackup | ChangedImageSizeMode | WrongImageSizeTrial | WrongImageSizeFixture | ChangedUpRecord | ChangedBackRecord | ChangedUpNand | ChangedBackNand | ImageSizeRetiredFetch deriving (Eq, Show)
@@ -676,8 +678,8 @@ main = do
         ,("old receipt schema refuses both roles",all (\role -> wrongEndpointVersion role "schema" (Number 1)) [Stock,Owned])
         ,("old endpoint contract refuses both roles",all (\role -> wrongEndpointVersion role "endpoint_contract" (String "local-ui-drain")) [Stock,Owned])
         ,("power cycle qualifies both roles and compares equal",cycleCompared CycleOriginal == Just True)]
-        ++ [("power cycle comparison detects " ++ show evidence,cycleCompared evidence == Just False) | evidence <- [CyclePayload,CycleRebootMedium,CycleRebootSettings]]
-        ++ [("power cycle qualification refuses " ++ show evidence,cycleCompared evidence == Nothing) | evidence <- [CycleOtherExport,CycleTruncatedTail,CycleNoTerminal,CycleMissingRebootMarker,CycleOpenAtPowerOff]]
+        ++ [("power cycle comparison detects " ++ show evidence,cycleCompared evidence == Just False) | evidence <- [CyclePayload,CycleRebootMedium,CycleRebootSettings,CycleOtherTick]]
+        ++ [("power cycle qualification refuses " ++ show evidence,cycleCompared evidence == Nothing) | evidence <- [CycleOtherExport,CycleTruncatedTail,CycleNoTerminal,CycleUnaligned,CycleMissingRebootMarker,CycleOpenAtPowerOff]]
         ++ [("intended image-size selection accepts the known stock stall without calling it equality",reportField "outcome" intendedDifference == Just (String "accepted-functional-difference"))
            ,("intended image-size selection reports both declared cases and derived rollback",intendedCasesReported)
            ,("a responsive stock image-size selection also satisfies the intended oracle",reportField "outcome" intendedMatch == Just (String "matched"))

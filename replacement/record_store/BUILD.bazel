@@ -18,14 +18,14 @@ xm1_rust_staticlib(
 )
 
 [xm1_rust_staticlib(
-    name = "record-store-rust-control-" + str(control) + "-unchecked",
+    name = "record-store-rust-control-" + control + "-unchecked",
     src = "src/lib.rs",
     data = ["src/guest.rs", "src/lifecycle.rs"],
     crate_name = "xm1_record_store",
-    rustc_flags = ["'--cfg=feature=\"guest\"'", "'--cfg=feature=\"control-" + str(control) + "\"'"],
+    rustc_flags = ["'--cfg=feature=\"guest\"'", "'--cfg=feature=\"control-" + control + "\"'"],
     strict_align = False,
     visibility = ["//visibility:private"],
-) for control in range(1, 10)]
+) for control in [str(n) for n in range(1, 10)] + ["seal"]]
 
 haskell_binary(
     name = "archive-check",
@@ -41,7 +41,7 @@ haskell_binary(
     tools = [":archive-check", "@lab_llvm//:bin/llvm-nm"],
     outs = ["record-store-rust" + variant + ".a"],
     cmd = "$(location :archive-check) $(location @lab_llvm//:bin/llvm-nm) $(location :record-store-rust" + variant + "-unchecked) && cp $(location :record-store-rust" + variant + "-unchecked) $@",
-) for variant in [""] + ["-control-" + str(control) for control in range(1, 10)]]
+) for variant in [""] + ["-control-" + str(control) for control in range(1, 10)] + ["-control-seal"]]
 
 genrule(
     name = "host-tests",
@@ -52,12 +52,12 @@ genrule(
 )
 
 [genrule(
-    name = "host-control-" + str(control),
+    name = "host-control-" + control,
     srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs"],
     tools = ["@lab_xm1_rust//:bin/rustc"],
-    outs = ["host-control-" + str(control) + ".detected"],
-    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"control-" + str(control) + "\"' $(location src/lib.rs) -o $(@D)/host-control-" + str(control) + " && if $(@D)/host-control-" + str(control) + "; then exit 1; else touch $@; fi",
-) for control in range(1, 10)]
+    outs = ["host-control-" + control + ".detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"control-" + control + "\"' $(location src/lib.rs) -o $(@D)/host-control-" + control + " && if $(@D)/host-control-" + control + "; then exit 1; else touch $@; fi",
+) for control in [str(n) for n in range(1, 10)] + ["seal"]]
 
 genrule(
     name = "host-adapter-tests",

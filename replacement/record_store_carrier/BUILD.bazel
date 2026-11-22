@@ -11,7 +11,7 @@ package(default_visibility = ["//visibility:public"])
     link_script = "record-store.ld",
     link_includes = ["imports.ld"],
     extra_ldflags = ["-Wl,--gc-sections"],
-) for suffix in [""] + ["-control-" + str(control) for control in range(1, 10)]]
+) for suffix in [""] + ["-control-" + str(control) for control in range(1, 10)] + ["-control-seal"]]
 
 haskell_library(
     name = "record-store-artifact",

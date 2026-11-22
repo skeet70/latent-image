@@ -251,7 +251,7 @@ impl<'a, M: RecordMedium, S: Staging, B: BlockBuffer<M>> Entry<'a, M, S, B> {
         if let RecordSource::Caller(source) = source { copy(part_mut(bytes, 0, q), part(source, 0, q)); }
         copy(part_mut(bytes, q, 2), &seq.0.to_le_bytes());
         if let RecordSource::Caller(source) = source { copy(part_mut(bytes, q + 2, s - q - 2), part(source, q + 2, s - q - 2)); }
-        callbacks.seal(part_mut(bytes, 0, s));
+        if !cfg!(feature = "control-seal") { callbacks.seal(part_mut(bytes, 0, s)); }
         let length = if cfg!(feature = "control-9") { s } else { area.kind.program_bytes().0 as usize };
         self.buffer.invalidate();
         let result = self.medium.program(area.kind, area.current, BytePosition(position.0 as u32 * s as u32), part(bytes, 0, length));

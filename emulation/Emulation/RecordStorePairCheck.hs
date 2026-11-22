@@ -84,7 +84,8 @@ data Pending = Pending Int Entry Hit CallContext deriving (Eq, Show)
 data Retirement = BeforeOpen | AfterOpen deriving (Eq, Show)
 data State = State Retirement Service (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
 data Interval = Interval T.Text [CrawlKey] [Call] [Nand] Regions Regions (Maybe Press) (Maybe Medium) deriving (Eq, Show)
-data Qualified = Qualified Role [(InputName,Digest)] [Route] [Interval] Medium deriving (Eq, Show)
+data PowerTerms = PowerTerms Word64 Tick deriving (Eq, Show)
+data Qualified = Qualified Role [(InputName,Digest)] (Maybe PowerTerms) [Route] [Interval] Medium deriving (Eq, Show)
 data Difference = Difference T.Text Value Value | AmbiguousOutput T.Text Value Value | PreservationViolation T.Text Value Value | OracleViolation Role T.Text Value Value deriving (Eq, Show)
 newtype EvidencePath = EvidencePath FilePath deriving (Eq, Show)
 data SourceEvidence = SourceEvidence EvidencePath Digest deriving (Eq, Show)
@@ -672,7 +673,8 @@ forceInterval (Interval name keys calls nand before after press medium) =
   forceRegions before `seq` forceRegions after `seq` forceMaybe forcePress press `seq` forceMaybe forceMedium medium `seq` ()
 
 forceQualified :: Qualified -> ()
-forceQualified (Qualified _ cohort routes intervals medium) =
+forceQualified (Qualified _ cohort terms routes intervals medium) =
+  forceMaybe (\(PowerTerms budget tick) -> budget `seq` tick `seq` ()) terms `seq`
   forceList (\(InputName name, Digest digestText) -> T.length name `seq` T.length digestText `seq` ()) cohort
   `seq` length routes `seq` forceList forceInterval intervals `seq` forceMedium medium `seq` ()
 
@@ -812,14 +814,17 @@ qualify role bindings observation = do
         Interval _ _ _ _ _ _ _ (Just blocks):_ -> blocks
         _ -> attachedMedium
   need (terminal == lastMedium) "terminal medium differs from final leaf"
-  powerCycle <- if not cycled then need (lastEnd == length hits) "trace tail unobserved" >> pure [] else do
+  (terms,powerCycle) <- if not cycled then need (lastEnd == length hits) "trace tail unobserved" >> pure (Nothing,[]) else do
     budget <- field "power_off_budget" receipt >>= word64
     need (budget >= 1 && budget <= 4000000000) "power-off budget outside the bridge range"
+    tick <- Tick <$> (field "power_off_tick" receipt >>= word64)
     (leafState,leafRegions,leafKeys) <- case (routeList routes >>= \route -> [routeKeys route | not (null (routeKeys route))],M.lookupMax lastStates) of
       ([keys],Just (_,leaf@(_,_,observed))) | observed == keys -> Right leaf
       _ -> Left "a power cycle follows exactly one key route"
     off <- load PowerOffFile
-    exact ["power_off","hits","watch","regions_before","regions_after","medium_after","export"] off
+    exact ["aligned","power_off","hits","watch","regions_before","regions_after","medium_after","export"] off
+    aligned <- field "aligned" off >>= field "tick" >>= word64
+    need (Tick aligned == tick) "POWER OFF was not switched at the declared tick"
     switched <- field "power_off" off >>= field "switched" >>= word64
     terminal' <- field "power_off" off >>= field "terminal" >>= word64
     need (terminal' > switched) "POWER OFF did not reach the stock terminal after the switch"
@@ -845,14 +850,14 @@ qualify role bindings observation = do
     rebootSettings <- field "settings_at_attach" reboot >>= parseRegions SettingsSnapshot
     need (rebootSettings == rebootRegions) "reboot attach settings differ from reset endpoint"
     rebootMedium <- field "medium_at_attach" reboot >>= parseMedium
-    pure (offInterval : rebootPhases ++ [Interval "reboot-attach-medium" [] [] [] rebootRegions rebootRegions Nothing (Just rebootMedium)])
-  let qualified = Qualified role cohort (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results ++ powerCycle) terminal
+    pure (Just (PowerTerms budget tick),offInterval : rebootPhases ++ [Interval "reboot-attach-medium" [] [] [] rebootRegions rebootRegions Nothing (Just rebootMedium)])
+  let qualified = Qualified role cohort terms (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results ++ powerCycle) terminal
   forceQualified qualified `seq` pure qualified
  where
   (>=>) first second value = first value >>= second
 
 coverageValue :: Qualified -> Value
-coverageValue (Qualified role cohort _ intervals _) = object (
+coverageValue (Qualified role cohort _ _ intervals _) = object (
   [ "role" .= (if role == Stock then "stock" else "owned" :: T.Text)
   , "record_nand_sha256" .= fmap (\(Digest value) -> value) (lookup (InputName "record-nand") cohort)
   ] ++ counts intervals
@@ -907,7 +912,8 @@ comparisonValue contract stock owned result = object
 showValue :: Show a => a -> Value
 showValue = String . T.pack . show
 comparePair :: ComparisonContract -> Qualified -> Qualified -> Either Difference [ImageSizeCaseResult]
-comparePair contract (Qualified Stock stockInputs stockRoutes stock stockMedium) (Qualified Owned ownedInputs ownedRoutes owned ownedMedium) = do
+comparePair contract (Qualified Stock stockInputs stockTerms stockRoutes stock stockMedium) (Qualified Owned ownedInputs ownedTerms ownedRoutes owned ownedMedium) = do
+  equal "power-off-terms" stockTerms ownedTerms
   equal "cohort" stockInputs ownedInputs
   equal "interval-count" (length stock) (length owned)
   cases <- case contract of

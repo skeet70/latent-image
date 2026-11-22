@@ -32,7 +32,8 @@ import System.FilePath ((</>))
 import System.IO (BufferMode (..), IOMode (..), hFlush, hSetBuffering, stdout, withBinaryFile)
 
 data Role = Stock | Owned deriving (Eq)
-data Options = Options { role :: Role, inputs :: M.Map String FilePath, output :: FilePath, powerOffBudget :: Maybe Word64 }
+data PowerOff = PowerOff { offBudget :: Word64, offTick :: Tick }
+data Options = Options { role :: Role, inputs :: M.Map String FilePath, output :: FilePath, powerOff :: Maybe PowerOff }
 data Trie = Trie [(CrawlKey, Trie)]
 
 insertPath :: [CrawlKey] -> Trie -> Trie
@@ -58,19 +59,25 @@ parseOptions args = do
   pairs <- collect args
   let values = M.fromList pairs
       required = ["routes", "update", "contract", "linked", "symbols", "run", "boot-rom", "adjustment-nand", "bridge"]
-      controls = ["role", "output", "power-off-budget"]
+      controls = ["role", "output", "power-off-budget", "power-off-tick"]
   need (length pairs == M.size values && all (`M.member` values) ("role" : "output" : required)
     && all (`elem` (controls ++ "record-nand" : required)) (M.keys values)) "invalid record-store-pair-observe options"
   selected <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
-  budget <- case M.lookup "power-off-budget" values of
-    Nothing -> pure Nothing
-    Just text -> case reads text of
-      [(instructions,"")] | instructions >= 1 && instructions <= (4000000000::Integer) -> pure (Just (fromInteger instructions))
-      _ -> ioError (userError "--power-off-budget must be 1..4000000000 instructions")
-  pure (Options selected (M.withoutKeys values (S.fromList controls)) (values M.! "output") budget)
+  let bounded name low high = case M.lookup name values of
+        Nothing -> pure Nothing
+        Just text -> case reads text of
+          [(value,"")] | value >= low && value <= (high::Integer) -> pure (Just (fromInteger value))
+          _ -> ioError (userError ("--" ++ name ++ " must be " ++ show low ++ ".." ++ show high))
+  budget <- bounded "power-off-budget" 1 4000000000
+  tick <- bounded "power-off-tick" 1 (toInteger (maxBound :: Word64))
+  cycle' <- case (budget,tick) of
+    (Nothing,Nothing) -> pure Nothing
+    (Just instructions,Just at) -> pure (Just (PowerOff instructions (Tick at)))
+    _ -> ioError (userError "--power-off-budget and --power-off-tick go together")
+  pure (Options selected (M.withoutKeys values (S.fromList controls)) (values M.! "output") cycle')
  where
   collect [] = pure []
   collect (('-':'-':key) : value : rest) = ((key, value) :) <$> collect rest
@@ -171,7 +178,7 @@ main = do
   receipt <- newIORef KM.empty
   let record key value = modifyIORef' receipt (KM.insert key value)
       save status = do
-        let cycleFiles = if isJust (powerOffBudget options) then ["power-off.json","reboot-hits.jsonl","reboot/reset-observation.json","reboot/emulator-session.json"] else []
+        let cycleFiles = if isJust (powerOff options) then ["power-off.json","reboot-hits.jsonl","reboot/reset-observation.json","reboot/emulator-session.json"] else []
         hashes <- forM (["spec.json","owned-extents.json","reset-observation.json","hits.jsonl","steps.json","medium.json","emulator-session.json"] ++ cycleFiles) $ \name -> do
           present <- doesPathExist (directory </> name)
           digest <- if present then Just . sha256Hex <$> sha256File (directory </> name) else pure Nothing
@@ -194,8 +201,10 @@ observe options directory record = do
     pure (K.fromString name .= object ["path" .= path,"sha256" .= sha256Hex digest])
   observer <- getExecutablePath
   observerDigest <- sha256File observer
-  record "schema" (Number (if isJust (powerOffBudget options) then 3 else 2))
-  forM_ (powerOffBudget options) (record "power_off_budget" . A.toJSON)
+  record "schema" (Number (if isJust (powerOff options) then 3 else 2))
+  forM_ (powerOff options) $ \terms -> do
+    record "power_off_budget" (A.toJSON (offBudget terms))
+    record "power_off_tick" (A.toJSON (tickValue (offTick terms)))
   record "role" (String (if role options == Owned then "owned" else "stock"))
   record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer,"sha256" .= sha256Hex observerDigest]]))
   symbols <- B.readFile (paths M.! "symbols")
@@ -258,7 +267,7 @@ observe options directory record = do
         hFlush file
         case field "count" reply of Number total | end < truncate total -> drainInto file position emulator; _ -> pure end
       stop (emulator,_,()) = stopEmulator emulator
-  when (isJust (powerOffBudget options)) $ need (length keyRoutes == 1) "a power cycle follows exactly one key route"
+  when (isJust (powerOff options)) $ need (length keyRoutes == 1) "a power cycle follows exactly one key route"
   withBinaryFile (directory </> "hits.jsonl") WriteMode $ \hits -> do
     let drain = drainInto hits cursor
     bracket (startEmulator (paths M.! "bridge") directory arguments (\_ -> pure (Nothing,()))) stop $ \(emulator,start,()) -> do
@@ -304,10 +313,21 @@ observe options directory record = do
       walk [] 0 (foldl (flip insertPath) (Trie []) keyRoutes)
       final <- medium emulator
       BL.writeFile (directory </> "medium.json") (A.encode final <> "\n")
-      forM_ (powerOffBudget options) $ \budget -> do
+      forM_ (powerOff options) $ \(PowerOff budget target) -> do
         first <- readIORef cursor
         before <- settings emulator
         _ <- emulatorBridgeCommand emulator watch
+        let align = do
+              state <- emulatorUiState emulator
+              now <- case field "tick" state of Number n -> pure (truncate n :: Integer); _ -> ioError (userError "ui-state lacks its tick")
+              let remaining = toInteger (tickValue target) - now
+              need (remaining >= 0) "power-off tick precedes the final step"
+              if remaining == 0 then pure state else do
+                let chunk = min remaining 20000000
+                elapsed <- emulatorIdleTicks emulator (Tick (fromInteger chunk))
+                need (field "ticks" elapsed == A.toJSON chunk) "power-off alignment missed its tick boundary"
+                align
+        aligned <- align
         off <- emulatorPowerOff emulator budget
         observed <- emulatorWatchEnd emulator
         last' <- drain emulator
@@ -322,10 +342,10 @@ observe options directory record = do
         extent <- getFileSize exportPath
         need (field "sha256" artifact == String (T.pack digest) && field "bytes" artifact == A.toJSON extent) "power-off NAND export digest or extent differs"
         BL.writeFile (directory </> "power-off.json") (A.encode (object
-          ["power_off" .= off,"hits" .= [first,last'],"watch" .= observed,"regions_before" .= before,"regions_after" .= after
+          ["aligned" .= aligned,"power_off" .= off,"hits" .= [first,last'],"watch" .= observed,"regions_before" .= before,"regions_after" .= after
           ,"medium_after" .= blocks,"export" .= exported]) <> "\n")
         putStrLn ("power off " ++ show first ++ ".." ++ show last')
-  forM_ (powerOffBudget options) $ \_ -> do
+  forM_ (powerOff options) $ \_ -> do
     let rebootDirectory = directory </> "reboot"
         rebootArguments = ["--run",paths M.! "run","--boot-rom",paths M.! "boot-rom","--installed-dat",paths M.! "update","--committed-nand",exportPath
           ,"--output",rebootDirectory,"--ram-push-checkpoints",rebootDirectory </> "unused-checkpoints","--fresh-boot","--reset-observation",specPath]
