@@ -5962,36 +5962,36 @@
     "scope": "X-M1 1.50 cardless RAM-push value package under the controlled-RTC run document. The completion schedules, output-clock-200000 from boot and the route-step release to 200000 ticks (fujimod-output-clock.patch), are shared scenario inputs, not X-M1 timing or the production model. Stock drawing. No owned renderer, changed image dimensions, camera or hardware acceptance.",
     "notes": "Stock invokes the pipeline completion callback only with status 0 (all.c 0x01029188, 0x01029430), so failure completion is not a contract-permitted input. Cancellation in the source is the callback cell overwritten by a later 0x4010 or cleared without invocation by pipeline init 0x010287c8 ([0x016fe9bc,0x016fea28); decompiled callers task entry 0x01028b04 and 0x01028a90, reached from 0x01039580 through capture handlers 0x00f01c48/0x00f01ccc). Both roles refuse the second DOWN while pending, so overwrite is unreachable; a clear without invocation would leave Menu pending as in the stall case (source reading, not exercised), and no natural input on this route reaches pipeline init. Slow output-clock drift was probed and rejected as the late-completion input: the lock breaks at one board time, which the roles reach about 925M instructions apart in route terms, beyond the modal watch's 1,048,576-record bound. The input-phase-200000 schedule was not run.",
     "artifacts": [
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/change-stall.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/change-stall.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/change-complete.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/change-complete.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/change-late-close.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/change-late-close.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/change-late-confirm.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/change-late-confirm.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/scenario.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/inputs.sha256",
-      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/change-late-back.stock.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/change-late-back.owned.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/stock-e2e-modal-settings-writes.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/owned-e2e-modal-settings-writes.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/stock-e2e-lifecycle-failure.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/owned-e2e-lifecycle-failure.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/change-stall.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/change-stall.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/change-complete.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/change-complete.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/change-late-close.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/change-late-close.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/change-late-confirm.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/change-late-confirm.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/scenario.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/inputs.sha256",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/change-late-back.stock.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/change-late-back.owned.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/stock-e2e-modal-settings-writes.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/owned-e2e-modal-settings-writes.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/stock-e2e-lifecycle-failure.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/owned-e2e-lifecycle-failure.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
       "replacement/menu_value/callback-correspondence.json",
       "build-support/fujimod-output-clock.patch",
       "private-data/scratch/MenuValueFix/inputs/value-schedules/output-clock-200000.json"
@@ -5999,7 +5999,7 @@
     "facts": [
       {
         "name": "firmware_sha256",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "inputs",
           "firmware"
@@ -6007,28 +6007,28 @@
       },
       {
         "name": "stall_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "stall_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "stall_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "stall_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -6036,14 +6036,14 @@
       },
       {
         "name": "stall_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
       },
       {
         "name": "stall_callback",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-stall-production-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-stall-m53/result/gate.json",
         "pointer": [
           "owned_callback_words_in_stock_terms",
           "0"
@@ -6051,28 +6051,28 @@
       },
       {
         "name": "complete_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "complete_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "complete_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "complete_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -6080,21 +6080,21 @@
       },
       {
         "name": "complete_settings_writes_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/gate.json",
         "pointer": [
           "settings_writes_equal"
         ]
       },
       {
         "name": "complete_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
       },
       {
         "name": "complete_callback",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080346Z-image-size-gate-complete-output200k-3/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-complete-m53/result/gate.json",
         "pointer": [
           "owned_callback_words_in_stock_terms",
           "0"
@@ -6102,28 +6102,28 @@
       },
       {
         "name": "close_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "close_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "close_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "close_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -6131,7 +6131,7 @@
       },
       {
         "name": "close_pending_phase",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "segments",
           "5",
@@ -6140,7 +6140,7 @@
       },
       {
         "name": "close_pending_events",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "segments",
           "5",
@@ -6150,7 +6150,7 @@
       },
       {
         "name": "close_release_phase",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "segments",
           "6",
@@ -6159,7 +6159,7 @@
       },
       {
         "name": "close_release_first",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "segments",
           "6",
@@ -6170,35 +6170,35 @@
       },
       {
         "name": "close_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-close/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T152243Z-image-size-gate-late-close-m53b/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
       },
       {
         "name": "confirm_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "confirm_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "confirm_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "confirm_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -6206,7 +6206,7 @@
       },
       {
         "name": "confirm_pending_phase",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "segments",
           "5",
@@ -6215,7 +6215,7 @@
       },
       {
         "name": "confirm_pending_events",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "segments",
           "5",
@@ -6225,7 +6225,7 @@
       },
       {
         "name": "confirm_release_phase",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "segments",
           "6",
@@ -6234,7 +6234,7 @@
       },
       {
         "name": "confirm_release_first",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "segments",
           "6",
@@ -6245,35 +6245,35 @@
       },
       {
         "name": "confirm_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T075644Z-image-size-gate-late-confirm/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-confirm-m53/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
       },
       {
         "name": "back_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/verdict.json",
         "pointer": [
           "source"
         ]
       },
       {
         "name": "back_schedule",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/verdict.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/verdict.json",
         "pointer": [
           "schedule"
         ]
       },
       {
         "name": "back_pass",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "pass"
         ]
       },
       {
         "name": "back_segments",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "segments"
         ],
@@ -6281,7 +6281,7 @@
       },
       {
         "name": "back_pending_phase",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "segments",
           "5",
@@ -6290,7 +6290,7 @@
       },
       {
         "name": "back_pending_events",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "segments",
           "5",
@@ -6300,7 +6300,7 @@
       },
       {
         "name": "back_release_phase",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "segments",
           "6",
@@ -6309,7 +6309,7 @@
       },
       {
         "name": "back_release_first",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "segments",
           "6",
@@ -6320,7 +6320,7 @@
       },
       {
         "name": "back_terminal_equal",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080123Z-image-size-gate-late-back/result/gate.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T071659Z-image-size-gate-late-back-m53/result/gate.json",
         "pointer": [
           "terminal_equal"
         ]
@@ -6331,28 +6331,28 @@
     "id": "E-MENU-VALUE-CUTOVER-150",
     "claim": "The value package's 69-pair matrix is the qualifier's one current matrix, for the menu cutover and for the time-services owned base. Menu cutover at source {{menu_source}}, archive {{owned_archive}}, trajectory inventory {{trajectory_inventory}} and SDK {{sdk}}: {{menu_status}}, {{menu_completed}} of {{menu_required}} roles complete over {{menu_pairs}} pairs ({{menu_executed}} executed, {{menu_reused}} reused, {{menu_failed}} failed), internal builds at --jobs={{menu_jobs}}, {{menu_seconds}} seconds. Time-services owned base {{time_base}} at source {{time_source}} with archive {{time_archive}}: {{time_status}}, {{time_passed}} of {{time_pairs}} pairs pass and {{time_completed}} roles complete ({{time_executed}} executed, {{time_reused}} stock roles reused from the menu cohort, {{time_failed}} failed), {{time_seconds}} seconds.",
     "scope": "X-M1 1.50 cardless RAM-push controlled-RTC matrix: the value archive over increment 7 with the owned IMAGE SIZE apply, stock drawing, two emulator slots at 2 GiB. Owned renderer, changed selection (E-MENU-VALUE-CHANGED-SELECTION-150), full native and hardware remain separate.",
-    "notes": "The time-services cohort copies the menu cohort's stock roles, whose execution identity excludes the owned base; the render comparison reads their receipts at the menu run's original work path, which was restored as a symlink to the kept cohort for that run only. A first time-services attempt without it (image-size-qualify-time7) failed render-compare on the missing path, not on a comparison. E-MENU-ENGINE-CUTOVER-150 keeps the earlier engine-only matrix.",
+    "notes": "The time-services cohort copies the menu cohort's stock roles, whose execution identity excludes the owned base; the render comparison reads their receipts at the menu run's original work path, which was restored as a symlink to the kept cohort for that run only. A first time-services attempt without it (image-size-qualify-time7) failed render-compare on the missing path, not on a comparison. After the 53-commit merge of origin/main the value archive ee5f49a2, trajectory inventory 8b02169c, RC0 DAT acb0fbbb and time-services base b0de4bc4 are unchanged, while the SDK and viewer changed, so both matrices were rerun on them. E-MENU-ENGINE-CUTOVER-150 keeps the earlier engine-only matrix.",
     "artifacts": [
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/review-packet.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/gate.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/host-build-verdicts.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/measurement.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/role-summaries.jsonl",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/review-packet.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/host-build-verdicts.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/stdout.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/measurement.json",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/pairs.jsonl",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/role-summaries.jsonl",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/input-sha256.txt",
-      "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/seed-cohort.txt"
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/review-packet.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/gate.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/host-build-verdicts.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/measurement.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/role-summaries.jsonl",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/review-packet.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/host-build-verdicts.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/stdout.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/measurement.json",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/pairs.jsonl",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/role-summaries.jsonl",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/input-sha256.txt",
+      "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/seed-cohort.txt"
     ],
     "facts": [
       {
         "name": "firmware_sha256",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "inputs",
           "firmware"
@@ -6360,7 +6360,7 @@
       },
       {
         "name": "menu_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "source",
           "head"
@@ -6368,14 +6368,14 @@
       },
       {
         "name": "menu_status",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "status"
         ]
       },
       {
         "name": "owned_archive",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "inputs",
           "owned_archive"
@@ -6383,7 +6383,7 @@
       },
       {
         "name": "trajectory_inventory",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "inputs",
           "trajectory_inventory"
@@ -6391,7 +6391,7 @@
       },
       {
         "name": "sdk",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "tools",
           "sdk_store"
@@ -6399,7 +6399,7 @@
       },
       {
         "name": "menu_pairs",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "required_pairs"
@@ -6407,7 +6407,7 @@
       },
       {
         "name": "menu_completed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "completed_roles"
@@ -6415,7 +6415,7 @@
       },
       {
         "name": "menu_required",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "required_roles"
@@ -6423,7 +6423,7 @@
       },
       {
         "name": "menu_executed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "executed_roles"
@@ -6431,7 +6431,7 @@
       },
       {
         "name": "menu_reused",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "reused_roles"
@@ -6439,7 +6439,7 @@
       },
       {
         "name": "menu_failed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "failed_roles"
@@ -6447,7 +6447,7 @@
       },
       {
         "name": "menu_jobs",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/terminal.json",
         "pointer": [
           "resources",
           "bazel_jobs"
@@ -6455,21 +6455,21 @@
       },
       {
         "name": "menu_seconds",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T080921Z-image-size-qualify7-3/result/measurement.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T072139Z-image-size-qualify7-m53/result/measurement.json",
         "pointer": [
           "wall_seconds"
         ]
       },
       {
         "name": "time_status",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "status"
         ]
       },
       {
         "name": "time_source",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "source",
           "head"
@@ -6477,7 +6477,7 @@
       },
       {
         "name": "time_base",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "inputs",
           "owned_base_firmware"
@@ -6485,7 +6485,7 @@
       },
       {
         "name": "time_archive",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "inputs",
           "owned_archive"
@@ -6493,14 +6493,14 @@
       },
       {
         "name": "time_passed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/stdout.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/stdout.json",
         "pointer": [
           "passed_pairs"
         ]
       },
       {
         "name": "time_pairs",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "required_pairs"
@@ -6508,7 +6508,7 @@
       },
       {
         "name": "time_completed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "completed_roles"
@@ -6516,7 +6516,7 @@
       },
       {
         "name": "time_executed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "executed_roles"
@@ -6524,7 +6524,7 @@
       },
       {
         "name": "time_reused",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "reused_roles"
@@ -6532,7 +6532,7 @@
       },
       {
         "name": "time_failed",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/terminal.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/terminal.json",
         "pointer": [
           "execution",
           "failed_roles"
@@ -6540,7 +6540,7 @@
       },
       {
         "name": "time_seconds",
-        "path": "private-data/scratch/MenuValueFix/runs/20261121T131722Z-image-size-qualify-time7-2/result/measurement.json",
+        "path": "private-data/scratch/MenuValueFix/runs/20261122T102433Z-image-size-qualify-time7-m53/result/measurement.json",
         "pointer": [
           "wall_seconds"
         ]
