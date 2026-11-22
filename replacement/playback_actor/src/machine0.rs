@@ -335,6 +335,11 @@ pub fn action12<S: Services>(_services: &mut S) -> i32 {
 }
 
 pub fn action13<S: Services>(services: &mut S) -> i32 {
+    let result = navigation(services);
+    if cfg!(playback_control_navigation_result_shifted) { result + 1 } else { result }
+}
+
+fn navigation<S: Services>(services: &mut S) -> i32 {
     let status = read(services, Source::Navigation);
     if let Some(result) = value_notifications(services, status) {
         return result;

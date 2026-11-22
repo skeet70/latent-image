@@ -13,6 +13,7 @@ PLAYBACK_ACTOR_CONTROLS = [
     "error_without_restart",
     "packet_082d_result_dropped",
     "buffer_step_kept",
+    "navigation_result_shifted",
 ]
 
 _VARIANTS = [("", [])] + [
@@ -88,6 +89,22 @@ haskell_binary(
 )
 
 haskell_binary(
+    name = "playback-actor-stage",
+    srcs = ["StageMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "StageMain.hs",
+    deps = [
+        "//emulation:case-sha256",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+    ],
+)
+
+haskell_binary(
     name = "playback-actor-observe",
     srcs = ["ObserveMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
@@ -113,6 +130,7 @@ filegroup(
     srcs = [
         ":host-tests",
         ":playback-actor-observe",
+        ":playback-actor-stage",
         ":playback-actor-suite",
     ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS],
 )

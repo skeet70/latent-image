@@ -2,19 +2,19 @@
 
 -- | playback-actor-observe observe --role stock|owned --update DAT --run JSON --boot-rom ROM
 --     --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
---   playback-actor-observe compare STOCK_DIR OWNED_DIR OUTPUT_JSON
+--   playback-actor-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
 --
--- observe: fresh-boots the RAM-push bridge with trace sites at the queue-4 machine dispatcher,
--- the actor's entries and the retained services the actor calls, a write watch over the actor's
--- state and a fetch watch over the retired extents minus the entry veneer words. After attach it
--- presses the route keys (by default PLAY and the playback keys), idles a fixed budget after
--- each, and captures the screen. Every hit samples the machine event and state halfwords.
+-- observe: fresh-boots the RAM-push bridge with trace sites at the queue-4 machine dispatcher
+-- and the retained services the owned machines call, a write watch over the machine and mode
+-- state and a fetch watch over the retired action extents. After attach it presses the route
+-- keys (by default PLAY and the playback keys), idles a fixed budget after each, and captures
+-- the screen. Every hit samples the machine event and state halfwords.
 --
--- compare: the dispatcher's entries and returns, the actor's entries called from outside the
--- retired extents and their returns, the calls the actor makes into the retained services with
--- the bytes they point at and r0 on return, the watched writes, the screens and the card's
--- accepted writes, dirty sectors and final command history must be equal, and the owned role
--- must fetch nothing in the retired extents.
+-- compare: the dispatcher's entries and returns, the calls the machines make into the
+-- retained services (calls returning into a retired extent) with the bytes they point at and r0
+-- on return, the watched writes, the screens and the card's accepted writes, dirty sectors and
+-- final command history must be equal, and the owned role must fetch nothing in the retired
+-- extents outside the owned code (the functions OWNED_SYMBOLS places there).
 module Main (main) where
 
 import Control.DeepSeq (rnf)
@@ -116,15 +116,8 @@ captureValue capture =
     , "returns" .= [readSpec (registerBase r) n | (r, n) <- captureReturn capture]
     ]
 
--- | The retired extents minus each entry's veneer word.
 fetchSpans :: [Span]
-fetchSpans = concatMap split retired
-  where
-    veneers = map entryAddress entries
-    split (Span s e) = go s (sort [v | v <- veneers, s <= v, v < e])
-      where
-        go from [] = [Span from e | from < e]
-        go from (v : vs) = [Span from v | from < v] ++ go (v + 4) vs
+fetchSpans = retired
 
 mergedSpans :: [Span] -> [Span]
 mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
@@ -160,8 +153,8 @@ main = do
   arguments <- getArgs
   case arguments of
     ("observe" : rest) -> parseInputs rest >>= observeMain
-    ["compare", stock, owned, output] -> compareMain stock owned output
-    _ -> ioError (userError "usage: playback-actor-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OUTPUT_JSON")
+    ["compare", stock, owned, symbols, output] -> compareMain stock owned symbols output
+    _ -> ioError (userError "usage: playback-actor-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON")
 
 parseInputs :: [String] -> IO Inputs
 parseInputs arguments = do
@@ -227,8 +220,7 @@ observe inputs directory record = do
   record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer, "sha256" .= sha256Hex observerDigest]]))
   let sites =
         (dispatcher, "dispatch", Capture [] [])
-          : [(entryAddress e, "entry:" ++ entryName e, entryCapture e) | e <- entries]
-          ++ [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s) | s <- services]
+          : [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s) | s <- services]
       machineReads = A.toJSON [[s, e - s] | Span s e <- [machineEvents, machineStates]]
       writes = map spanValue watchedWrites
       fetches = map spanValue fetchSpans
@@ -328,12 +320,6 @@ taskOf hit = object ["kernel" .= field "kernel" (field "task" hit), "task_id" .=
 readsOf :: Value -> Value
 readsOf hit = A.toJSON [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
 
-argumentNames :: Int -> [T.Text]
-argumentNames n = take n ["r0", "r1", "r2", "r3"]
-
-entryNames :: M.Map Word32 Entry
-entryNames = M.fromList [(entryAddress e, e) | e <- entries]
-
 serviceSites :: M.Map Word32 Service
 serviceSites = M.fromList [(serviceAddress s, s) | s <- services]
 
@@ -345,19 +331,16 @@ event hit = do
   let common = ["core" .= field "core" hit, "task" .= taskOf hit, "machines" .= field "memory" hit]
   case label of
     "dispatch" -> Just (Event "dispatch" "dispatch" True (object (["kind" .= ("dispatch" :: T.Text), "machine" .= registersOf ["r0"] hit] ++ common)))
-    _ | "entry:" `isPrefixOf` label, Just e <- M.lookup address entryNames ->
-          Just (Event "entry" (entryName e) (external lr) (object (["kind" .= ("entry" :: T.Text), "name" .= entryName e, "lr" .= hexWord lr, "arguments" .= registersOf (argumentNames (entryArity e)) hit, "reads" .= readsOf hit] ++ common)))
-      | "service:" `isPrefixOf` label, Just s <- M.lookup address serviceSites, not (external lr) ->
+    _ | "service:" `isPrefixOf` label, Just s <- M.lookup address serviceSites, not (external lr) ->
           Just (Event "service" (serviceName s) True (object (["kind" .= ("service" :: T.Text), "name" .= serviceName s, "arguments" .= registersOf (serviceArguments s) hit, "reads" .= readsOf hit] ++ common)))
       | "service:" `isPrefixOf` label -> Nothing
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
-          case (site == dispatcher, M.lookup site serviceSites, M.lookup site entryNames) of
-            (True, _, _) -> Just (Event "dispatch-return" "dispatch" True (object (["kind" .= ("dispatch-return" :: T.Text), "result" .= registersOf ["r0"] hit] ++ common)))
-            (_, Just s, _)
+          case (site == dispatcher, M.lookup site serviceSites) of
+            (True, _) -> Just (Event "dispatch-return" "dispatch" True (object (["kind" .= ("dispatch-return" :: T.Text), "result" .= registersOf ["r0"] hit] ++ common)))
+            (_, Just s)
               | external address -> Nothing
               | otherwise -> Just (Event "service-return" (serviceName s) True (object (["kind" .= ("service-return" :: T.Text), "name" .= serviceName s, "result" .= registersOf (serviceResult s) hit, "reads" .= readsOf hit] ++ common)))
-            (_, _, Just e) -> Just (Event "return" (entryName e) (external address) (object (["kind" .= ("return" :: T.Text), "name" .= entryName e, "result" .= registersOf (entryResult e) hit, "reads" .= readsOf hit] ++ common)))
             _ -> Nothing
       | otherwise -> Nothing
 
@@ -390,10 +373,19 @@ counts :: [Event] -> M.Map String (Int, Int)
 counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0) else (0, 1)) | e <- events, eventKind e `elem` ["entry", "service", "dispatch"]]
   where add (a, b) (c, d) = (a + c, b + d)
 
-compareMain :: FilePath -> FilePath -> FilePath -> IO ()
-compareMain stockDir ownedDir output = do
+-- | The owned functions inside the retired extents, from a `.symbols` listing.
+readBody :: FilePath -> IO [Span]
+readBody path = do
+  rows <- map words . lines <$> readFile path
+  let spans = [Span a (a + n) | [address, size, kind, _] <- rows, kind `elem` ["T", "t"], [(a, "")] <- [readHex address], [(n, "")] <- [readHex size], n > 0, any (`inside` a) retired]
+  need (not (null spans)) (path ++ " places no function in a retired extent")
+  pure spans
+
+compareMain :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+compareMain stockDir ownedDir symbols output = do
   exists <- doesPathExist output
   need (not exists) "comparison output must be new"
+  body <- readBody symbols
   let load directory = do
         events <- loadEvents directory
         receipt <- loadJson (directory </> "receipt.json")
@@ -423,7 +415,7 @@ compareMain stockDir ownedDir output = do
         ]
       finalHistory steps = [field "history" (field "media" idled) | s <- take 1 (reverse steps), idled <- take 1 (reverse (arrayOf (field "idle" s)))]
       cardOf steps = card steps ++ finalHistory steps
-      ownedFetches = fetchTotal ownedReceipt ownedSteps
+      ownedFetches = sum [n | w <- watches ownedReceipt ownedSteps, Object byPc <- [field "fetches_by_pc" w], (pc, Number c) <- KM.toList byPc, Just a <- [hexValue (String (K.toText pc))], not (any (`inside` a) body), let n = truncate c :: Integer]
       sharedInputs receipt = case field "inputs" receipt of
         Object fields -> Object (KM.delete "update" fields)
         other -> other
@@ -444,6 +436,7 @@ compareMain stockDir ownedDir output = do
   BL.writeFile output $ A.encode $ object
     [ "schema" .= (1 :: Int)
     , "retired" .= map spanValue retired
+    , "owned_body" .= map spanValue body
     , "stock" .= summary stockEvents stockReceipt stockSteps (fetchTotal stockReceipt stockSteps) stockWrites
     , "owned" .= summary ownedEvents ownedReceipt ownedSteps ownedFetches ownedWrites
     , "entry_counts" .= countTable
