@@ -7427,5 +7427,42 @@
         "pointer": ["verdict"]
       }
     ]
+  },
+  {
+    "id": "E-PLAYBACK-MACHINE0-CARRIER-150",
+    "claim": "The owned playback machine 0 (the queue-4 source/mode status machine, 31 actions at table indices 2..32 of 0x01218ec0), linked in place over its plain-image action extent [0x011e8ce4,0x011ea434) with its action-table rows republished, matches the stock X-M1 1.50 plain-image bytes natively: the playback-actor suite is {{native_verdict}} on {{native_cases}} dispatcher-entered cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, plain image {{plain_sha256}}, decomp {{decomp_commit}}). On the emulated playback card route the staged DAT is {{playback_verdict}} to stock over {{playback_events}} interface events with {{playback_owned_fetches}} owned fetches of retired code against {{playback_stock_fetches}} stock ones, and on the PROTECT card route it is {{protect_verdict}} over {{protect_events}} events with {{protect_owned_fetches}} against {{protect_stock_fetches}}; the reached-entry control navigation_result_shifted is {{playback_control_verdict}} and {{protect_control_verdict}}, and a stock rerun is {{playback_rerun_verdict}} and {{protect_rerun_verdict}}.",
+    "scope": "Host-only X-M1 1.50. Native: each action entered through the retained dispatcher 0x011e8bf8 for machine 0 with the event and state that select it, every status the action distinguishes plus one it does not, on the Cortex-R5F runner over the 32 scripted retained services, comparing the dispatcher result, the ordered service calls with their inputs and packet bytes, and the final machine and mode state against an independent model of the stock action bytes. Full system: FujiMod RAM-push fresh boot to attach with the three-JPEG playback card, then PLAY, LEFT, LEFT, RIGHT, RIGHT, and PLAY, OK, DOWN, DOWN, DOWN, OK, OK, OK; the interface is every dispatcher entry and return with the machine event and state halfwords and every call machine 0 makes into the retained services with arguments, packet bytes and returned status, plus watched writes to the machine and mode state, screens and card effects.",
+    "notes": "Staged by playback-actor-stage and rebuild-update replace-plain; only the action extent (owned code then trap words) and the 31 table rows change. The device packets 0x81e/0x82d are compared on their two defined words; stock leaves the rest of the 80-byte frame unwritten. The routes reach actions 2, 13, 17, 25, 27, 30 and 32; the other 24 have native evidence only. A cardless route never enters the dispatcher.",
+    "artifacts": [
+      "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-owned.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-owned.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-control-navigation-result-shifted.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-control-navigation-result-shifted.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-stock-2.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-stock-2.json",
+      "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/stage-owned.json"
+    ],
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-owned.json", "pointer": ["stock", "inputs", "update", "sha256"]},
+      {"name": "native_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json", "pointer": ["verdict"]},
+      {"name": "native_cases", "path": "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "native_controls", "path": "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "owned_sha256", "path": "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json", "pointer": ["owned_sha256"]},
+      {"name": "plain_sha256", "path": "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json", "pointer": ["plain_sha256"]},
+      {"name": "decomp_commit", "path": "private-data/scratch/PlaybackActor/runs/20261122T221746Z-playback-actor-native/result/playback-actor.json", "pointer": ["decomp_commit"]},
+      {"name": "playback_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-owned.json", "pointer": ["verdict"]},
+      {"name": "playback_events", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-owned.json", "pointer": ["owned", "interface_events"]},
+      {"name": "playback_owned_fetches", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-owned.json", "pointer": ["owned", "retired_fetches"]},
+      {"name": "playback_stock_fetches", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-owned.json", "pointer": ["stock", "retired_fetches"]},
+      {"name": "protect_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-owned.json", "pointer": ["verdict"]},
+      {"name": "protect_events", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-owned.json", "pointer": ["owned", "interface_events"]},
+      {"name": "protect_owned_fetches", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-owned.json", "pointer": ["owned", "retired_fetches"]},
+      {"name": "protect_stock_fetches", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-owned.json", "pointer": ["stock", "retired_fetches"]},
+      {"name": "playback_control_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-control-navigation-result-shifted.json", "pointer": ["verdict"]},
+      {"name": "protect_control_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-control-navigation-result-shifted.json", "pointer": ["verdict"]},
+      {"name": "playback_rerun_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-playback-stock-2.json", "pointer": ["verdict"]},
+      {"name": "protect_rerun_verdict", "path": "private-data/scratch/PlaybackActor/runs/20261122T222233Z-playback-actor-pair/result/comparison-protect-stock-2.json", "pointer": ["verdict"]}
+    ]
   }
 ]

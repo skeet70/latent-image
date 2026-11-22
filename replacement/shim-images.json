@@ -1311,6 +1311,54 @@
       "expected_sha256": "8a75a64a4274c370c01bf9bab82ffa84e4f7c8a9b95f6c45c2e355f700da993a"
     },
     {
+      "id": "//replacement/playback_actor:playback-actor-image",
+      "elf": "replacement/playback_actor/playback-actor-image.elf",
+      "units": [
+        "playback_actor"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/playback_actor/imports.ld",
+        "replacement/playback_actor/playback-actor.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "playback_apply_selected_mode_options",
+        "playback_apply_selected_record_flags",
+        "playback_bind_selected_record",
+        "playback_callback_ready",
+        "playback_cancel_buffer_step",
+        "playback_consume_secondary",
+        "playback_device_notification",
+        "playback_notify_0819",
+        "playback_notify_081f",
+        "playback_notify_0821",
+        "playback_notify_0825",
+        "playback_notify_0826",
+        "playback_notify_084e",
+        "playback_notify_084f",
+        "playback_notify_0850",
+        "playback_notify_primary",
+        "playback_post_pending_event",
+        "playback_publish_requested_mode",
+        "playback_reset_workspaces",
+        "playback_set_work_state",
+        "playback_source_error_notification",
+        "playback_status_buffer_mode",
+        "playback_status_effect",
+        "playback_status_machine20",
+        "playback_status_machine34",
+        "playback_status_message",
+        "playback_status_navigation",
+        "playback_status_parameter",
+        "playback_status_parameter_transition",
+        "playback_submit_indexed_storage_buffer",
+        "playback_trace",
+        "playback_write_error_trace"
+      ],
+      "expected_sha256": "8f1b00445d95ef4e649c05f5a52199fb3c9e4c359fd949b34cab75e8755fa0a5"
+    },
+    {
       "id": "//replacement/power_lifecycle:record-helpers",
       "elf": "replacement/power_lifecycle/record-helpers.elf",
       "units": [
