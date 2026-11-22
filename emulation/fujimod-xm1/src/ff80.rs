@@ -22,6 +22,10 @@ const ACTIVATION_BUDGET: u64 = 140_000_000;
 /// (`msleep(10)` after `hub_set_address`); USB 2.0 §9.2.6.3 gives the device 2 ms. Board ticks
 /// run at the run document's 12 MHz device clock policy.
 const SET_ADDRESS_RECOVERY_TICKS: u64 = 120_000;
+/// The host resets the bus 100 ms after it sees the device attach: USB 2.0 §7.1.7.3 TATTDB, Linux
+/// `hub_port_debounce`. An immediate reset can lose a later control status stage in either role
+/// (E-RECORD-STORE-REBOOT-ATTACH-150).
+const ATTACH_DEBOUNCE_TICKS: u64 = 1_200_000;
 const PACKET_BYTES: usize = 64;
 const BULK_OUT: u8 = 2;
 const BULK_IN: u8 = 0x81;
@@ -697,6 +701,7 @@ impl EnumerationPort for Ff80 {
 
 fn enumerate_port(port: &mut impl EnumerationPort, budget: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
     port.await_activation(budget)?;
+    advance_ticks(port, ATTACH_DEBOUNCE_TICKS, "attach debounce")?;
     port.reset()?;
     port.advance(1_000_000)?;
     let device = port.control_in([0x80, 6, 0, 1, 0, 0, 18, 0], 18)?;
@@ -704,7 +709,7 @@ fn enumerate_port(port: &mut impl EnumerationPort, budget: u64) -> Result<(Vec<u
         return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
     }
     port.control_status([0, 5, 1, 0, 0, 0, 0, 0])?;
-    advance_ticks(port, SET_ADDRESS_RECOVERY_TICKS)?;
+    advance_ticks(port, SET_ADDRESS_RECOVERY_TICKS, "SetAddress recovery wait")?;
     let head = port.control_in([0x80, 6, 0, 2, 0, 0, 9, 0], 9)?;
     let total = head.get(2..4).map(|bytes| usize::from(u16::from_le_bytes([bytes[0], bytes[1]]))).unwrap_or(0);
     if head.len() != 9 || !(9..=256).contains(&total) {
@@ -720,7 +725,7 @@ fn enumerate_port(port: &mut impl EnumerationPort, budget: u64) -> Result<(Vec<u
     Ok((device, configuration))
 }
 
-fn advance_ticks(port: &mut impl EnumerationPort, ticks: u64) -> Result<(), String> {
+fn advance_ticks(port: &mut impl EnumerationPort, ticks: u64, label: &str) -> Result<(), String> {
     let (numerator, denominator) = port.rate();
     let end = port.now().saturating_add(ticks);
     loop {
@@ -729,7 +734,7 @@ fn advance_ticks(port: &mut impl EnumerationPort, ticks: u64) -> Result<(), Stri
             return Ok(());
         }
         if port.advance(((end - now) * numerator).div_ceil(denominator))? == RunOutcome::DrainRequired {
-            return Err("SetAddress recovery wait: a capture page is outstanding".into());
+            return Err(format!("{label}: a capture page is outstanding"));
         }
     }
 }
@@ -814,16 +819,17 @@ mod tests {
         instructions: u64,
         drain: bool,
         setups: Vec<([u8; 8], u64)>,
+        resets: Vec<u64>,
     }
     impl Bench {
-        fn new() -> Self { Self { instructions: 0, drain: false, setups: Vec::new() } }
+        fn new() -> Self { Self { instructions: 0, drain: false, setups: Vec::new(), resets: Vec::new() } }
         fn tick_of(&self, setup: [u8; 8]) -> u64 {
             self.setups.iter().find(|(seen, _)| seen[..4] == setup[..4]).map(|(_, tick)| *tick).expect("request sent")
         }
     }
     impl EnumerationPort for Bench {
         fn await_activation(&mut self, _: u64) -> Result<(), String> { Ok(()) }
-        fn reset(&mut self) -> Result<(), String> { Ok(()) }
+        fn reset(&mut self) -> Result<(), String> { self.resets.push(self.now()); Ok(()) }
         fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String> {
             self.setups.push((setup, self.now()));
             Ok(if setup[3] == 1 { vec![0x12; 18] } else { CONFIGURATION[..count].to_vec() })
@@ -849,10 +855,18 @@ mod tests {
     }
 
     #[test]
-    fn an_outstanding_capture_page_ends_enumeration_before_the_configuration_request() {
+    fn the_bus_reset_follows_activation_by_one_hundred_milliseconds_of_board_time() {
+        let mut bench = Bench::new();
+        enumerate_port(&mut bench, 1).unwrap();
+        assert_eq!(bench.resets, [1_200_000]);
+        assert!(bench.setups.iter().all(|(_, tick)| *tick > 1_200_000));
+    }
+
+    #[test]
+    fn an_outstanding_capture_page_ends_enumeration_before_the_bus_reset() {
         let mut bench = Bench::new();
         bench.drain = true;
         assert!(enumerate_port(&mut bench, 1).is_err());
-        assert!(bench.setups.iter().all(|(setup, _)| setup[..4] != [0x80, 6, 0, 2]));
+        assert!(bench.resets.is_empty() && bench.setups.is_empty());
     }
 }
