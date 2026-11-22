@@ -49,12 +49,27 @@ backendReturn site address r0 =
     ]
 
 -- | One role's component calls: fs_close of a handle, local_record into the caller's frame,
--- entry_update of an 11-byte name, and a divide at the role's own call site, whose enclosing
--- function's return the bridge also records.
-data Role = Role {closeHandle :: T.Text, localRecordResult :: T.Text, entryName :: T.Text, divideSite :: Int, divisor :: T.Text}
+-- entry_update of an 11-byte name, a divide at the role's own call site, whose enclosing
+-- function's return the bridge also records, and fill_memory into the caller's frame and into a
+-- context record.
+data Role = Role
+  { closeHandle :: T.Text, localRecordResult :: T.Text, entryName :: T.Text, divideSite :: Int, divisor :: T.Text
+  , frameFill :: (Integer, Integer), contextFill :: Integer
+  }
 
 stockRole :: Role
-stockRole = Role "0x5" "0xa19d6c" "44534346333039374a50470018547200" 0x712800 "0x200"
+stockRole = Role "0x5" "0xa19d6c" "44534346333039374a50470018547200" 0x712800 "0x200" (0xa19d00, 0xa19c00) 0x910400
+
+-- | fill_memory of 0x10 bytes at DESTINATION with sp at SP, and its return.
+fill :: Integer -> Integer -> [Value]
+fill destination sp =
+  [ withSp (backendEntry "fill_memory" "0x70e664" "0x711840" [("r0", hex destination), ("r1", "0x0"), ("r2", "0x10")] [])
+  , withSp (backendReturn 0x70e664 "0x711840" (hex (destination + 0x10)))
+  ]
+  where
+    hex = T.pack . ("0x" ++) . flip showHex ""
+    withSp (Object fields) = Object (KM.insert "sp" (String (hex sp)) fields)
+    withSp other = other
 
 divideHit :: T.Text -> Int -> [(T.Text, T.Text)] -> Value
 divideHit kind site registers =
@@ -78,6 +93,8 @@ calls role =
   , backendReturn (divideSite role) "0x711830" "0x0"
   , backendReturn (divideSite role + 4) "0x711830" "0x0"
   ]
+    ++ uncurry fill (frameFill role)
+    ++ fill (contextFill role) (snd (frameFill role))
 
 writeRole :: FilePath -> T.Text -> Int -> Role -> IO ()
 writeRole directory name noisy role = do
@@ -112,7 +129,8 @@ main = do
   writeFile symbols "00ba0020 0 NOTYPE __fixed_body_start\n00bc0000 0 NOTYPE __fixed_body_end\n"
   writeRole (root </> "stock") "stock" noiseHits stockRole
   let cases =
-        [ ("stack-and-unread-name-bytes", noiseHits, stockRole {localRecordResult = "0xa19d40", entryName = "44534346333039374a50470000000000", divideSite = 0xba1000}, ExitSuccess, "equal")
+        [ ("stack-and-unread-name-bytes", noiseHits, stockRole {localRecordResult = "0xa19d40", entryName = "44534346333039374a50470000000000", divideSite = 0xba1000, frameFill = (0xa19d20, 0xa19c40)}, ExitSuccess, "equal")
+        , ("fill-context-destination", 0, stockRole {contextFill = 0x910480, divideSite = 0xba1000}, ExitFailure 1, "different")
         , ("close-handle", 0, stockRole {closeHandle = "0x6", divideSite = 0xba1000}, ExitFailure 1, "different")
         , ("read-name-byte", 0, stockRole {entryName = "44534346333039384a50470018547200", divideSite = 0xba1000}, ExitFailure 1, "different")
         , ("divisor", 0, stockRole {divisor = "0x400", divideSite = 0xba1000}, ExitFailure 1, "different")

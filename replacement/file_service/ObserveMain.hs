@@ -147,7 +147,7 @@ backends =
   , (0x712dac, Backend "directory_number" ["r1"] [readSpec (register 0) 32])
   , (0x716184, Backend "make_directory" ["r0", "r1"] [])
   , (0x7004b0, Backend "find_first_entry" ["r3"] [readSpec (register 0) 32, readSpec (register 1) 16, readSpec (register 2) 80])
-  , (0x70e664, Backend "fill_memory" ["r1", "r2"] [])
+  , (0x70e664, Backend "fill_memory" ["r0", "r1", "r2"] [])
   , (0x70e650, Backend "little_endian" ["r0"] [])
   , (0x71d214, Backend "format_timestamp" ["r2"] [readSpec (register 1) 4])
   , (0x70ec84, Backend "device_for_letter" ["r0"] [])
@@ -725,7 +725,8 @@ event body hit = do
       | "worker:" `isPrefixOf` label ->
           Just (Event "worker" label True (object (["kind" .= ("worker" :: T.Text), "name" .= label, "arguments" .= registersOf argumentRegisters hit, "reads" .= requestReads hit] ++ common)) (object []))
       | "backend:" `isPrefixOf` label, Just backend <- M.lookup address backendSites, not (external body lr) ->
-          Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf (backendArguments backend) hit, "reads" .= backendReadsOf backend hit] ++ common)) (object []))
+          let arguments = if backendName backend == "fill_memory" && destinationOnStack hit then filter (/= "r0") (backendArguments backend) else backendArguments backend
+           in Just (Event "backend" (backendName backend) True (object (["kind" .= ("backend" :: T.Text), "name" .= backendName backend, "arguments" .= registersOf arguments hit, "reads" .= backendReadsOf backend hit] ++ common)) (object []))
       | "backend:" `isPrefixOf` label -> Nothing
       | "divide-call:" `isPrefixOf` label ->
           Just (Event "backend" "divide" True (object (["kind" .= ("backend" :: T.Text), "name" .= ("divide" :: T.Text), "arguments" .= registersOf ["r0", "r1"] hit, "reads" .= ([] :: [Value])] ++ common)) (object []))
@@ -737,7 +738,7 @@ event body hit = do
             Just backend
               | external body address -> Nothing
               | otherwise ->
-                  let result = if backendName backend `elem` stackResults then [] else ["r0"]
+                  let result = if backendName backend `elem` stackResults || (backendName backend == "fill_memory" && destinationOnStack hit) then [] else ["r0"]
                    in Just (Event "backend-return" (backendName backend) True (object (["kind" .= ("backend-return" :: T.Text), "name" .= backendName backend, "result" .= registersOf result hit] ++ common)) (object []))
             Nothing -> returned site
       | otherwise -> Nothing
@@ -756,10 +757,19 @@ backendSites :: M.Map Word32 Backend
 backendSites = M.fromList backends
 
 -- | The backends whose r0 on return is the caller's stack argument advanced past the bytes they
--- wrote: fill_memory's destination, local_record's through 0x722054, and volume_geometry's
--- r1 + 0x40 through 0x70e6c4.
+-- wrote: local_record's through 0x722054 and volume_geometry's r1 + 0x40 through 0x70e6c4.
 stackResults :: [String]
-stackResults = ["fill_memory", "local_record", "volume_geometry"]
+stackResults = ["local_record", "volume_geometry"]
+
+-- | Whether r0 lies in the 3072 bytes above sp, the media task's stack size (id4.dis:265833): a
+-- fill_memory destination there is in the caller's frame, whose address differs between roles.
+destinationOnStack :: Value -> Bool
+destinationOnStack hit = case (hexValue (field "r0" (field "registers" hit)), hexValue (field "sp" hit)) of
+  (Just r0, Just sp) -> r0 >= sp && r0 - sp <= mediaTaskStack
+  _ -> False
+
+mediaTaskStack :: Word32
+mediaTaskStack = 3072
 
 -- | A backend call's captured bytes; a path read stops at its terminator, the bytes past it
 -- being whatever the poster's frame held. entry_update and entry_update_one read the first 11
