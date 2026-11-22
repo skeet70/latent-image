@@ -23,9 +23,12 @@ const ACTIVATION_BUDGET: u64 = 140_000_000;
 /// run at the run document's 12 MHz device clock policy.
 const SET_ADDRESS_RECOVERY_TICKS: u64 = 120_000;
 /// The host resets the bus 100 ms after it sees the device attach: USB 2.0 §7.1.7.3 TATTDB, Linux
-/// `hub_port_debounce`. An immediate reset can lose a later control status stage in either role
-/// (E-RECORD-STORE-REBOOT-ATTACH-150).
+/// `hub_port_debounce`.
 const ATTACH_DEBOUNCE_TICKS: u64 = 1_200_000;
+/// Enumerations the host starts, each after a bus reset, before it gives up on a device that
+/// loses a control stage: Linux `hub_port_connect` resets the port and re-runs `hub_port_init`
+/// when an enumeration control transfer times out.
+const ENUMERATION_ATTEMPTS: u8 = 3;
 const PACKET_BYTES: usize = 64;
 const BULK_OUT: u8 = 2;
 const BULK_IN: u8 = 0x81;
@@ -504,7 +507,7 @@ impl Ff80 {
     }
 
     /// Runs until `ready` holds.
-    fn wait(&mut self, label: &str, budget: u64, mut ready: impl FnMut(&mut Self) -> Result<bool, String>) -> Result<(), String> {
+    fn wait(&mut self, label: &str, budget: u64, mut ready: impl FnMut(&mut Self) -> Result<bool, String>) -> Result<(), WaitError> {
         let start = self.machine.instructions();
         let mut step = FIRST_POLL;
         loop {
@@ -516,7 +519,7 @@ impl Ff80 {
             }
             let spent = self.machine.instructions() - start;
             if spent >= budget {
-                return Err(format!("{label}: instruction budget expired"));
+                return Err(WaitError::Expired(format!("{label}: instruction budget expired")));
             }
             self.advance((budget - spent).min(step)).map_err(|e| format!("{label}: {e}"))?;
             step = (step * 2).min(WAIT_STEP);
@@ -554,7 +557,7 @@ impl Ff80 {
         self.machine.session.usb_setup(&self.usb(), &setup)
     }
 
-    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String> {
+    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, WaitError> {
         self.control_setup(setup)?;
         let label = format!("control IN data for setup {}", encode_hex(&setup));
         let mut payload = Vec::new();
@@ -571,11 +574,12 @@ impl Ff80 {
         Ok(payload)
     }
 
-    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String> {
+    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), WaitError> {
         self.control_setup(setup)?;
-        self.wait("control status IN", WAIT_BUDGET, |host| Ok(host.status()?.tx_packets[0] > 0))?;
+        self.wait(&format!("control status IN for setup {}", encode_hex(&setup)), WAIT_BUDGET,
+            |host| Ok(host.status()?.tx_packets[0] > 0))?;
         if !self.machine.session.usb_in(&self.usb(), 0x80, 64)?.is_empty() {
-            return Err("control status packet was not empty".into());
+            return Err(WaitError::Failed("control status packet was not empty".into()));
         }
         Ok(())
     }
@@ -614,7 +618,7 @@ impl Ff80 {
                 Ok(status.rx_position[1] == status.rx_length[1])
             })?;
         }
-        self.wait("bulk OUT DMA completion", WAIT_BUDGET, |host| Ok(!host.status()?.active_dma))
+        Ok(self.wait("bulk OUT DMA completion", WAIT_BUDGET, |host| Ok(!host.status()?.active_dma))?)
     }
 
     fn bulk_in(&mut self, endpoint: u8, count: usize) -> Result<Vec<u8>, String> {
@@ -644,29 +648,57 @@ impl Ff80 {
         Ok(payload)
     }
 
-    /// Raises the cable level first; returns the ff80 device and configuration descriptors.
-    pub fn enumerate(&mut self) -> Result<(Vec<u8>, Vec<u8>), String> {
+    /// Raises the cable level first; enumerates the ff80 device.
+    pub fn enumerate(&mut self) -> Result<Enumeration, String> {
         let cable = self.machine.document.usb_cable.0.clone();
         self.machine.session.logic_input(&cable, true)?;
-        let (device, configuration) = self.enumerate_attached(ACTIVATION_BUDGET)?;
-        if device[8..12] != VENDOR_PRODUCT {
-            return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
+        let enumeration = self.enumerate_attached(ACTIVATION_BUDGET)?;
+        if enumeration.device[8..12] != VENDOR_PRODUCT {
+            return Err(format!("unexpected device descriptor {}", encode_hex(&enumeration.device)));
         }
-        Ok((device, configuration))
+        Ok(enumeration)
     }
 
     /// Standard enumeration of whatever device the guest presents, once the
     /// controller activates within `budget` instructions.
-    pub fn enumerate_attached(&mut self, budget: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
+    pub fn enumerate_attached(&mut self, budget: u64) -> Result<Enumeration, String> {
         enumerate_port(self, budget)
+    }
+}
+
+pub struct Enumeration {
+    pub device: Vec<u8>,
+    pub configuration: Vec<u8>,
+    /// Bus resets the host made, the last starting the enumeration that completed.
+    pub attempts: u8,
+}
+
+#[derive(Debug)]
+enum WaitError {
+    /// The awaited condition did not hold within the wait's instruction budget.
+    Expired(String),
+    Failed(String),
+}
+
+impl From<String> for WaitError {
+    fn from(error: String) -> Self {
+        WaitError::Failed(error)
+    }
+}
+
+impl From<WaitError> for String {
+    fn from(error: WaitError) -> Self {
+        match error {
+            WaitError::Expired(error) | WaitError::Failed(error) => error,
+        }
     }
 }
 
 trait EnumerationPort {
     fn await_activation(&mut self, budget: u64) -> Result<(), String>;
     fn reset(&mut self) -> Result<(), String>;
-    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String>;
-    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String>;
+    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, WaitError>;
+    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), WaitError>;
     fn advance(&mut self, instructions: u64) -> Result<RunOutcome, String>;
     /// The board clock in ticks.
     fn now(&self) -> u64;
@@ -676,15 +708,15 @@ trait EnumerationPort {
 
 impl EnumerationPort for Ff80 {
     fn await_activation(&mut self, budget: u64) -> Result<(), String> {
-        self.wait("USB controller activation", budget, |host| Ok(host.status()?.register(0x090) & 6 == 6))
+        Ok(self.wait("USB controller activation", budget, |host| Ok(host.status()?.register(0x090) & 6 == 6))?)
     }
     fn reset(&mut self) -> Result<(), String> {
         self.machine.session.usb_reset(&self.usb())
     }
-    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String> {
+    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, WaitError> {
         Ff80::control_in(self, setup, count)
     }
-    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String> {
+    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), WaitError> {
         Ff80::control_status(self, setup)
     }
     fn advance(&mut self, instructions: u64) -> Result<RunOutcome, String> {
@@ -699,26 +731,38 @@ impl EnumerationPort for Ff80 {
     }
 }
 
-fn enumerate_port(port: &mut impl EnumerationPort, budget: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
+fn enumerate_port(port: &mut impl EnumerationPort, budget: u64) -> Result<Enumeration, String> {
     port.await_activation(budget)?;
     advance_ticks(port, ATTACH_DEBOUNCE_TICKS, "attach debounce")?;
+    let mut lost = Vec::new();
+    for attempts in 1..=ENUMERATION_ATTEMPTS {
+        match enumerate_after_reset(port) {
+            Ok((device, configuration)) => return Ok(Enumeration { device, configuration, attempts }),
+            Err(WaitError::Expired(stage)) => lost.push(stage),
+            Err(WaitError::Failed(error)) => return Err(error),
+        }
+    }
+    Err(format!("each of {ENUMERATION_ATTEMPTS} enumerations lost a control stage: {}", lost.join("; ")))
+}
+
+fn enumerate_after_reset(port: &mut impl EnumerationPort) -> Result<(Vec<u8>, Vec<u8>), WaitError> {
     port.reset()?;
     port.advance(1_000_000)?;
     let device = port.control_in([0x80, 6, 0, 1, 0, 0, 18, 0], 18)?;
     if device.len() != 18 {
-        return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
+        return Err(WaitError::Failed(format!("unexpected device descriptor {}", encode_hex(&device))));
     }
     port.control_status([0, 5, 1, 0, 0, 0, 0, 0])?;
     advance_ticks(port, SET_ADDRESS_RECOVERY_TICKS, "SetAddress recovery wait")?;
     let head = port.control_in([0x80, 6, 0, 2, 0, 0, 9, 0], 9)?;
     let total = head.get(2..4).map(|bytes| usize::from(u16::from_le_bytes([bytes[0], bytes[1]]))).unwrap_or(0);
     if head.len() != 9 || !(9..=256).contains(&total) {
-        return Err(format!("unexpected configuration descriptor head {}", encode_hex(&head)));
+        return Err(WaitError::Failed(format!("unexpected configuration descriptor head {}", encode_hex(&head))));
     }
     let length = (total as u16).to_le_bytes();
     let configuration = port.control_in([0x80, 6, 0, 2, 0, 0, length[0], length[1]], total)?;
     if configuration.len() != total {
-        return Err("configuration descriptor is truncated".into());
+        return Err(WaitError::Failed("configuration descriptor is truncated".into()));
     }
     port.control_status([0, 9, configuration[5], 0, 0, 0, 0, 0])?;
     port.advance(1_000_000)?;
@@ -814,28 +858,38 @@ mod tests {
     const SET_ADDRESS: [u8; 8] = [0, 5, 1, 0, 0, 0, 0, 0];
     const CONFIGURATION: [u8; 18] = [9, 2, 18, 0, 1, 1, 0, 0xc0, 0, 9, 4, 0, 0, 0, 0xff, 0, 0, 0];
 
-    /// A device answering descriptors at once, on a board clock of 5 instructions per 2 ticks.
+    /// A device answering descriptors at once, on a board clock of 5 instructions per 2 ticks,
+    /// that loses the status stage of its next `lost_statuses` SetAddress requests.
     struct Bench {
         instructions: u64,
         drain: bool,
+        lost_statuses: u8,
         setups: Vec<([u8; 8], u64)>,
         resets: Vec<u64>,
     }
     impl Bench {
-        fn new() -> Self { Self { instructions: 0, drain: false, setups: Vec::new(), resets: Vec::new() } }
+        fn new() -> Self { Self { instructions: 0, drain: false, lost_statuses: 0, setups: Vec::new(), resets: Vec::new() } }
         fn tick_of(&self, setup: [u8; 8]) -> u64 {
             self.setups.iter().find(|(seen, _)| seen[..4] == setup[..4]).map(|(_, tick)| *tick).expect("request sent")
+        }
+        fn sent(&self, setup: [u8; 8]) -> usize {
+            self.setups.iter().filter(|(seen, _)| seen[..4] == setup[..4]).count()
         }
     }
     impl EnumerationPort for Bench {
         fn await_activation(&mut self, _: u64) -> Result<(), String> { Ok(()) }
         fn reset(&mut self) -> Result<(), String> { self.resets.push(self.now()); Ok(()) }
-        fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String> {
+        fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, WaitError> {
             self.setups.push((setup, self.now()));
             Ok(if setup[3] == 1 { vec![0x12; 18] } else { CONFIGURATION[..count].to_vec() })
         }
-        fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String> {
+        fn control_status(&mut self, setup: [u8; 8]) -> Result<(), WaitError> {
             self.setups.push((setup, self.now()));
+            if setup == SET_ADDRESS && self.lost_statuses > 0 {
+                self.lost_statuses -= 1;
+                self.instructions += WAIT_BUDGET;
+                return Err(WaitError::Expired("control status IN: instruction budget expired".into()));
+            }
             Ok(())
         }
         fn advance(&mut self, instructions: u64) -> Result<RunOutcome, String> {
@@ -849,7 +903,7 @@ mod tests {
     #[test]
     fn configuration_request_follows_set_address_by_ten_milliseconds_of_board_time() {
         let mut bench = Bench::new();
-        let (_, configuration) = enumerate_port(&mut bench, 1).unwrap();
+        let configuration = enumerate_port(&mut bench, 1).unwrap().configuration;
         assert_eq!(configuration, CONFIGURATION);
         assert_eq!(bench.tick_of([0x80, 6, 0, 2, 0, 0, 0, 0]) - bench.tick_of(SET_ADDRESS), 120_000);
     }
@@ -860,6 +914,27 @@ mod tests {
         enumerate_port(&mut bench, 1).unwrap();
         assert_eq!(bench.resets, [1_200_000]);
         assert!(bench.setups.iter().all(|(_, tick)| *tick > 1_200_000));
+    }
+
+    #[test]
+    fn a_lost_status_stage_is_recovered_by_a_bus_reset_and_a_second_enumeration() {
+        let mut bench = Bench::new();
+        bench.lost_statuses = 1;
+        let enumeration = enumerate_port(&mut bench, 1).unwrap();
+        assert_eq!((enumeration.attempts, enumeration.configuration.as_slice()), (2, CONFIGURATION.as_slice()));
+        assert_eq!(bench.resets.len(), 2);
+        assert_eq!(bench.sent(SET_ADDRESS), 2);
+        assert!(bench.tick_of([0x80, 6, 0, 2, 0, 0, 0, 0]) > bench.resets[1]);
+    }
+
+    #[test]
+    fn three_consecutive_lost_status_stages_fail_enumeration() {
+        let mut bench = Bench::new();
+        bench.lost_statuses = 3;
+        assert!(enumerate_port(&mut bench, 1).is_err());
+        assert_eq!(bench.resets.len(), 3);
+        assert_eq!(bench.sent([0x80, 6, 0, 2, 0, 0, 0, 0]), 0);
+        assert_eq!(bench.sent([0, 9, CONFIGURATION[5], 0, 0, 0, 0, 0]), 0);
     }
 
     #[test]

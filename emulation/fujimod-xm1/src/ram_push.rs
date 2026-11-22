@@ -1419,9 +1419,9 @@ impl Server {
                 if !(1..=MAX_SETTLE).contains(&budget) {
                     return Err(format!("enumerate activation instructions must be 1..{MAX_SETTLE}"));
                 }
-                let (device, configuration) = self.bridge.enumerate_attached(budget)?;
-                json!({"device": encode_hex(&device), "configuration": encode_hex(&configuration),
-                    "instructions": self.bridge.machine.instructions()})
+                let enumeration = self.bridge.enumerate_attached(budget)?;
+                json!({"device": encode_hex(&enumeration.device), "configuration": encode_hex(&enumeration.configuration),
+                    "attempts": enumeration.attempts, "instructions": self.bridge.machine.instructions()})
             }
             Request::TraceSites { sites, reads, task, pauses } => {
                 let mut normalized = BTreeMap::new();

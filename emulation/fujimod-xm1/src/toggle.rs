@@ -408,10 +408,10 @@ impl Server {
                 if !(1..=MAX_ENUMERATE).contains(&budget) {
                     return Err(format!("enumerate takes an activation budget of 1..{MAX_ENUMERATE} instructions"));
                 }
-                let (device, configuration) = self.bridge.enumerate_attached(budget)?;
+                let enumeration = self.bridge.enumerate_attached(budget)?;
                 self.collect(&BTreeSet::new())?;
-                json!({"device": encode_hex(&device), "configuration": encode_hex(&configuration),
-                    "instructions": self.bridge.machine.instructions()})
+                json!({"device": encode_hex(&enumeration.device), "configuration": encode_hex(&enumeration.configuration),
+                    "attempts": enumeration.attempts, "instructions": self.bridge.machine.instructions()})
             }
             Request::Transfer(transfer) => {
                 let (count, payload) = self.bridge.transfer(&transfer)?;

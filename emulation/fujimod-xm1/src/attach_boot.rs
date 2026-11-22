@@ -38,7 +38,8 @@ pub fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<Route
         bridge.advance(ATTACH_HOLD_PULSE)?;
     }
     let attached = bridge.machine.instructions();
-    let (device, configuration) = bridge.enumerate()?;
+    let enumeration = bridge.enumerate()?;
+    pre_attach["enumeration_attempts"] = json!(enumeration.attempts);
     if let Some(key) = hold {
         bridge.machine.release_key(key)?;
         let released = bridge.machine.instructions();
@@ -48,5 +49,5 @@ pub fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<Route
             "menu_after_release": menu_value(bridge.machine.menu()?)});
     }
     boundary(&bridge, AttachPhase::Attached)?;
-    Ok((bridge, Attachment { pre_attach, device, configuration }))
+    Ok((bridge, Attachment { pre_attach, device: enumeration.device, configuration: enumeration.configuration }))
 }
