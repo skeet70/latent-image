@@ -5,7 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["imports.ld"])
 
-_SOURCES = ["src/machine0.rs", "src/machine30.rs", "src/stock.rs"]
+_SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/stock.rs"]
 
 PLAYBACK_ACTOR_CONTROLS = [
     "abort_keeps_state",
@@ -16,6 +16,7 @@ PLAYBACK_ACTOR_CONTROLS = [
     "navigation_result_shifted",
     "m30_gate_swapped",
     "m30_action17_result_shifted",
+    "m7_action47_result_shifted",
 ]
 
 _VARIANTS = [("", [])] + [
@@ -65,6 +66,7 @@ haskell_library(
     srcs = [
         "Replacement/PlaybackActor/Cases.hs",
         "Replacement/PlaybackActor/Machine30.hs",
+        "Replacement/PlaybackActor/Machine7.hs",
         "Replacement/PlaybackActor/Model.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

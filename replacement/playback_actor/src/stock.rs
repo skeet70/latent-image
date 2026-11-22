@@ -3,6 +3,7 @@
 
 use crate::machine0::{self, Call, Source, State, WorkState};
 use crate::machine30;
+use crate::machine7;
 use crate::DevicePacket;
 use core::mem::MaybeUninit;
 use core::ptr::{read_volatile, write_volatile};
@@ -11,6 +12,7 @@ const PACKET_FRAME_WORDS: usize = 20;
 
 const MACHINE_STATES: u32 = 0x014e_a5ac;
 const MACHINE0_STATE: u32 = MACHINE_STATES;
+const MACHINE7_STATE: u32 = MACHINE_STATES + 2 * 7;
 const MACHINE30_STATE: u32 = MACHINE_STATES + 2 * 30;
 const MODE_STATE: u32 = 0x014e_a678;
 const BUFFER_STEP: u32 = MODE_STATE + 0x18;
@@ -19,6 +21,8 @@ const REQUEST: u32 = 0x014e_a6e4;
 const REQUEST_EVENT: u32 = REQUEST + 0x2c;
 const TRANSFER: u32 = 0x014e_aed8;
 const TRANSFER_STEP: u32 = TRANSFER + machine30::Word::Step as u32;
+const STEP: u32 = 0x014e_b5d0;
+const STEP_KIND: u32 = STEP + 4;
 
 extern "C" {
     fn playback_status_parameter() -> i32;
@@ -105,6 +109,22 @@ extern "C" {
     fn playback_service_012431b8() -> i32;
     fn playback_service_01243868() -> i32;
     fn playback_service_01243e48() -> i32;
+    fn playback_service_0120d618() -> i32;
+    fn playback_service_0120e6e8() -> i32;
+    fn playback_service_0120e964() -> i32;
+    fn playback_service_0120f328() -> i32;
+    fn playback_service_0120f420() -> i32;
+    fn playback_service_0120fc08() -> i32;
+    fn playback_service_0121164c() -> i32;
+    fn playback_service_01211c8c() -> i32;
+    fn playback_service_012128a0() -> i32;
+    fn playback_service_012138ac() -> i32;
+    fn playback_service_0121406c() -> i32;
+    fn playback_service_012290cc(argument: u32) -> i32;
+    fn playback_service_012290fc(argument: u32) -> i32;
+    fn playback_service_012390d4() -> i32;
+    fn playback_service_01239134() -> i32;
+    fn playback_service_01239178() -> i32;
     fn playback_service_01243fa0() -> i32;
     fn playback_service_012441d0(argument: u32) -> i32;
     fn playback_service_012441f0() -> i32;
@@ -191,6 +211,62 @@ impl machine0::Services for Stock {
 
     fn clear_buffer_step(&mut self) {
         unsafe { write_volatile(BUFFER_STEP as *mut u32, 0) }
+    }
+}
+
+impl machine7::Services for Stock {
+    fn call(&mut self, call: machine7::Call) -> i32 {
+        use machine7::Call as C;
+        unsafe {
+            match call {
+                C::Fn120d618 => playback_service_0120d618(),
+                C::Fn120e6e8 => playback_service_0120e6e8(),
+                C::Fn120e964 => playback_service_0120e964(),
+                C::Fn120ec28 => playback_service_0120ec28(),
+                C::Fn120f328 => playback_service_0120f328(),
+                C::Fn120f420 => playback_service_0120f420(),
+                C::Fn120fc08 => playback_service_0120fc08(),
+                C::Fn121164c => playback_service_0121164c(),
+                C::Fn1211c8c => playback_service_01211c8c(),
+                C::Fn12128a0 => playback_service_012128a0(),
+                C::Fn1212a48 => playback_service_01212a48(),
+                C::Fn12138ac => playback_service_012138ac(),
+                C::Fn121406c => playback_service_0121406c(),
+                C::Trace => playback_trace(),
+                C::Fn12390d4 => playback_service_012390d4(),
+                C::Fn1239134 => playback_service_01239134(),
+                C::Fn1239178 => playback_service_01239178(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine7::CallWith, argument: u32) {
+        unsafe {
+            match call {
+                machine7::CallWith::Fn12290cc => playback_service_012290cc(argument),
+                machine7::CallWith::Fn12290fc => playback_service_012290fc(argument),
+            };
+        }
+    }
+
+    fn set_state(&mut self, state: machine7::State) {
+        unsafe { write_volatile(MACHINE7_STATE as *mut u16, state as u16) }
+    }
+
+    fn request_event(&self) -> u32 {
+        unsafe { read_volatile(REQUEST_EVENT as *const u32) }
+    }
+
+    fn step(&self) -> u32 {
+        unsafe { read_volatile(STEP as *const u32) }
+    }
+
+    fn step_kind(&self) -> u16 {
+        unsafe { read_volatile(STEP_KIND as *const u16) }
+    }
+
+    fn set_step_kind(&mut self, kind: u16) {
+        unsafe { write_volatile(STEP_KIND as *mut u16, kind) }
     }
 }
 
@@ -330,6 +406,34 @@ actions! { machine0 {
     xm1_playback_m0_action28 => action28, xm1_playback_m0_action29 => action29,
     xm1_playback_m0_action30 => action30, xm1_playback_m0_action31 => action31,
     xm1_playback_m0_action32 => action32,
+} }
+
+actions! { machine7 {
+    xm1_playback_m7_action02 => action02, xm1_playback_m7_action03 => action03,
+    xm1_playback_m7_action04 => action04, xm1_playback_m7_action05 => action05,
+    xm1_playback_m7_action06 => action06, xm1_playback_m7_action07 => action07,
+    xm1_playback_m7_action08 => action08, xm1_playback_m7_action09 => action09,
+    xm1_playback_m7_action10 => action10, xm1_playback_m7_action11 => action11,
+    xm1_playback_m7_action12 => action12, xm1_playback_m7_action13 => action13,
+    xm1_playback_m7_action14 => action14, xm1_playback_m7_action15 => action15,
+    xm1_playback_m7_action16 => action16, xm1_playback_m7_action17 => action17,
+    xm1_playback_m7_action18 => action18, xm1_playback_m7_action19 => action19,
+    xm1_playback_m7_action20 => action20, xm1_playback_m7_action21 => action21,
+    xm1_playback_m7_action22 => action22, xm1_playback_m7_action23 => action23,
+    xm1_playback_m7_action24 => action24, xm1_playback_m7_action25 => action25,
+    xm1_playback_m7_action26 => action26, xm1_playback_m7_action27 => action27,
+    xm1_playback_m7_action28 => action28, xm1_playback_m7_action29 => action29,
+    xm1_playback_m7_action30 => action30, xm1_playback_m7_action31 => action31,
+    xm1_playback_m7_action32 => action32, xm1_playback_m7_action33 => action33,
+    xm1_playback_m7_action34 => action34, xm1_playback_m7_action35 => action35,
+    xm1_playback_m7_action36 => action36, xm1_playback_m7_action37 => action37,
+    xm1_playback_m7_action38 => action38, xm1_playback_m7_action39 => action39,
+    xm1_playback_m7_action40 => action40, xm1_playback_m7_action41 => action41,
+    xm1_playback_m7_action42 => action42, xm1_playback_m7_action43 => action43,
+    xm1_playback_m7_action44 => action44, xm1_playback_m7_action45 => action45,
+    xm1_playback_m7_action46 => action46, xm1_playback_m7_action47 => action47,
+    xm1_playback_m7_action48 => action48, xm1_playback_m7_action49 => action49,
+    xm1_playback_m7_action50 => action50,
 } }
 
 actions! { machine30 {

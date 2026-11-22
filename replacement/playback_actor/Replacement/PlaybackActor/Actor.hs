@@ -42,16 +42,17 @@ data Service = Service
 dispatcher :: Word32
 dispatcher = 0x011e8bf8
 
-machineEvents, machineStates, modeState, requestState, transferState :: Span
+machineEvents, machineStates, modeState, requestState, transferState, stepState :: Span
 machineEvents = Span 0x014ea4ec 0x014ea5ac
 machineStates = Span 0x014ea5ac 0x014ea66c
 modeState = Span 0x014ea678 0x014ea6e4
 requestState = Span 0x014ea6e4 0x014ea714
 transferState = Span 0x014eaed8 0x014eb5d0
+stepState = Span 0x014eb5d0 0x014eb5d8
 
 -- | The owned machines' action extents.
 retired :: [Span]
-retired = [Span 0x011e8ce4 0x011ea434, Span 0x011f31bc 0x011f4810]
+retired = [Span 0x011e8ce4 0x011ea434, Span 0x011eb824 0x011ec980, Span 0x011f31bc 0x011f4810]
 
 none :: Capture
 none = Capture [] []
@@ -153,7 +154,23 @@ services =
   , status 0x01243fa0 "service_01243fa0"
   , withArgument 0x012441d0 "service_012441d0"
   , status 0x012441f0 "service_012441f0"
+  , status 0x0120d618 "service_0120d618"
+  , void 0x0120e6e8 "service_0120e6e8"
+  , status 0x0120e964 "service_0120e964"
+  , status 0x0120f328 "service_0120f328"
+  , status 0x0120f420 "service_0120f420"
+  , status 0x0120fc08 "service_0120fc08"
+  , status 0x0121164c "service_0121164c"
+  , status 0x01211c8c "service_01211c8c"
+  , status 0x012128a0 "service_012128a0"
+  , status 0x012138ac "service_012138ac"
+  , status 0x0121406c "service_0121406c"
+  , Service 0x012290cc "service_012290cc" ["r0"] [] none
+  , Service 0x012290fc "service_012290fc" ["r0"] [] none
+  , void 0x012390d4 "service_012390d4"
+  , void 0x01239134 "service_01239134"
+  , status 0x01239178 "service_01239178"
   ]
 
 watchedWrites :: [Span]
-watchedWrites = [machineEvents, machineStates, modeState, requestState, transferState]
+watchedWrites = [machineEvents, machineStates, modeState, requestState, transferState, stepState]

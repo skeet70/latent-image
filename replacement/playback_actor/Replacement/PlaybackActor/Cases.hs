@@ -17,6 +17,7 @@ import qualified Data.ByteString as B
 import Data.Word (Word32)
 import Replacement.FileService.Native
 import Replacement.PlaybackActor.Machine30 (machine30)
+import Replacement.PlaybackActor.Machine7 (machine7)
 import Replacement.PlaybackActor.Model (machineScenarios)
 
 plainBase :: Word32
@@ -35,6 +36,17 @@ data OwnedMachine = OwnedMachine
 ownedMachines :: [OwnedMachine]
 ownedMachines =
   [ OwnedMachine "machine0" "xm1_playback_m0_action" actionAddresses 0x011ea434 0x01218ec8
+  , OwnedMachine "machine7" "xm1_playback_m7_action"
+      [ 0x011eb824, 0x011eb83c, 0x011eb860, 0x011eb888, 0x011eb8b0, 0x011eb8d8, 0x011eb958, 0x011eb980
+      , 0x011eb9a8, 0x011eb9d0, 0x011eb9f8, 0x011eba0c, 0x011eba38, 0x011eba54, 0x011ebabc, 0x011ebb38
+      , 0x011ebbb4, 0x011ebc30, 0x011ebcac, 0x011ebcc4, 0x011ebcec, 0x011ebd14, 0x011ebd3c, 0x011ebdb4
+      , 0x011ebe2c, 0x011ebe44, 0x011ebe68, 0x011ebecc, 0x011ebf54, 0x011ebf64, 0x011ebfc8, 0x011ec1c4
+      , 0x011ec3b8, 0x011ec3e4, 0x011ec4cc, 0x011ec518, 0x011ec554, 0x011ec59c, 0x011ec5d8, 0x011ec604
+      , 0x011ec63c, 0x011ec660, 0x011ec674, 0x011ec764, 0x011ec78c, 0x011ec7f0, 0x011ec868, 0x011ec8e0
+      , 0x011ec908
+      ]
+      0x011ec980
+      0x0121a498
   , OwnedMachine "machine30" "xm1_playback_m30_action"
       [ 0x011f31bc, 0x011f31d4, 0x011f320c, 0x011f3244, 0x011f325c, 0x011f3278, 0x011f3294, 0x011f3338
       , 0x011f3370, 0x011f33a8, 0x011f33c0, 0x011f33dc, 0x011f351c, 0x011f3530, 0x011f3620, 0x011f3644
@@ -395,7 +407,7 @@ preludeServices p = case p of
   Discard address -> returning address 0x31
 
 scenarios :: B.ByteString -> [Scenario]
-scenarios image = machine0Scenarios image ++ machineScenarios image machine30
+scenarios image = machine0Scenarios image ++ concatMap (machineScenarios image) [machine7, machine30]
 
 -- | Every machine-0 action with every status; the action at 0x011e8e48 also with every second
 -- status after navigation status 8.

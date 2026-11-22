@@ -110,14 +110,12 @@ s12441f0 = 0x012441f0
 phase :: Action Word32
 phase = load (field 0) Word [1, 2]
 
--- | Phase 1 returns 8 and phase 2 returns 4, both in state 0.
 gate :: Action ()
 gate = do
   p <- phase
   when (p == 1) (state 0 >> finish 8)
   when (p == 2) (state 0 >> finish 4)
 
--- | State 4, 0x012259a4(step), 0x01225a98 and, when cleared, 0x01243868; returns 0.
 restart :: Word32 -> Bool -> Action a
 restart step cleared = do
   state 4
@@ -126,7 +124,6 @@ restart step cleared = do
   when cleared (void s1243868)
   finish 0
 
--- | State 0, 0x012259a4(8) and, when cleared, 0x01243868; returns 12.
 reset :: Bool -> Action a
 reset cleared = do
   state 0
@@ -134,7 +131,6 @@ reset cleared = do
   when cleared (void s1243868)
   finish 12
 
--- | Ends with `result` in `s` when the status is zero, otherwise restarts.
 zeroOr :: Word32 -> Word32 -> Action a -> Action a
 zeroOr status s otherwise' = if status == 0 then state s >> finish 0 else otherwise'
 
@@ -193,7 +189,6 @@ ec28Status = do
   when (r == 4) (state 0 >> finish r)
   restart 8 True
 
--- | The machine-3 status read before the gate; 4 continues into `ready`.
 machine3Gated :: Action Word32 -> Action Word32
 machine3Gated ready = do
   r <- call dispatch3 [4, 12]
