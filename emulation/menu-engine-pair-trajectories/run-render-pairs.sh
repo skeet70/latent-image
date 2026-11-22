@@ -278,8 +278,9 @@ run() {
   admission_run inputs "$name" "$role" "${bind_admission[@]}" || return 2
   local launch=(env) started finished run_status
   [ -n "${RENDER_VIEWER_GHCRTS:-}" ] && launch+=("GHCRTS=$RENDER_VIEWER_GHCRTS")
+  [ -n "${XM1_EMULATOR_SLOTS:-}" ] && launch+=("XM1_EMULATOR_SLOTS=$XM1_EMULATOR_SLOTS")
   started=$(date +%s%N)
-  "${launch[@]}" XM1_EMULATOR_SLOTS="${XM1_EMULATOR_SLOTS:-1}" devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}" \
+  "${launch[@]}" devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}" \
     < /dev/null > "$runs/$dir-viewer.log" 2>&1
   run_status=$?
   finished=$(date +%s%N)
@@ -317,7 +318,8 @@ admit() {
   printf 'admitted %s %s inputs; guest command:\n' "$name" "$role"
   local preview=(env)
   [ -n "${RENDER_VIEWER_GHCRTS:-}" ] && preview+=("GHCRTS=$RENDER_VIEWER_GHCRTS")
-  printf '%q ' "${preview[@]}" XM1_EMULATOR_SLOTS="${XM1_EMULATOR_SLOTS:-1}" devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}"
+  [ -n "${XM1_EMULATOR_SLOTS:-}" ] && preview+=("XM1_EMULATOR_SLOTS=$XM1_EMULATOR_SLOTS")
+  printf '%q ' "${preview[@]}" devenv shell -- bazel-bin/emulation/xm1-viewer "${GUEST[@]}"
   printf '\n'
 }
 
