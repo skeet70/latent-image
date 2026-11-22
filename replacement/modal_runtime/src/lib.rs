@@ -280,12 +280,6 @@ unsafe extern "C" {
     fn rb_bank_key_right() -> u32;
 }
 
-#[cfg(rb_menu_value_owned)]
-unsafe extern "C" {
-    fn rb_menu_value_cancel() -> u32;
-    fn rb_menu_value_confirm() -> u32;
-}
-
 #[cfg(rb_modal75_owned)]
 struct ArmPicker;
 
@@ -317,14 +311,6 @@ impl picker::PickerServices for ArmPicker {
     }
     fn write_word(&mut self, cell: picker::WordCell, value: u32) {
         unsafe { core::ptr::write_volatile(cell.address() as *mut u32, value) }
-    }
-    #[cfg(rb_menu_value_owned)]
-    fn value_confirm(&mut self, _node: &picker::PickerNode) {
-        unsafe { rb_menu_value_confirm() };
-    }
-    #[cfg(rb_menu_value_owned)]
-    fn value_cancel(&mut self, _node: &picker::PickerNode) {
-        unsafe { rb_menu_value_cancel() };
     }
 }
 

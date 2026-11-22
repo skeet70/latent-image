@@ -54,7 +54,7 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     ;;
   modal75,menu-engine,menu-value)
     builder_mode=(--ram-push-variant modal75,menu-engine,menu-value)
-    allocation_size=0x33d00
+    allocation_size=0x3dd00
     publication_count=226
     activation_count=95
     modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry

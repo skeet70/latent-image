@@ -68,9 +68,6 @@ static TABLES: ValueTables = ValueTables::new(
     Some(ImageSizeRule {
         size_property: SIZE,
         aspect_property: ASPECT,
-        change_property: PropertyId::new(0x161),
-        change_property_1f: PropertyId::new(0x165),
-        marker_property: PropertyId::new(0x1e5),
     }),
 );
 
@@ -95,10 +92,6 @@ impl FakeSettings {
 }
 
 impl Settings for FakeSettings {
-    fn read(&self, property: PropertyId) -> ChoiceCode {
-        ChoiceCode::new(self.value(property.get()))
-    }
-
     fn write(&mut self, property: PropertyId, value: ChoiceCode) {
         self.values.insert(property.get(), value.get());
         self.writes.push((property.get(), value.get()));
@@ -117,27 +110,17 @@ fn image_size(token: u32) -> ValueTarget {
     TABLES.target(SIZE, RowToken::new(token))
 }
 
-#[test]
-fn image_size_entry_choice_is_the_pair_of_token_one() {
-    let mut settings = FakeSettings::with(&[(SIZE.get(), 0), (ASPECT.get(), 1), (OTHER.get(), 7)]);
-    let transaction = Transaction::begin(&TABLES, image_size(1), &settings).unwrap();
-    assert_eq!(
-        transaction.entry().iter().map(|write| (write.property.get(), write.value.get())).collect::<Vec<_>>(),
-        vec![(SIZE.get(), 0), (ASPECT.get(), 1), (0x161, 0), (0x165, 0), (0x1e5, 0)]
-    );
-    let commit = transaction.select(&TABLES, RowToken::new(1), &mut settings).unwrap();
-    assert_eq!(writes(&commit), vec![(SIZE.get(), 0), (ASPECT.get(), 1)]);
-    assert_eq!(settings.take_writes(), vec![(SIZE.get(), 0), (ASPECT.get(), 1)]);
-    assert_eq!(settings.value(OTHER.get()), 7);
+fn commit(tables: &ValueTables, target: ValueTarget, settings: &mut FakeSettings) -> Result<Commit, Refusal> {
+    let commit = resolve(tables, target)?;
+    commit.write_to(settings);
+    Ok(commit)
 }
 
 #[test]
-fn image_size_down_previews_the_next_token() {
+fn image_size_commit_returns_the_retained_effects() {
     let mut settings = FakeSettings::with(&[(SIZE.get(), 0), (ASPECT.get(), 1)]);
-    let transaction = Transaction::begin(&TABLES, image_size(1), &settings).unwrap();
-    let commit = transaction.select(&TABLES, RowToken::new(2), &mut settings).unwrap();
+    let commit = commit(&TABLES, image_size(2), &mut settings).unwrap();
     assert_eq!(writes(&commit), vec![(SIZE.get(), 0), (ASPECT.get(), 2)]);
-    assert_eq!(settings.value(ASPECT.get()), 2);
     assert_eq!(
         retained(&commit),
         vec![
@@ -152,40 +135,11 @@ fn image_size_down_previews_the_next_token() {
 }
 
 #[test]
-fn image_size_back_restores_only_the_captured_properties() {
-    let mut settings = FakeSettings::with(&[(SIZE.get(), 0), (ASPECT.get(), 1), (OTHER.get(), 7)]);
-    let transaction = Transaction::begin(&TABLES, image_size(1), &settings).unwrap();
-    transaction.select(&TABLES, RowToken::new(2), &mut settings).unwrap();
-    settings.write(OTHER, ChoiceCode::new(9));
-    let restored = transaction.back(&mut settings);
-    assert_eq!(
-        restored.iter().map(|write| (write.property.get(), write.value.get())).collect::<Vec<_>>(),
-        vec![(SIZE.get(), 0), (ASPECT.get(), 1), (0x161, 0), (0x165, 0), (0x1e5, 0)]
-    );
-    assert_eq!(settings.value(SIZE.get()), 0);
-    assert_eq!(settings.value(ASPECT.get()), 1);
-    assert_eq!(settings.value(OTHER.get()), 9);
-    assert_eq!(settings.take_writes().last(), Some(&(0x1e5, 0)));
-}
-
-#[test]
-fn image_size_confirm_keeps_the_selection_without_a_write() {
-    let mut settings = FakeSettings::with(&[(SIZE.get(), 0), (ASPECT.get(), 1)]);
-    let transaction = Transaction::begin(&TABLES, image_size(1), &settings).unwrap();
-    transaction.select(&TABLES, RowToken::new(2), &mut settings).unwrap();
-    settings.take_writes();
-    transaction.confirm();
-    assert!(settings.take_writes().is_empty());
-    assert_eq!(settings.value(ASPECT.get()), 2);
-}
-
-#[test]
 fn every_offered_token_commits_its_pair() {
     for token in OFFERED {
         let (_, size, aspect) = PAIRS[token as usize];
         let mut settings = FakeSettings::with(&[(SIZE.get(), 0), (ASPECT.get(), 1)]);
-        let transaction = Transaction::begin(&TABLES, image_size(1), &settings).unwrap();
-        let commit = transaction.select(&TABLES, RowToken::new(token), &mut settings).unwrap();
+        let commit = commit(&TABLES, image_size(token), &mut settings).unwrap();
         assert_eq!(writes(&commit), vec![(SIZE.get(), size), (ASPECT.get(), aspect)], "token {token}");
         assert_eq!(settings.value(SIZE.get()), size);
         assert_eq!(settings.value(ASPECT.get()), aspect);
@@ -195,10 +149,9 @@ fn every_offered_token_commits_its_pair() {
 #[test]
 fn image_size_unoffered_token_refuses_without_writing() {
     let mut settings = FakeSettings::with(&[(SIZE.get(), 0), (ASPECT.get(), 1)]);
-    let transaction = Transaction::begin(&TABLES, image_size(1), &settings).unwrap();
     settings.take_writes();
     assert_eq!(
-        transaction.select(&TABLES, RowToken::new(12), &mut settings),
+        commit(&TABLES, image_size(12), &mut settings),
         Err(Refusal::UnofferedRow(RowToken::new(12)))
     );
     assert!(settings.take_writes().is_empty());

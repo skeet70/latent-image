@@ -1812,6 +1812,13 @@ sh_binary(
 )
 
 sh_binary(
+    name = "preservation-control",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-preservation-control"],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "scanout-pair",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-scanout-pair"],
     visibility = ["//visibility:public"],
@@ -2975,25 +2982,6 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:filepath",
-    ],
-)
-
-haskell_binary(
-    name = "menu-value-cases",
-    srcs = ["MenuValueCases.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
-    main_file = "MenuValueCases.hs",
-    visibility = ["//visibility:public"],
-    deps = [
-        ":native-adapter",
-        ":native-observation",
-        ":owned-case",
-        "//host:aeson",
-        "//host:base",
-        "//host:bytestring",
-        "//host:containers",
-        "//host:filepath",
-        "//host:host-support",
     ],
 )
 

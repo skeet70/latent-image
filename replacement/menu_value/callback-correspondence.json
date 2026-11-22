@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "callbacks": [
+    {
+      "stock": "0x00f3a834",
+      "owned": "0x00f3a834",
+      "invocation": "IMAGE SIZE configuration completion of pipeline command 0x4010: submitted by stock 0x00f3b6bc through 0x0103a254 as the seventh payload word, held at 0x016fe9f8 by 0x01029188 and invoked once with zero by 0x01029188 (pipeline states 1/2) or 0x01029430 (pending state 2); it posts saclac message 0x71. Both roles submit the stock word."
+    }
+  ]
+}
