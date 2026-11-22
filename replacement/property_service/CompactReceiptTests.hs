@@ -43,7 +43,7 @@ native :: [O.WriteEvent] -> N.NativeObservation
 native writes = N.NativeObservation N.Returned (M.fromList [(register, 7) | register <- N.registerLabels])
   [(ident, B.replicate size 0) | (ident, _, size) <- O.comparedRegions]
   (N.Complete (N.ProvenanceTotal (fromIntegral (length writes))) [N.Write (N.GuestAddress (fromIntegral (O.eventAddress event))) (N.WriteBytes (fromIntegral (O.eventWidth event))) | event <- writes])
-  (N.InstructionCount 99) (N.EngineError 0) Nothing
+  (N.InstructionCount 99) (N.EngineError 0) Nothing Nothing
 
 report :: [O.WriteEvent] -> Value
 report writes = object

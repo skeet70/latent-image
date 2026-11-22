@@ -36,4 +36,4 @@ memory :: B.ByteString -> B.ByteString -> [(RegionId,B.ByteString)]
 memory state output = [(RegionId "state",state),(RegionId "late-state",B.replicate 4 0),(RegionId "output",output),(RegionId "receipts",B.replicate 16 0),(RegionId "stack",B.replicate 0x1000 0xa5)]
 
 reference :: NativeObservation
-reference = NativeObservation Returned registers (memory (B.replicate 4 0) (B.replicate 4 0)) (Complete (ProvenanceTotal 0) []) (InstructionCount 10) (EngineError 0) Nothing
+reference = NativeObservation Returned registers (memory (B.replicate 4 0) (B.replicate 4 0)) (Complete (ProvenanceTotal 0) []) (InstructionCount 10) (EngineError 0) Nothing Nothing

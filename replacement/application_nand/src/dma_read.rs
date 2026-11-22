@@ -298,6 +298,6 @@ impl<P: ReadPorts, B: DmaDestination> DmaReadOwner<P, B> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, xm1_application_nand_host_tests))]
 #[path = "dma_read_tests.rs"]
 mod tests;

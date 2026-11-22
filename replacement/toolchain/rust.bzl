@@ -30,6 +30,9 @@ _TARGET_FLAGS_TAIL = [
     "jump-tables=no",
 ]
 
+def _jump_table_flags(jump_tables):
+    return [] if jump_tables else _TARGET_FLAGS_TAIL
+
 def _strict_align_flags(strict_align):
     return ["-C", "target-feature=" + ("+strict-align" if strict_align else "-strict-align")]
 
@@ -112,6 +115,7 @@ def xm1_rust_staticlib(
         rlib_search_deps = [],
         dependency_archives = [],
         debuginfo_override = None,
+        jump_tables = False,
         tags = []):
     """Compiles one no_std crate root to a staticlib for armv7r-none-eabi.
 
@@ -120,7 +124,8 @@ def xm1_rust_staticlib(
     `include!` and `env!`.
     Search-only rlibs and dependency archives use the same scoped setup as `xm1_rust_rlib`.
     `debuginfo_override` pins the debuginfo level instead of following the
-    `--define=xm1_rust_debuginfo=2` selection.
+    `--define=xm1_rust_debuginfo=2` selection. `jump_tables` lets the compiler
+    emit switch jump tables, for crates outside the native CFG admission.
     """
     if crate_name == None:
         crate_name = name.replace("-", "_")
@@ -134,7 +139,7 @@ def xm1_rust_staticlib(
                 "--crate-type=staticlib",
                 "-C",
                 "opt-level=%s" % opt_level,
-            ] + _TARGET_FLAGS_HEAD + _debuginfo_flags(debuginfo) + _TARGET_FLAGS_TAIL + _strict_align_flags(strict_align) + rustc_flags + [
+            ] + _TARGET_FLAGS_HEAD + _debuginfo_flags(debuginfo) + _jump_table_flags(jump_tables) + _strict_align_flags(strict_align) + rustc_flags + [
                 "--extern=%s=$(location %s)" % (crate, label)
                 for crate, label in rlib_deps.items()
             ] + [

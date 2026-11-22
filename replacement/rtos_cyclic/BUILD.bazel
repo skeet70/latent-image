@@ -42,6 +42,7 @@ xm1_rust_staticlib(
             "--cfg",
             "'feature=\"stage\"'",
         ],
+        jump_tables = True,
     )
     for domain in ["a", "b"]
 ]
