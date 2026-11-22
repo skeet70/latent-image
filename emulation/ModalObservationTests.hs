@@ -20,7 +20,7 @@ import qualified Emulation.ContextCatalogue as Catalogue
 import Emulation.ModalObservation
 import Emulation.ModalWatchStream (readFinalModalWatchFrom)
 import Emulation.WatchObservation
-import EmulatorUsb (BridgeExchange, EmulatorStart (..), TraceHit (..), TraceHitCursor (..), TraceHitLimit (..), TraceHitPage (..), ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorTraceHitCount, emulatorTraceHitPage, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
+import EmulatorUsb (BridgeExchange, EmulatorStart (..), TraceHit (..), TraceHitCursor (..), TraceHitLimit (..), TraceHitPage (..), ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd, startEmulator, stopEmulator, emulatorTraceHitTotal, emulatorTraceHitPage, emulatorWatchStateToFile, emulatorWatchStateRaw, emulatorWatchEnd)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.UiTrajectory (checkModalObserverConfiguration, decodeTrajectories)
 import Emulation.RenderStackDiagnostic
@@ -354,7 +354,7 @@ tracePageTests = do
   executable <- getExecutablePath
   forM_ [BoundedTraceReply, SuffixTraceReply, ShortTraceReply] $ \mode -> do
     (emulator, _, ()) <- startEmulator executable "." ["--trace-page-fixture", show mode] (\_ -> pure (Nothing, ()))
-    count <- try (emulatorTraceHitCount emulator (TraceHitCursor 0)) :: IO (Either IOException Int)
+    count <- try (emulatorTraceHitTotal emulator) :: IO (Either IOException Int)
     case mode of
       ShortTraceReply -> check "incomplete suffix is refused" (isLeft count)
       _ -> do
@@ -362,6 +362,8 @@ tracePageTests = do
         page <- emulatorTraceHitPage emulator (TraceHitCursor 1) (TraceHitLimit 1)
         check "bounded and retained suffix replies expose the requested page"
           (tracePageCount page == 4 && tracePageCursor page == TraceHitCursor 1 && map traceInstructions (tracePageHits page) == [2])
+        reread <- try (emulatorTraceHitPage emulator (TraceHitCursor 0) (TraceHitLimit 1)) :: IO (Either IOException TraceHitPage)
+        check "a cursor below an acknowledged one is refused without a request" (isLeft reread)
     stopEmulator emulator
 
 data WatchSpoolFixture = ChunkedWatch | TruncatedWatch | MalformedWatch | UnsolicitedWatch

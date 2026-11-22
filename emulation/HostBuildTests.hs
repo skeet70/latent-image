@@ -4,14 +4,14 @@ module Main (main) where
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
 import Control.Exception (IOException, try)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteString8
 import Data.Char (isDigit)
 import Data.List (elemIndex, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import GHC.IO.Encoding (setForeignEncoding)
-import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, makeAbsolute, renameFile)
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, listDirectory, makeAbsolute, renameFile)
 import System.Environment (getArgs, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath (takeDirectory, (</>))
@@ -106,7 +106,8 @@ run binary = do
       smallHostInfo = root </> "meminfo-small-host"
   writeMeminfo hostInfo (64 * gib) (64 * gib)
   writeMeminfo smallHostInfo (24 * gib) (24 * gib)
-  environment <- (("XM1_HOST_MEMINFO", hostInfo) :) <$> testEnvironment home bin logFile
+  let cgroupRoot = root </> "cgroup"
+  environment <- (\inherited -> ("XM1_HOST_MEMINFO", hostInfo) : ("XM1_HOST_CGROUP_ROOT", cgroupRoot) : inherited) <$> testEnvironment home bin logFile
   let release name = root </> ("release-" ++ name)
       named name extra =
         let overrides = ("FAKE_NAME", name) : ("FAKE_RELEASE", release name) : extra
@@ -138,11 +139,11 @@ run binary = do
     , ("maximum-swap", [("XM1_HOST_BUILD_MEMORY_MAX", "2G"), ("XM1_HOST_BUILD_SWAP_MAX", "32G"), ("XM1_HOST_MEMORY_BUDGET", "4G")], "2147483648", "34359738368")
     ] $ \(name, overrides, memory, swap) -> do
       writeFile (release name) ""
-      invocation <- startTargets name overrides ["//memory:" ++ name]
+      invocation <- startTargets name (("HOME", root </> ("home-" ++ name)) : overrides) ["//memory:" ++ name]
       code <- waitForProcess (invocationProcess invocation)
       errors <- invocationStderr invocation
       entries <- lines <$> readFile' logFile
-      expect (name ++ " enforces RAM and swap for the whole build scope and reserves only its RAM")
+      expect (name ++ " enforces RAM and swap for the whole build scope and, with no class history, reserves its RAM cap")
         (code == ExitSuccess && ("memory " ++ name ++ " " ++ memory ++ " " ++ swap) `elem` entries
           && ("\"reserved_memory_bytes\":" ++ memory ++ ",") `isInfixOf` errors)
   invalidMemoryCases <- forM
@@ -187,15 +188,16 @@ run binary = do
           && ("high " ++ name ++ " " ++ reserved) `elem` entries
           && ("\"reserved_memory_bytes\":" ++ reserved ++ ",") `isInfixOf` errors)
   firstRun <- historyCase "history-first"
-  firstReservesCap <- expect "the first run of a key reserves its RAM cap and sets it as MemoryHigh" (firstRun "2147483648")
+  firstReservesClassEstimate <- expect "a new key in a class with recorded peaks reserves the class estimate, not its RAM cap, and sets it as MemoryHigh"
+    (firstRun "268435456")
   repeatRun <- historyCase "history-repeat"
   repeatReservesEstimate <- expect "a repeat key reserves 1.25 times its recorded peak in whole tokens, under the same RAM cap"
     (repeatRun "268435456")
 
   let shortInfo = root </> "meminfo-short"
-  writeMeminfo shortInfo (64 * gib) (9 * gib)
+  writeMeminfo shortInfo (64 * gib) (3 * gib + token - 1024)
   writeFile (release "short") ""
-  short <- startTargets "short" [("XM1_HOST_MEMINFO", shortInfo), ("XM1_HOST_BUILD_MEMORY_MAX", "2G")] ["//available:short"]
+  short <- startTargets "short" [("XM1_HOST_MEMINFO", shortInfo), ("XM1_HOST_BUILD_MEMORY_MAX", "256M")] ["//available:short"]
   threadDelay 2_000_000
   shortEarly <- started "short"
   laneA <- startTargets "lane-a" [] ["//available:lane-a"]
@@ -209,9 +211,9 @@ run binary = do
         errors <- maybe (pure "still running") (const (invocationStderr invocation)) code
         pure (code, errors)
   (laneCodes, laneErrors) <- unzip <$> mapM settled [laneA, laneB]
-  writeMeminfo shortInfo (64 * gib) (64 * gib)
+  writeMeminfo shortInfo (64 * gib) (3 * gib + token)
   (shortCode, shortErr) <- settled short
-  availableGate <- expect "admission waits while MemAvailable less the 8 GiB reserve is short and re-checks it"
+  availableGate <- expect "admission waits while MemAvailable less the 3 GiB live headroom is 1 KiB short of the reservation and admits once it covers it"
     (not shortEarly && shortCode == Just ExitSuccess && "waiting for host RAM" `isInfixOf` shortErr)
   laneless <- expect "a build waiting for memory holds no build lane"
     (lanesFree && shortStillWaiting && all (== Just ExitSuccess) laneCodes)
@@ -219,7 +221,9 @@ run binary = do
 
   let orderInfo = root </> "meminfo-order"
       orderBudget = [("XM1_HOST_MEMINFO", orderInfo), ("XM1_HOST_MEMORY_BUDGET", "4G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")]
-  writeMeminfo orderInfo (64 * gib) (9 * gib)
+  appendFile (home </> ".cache" </> "xm1-host-memory" </> "history")
+    (unlines [show gib ++ "\thost-build build //order:small", show (3 * gib) ++ "\thost-build build //order:large"])
+  writeMeminfo orderInfo (64 * gib) (3 * gib)
   writeFile (release "order-large") ""
   large <- startTargets "order-large" (("XM1_HOST_BUILD_MEMORY_MAX", "4G") : orderBudget) ["//order:large"]
   threadDelay 1_000_000
@@ -232,8 +236,63 @@ run binary = do
   largeHeld <- not <$> started "order-large"
   writeFile (release "order-small") ""
   orderCodes <- map fst <$> mapM settled [small, large]
-  smallestFirst <- expect "when both fit, the smaller waiting reservation is admitted first"
+  smallestFirst <- expect "before the aging threshold, when both fit, the smaller waiting reservation is admitted first"
     (neitherEarly && smallFirst && largeHeld && all (== Just ExitSuccess) orderCodes)
+
+  let agingInfo = root </> "meminfo-aging"
+      agingBudget = [("XM1_HOST_MEMINFO", agingInfo), ("XM1_HOST_MEMORY_BUDGET", "4G"), ("XM1_HOST_BUILD_SWAP_MAX", "0"),
+        ("XM1_HOST_ADMISSION_AGING_SECONDS", "1")]
+  appendFile (home </> ".cache" </> "xm1-host-memory" </> "history")
+    (unlines [show gib ++ "\thost-build build //aging:holder", show gib ++ "\thost-build build //aging:small", show (3 * gib) ++ "\thost-build build //aging:large"])
+  writeMeminfo agingInfo (64 * gib) (64 * gib)
+  agingHolder <- startTargets "aging-holder" (("XM1_HOST_BUILD_MEMORY_MAX", "2G") : agingBudget) ["//aging:holder"]
+  agingHolderStarted <- waitFor (started "aging-holder")
+  writeFile (release "aging-large") ""
+  agingLarge <- startTargets "aging-large" (("XM1_HOST_BUILD_MEMORY_MAX", "4G") : agingBudget) ["//aging:large"]
+  threadDelay 2_500_000
+  writeFile (release "aging-small") ""
+  agingSmall <- startTargets "aging-small" (("XM1_HOST_BUILD_MEMORY_MAX", "2G") : agingBudget) ["//aging:small"]
+  threadDelay 2_000_000
+  neitherAdmitted <- not <$> ((||) <$> started "aging-large" <*> started "aging-small")
+  writeFile (release "aging-holder") ""
+  (agingCodes, agingErrors) <- unzip <$> mapM settled [agingHolder, agingLarge, agingSmall]
+  agingStarts <- filter (\name -> name `elem` ["aging-large", "aging-small"]) . concatMap (take 1 . drop 1 . words) . filter ("start " `isPrefixOf`) . lines <$> readFile' logFile
+  agedFirst <- expect "a waiter past the aging threshold blocks a newer smaller one that fits until running scopes drain and it is admitted"
+    (agingHolderStarted && neitherAdmitted && agingStarts == ["aging-large", "aging-small"] && all (== Just ExitSuccess) agingCodes)
+  unless agedFirst (putStrLn (unlines agingErrors))
+
+  let outstandingInfo = root </> "meminfo-outstanding"
+      outstandingBudget = [("XM1_HOST_MEMINFO", outstandingInfo), ("XM1_HOST_BUILD_MEMORY_MAX", "2G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")]
+      memoryRecords = home </> ".cache" </> "xm1-host-memory"
+      scopeUsage :: Integer -> Integer -> IO ()
+      scopeUsage current swap = do
+        names <- listDirectory memoryRecords
+        forM_ [name | name <- names, "scope-" `isPrefixOf` name, '.' `notElem` name] $ \name -> do
+          record <- lines <$> readFile' (memoryRecords </> name)
+          case record of
+            [_, _, group, _] -> do
+              let directory = cgroupRoot ++ group
+                  counter file value = writeFile (directory </> file ++ ".tmp") (show value) >> renameFile (directory </> file ++ ".tmp") (directory </> file)
+              createDirectoryIfMissing True directory
+              counter "memory.current" current
+              counter "memory.swap.current" swap
+            _ -> pure ()
+  appendFile (memoryRecords </> "history")
+    (unlines [show (2 * gib) ++ "\thost-build build //outstanding:held", show (2 * gib) ++ "\thost-build build //outstanding:new"])
+  writeMeminfo outstandingInfo (64 * gib) (5 * gib)
+  outstandingHeld <- startTargets "outstanding-held" outstandingBudget ["//outstanding:held"]
+  heldStarted <- waitFor (started "outstanding-held")
+  scopeUsage 0 0
+  writeFile (release "outstanding-new") ""
+  outstandingNew <- startTargets "outstanding-new" outstandingBudget ["//outstanding:new"]
+  threadDelay 2_000_000
+  newEarly <- started "outstanding-new"
+  scopeUsage gib gib
+  newAdmitted <- waitFor (started "outstanding-new")
+  writeFile (release "outstanding-held") ""
+  outstandingCodes <- map fst <$> mapM settled [outstandingNew, outstandingHeld]
+  outstandingGate <- expect "an admitted scope below its reservation blocks a new one MemAvailable less the live headroom covers, until its RAM plus swap reaches its reservation"
+    (heldStarted && not newEarly && newAdmitted && all (== Just ExitSuccess) outstandingCodes)
 
   first <- start "first" []
   firstStarted <- waitFor (started "first")
@@ -430,7 +489,7 @@ run binary = do
   _ <- waitForProcess legacy
   legacyCompatible <- expect "a legacy whole-file lock blocks both build lanes"
     (legacyPid /= Nothing && not legacyEarly && legacyCode == ExitSuccess)
-  pure (and ([storageRefused, invalidReserveRefused, overrideBounded, defaultReserve, firstReservesCap, repeatReservesEstimate, availableGate, laneless, smallestFirst, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
+  pure (and ([storageRefused, invalidReserveRefused, overrideBounded, defaultReserve, firstReservesClassEstimate, repeatReservesEstimate, availableGate, laneless, smallestFirst, agedFirst, outstandingGate, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
 
 data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
 
@@ -540,9 +599,10 @@ testEnvironment home bin logFile = do
       path = maybe bin ((bin ++ ":") ++) (lookup "PATH" inherited)
       keep name value environment =
         if any ((== name) . fst) environment then environment else (name, value) : environment
-      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE", "XM1_HOST_MEMORY_BUDGET", "XM1_HOST_MEMINFO",
+      dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE", "XM1_HOST_MEMORY_BUDGET", "XM1_HOST_MEMINFO", "XM1_HOST_CGROUP_ROOT",
         "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX",
-        "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
+        "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL",
+        "XM1_HOST_ADMISSION_AGING_SECONDS"]
   pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile) : ("XM1_STORAGE_MIN_FREE", "1")
     : filter ((`notElem` dropped) . fst)
       (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited))

@@ -25,6 +25,7 @@ module EmulatorUsb
   , traceHitPageLimit
   , emulatorTraceHitPage
   , emulatorTraceHitCount
+  , emulatorTraceHitTotal
   , emulatorTraceHits
   , emulatorTraceHitsRaw
   , emulatorTraceHitsPage
@@ -107,7 +108,7 @@ import qualified Emulation.CaptureStream as Capture
 import qualified Emulation.SaveLifecycle as Lifecycle
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Int (Int32)
 import Data.List (sort)
 import Data.Word (Word8, Word32, Word64)
@@ -142,6 +143,9 @@ data Emulator = Emulator
   , emulatorLock :: MVar ()
   , emulatorCaptureReader :: Capture.BoundedReader
   , emulatorProvenanceBatches :: IORef ProvenanceBuffer
+  -- | The highest `from` this session's trace-hits requests have sent since the session started or
+  -- since capture-observation-begin. The FujiMod bridge drops the hits below it.
+  , emulatorTraceFloor :: IORef TraceHitCursor
   }
 
 -- | How the emulator reached its first host command.
@@ -261,12 +265,18 @@ data CaptureCommand
   | CaptureWindow
 
 emulatorCaptureCommand :: Emulator -> CaptureCommand -> IO Value
-emulatorCaptureCommand emulator = bridgeWatchRpc exchange . request
+emulatorCaptureCommand emulator command = do
+  reply <- bridgeWatchRpc exchange (request command)
+  case (command, reply) of
+    (BeginSaveLifecycle _, Object fields) | not (M.member "ok" fields || M.member "decode_error" fields) ->
+      writeIORef (emulatorTraceFloor emulator) (TraceHitCursor 0)
+    _ -> pure ()
+  pure reply
   where
     exchange encoded = withMVar (emulatorLock emulator) $ \_ ->
       exchangeLockedReading emulator
         (Capture.readBoundedLine (emulatorCaptureReader emulator)) encoded
-    request command = case command of
+    request command' = case command' of
       BeginSaveLifecycle program -> object
         ["command" .= ("capture-observation-begin" :: T.Text), "scope" .= Lifecycle.scopeValue program]
       CapturePage cursor -> Capture.hitsRequest cursor
@@ -344,7 +354,8 @@ startEmulator python directory arguments choose = bracketOnError create cleanup 
       lock <- newMVar ()
       captureReader <- Capture.newBoundedReader output
       provenance <- newIORef ProvenanceDisabled
-      pure (Emulator input output process lock captureReader provenance)
+      floor_ <- newIORef (TraceHitCursor 0)
+      pure (Emulator input output process lock captureReader provenance floor_)
     event emulator name = do
       line <- C.hGetLine (emulatorOutput emulator)
       value <- either (ioError . userError . (("invalid emulator " ++ name ++ " event: ") ++)) pure (eitherDecodeStrict' line)
@@ -541,12 +552,22 @@ data TraceHitPage = TraceHitPage
 traceHitPageLimit :: TraceHitLimit
 traceHitPageLimit = TraceHitLimit 16
 
+-- | Sends one trace-hits request from CURSOR, refusing a cursor below 'emulatorTraceFloor'.
+traceHitsRequest :: Emulator -> TraceHitCursor -> Maybe TraceHitLimit -> IO (M.KeyMap Value)
+traceHitsRequest emulator cursor@(TraceHitCursor from) limit = do
+  require (from >= 0) "trace-hits cursor is negative"
+  floor_ <- readIORef (emulatorTraceFloor emulator)
+  require (cursor >= floor_) "trace-hits index precedes acknowledged hits"
+  fields <- rpc emulator (object (["command" .= String "trace-hits", "from" .= from]
+    ++ ["limit" .= value | Just (TraceHitLimit value) <- [limit]]))
+  atomicModifyIORef' (emulatorTraceFloor emulator) (\current -> (max current cursor, ()))
+  pure fields
+
 -- | The retained bridge returns the whole suffix; the SDK returns a bounded page.
 emulatorTraceHitPage :: Emulator -> TraceHitCursor -> TraceHitLimit -> IO TraceHitPage
 emulatorTraceHitPage emulator (TraceHitCursor from) (TraceHitLimit limit) = do
-  require (from >= 0) "trace-hits cursor is negative"
   require (limit > 0) "trace-hits limit must be positive"
-  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= from, "limit" .= limit])
+  fields <- traceHitsRequest emulator (TraceHitCursor from) (Just (TraceHitLimit limit))
   count <- integerField "count" fields
   require (count >= from) ("trace-hits count " ++ show count ++ " precedes cursor " ++ show from)
   hits <- objectField "hits" fields >>= parseTraceHits
@@ -557,11 +578,10 @@ emulatorTraceHitPage emulator (TraceHitCursor from) (TraceHitLimit limit) = do
       ++ " rows, the frozen count requires " ++ show expected)
   pure (TraceHitPage count (TraceHitCursor from) (if returned == expected then hits else take limit hits))
 
--- | The recorded count at or after CURSOR. The retained bridge also returns its full suffix.
+-- | The recorded count, acknowledging the hits below CURSOR. The retained bridge also returns its full suffix.
 emulatorTraceHitCount :: Emulator -> TraceHitCursor -> IO Int
 emulatorTraceHitCount emulator (TraceHitCursor from) = do
-  require (from >= 0) "trace-hits cursor is negative"
-  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= from, "limit" .= (1 :: Int)])
+  fields <- traceHitsRequest emulator (TraceHitCursor from) (Just (TraceHitLimit 1))
   count <- integerField "count" fields
   require (count >= from) ("trace-hits count " ++ show count ++ " precedes cursor " ++ show from)
   hits <- objectField "hits" fields >>= parseTraceHits
@@ -570,11 +590,15 @@ emulatorTraceHitCount emulator (TraceHitCursor from) = do
   require (returned == expected || returned == count - from) "trace-hits count query returned an unstable hit page"
   pure count
 
+-- | The recorded count, acknowledging no further hits.
+emulatorTraceHitTotal :: Emulator -> IO Int
+emulatorTraceHitTotal emulator = readIORef (emulatorTraceFloor emulator) >>= emulatorTraceHitCount emulator
+
 -- | The hit count so far and the hits recorded from index `start` on. Unbounded; the render route
 -- uses the page and count queries instead.
 emulatorTraceHits :: Emulator -> Int -> IO (Int, [TraceHit])
 emulatorTraceHits emulator start = do
-  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= start])
+  fields <- traceHitsRequest emulator (TraceHitCursor start) Nothing
   count <- integerField "count" fields
   hits <- objectField "hits" fields >>= parseTraceHits
   pure (count, hits)
@@ -639,12 +663,12 @@ hexBytes text = case text of
 -- | The bridge's hit records from index `start` on, unchanged, with their `lr`, `sp` and `cpsr`.
 emulatorTraceHitsRaw :: Emulator -> Int -> IO Value
 emulatorTraceHitsRaw emulator start = do
-  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= start])
+  fields <- traceHitsRequest emulator (TraceHitCursor start) Nothing
   objectField "hits" fields
 
 -- | The bridge's trace-hits reply for at most `limit` recorded hits from index `start` on, undecoded.
 emulatorTraceHitsPage :: Emulator -> Int -> Int -> IO Value
-emulatorTraceHitsPage emulator start limit = Object <$> rpc emulator (object ["command" .= String "trace-hits", "from" .= start, "limit" .= limit])
+emulatorTraceHitsPage emulator start limit = Object <$> traceHitsRequest emulator (TraceHitCursor start) (Just (TraceHitLimit limit))
 
 -- | A key's hold and debounced-release cap in guest instructions, both positive.
 data KeyPulse = KeyPulse { keyPulseHold :: Word32, keyPulseRelease :: Word32 } deriving (Eq, Show)

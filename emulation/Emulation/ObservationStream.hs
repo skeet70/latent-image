@@ -23,6 +23,10 @@ module Emulation.ObservationStream
   , loadReceiptObservationValues
   , countObservationDrawers
   , countObservationDrawersValue
+  , PendingObservation
+  , readObservationSources
+  , publishObservation
+  , discardObservation
   , writeObservationStream
   , foldTraceHitRows
   , foldTraceHitLines
@@ -31,7 +35,7 @@ module Emulation.ObservationStream
   , withRowReader
   ) where
 
-import Control.Exception (IOException, bracket, evaluate, try)
+import Control.Exception (IOException, bracket, evaluate, onException, try)
 import Control.Monad (foldM, forM_, unless)
 import Data.Aeson (Value (..), eitherDecodeFileStrict', eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import qualified Data.Aeson as J
@@ -46,7 +50,7 @@ import Emulation.Sha256 (Sha256, parseSha256Hex, sha256File, sha256Hex)
 import EmulatorUsb
   ( Emulator, TraceHit (..), TraceHitCursor (..), TraceHitLimit (..), TraceHitPage (..)
   , emulatorTraceHitPage, traceHitValue )
-import System.Directory (doesFileExist, getFileSize)
+import System.Directory (doesFileExist, getFileSize, removeFile)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
 import System.IO (IOMode (ReadMode, WriteMode), hClose, hIsEOF, openBinaryFile)
 
@@ -101,8 +105,13 @@ data ObservationSpec = ObservationSpec
   , specPrefix :: Value
   , specSources :: [TraceHitSource]
   , specFormat :: TraceHitFormat
-  , specSuffix :: Value
   }
+
+-- | A spec's declared rows after its sources' one read: held for an inline observation, or
+-- already in its sidecar.
+data PendingObservation = PendingObservation ObservationSpec PendingRows
+
+data PendingRows = InlineRows [Value] | SidecarRows Sha256 Int
 
 instance J.ToJSON TraceHitRef where
   toJSON (TraceHitRef path digest count) = object
@@ -424,63 +433,77 @@ foldSidecarLines directory ref step initial = case resolveReference directory re
       Just message -> Left message
       Nothing -> Right (final, total)
 
-writeObservationStream :: ObservationSpec -> IO ObservationRef
-writeObservationStream spec = do
-  let directory = specDirectory spec
-      stem = specStem spec
-      observationPath = directory </> stem ++ ".json"
-      sidecarPath = directory </> stem ++ ".trace-hits.jsonl"
-      totalRows = sum [cursorValue (sourceEnd source) - cursorValue (sourceStart source) | source <- specSources spec]
-      inline = totalRows <= 16
-  (inlineRows, sidecar, declaredRows) <-
-    if inline
-      then do
-        rows <- collectDeclared spec
-        pure (rows, Nothing, length rows)
-      else do
-        (count, digest) <- writeSidecar spec sidecarPath
-        pure ([], Just digest, count)
-  writeObservationFile spec observationPath inlineRows sidecar declaredRows
-  observationDigest <- sha256File observationPath
-  observationBytes <- getFileSize observationPath
-  let traceRef = case sidecar of
-        Just digest -> TraceHitRef (takeFileName sidecarPath) digest declaredRows
-        Nothing -> TraceHitRef (takeFileName observationPath) observationDigest declaredRows
-  pure (ObservationRef (specPhase spec) (takeFileName observationPath) observationDigest observationBytes traceRef)
+observationPath :: ObservationSpec -> FilePath
+observationPath spec = specDirectory spec </> specStem spec ++ ".json"
 
-writeSidecar :: ObservationSpec -> FilePath -> IO (Int, Sha256)
-writeSidecar spec path = do
-  count <- bracket (openBinaryFile path WriteMode) hClose $ \handle ->
-    foldTraceHitSources (specSources spec) (step handle) 0
-  digest <- sha256File path
-  pure (count, digest)
- where
-  step handle count hit
-    | isDeclared spec hit = do
-        B.hPut handle (BL.toStrict (encode (traceHitValue (formatLrLabels (specFormat spec)) (formatSpLabels (specFormat spec)) hit)) <> "\n")
-        pure (count + 1)
-    | otherwise = pure count
+sidecarPath :: ObservationSpec -> FilePath
+sidecarPath spec = specDirectory spec </> specStem spec ++ ".trace-hits.jsonl"
 
-collectDeclared :: ObservationSpec -> IO [Value]
-collectDeclared spec = foldTraceHitSources (specSources spec) step []
+-- | Reads SPEC's sources once, folding every hit through STEP. Over 16 rows, the declared rows go
+-- to the sidecar as they are read; a failed read removes it.
+readObservationSources :: ObservationSpec -> (a -> TraceHit -> a) -> a -> IO (a, PendingObservation)
+readObservationSources spec step initial
+  | totalRows <= 16 = do
+      (final, rows) <- foldTraceHitSources (specSources spec) (\(state, rows) hit -> do
+        next <- evaluate (step state hit)
+        pure (next, if isDeclared spec hit then rows ++ [traceHitRow spec hit] else rows)) (initial, [])
+      pure (final, PendingObservation spec (InlineRows rows))
+  | otherwise = do
+      let path = sidecarPath spec
+      (final, count) <- (bracket (openBinaryFile path WriteMode) hClose $ \handle ->
+        foldTraceHitSources (specSources spec) (\(state, count) hit -> do
+          next <- evaluate (step state hit)
+          if isDeclared spec hit
+            then do
+              B.hPut handle (BL.toStrict (encode (traceHitRow spec hit)) <> "\n")
+              let counted = count + 1
+              counted `seq` pure (next, counted)
+            else pure (next, count)) (initial, 0))
+        `onException` removeFile path
+      digest <- sha256File path
+      pure (final, PendingObservation spec (SidecarRows digest count))
  where
-  step rows hit
-    | isDeclared spec hit = pure (rows ++ [traceHitValue (formatLrLabels (specFormat spec)) (formatSpLabels (specFormat spec)) hit])
-    | otherwise = pure rows
+  totalRows = sum [cursorValue (sourceEnd source) - cursorValue (sourceStart source) | source <- specSources spec]
+
+-- | Writes the observation file with SUFFIX after its trace hits.
+publishObservation :: PendingObservation -> Value -> IO ObservationRef
+publishObservation (PendingObservation spec rows) suffix = do
+  let path = observationPath spec
+  writeObservationFile spec path rows suffix
+  observationDigest <- sha256File path
+  observationBytes <- getFileSize path
+  let traceRef = case rows of
+        SidecarRows digest count -> TraceHitRef (takeFileName (sidecarPath spec)) digest count
+        InlineRows inline -> TraceHitRef (takeFileName path) observationDigest (length inline)
+  pure (ObservationRef (specPhase spec) (takeFileName path) observationDigest observationBytes traceRef)
+
+-- | Removes the sidecar a read wrote.
+discardObservation :: PendingObservation -> IO ()
+discardObservation (PendingObservation spec rows) = case rows of
+  SidecarRows _ _ -> removeFile (sidecarPath spec)
+  InlineRows _ -> pure ()
+
+writeObservationStream :: ObservationSpec -> Value -> IO ObservationRef
+writeObservationStream spec suffix = do
+  ((), pending) <- readObservationSources spec const ()
+  publishObservation pending suffix
+
+traceHitRow :: ObservationSpec -> TraceHit -> Value
+traceHitRow spec = traceHitValue (formatLrLabels (specFormat spec)) (formatSpLabels (specFormat spec))
 
 isDeclared :: ObservationSpec -> TraceHit -> Bool
 isDeclared spec hit = traceSite hit `elem` formatDeclaredLabels (specFormat spec)
 
-writeObservationFile :: ObservationSpec -> FilePath -> [Value] -> Maybe Sha256 -> Int -> IO ()
-writeObservationFile spec path rows sidecar count = do
-  let traceFieldValue = case sidecar of
-        Just digest -> object
+writeObservationFile :: ObservationSpec -> FilePath -> PendingRows -> Value -> IO ()
+writeObservationFile spec path rows suffixValue = do
+  let traceFieldValue = case rows of
+        SidecarRows digest count -> object
           [ "schema" .= (1 :: Int)
           , "path" .= (specStem spec ++ ".trace-hits.jsonl")
           , "sha256" .= sha256Hex digest, "count" .= count ]
-        Nothing -> toJSON rows
+        InlineRows inline -> toJSON inline
       prefix = encodeObjectPrefix (specPrefix spec)
-      suffix = encodeObjectSuffix (specSuffix spec)
+      suffix = encodeObjectSuffix suffixValue
       bytes = prefix <> ",\"trace_hits\":" <> BL.toStrict (encode traceFieldValue)
         <> (if B.null suffix then "" else "," <> suffix) <> "\n"
   BL.writeFile path (BL.fromStrict bytes)
