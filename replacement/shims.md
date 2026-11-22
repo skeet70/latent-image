@@ -44,6 +44,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/media_permit:media-permit-candidate` | Production | media_permit | 5 |
 | `//replacement/peer_wait_control:peer-wait-control-image` | Production | peer_wait_control | 2 |
 | `//replacement/plain_load:plain-load-image` | Production | plain_load | 3 |
+| `//replacement/playback_actor:playback-actor-image` | Production | playback_actor | 2 |
 | `//replacement/power_lifecycle:record-helpers` | Qualification | power_lifecycle | 6 |
 | `//replacement/primary_initializer:primary-initializer-image` | Production | primary_initializer | 3 |
 | `//replacement/property_service:property-service-image` | Production | kernel, property_service, record_store, settings_storage | 12 |
@@ -654,6 +655,17 @@ Classification: `module`. [Declarations](playback/shims.json).
 | Static-record construction, develop job4 consumers and whole ordinary Playback JPEG lifecycle A32 exports | stock-ABI export | Develop framework finish caller 0x00e936a8, overlay47 clear-record caller 0x01238160, machine5 and deferred notification, task-event notify/wait/retain, nested critical and timer providers, subscriber callbacks | partly | all producer and completion callers link the typed owned API directly; static-request and subscriber quiescence permits publication removal | required | unestablished | reference-only: Exact whole lifecycle and develop job4/notification/clear-record bodies retain the source/output interface. Natural cancellation owns entry0x0122026c;0x01220288 is a stock observation interior only. Owned finish/cancel release observations are immutable interior labels. Preparation construction through job4 and PLAY handbacks remain separate epochs; job4 construction runs only on task0xb. Owned job4 releases after its record notification and re-waits after unrelated event-0x10 wakes; on the cancel-all signature 0x40 it submits stock's reset/release sequence and returns Cancelled, which the retained framework caller discards. |
 | Retained JPEG continuation, resource routing, lock, cache, timer and task-event services | trampoline into retained stock | Command4 endpoint reprogramming0x0065aa44, resource1e, reserved lock9, cache0x00042634, IRQ registration/release, timer0x0069b328/0x0069b7a4 and task-event notify0x00724558/wait0x007243a8/retain0x007246f0 | partly | the packaged transaction links owned service providers with qualified hardware laws | required | unestablished | reference-only: Nominal low-level MMIO services are defined in the owned transaction artifact. Native high-level callers keep explicit device-service boundaries; full-system polling and MMIO acceptance use the existing JPEG model. Command4 and status17/24 device behavior remain unqualified. |
 | Shared JPEG request/configuration layout and published IRQ lifetime | guest-memory layout view | Retained machine5/overlay47 consumers, owned develop job4 and ordinary Playback lifecycle, retained interrupt release | partly | all shared-state consumers use owned layouts and IRQ quiescence permits publication removal | required | unestablished | reference-only: The runtime and callback remain resident through nominal PLAY and retained IRQ release; unload and post-consumer reuse are not qualified. |
+
+## playback_actor
+
+Owned queue-4 playback machine 0 in place in the plain image: republished action-table rows, A32 action exports behind the stock dispatcher and import stubs for the retained playback services.
+
+Classification: `linked`. [Declarations](playback_actor/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| machine-0 action-table rows in `table.S` and `playback-actor.ld` | veneer or carrier at a stock address | the stock queue-4 dispatcher 0x011e8bf8 | no | the owned dispatcher calls the owned machine directly | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Publication, 1 symbols, 0 definite references) |
+| `imports.ld` import stubs | trampoline into retained stock | the retained playback status sources, notifications, pending-event, mode-work and device-notification services | no | the owned playback machines and notification services replace them | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Import, 32 symbols, 0 definite references) |
 
 ## power_lifecycle
 
