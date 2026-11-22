@@ -12,7 +12,8 @@
 -- key it reads the media context's numbering fields and the profile header.
 --
 -- compare: entries whose return address lies outside the extents are the interface. The ordered
--- interface entries (arguments), their returns (r0 of the entries that return a value), every
+-- interface entries (arguments), their returns (r0 of the entries that return a value and the
+-- output bytes they write through their arguments), every
 -- service call (arguments and the bytes they name), the watched writes, the numbering state and
 -- profile header after attach and each key, the screens and the card's accepted writes, dirty
 -- sectors and final command history must be equal. An owned observation must fetch nothing in
@@ -71,21 +72,22 @@ inside (Span s e) a = s <= a && a < e
 inExtents :: Word32 -> Bool
 inExtents a = any (`inside` a) extents
 
--- | An entry: address, name, register arguments and whether it returns a value.
-data Entry = Entry {entryAddress :: Word32, entryName :: String, entryArity :: Int, entryReturns :: Bool}
+-- | An entry: address, name, register arguments, whether it returns a value, and the output
+-- bytes read at return through the argument registers' values at entry.
+data Entry = Entry {entryAddress :: Word32, entryName :: String, entryArity :: Int, entryReturns :: Bool, entryOutputs :: [(Int, Int, Extent)]}
 
 entries :: [Entry]
 entries =
-  [ Entry 0x70f790 "set_prefix_mode" 1 False, Entry 0x70f840 "check_name" 2 True
-  , Entry 0x70faa0 "apply_continuous_numbering" 1 False, Entry 0x70fb68 "read_numbers" 2 True
-  , Entry 0x70fbfc "prepare_name" 3 True, Entry 0x71141c "note_written" 1 False
-  , Entry 0x7159f8 "read_profile" 4 False, Entry 0x715a2c "write_profile" 4 False
-  , Entry 0x716184 "create_folder" 2 True, Entry 0x716324 "last_used" 4 True ]
+  [ Entry 0x70f790 "set_prefix_mode" 1 False [], Entry 0x70f840 "check_name" 2 True []
+  , Entry 0x70faa0 "apply_continuous_numbering" 1 False [], Entry 0x70fb68 "read_numbers" 2 True [(0, 2, Fixed), (1, 2, Fixed)]
+  , Entry 0x70fbfc "prepare_name" 3 True [(0, 64, Terminated)], Entry 0x71141c "note_written" 1 False []
+  , Entry 0x7159f8 "read_profile" 4 False [(2, 2, Fixed), (3, 2, Fixed)], Entry 0x715a2c "write_profile" 4 False []
+  , Entry 0x716184 "create_folder" 2 True [], Entry 0x716324 "last_used" 4 True [(2, 2, Fixed), (3, 2, Fixed)] ]
 
 entryAt :: M.Map Word32 Entry
 entryAt = M.fromList [(entryAddress e, e) | e <- entries]
 
--- | How a service call's captured bytes are judged.
+-- | How captured bytes are judged.
 data Extent = Fixed | CountIn Int | Terminated deriving (Eq)
 
 -- | A retained service: name, register arguments and the bytes captured at the call, each from a
@@ -288,8 +290,8 @@ observe inputs directory record = do
   need (not (null calls)) "no service call sites in the numbering code"
   record "call_sites" (A.toJSON [object ["site" .= hexWord a, "service" .= serviceName (services M.! t)] | (a, t) <- calls])
   let stateReads = A.toJSON [[contextSlot, 4], let Span s e = profileHeader in [s, e - s]]
-      entryCapture e = object ["entry" .= [readSpec 0 32 | entryName e == "check_name"], "returns" .= ([] :: [Value])]
-      callCapture service = object ["entry" .= [readSpec r count | (r, count, _) <- serviceReads service], "returns" .= ([] :: [Value])]
+      entryCapture e = object ["entry" .= [readSpec 0 32 | entryName e == "check_name"], "returns" .= [readSpec r count | (r, count, _) <- entryOutputs e]]
+      callCapture service = object ["entry" .= [readSpec r count | (r, count, _) <- serviceReads service]]
       sites =
         [(entryAddress e, "dcf:" ++ entryName e, entryCapture e) | e <- entries]
           ++ [(a, "call:" ++ serviceName (services M.! t), callCapture (services M.! t)) | (a, t) <- calls]
@@ -403,8 +405,8 @@ argumentValue hit r = case (registerOf hit r, hexValue (field "sp" hit)) of
 capturedBytes :: Value -> [T.Text]
 capturedBytes hit = [t | r <- arrayOf (field "reads" (field "observation" hit)), String t <- [field "bytes" r]]
 
-serviceBytes :: Service -> Value -> Value
-serviceBytes service hit = A.toJSON (zipWith judge (serviceReads service) (capturedBytes hit))
+judgedBytes :: [(Int, Int, Extent)] -> Value -> Value
+judgedBytes specs hit = A.toJSON (zipWith judge specs (capturedBytes hit))
   where
     judge (_, _, extent) text =
       let bytes = hexBytes text
@@ -427,11 +429,11 @@ event hit = do
           let name = if entryName entry == "check_name" then [maskedHex (map (< maybe 0 fromIntegral (registerOf hit 1)) [0 :: Int ..]) (hexBytes t) | t <- capturedBytes hit] else []
            in Just (Event (entryName entry) "entry" (not (inExtents lr)) (object (["kind" .= ("entry" :: T.Text), "name" .= entryName entry, "lr" .= hexWord lr, "arguments" .= [A.toJSON (fmap hexWord (registerOf hit r)) | r <- [0 .. entryArity entry - 1]], "reads" .= name] ++ common hit)))
       | "call:" `isPrefixOf` label, Just service <- M.lookup (callTarget label) servicesByName ->
-          Just (Event (serviceName service) "service" True (object (["kind" .= ("service" :: T.Text), "name" .= serviceName service, "arguments" .= [argumentValue hit r | r <- [0 .. serviceArity service - 1]], "reads" .= serviceBytes service hit] ++ common hit)))
+          Just (Event (serviceName service) "service" True (object (["kind" .= ("service" :: T.Text), "name" .= serviceName service, "arguments" .= [argumentValue hit r | r <- [0 .. serviceArity service - 1]], "reads" .= judgedBytes (serviceReads service) hit] ++ common hit)))
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
           entry <- M.lookup site entryAt
-          Just (Event (entryName entry) "return" (not (inExtents address)) (object (["kind" .= ("return" :: T.Text), "name" .= entryName entry, "return_address" .= hexWord address, "result" .= [A.toJSON (fmap hexWord (registerOf hit 0)) | entryReturns entry]] ++ common hit)))
+          Just (Event (entryName entry) "return" (not (inExtents address)) (object (["kind" .= ("return" :: T.Text), "name" .= entryName entry, "return_address" .= hexWord address, "result" .= [A.toJSON (fmap hexWord (registerOf hit 0)) | entryReturns entry], "outputs" .= judgedBytes (entryOutputs entry) hit] ++ common hit)))
       | otherwise -> Nothing
   where
     callTarget = drop 5
