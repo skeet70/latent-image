@@ -49,15 +49,17 @@ impl Cache {
     }
 }
 
-/// Stock `0x425c8`/`0x425d0`. Returns the SCTLR bit, stock's r0.
+/// Stock `0x425c8`/`0x425d0`. Returns the SCTLR bit, stock's r0. Each invalidation is an `mcreq`
+/// after `tst r0, #bit`, so enabling the I-cache invalidates the data cache and enabling the
+/// D-cache invalidates the instruction cache.
 #[inline(always)]
 pub fn enable<C: Cp15>(c: &C, cache: Cache) -> u32 {
     let bit = cache.sctlr_bit();
     let sctlr = c.read_sctlr() | bit;
     c.dsb();
     match cache {
-        Cache::Instruction => c.maintain(Maintenance::InvalidateInstructionAll, 0),
-        Cache::Data => c.maintain(Maintenance::InvalidateDataAll, 0),
+        Cache::Instruction => c.maintain(Maintenance::InvalidateDataAll, 0),
+        Cache::Data => c.maintain(Maintenance::InvalidateInstructionAll, 0),
     }
     c.write_sctlr(sctlr);
     c.isb();

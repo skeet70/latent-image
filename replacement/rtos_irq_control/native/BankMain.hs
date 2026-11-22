@@ -42,7 +42,7 @@ mutants domain =
   , Mutant "clear-order-second" "clear-0-5" (at 0x2d8 0x2d8) 0xe582_10e0 0xe582_10a0
   , Mutant "clean-line-op" "dcache-clean-aligned" (at 0xa4 0xa4) 0xee07_0f3a 0xee07_0f3e
   , Mutant "clean-set-way-op" "dcache-clean-whole-four-way" (at 0x74 0x74) 0xee07_6f5a 0xee07_6f5e
-  , Mutant "icache-enable-invalidate" "enable-icache-off" (at 0x1fc 0x1fc) 0xee07_1f15 0xe320_f000
+  , Mutant "icache-enable-invalidate" "enable-icache-off" (at 0x1fc 0x1fc) 0xee0f_1f15 0xe320_f000
   , Mutant "dcache-disable-isb" "disable-dcache-on" (at 0x18c 0x18c) 0xf57f_f06f 0xe320_f000
   , Mutant "restore-irq-unmask" "restore-irq-clear-masked" (at 0xebc 0xeb4) 0xf108_0080 0xf10c_0080
   , Mutant "leave-tpidrurw" "leave-outer-primary" (at 0xabc 0xab8) leaveWord 0xe320_f000

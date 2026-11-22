@@ -68,7 +68,7 @@ The mask helpers return `cpsr & mask` and restore by writing only the masked bit
 
 The stock helpers issue CP15 operations with no memory access:
 
-- Enable (`r0` = `0x1000` I or `0x4` D): read SCTLR, OR the bit, DSB SY, `ICIALLU` (I) or `p15,0,c15,c5,0` (D) with operand 0, write SCTLR, ISB SY. Disable: read SCTLR, clear the bit, DSB SY, write SCTLR, ISB SY.
+- Enable (`r0` = `0x1000` I or `0x4` D): read SCTLR, OR the bit, DSB SY, then `tst r0, #0x1000; mcreq` `ICIALLU` and `tst r0, #4; mcreq` `p15,0,c15,c5,0`, both with operand 0, write SCTLR, ISB SY. The conditions are `eq`, so enabling the I-cache invalidates all data and enabling the D-cache issues `ICIALLU`; the decomp comment states the opposite pairing. Disable: read SCTLR, clear the bit, DSB SY, write SCTLR, ISB SY.
 - Range `(start, length)`: a zero start or zero length selects the whole-cache path. Otherwise end = start + length, start is rounded down to 32 bytes, and one operation per 32-byte line is issued while `line < end` under a signed compare (`blt`), at least once. Operation 1 is `DCCIMVAC` (`c7,c14,1`), 2 `DCCMVAC` (`c7,c10,1`), 3 `DCIMVAC` (`c7,c6,1`), 4 `ICIMVAU` (`c7,c5,1`). No barrier is issued.
 - Whole cache: operation 3 issues `p15,0,c15,c5,0` with operand 0, operation 4 `ICIALLU` with operand 0. Operations 1 and 2 walk CLIDR's levels below the level of coherency: for each level whose CLIDR type is 2 or more, write CSSELR = `level << 1`, ISB SY, read CCSIDR, then for each set descending and, within it, each way descending, issue `DCCISW` (`c7,c14,2`) or `DCCSW` (`c7,c10,2`) with `level << 1 | way << clz(ways - 1) | set << ((CCSIDR & 7) + 4)`. With one way, `clz(0) = 32` and the register shift contributes 0. No final barrier.
 

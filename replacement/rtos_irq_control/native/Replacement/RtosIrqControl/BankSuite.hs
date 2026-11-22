@@ -193,7 +193,7 @@ cacheCases =
            , ("r4-shaped", oneLevel (ccsidrOf 4 128 32))
            , ("two-levels", geometry 0x0200_0013 [(0, ccsidrOf 2 4 32), (2, ccsidrOf 8 4 64)])
            , ("instruction-only-level", geometry 0x0200_0011 [(2, ccsidrOf 2 2 32)])
-           , ("no-coherency", geometry 0x0000_0002 [])
+           , ("no-coherency", geometry 0x0000_0002 [(0, ccsidrOf 4 8 32)])
            ]
        ]
   where
@@ -364,7 +364,7 @@ caseSpec domain role loader owned bank suffix one =
         [(Sp, stackPointer), (Lr, exitAddress), (Cpsr, caseCpsr one)]
           ++ [(register, M.findWithDefault (seed register) register (M.fromList (caseArguments one))) | register <- [R0 .. R12]]
     , caseExpectedStatus = Returned
-    , caseExpectedRegisters = []
+    , caseExpectedRegisters = (Sp, stackPointer) : [(register, seed register) | register <- [R4 .. R11]]
     , caseExpectedMemory = []
     , caseIgnoredMemory = []
     , caseCp14Identity = Just (caseIdentity one)

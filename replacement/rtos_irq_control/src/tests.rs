@@ -708,7 +708,7 @@ impl cache::Cp15 for Cp15Model {
 use cache::Maintenance as Op;
 
 #[test]
-fn cache_enable_invalidates_between_the_barrier_and_the_sctlr_write() {
+fn cache_enable_invalidates_the_other_cache_between_the_barrier_and_the_sctlr_write() {
     let c = Cp15Model::new(0x0000_0078, 0, &[]);
     assert_eq!(cache::enable(&c, cache::Cache::Instruction), 0x1000);
     assert_eq!(
@@ -716,7 +716,7 @@ fn cache_enable_invalidates_between_the_barrier_and_the_sctlr_write() {
         vec![
             Cp15Event::ReadSctlr,
             Cp15Event::Dsb,
-            Cp15Event::Maintain(Op::InvalidateInstructionAll, 0),
+            Cp15Event::Maintain(Op::InvalidateDataAll, 0),
             Cp15Event::WriteSctlr(0x0000_1078),
             Cp15Event::Isb,
         ]
@@ -728,7 +728,7 @@ fn cache_enable_invalidates_between_the_barrier_and_the_sctlr_write() {
         vec![
             Cp15Event::ReadSctlr,
             Cp15Event::Dsb,
-            Cp15Event::Maintain(Op::InvalidateDataAll, 0),
+            Cp15Event::Maintain(Op::InvalidateInstructionAll, 0),
             Cp15Event::WriteSctlr(0x0000_107c),
             Cp15Event::Isb,
         ]
