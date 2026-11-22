@@ -847,6 +847,15 @@ Classification: `linked`. [Declarations](rtos_irq_control/shims.json).
 | `xm1_rtos_irq_*` exports placed at `0x41108`, `0x41124`, `0x4d8fc`-family addresses by `irq-a.ld`/`irq-b.ld` | stock-ABI export | stock IRQ callers | no | every IRQ caller is owned or migrated | required | unestablished | `//replacement/rtos_irq_control:irq-a` (Export, 6 symbols, 0 definite references); `//replacement/rtos_irq_control:irq-b` (Export, 6 symbols, 0 definite references) |
 | Global untyped assembly entries and linker publication labels | veneer or carrier at a stock address | retained entry, compiler ABI and image-layout consumers | partly | no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image | required | unestablished | `//replacement/rtos_irq_control:irq-a` (Publication, 1 symbols, 0 definite references); `//replacement/rtos_irq_control:irq-b` (Publication, 1 symbols, 0 definite references) |
 
+## rtos_kernel_init
+
+Bank-form bodies of the kernel startup group in both loaders: interface publication, kernel_start, per-core configuration, owner contexts, the primary tick timer, task initialization and autostart, and the object-table initializers. No production image links them until a bank root does; the probe images place them behind stock-entry veneers for native comparison only.
+
+Classification: `module`. [Declarations](rtos_kernel_init/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
 ## rtos_objects
 
 The owned flag and mailbox family.
