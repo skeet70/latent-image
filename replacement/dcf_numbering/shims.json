@@ -38,6 +38,41 @@
       }
     },
     {
+      "id": "dcf_numbering-03",
+      "shim": "Owned bodies behind the entry veneers in `dcf_numbering/src/stock.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "the veneers at the ten stock entries and the stock argument and return conventions of their callers",
+      "owned": "partly",
+      "removal": "every caller uses a typed owned numbering API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/dcf_numbering:dcf-numbering-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_dcf_apply_continuous_numbering",
+            "xm1_dcf_check_name",
+            "xm1_dcf_create_folder",
+            "xm1_dcf_last_used",
+            "xm1_dcf_note_written",
+            "xm1_dcf_prepare_name",
+            "xm1_dcf_read_numbers",
+            "xm1_dcf_read_profile",
+            "xm1_dcf_set_prefix_mode",
+            "xm1_dcf_write_profile"
+          ],
+          "contract": "replacement/dcf_numbering/dcf-numbering.ld",
+          "requirement": "The linker places every body inside the retired image-4 extents with no writable statics.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
       "id": "dcf_numbering-02",
       "shim": "`imports.ld` import stubs",
       "kind": "trampoline into retained stock",
