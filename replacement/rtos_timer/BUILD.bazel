@@ -116,10 +116,11 @@ xm1_rust_staticlib(
             "timer-bank-probe-%s-carrier.bin" % domain,
             "timer-bank-probe-%s-bank.bin" % domain,
         ],
-        cmd = " && ".join([
-            "$(location @lab_llvm//:bin/llvm-objcopy) -O binary " + " ".join(["-j " + section for section in [".timer_initialize", ".initialize_fill", ".timer_insert", ".insert_fill", ".timer_remove", ".remove_fill", ".timer_tick", ".tick_fill"]]) + " $(location :timer-bank-probe-%s.elf) $(location timer-bank-probe-%s-carrier.bin)" % (domain, domain),
-            "$(location @lab_llvm//:bin/llvm-objcopy) -O binary -j .bank $(location :timer-bank-probe-%s.elf) $(location timer-bank-probe-%s-bank.bin)" % (domain, domain),
-        ]),
+        cmd = ("$(location @lab_llvm//:bin/llvm-objcopy) -O binary -j .timer_initialize -j .initialize_fill " +
+               "-j .timer_insert -j .insert_fill -j .timer_remove -j .remove_fill -j .timer_tick -j .tick_fill " +
+               "$(location :timer-bank-probe-%s.elf) $(location timer-bank-probe-%s-carrier.bin) && " % (domain, domain) +
+               "$(location @lab_llvm//:bin/llvm-objcopy) -O binary -j .bank " +
+               "$(location :timer-bank-probe-%s.elf) $(location timer-bank-probe-%s-bank.bin)" % (domain, domain)),
         tools = ["@lab_llvm//:bin/llvm-objcopy"],
     )
     for domain in ["a", "b"]

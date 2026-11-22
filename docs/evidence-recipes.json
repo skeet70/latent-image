@@ -7427,5 +7427,85 @@
         "pointer": ["verdict"]
       }
     ]
+  },
+  {
+    "id": "E-RTOS-TIMER-BANK-NATIVE-150",
+    "claim": "The timer family's fixed-bank bodies, xm1_rtos_timer_{initialize,insert,remove,tick}_{a,b}, linked at the fixed body origin behind four stock-address veneers per domain with the rest of each timer carrier filled, match stock on the unchanged timer cohort: {{bank_cases}} comparisons with {{bank_failures}} failures and {{bank_controls}} controls, including the executed callback-removed, wrong-lock and wrong-detach tick mutants; stock and owned observations are {{bank_reuse}}. Bank bodies A {{bank_a}} and B {{bank_b}}; carriers A {{carrier_a}} and B {{carrier_b}}. The in-place stage on the same oracle passes {{stage_cases}} comparisons with {{stage_failures}} failures and {{stage_controls}} controls.",
+    "scope": "Native per-entry cohorts on the pinned X-M1 1.50 loaders with synthetic heap, entry, callback and scheduler state, the bank body mapped as one more owned code region at 0x00ba0020. Not bank placement, joint bank/loader admission or a from-reset boot.",
+    "notes": "The detach on pop and removal, the linked-entry refusal, the acquired-lock release and the 184-node bound are role-specific expectations, not masked differences. A bank image places the bodies at another address and needs its own cohort on the staged slices.",
+    "artifacts": [
+      "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+      "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/stage/results.json",
+      "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/inputs.sha256",
+      "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/run.json",
+      "private-data/scratch/RtosTimer/runs/20261122T162400Z-timer-bank-native/result/firmware.json",
+      "private-data/scratch/RtosTimer/runs/20261122T162400Z-timer-bank-native/run.json"
+    ],
+    "facts": [
+      {
+        "name": "firmware_sha256",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T162400Z-timer-bank-native/result/firmware.json",
+        "pointer": ["firmware_sha256"]
+      },
+      {
+        "name": "bank_cases",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["cases"],
+        "operation": "length"
+      },
+      {
+        "name": "bank_failures",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["failures"]
+      },
+      {
+        "name": "bank_controls",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["controls"],
+        "operation": "length"
+      },
+      {
+        "name": "bank_reuse",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["cases", "0", "reuse"]
+      },
+      {
+        "name": "bank_a",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["inputs", "bank_a_bin_sha256"]
+      },
+      {
+        "name": "bank_b",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["inputs", "bank_b_bin_sha256"]
+      },
+      {
+        "name": "carrier_a",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["inputs", "owned_a_bin_sha256"]
+      },
+      {
+        "name": "carrier_b",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/bank/results.json",
+        "pointer": ["inputs", "owned_b_bin_sha256"]
+      },
+      {
+        "name": "stage_cases",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/stage/results.json",
+        "pointer": ["cases"],
+        "operation": "length"
+      },
+      {
+        "name": "stage_failures",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/stage/results.json",
+        "pointer": ["failures"]
+      },
+      {
+        "name": "stage_controls",
+        "path": "private-data/scratch/RtosTimer/runs/20261122T155657Z-timer-bank-cohorts/result/stage/results.json",
+        "pointer": ["controls"],
+        "operation": "length"
+      }
+    ]
   }
 ]

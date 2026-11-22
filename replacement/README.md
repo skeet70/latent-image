@@ -403,6 +403,18 @@ Scope: Current staged-effective loader union and complete named native matrix, n
 
 <!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
 
+## Fixed-bank timer family
+
+The [timer family contract](../reports/rtos-timer-family.md) fixes the family's four entries per domain, their callers and raw consumers. `//replacement/rtos_timer:timer-bank-{a,b}` are the bank rlibs, exporting `xm1_rtos_timer_{initialize,insert,remove,tick}_{a,b}`. `:timer-bank-probe-{a,b}` link them at the fixed body origin behind stock-address veneers, and `//replacement/rtos_timer/oracle:timer-bank-oracle --loader-a LOADER_A --loader-b LOADER_B --results RESULTS` runs the timer cohort with the bank mapped.
+
+<!-- evidence-record E-RTOS-TIMER-BANK-NATIVE-150 -->
+
+E-RTOS-TIMER-BANK-NATIVE-150: The timer family's fixed-bank bodies, xm1_rtos_timer_{initialize,insert,remove,tick}_{a,b}, linked at the fixed body origin behind four stock-address veneers per domain with the rest of each timer carrier filled, match stock on the unchanged timer cohort: 56 comparisons with 0 failures and 280 controls, including the executed callback-removed, wrong-lock and wrong-detach tick mutants; stock and owned observations are (BatchExecuted,BatchExecuted). Bank bodies A e688edb136278787384a57d8b0415c77392d77b787a42230be7c9fb50d6d7822 and B 42ccf163c71abe26144f8a60524e638e93ff92c2e2552ba3c5a99d07d89f44d5; carriers A b5787db5e701fdcbabcc2b3b1be3e58eaddac1e8efe0473932338fc4ba3d67e8 and B 38aa995d7ad0586e4c2a17c7df797e13c527cc6918bf05cad0abcc015446eb0d. The in-place stage on the same oracle passes 56 comparisons with 0 failures and 280 controls.
+
+Scope: Native per-entry cohorts on the pinned X-M1 1.50 loaders with synthetic heap, entry, callback and scheduler state, the bank body mapped as one more owned code region at 0x00ba0020. Not bank placement, joint bank/loader admission or a from-reset boot.
+
+<!-- /evidence-record E-RTOS-TIMER-BANK-NATIVE-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->

@@ -41,7 +41,7 @@ The owned bodies keep the three corrections of §4.15: a popped or removed entry
 
 In a bank image each stock entry keeps a four-byte veneer, a branch to its domain's bank body, and the rest of the timer carrier (`[0x44a50,0x44f2c)`, `[0xd4a10,0xd4eec)`) is fill. The other families keep calling the stock entry addresses.
 
-`//replacement/rtos_timer:timer-bank-probe-{a,b}` link the same bodies at the fixed body origin `0x00ba0020` behind those veneers, with the carrier filled, and `-split` extracts the carrier and bank binaries. `//replacement/rtos_timer/oracle:timer-oracle` maps the bank binary as one more owned region when given `--bank-{a,b}-{bin,symbols}` (`:timer-bank-oracle` binds them). Cases, checks, mutants and controls are the existing timer cohort's; only the code mapping changes.
+`//replacement/rtos_timer:timer-bank-probe-{a,b}` link the same bodies at the fixed body origin `0x00ba0020` behind those veneers, with the carrier filled, and `-split` extracts the carrier and bank binaries. `//replacement/rtos_timer/oracle:timer-oracle` maps the bank binary as one more owned region when given `--bank-{a,b}-{bin,symbols}` (`:timer-bank-oracle` binds them). Cases, checks, mutants and controls are the existing timer cohort's; only the code mapping changes. The result is E-RTOS-TIMER-BANK-NATIVE-150.
 
 ## Open
 
