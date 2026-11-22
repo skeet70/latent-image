@@ -6887,5 +6887,93 @@
         "pointer": ["verdict"]
       }
     ]
+  },
+  {
+    "id": "E-RECORD-STORE-POWER-CYCLE-PAIR-150",
+    "claim": "The owned record store on candidate DAT {{candidate_dat}} matches stock across a settings change, POWER OFF at board tick {{power_off_tick}} and a cold boot from each role's exported NAND: under stock-equality-v1 the erased pair compares {{erased_outcome}} and the populated pair (area-2 NAND {{record_nand}}) {{populated_outcome}}. Each erased role makes {{erased_entries}} external record calls, {{erased_power_off_entries}} at POWER OFF ({{erased_power_off_appends}} appends, {{erased_power_off_programs}} NAND programs) and {{erased_reboot_entries}} in the cold boot; each populated role makes {{populated_entries}}. The reboots attach on enumeration {{erased_stock_attempts}} and {{erased_owned_attempts}} (erased stock, owned) and {{populated_stock_attempts}} and {{populated_owned_attempts}} (populated). The unsealed-append control DAT {{control_dat}} on the erased medium compares {{control_outcome}} at {{control_path}} (stock {{control_stock}}, control {{control_owned}}).",
+    "scope": "Emulated X-M1 1.50 DAT {{firmware_sha256}}, one full-system observation per role and medium on emulation/record-store-pair-power-off-routes.json, through the RAM-push bridge with the attach debounce and enumeration retry of E-RECORD-STORE-REBOOT-ATTACH-150. Not the camera. The finite boot/settings cutover is E-RECORD-STORE-CUTOVER-PAIR-150.",
+    "notes": "The control is detected before POWER OFF; no control isolates a divergence that appears only at POWER OFF or in the cold boot. Kind 1 and 4 writes, erase-all, collect and physical NAND timing, ECC, partial-program and power-cut laws stay outside this pair.",
+    "artifacts": [
+      "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/inputs.sha256",
+      "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json",
+      "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-stock.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-owned.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/power-off-stock.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/power-off-owned.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/inputs.sha256",
+      "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/compare.json",
+      "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/receipt-stock.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/receipt-owned.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/power-off-stock.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/power-off-owned.json.gz",
+      "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/inputs.sha256",
+      "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/compare.json"
+    ],
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-stock-summary.json", "pointer": ["inputs", "update", "sha256"]},
+      {"name": "candidate_dat", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-owned-summary.json", "pointer": ["inputs", "update", "sha256"]},
+      {"name": "power_off_tick", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-owned-summary.json", "pointer": ["power_off_tick"]},
+      {"name": "erased_outcome", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json", "pointer": ["outcome"]},
+      {"name": "populated_outcome", "path": "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/compare.json", "pointer": ["outcome"]},
+      {"name": "record_nand", "path": "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/receipt-owned-summary.json", "pointer": ["inputs", "record-nand", "sha256"]},
+      {"name": "erased_entries", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json", "pointer": ["coverage", "owned", "external_entry_total"]},
+      {"name": "erased_power_off_entries", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json", "pointer": ["coverage", "owned", "power_off", "external_entry_total"]},
+      {"name": "erased_power_off_appends", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json", "pointer": ["coverage", "owned", "power_off", "external_entries", "record_store_append"]},
+      {"name": "erased_power_off_programs", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json", "pointer": ["coverage", "owned", "power_off", "nand", "program"]},
+      {"name": "erased_reboot_entries", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/compare.json", "pointer": ["coverage", "owned", "reboot", "external_entry_total"]},
+      {"name": "populated_entries", "path": "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/compare.json", "pointer": ["coverage", "owned", "external_entry_total"]},
+      {"name": "erased_stock_attempts", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/attach-stock-reboot.json", "pointer": ["pre_attach", "enumeration_attempts"]},
+      {"name": "erased_owned_attempts", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/attach-owned-reboot.json", "pointer": ["pre_attach", "enumeration_attempts"]},
+      {"name": "populated_stock_attempts", "path": "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/attach-stock-reboot.json", "pointer": ["pre_attach", "enumeration_attempts"]},
+      {"name": "populated_owned_attempts", "path": "private-data/scratch/RecordStore/runs/20261122T155835Z-pair-populated/result/attach-owned-reboot.json", "pointer": ["pre_attach", "enumeration_attempts"]},
+      {"name": "control_dat", "path": "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/receipt-owned-summary.json", "pointer": ["inputs", "update", "sha256"]},
+      {"name": "control_outcome", "path": "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/compare.json", "pointer": ["outcome"]},
+      {"name": "control_path", "path": "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/compare.json", "pointer": ["path"]},
+      {"name": "control_stock", "path": "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/compare.json", "pointer": ["stock"]},
+      {"name": "control_owned", "path": "private-data/scratch/RecordStore/runs/20261122T155924Z-pair-control-seal/result/compare.json", "pointer": ["owned"]}
+    ]
+  },
+  {
+    "id": "E-RECORD-STORE-REBOOT-ATTACH-150",
+    "claim": "Booting each role's DAT on its own power-off export, the RAM-push bridge's enumeration with the 100 ms attach debounce and up to three port-reset enumerations attaches stock {{retry_stock_attached}}/{{boots}} and owned {{retry_owned_attached}}/{{boots}} over the first-reset offsets. Stock attaches on the first enumeration at {{retry_stock_first}} offsets; owned at {{retry_owned_first}}, on the second at {{retry_owned_second}} (offsets {{retry_owned_retried}}) and on the third at {{retry_owned_third}}, losing {{retry_owned_lost}} control stages: the configuration descriptor's IN data or SET_CONFIGURATION's status stage. With the debounce and one enumeration, owned attaches {{debounce_owned_attached}}/{{boots}} (fails at {{debounce_owned_failed}}) and stock {{debounce_stock_attached}}/{{boots}} (fails at {{debounce_stock_failed}}); with neither, owned attaches {{reset_owned_attached}}/{{boots}} (fails at {{reset_owned_failed}}) and stock {{reset_stock_attached}}/{{boots}} (fails at {{reset_stock_failed}}). The two power-off exports differ only in the installed DAT's flash base, the owned boot makes stock's record calls in stock's order with stock's results, and no owned record code runs after the boot's kind-3 read, so the losses are the harness's enumeration timing, not an owned divergence. Why the owned boot meets them more often is open.",
+    "scope": "Emulated X-M1 1.50 DAT {{firmware_sha256}} and the record-store carrier candidate on the aligned erased power-off exports, fresh boots to the bridge's attach with the first bus reset N instructions after activation, N from 0 to 300,000 in steps of 10,000, activation polled every 1,000 instructions. The sweeps use diagnostic builds of the bridge that add only the offset and polling knobs; the retry sweep's build is the committed bridge otherwise. Not the camera or a USB host.",
+    "notes": "The likeliest lead for the asymmetry is the owned boot's later phase relative to the bridge's fixed enumeration schedule, not shown. Linux also resets the port and re-enumerates after a timed-out enumeration transfer, so the retry is host conformance.",
+    "artifacts": [
+      "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/driver.sh",
+      "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/inputs.sha256",
+      "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/summary.txt",
+      "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/boots.jsonl",
+      "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/retry-owned-160000.log",
+      "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/retry-owned-260000.log",
+      "private-data/scratch/RecordStore/runs/20261122T151933Z-reboot-debounce-sweep/result/summary.txt",
+      "private-data/scratch/RecordStore/runs/20261122T151933Z-reboot-debounce-sweep/result/inputs.sha256",
+      "private-data/scratch/RecordStore/runs/20261122T150130Z-reboot-reset-sweep/result/summary.txt",
+      "private-data/scratch/RecordStore/runs/20261122T150130Z-reboot-reset-sweep/result/inputs.sha256",
+      "private-data/scratch/RecordStore/runs/20261122T071343Z-reboot-cross/result/summary.txt",
+      "private-data/scratch/RecordStore/runs/20261122T071712Z-reboot-drop/result/summary.txt",
+      "private-data/scratch/RecordStore/runs/20261122T101018Z-reboot-timing/result/summary.txt",
+      "private-data/scratch/RecordStore/inputs/aligned-power-off/stock.nand.gz",
+      "private-data/scratch/RecordStore/inputs/aligned-power-off/owned.nand.gz"
+    ],
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/RecordStore/runs/20261122T155746Z-pair-erased/result/receipt-stock-summary.json", "pointer": ["inputs", "update", "sha256"]},
+      {"name": "boots", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["owned", "boots"]},
+      {"name": "retry_stock_attached", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["stock", "attached"]},
+      {"name": "retry_owned_attached", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["owned", "attached"]},
+      {"name": "retry_stock_first", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["stock", "attached_after_1"]},
+      {"name": "retry_owned_first", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["owned", "attached_after_1"]},
+      {"name": "retry_owned_second", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["owned", "attached_after_2"]},
+      {"name": "retry_owned_third", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["owned", "attached_after_3"]},
+      {"name": "retry_owned_lost", "path": "private-data/scratch/RecordStore/runs/20261122T155752Z-reboot-retry-sweep/result/attempts.json", "pointer": ["owned", "lost_stages"]},
+      {"name": "retry_owned_retried", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T155752Z-reboot-retry-sweep.json", "pointer": ["owned", "retried_offsets"]},
+      {"name": "debounce_owned_attached", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T151933Z-reboot-debounce-sweep.json", "pointer": ["owned", "attached"]},
+      {"name": "debounce_owned_failed", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T151933Z-reboot-debounce-sweep.json", "pointer": ["owned", "failed_offsets"]},
+      {"name": "debounce_stock_attached", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T151933Z-reboot-debounce-sweep.json", "pointer": ["stock", "attached"]},
+      {"name": "debounce_stock_failed", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T151933Z-reboot-debounce-sweep.json", "pointer": ["stock", "failed_offsets"]},
+      {"name": "reset_owned_attached", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T150130Z-reboot-reset-sweep.json", "pointer": ["owned", "attached"]},
+      {"name": "reset_owned_failed", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T150130Z-reboot-reset-sweep.json", "pointer": ["owned", "failed_offsets"]},
+      {"name": "reset_stock_attached", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T150130Z-reboot-reset-sweep.json", "pointer": ["stock", "attached"]},
+      {"name": "reset_stock_failed", "path": "private-data/scratch/RecordStore/runs/20261122T160844Z-reboot-sweep-summary/result/20261122T150130Z-reboot-reset-sweep.json", "pointer": ["stock", "failed_offsets"]}
+    ]
   }
 ]
