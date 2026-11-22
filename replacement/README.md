@@ -348,6 +348,27 @@ The `handles` controls are `sequence_wrap`, `skip_allocated`, `no_free_slot_adva
 
 The shared divide `0x4d978` is traced only at the component's own `bl 0x4d978` sites: in stock those in the retired extents of image 4, in owned those in the `--body` bytes loaded at `0xba0020`, each with a return site 4 bytes on. `compare` pairs them by order as the retained service `divide` and drops the enclosing function's returns the bridge records at those sites. It decodes `hits.jsonl` one line at a time and keeps only the component's events; `:observe-compare-tests` runs it under a 48 MiB heap on 85 MB of hits. Run it inside a native slot, for example `XM1_NATIVE_MEMORY_MAX=1G XM1_RUN_LABEL=file-service-observe-compare emulator-slot --native env GHCRTS=-M768m file-service-observe compare ...` with absolute paths.
 
+## DCF numbering
+
+`replacement/dcf_numbering` (crate `xm1_dcf_numbering`) owns the image-4 choice and persistence of DCF folder and file numbers for saved images: the prefix mode `0x70f790`, name check `0x70f840`, FRAME NO. apply `0x70faa0`, selected-group numbers `0x70fb68`, next base name `0x70fbfc` (`L:\DCIM\NNN_SSSSS\PPPPFFFF`), numbering after a written file closes `0x71141c`, persisted pair read `0x7159f8` and write `0x715a2c`, folder creation `0x716184` and last-used pair `0x716324`. The contract and the rest of the save path are in [the capture save report](../reports/capture-save-path.md).
+
+It is an in-place carrier like the record store's: `dcf-numbering.ld` links a four-byte branch `dcf_entry_<name>` at each stock entry and packs the Rust code into the rest of the five retired extents `[0x70f790,0x70f8b8)`, `[0x70faa0,0x7101e4)`, `[0x71141c,0x7115a4)`, `[0x7159f8,0x715a58)` and `[0x716184,0x71657c)`, with no writable sections and no compiler builtins. Two gaps are full to the byte, so a code-size change needs a new packing. `imports.ld` binds the retained services: media status `0x71ddf0`, current drive `0x71f708`, group index `0x715f0c`, event `0x726c74`, drive prefix `0x712d08`, copy `0x70e6c4` and `0x722054`, decimal `0x70eaa0` and `0x722218`, configuration byte `0x69f8fc`, settings profile `0x6a8040`, `0x6a801c`, `0x6a802c`, `0x6a8008` and `0x6a8050`, snapshot `0x712b4c`, fill `0x43550`, directory open `0x701e18`, entry cluster `0x713460`, path groups `0x7160b8` and status translation `0x71d450`. The file service calls `0x716184` and `0x71141c` through these entries.
+
+`dcf-numbering-suite RUNNER IMAGE4 OWNED_ELF OUTPUT CONTROL=ELF ...` runs the cases of `Replacement/DcfNumbering/Cases.hs`, an independent model of the stock bytes, on stock and owned, then on each control, and writes `dcf-numbering.json` to `XM1_RUN_RESULT`. The controls are `block_sequence_kept`, `profile_ignored`, `written_unpersisted`, `folder_cluster_unrecorded`, `latch_kept` and `name_accepts_dash`.
+
+```sh
+devenv shell -- host-build build //replacement/dcf_numbering:all //emulation:native-runner //emulation:emulator-slot
+devenv shell -- env XM1_NATIVE_MEMORY_MAX=2G run-output exec --label dcf-numbering -- bash -c 'B=bazel-bin/replacement/dcf_numbering/dcf-numbering-image; exec bazel-bin/emulation/emulator-slot --native bazel-bin/replacement/dcf_numbering/dcf-numbering-suite bazel-bin/emulation/native-runner private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin $B.elf "$XM1_RUN_WORK/suite" block-sequence-kept=$B-control-block-sequence-kept.elf profile-ignored=$B-control-profile-ignored.elf written-unpersisted=$B-control-written-unpersisted.elf folder-cluster-unrecorded=$B-control-folder-cluster-unrecorded.elf latch-kept=$B-control-latch-kept.elf name-accepts-dash=$B-control-name-accepts-dash.elf'
+```
+
+<!-- evidence-record E-DCF-NUMBERING-NATIVE-150 -->
+
+E-DCF-NUMBERING-NATIVE-150: The owned DCF numbering (prefix mode 0x70f790, name check 0x70f840, FRAME NO. apply 0x70faa0, selected-group numbers 0x70fb68, next name 0x70fbfc, numbering after a written close 0x71141c, persisted pair read 0x7159f8 and write 0x715a2c, folder creation 0x716184 and last-used pair 0x716324), linked in place over the stock image-4 extents, matches the stock X-M1 1.50 image-4 bytes natively: the dcf-numbering suite is equal on 53 cases and detects every one of 6 deliberately wrong controls (owned ELF d1fb3c6bc533dd51690d09c871c56c28b241795109a0feaa085511a3d82c4307, image 4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16, decomp 55436fc85c0560dd252b0410af6f2427fe198cd3).
+
+Scope: Host-only X-M1 1.50. Per-case runs of the ten entries, alone and in sequence, on the Cortex-R5F runner over scripted stock media-status, drive, group-index, event, formatting, configuration, settings-profile, directory, cluster and status-translation services, comparing results, the ordered service calls with their inputs and pointed-at bytes, and the final media context, path and output bytes against an independent model of the stock bytes.
+
+<!-- /evidence-record E-DCF-NUMBERING-NATIVE-150 -->
+
 ## Stimulus clock for stock-against-owned scenarios
 
 Full-system comparisons of a subsystem that changes guest timing fire their scenario stimuli on board ticks ([stimulus clock](../emulation/checkpoint-runs.md#stimulus-clock)).

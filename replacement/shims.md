@@ -21,6 +21,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/capture:capture-candidate` | Production | capture | 4 |
 | `//replacement/completion_delay:completion-delay-image` | Production | completion_delay | 2 |
 | `//replacement/critical_pair:critical-pair-image` | Production | critical_pair, interface_initializer, loader_prefix, secondary_stage | 8 |
+| `//replacement/dcf_numbering:dcf-numbering-image` | Production | dcf_numbering | 2 |
 | `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 27 |
 | `//replacement/display_scanout:display-scanout` | Production | display_scanout | 4 |
 | `//replacement/display_scanout:display-scanout-panel` | Production | display_scanout | 4 |
@@ -295,6 +296,17 @@ Classification: `linked`. [Declarations](critical_pair/shims.json).
 | `xm1_critical_enter_adapter`, `xm1_critical_exit_adapter` and `xm1_critical_enter_continue`/`xm1_critical_exit` in `entry.S`/`src.rs` | stock-ABI export | stock task103 callers | no | the task103 critical pair is called from owned code only | required | unestablished | `//replacement/critical_pair:critical-pair-image` (Export, 4 symbols, 0 definite references) |
 | `xm1_critical_retained_call` in `entry.S` | trampoline into retained stock | the retained loader critical-section service | no | the loader service is owned | required | unestablished | `//replacement/critical_pair:critical-pair-image` (RetainedEntry, 1 symbols, 0 definite references); `//replacement/critical_pair:critical-pair-image` (Import, 52 symbols, 0 definite references) |
 | Global untyped assembly entries and linker publication labels | veneer or carrier at a stock address | retained entry, compiler ABI and image-layout consumers | partly | no consumer requires these published ABI or layout labels and both sides have stock comparisons in the same image | required | unestablished | `//replacement/critical_pair:critical-pair-image` (Publication, 5 symbols, 0 definite references) |
+
+## dcf_numbering
+
+The DCF numbering carrier ELF: entry veneers at the stock image-4 entries and import stubs.
+
+Classification: `linked`. [Declarations](dcf_numbering/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `dcf_entry_*` in `entry.S` and `dcf-numbering.ld` | veneer or carrier at a stock address | stock callers of the ten DCF numbering entries | no | every caller enters the owned numbering directly | required | unestablished | `//replacement/dcf_numbering:dcf-numbering-image` (Publication, 10 symbols, 0 definite references) |
+| `imports.ld` import stubs | trampoline into retained stock | the retained media, profile, formatting and directory services | no | the owned file service, settings profile and filesystem replace them | required | unestablished | `//replacement/dcf_numbering:dcf-numbering-image` (Import, 21 symbols, 0 definite references) |
 
 ## develop
 
