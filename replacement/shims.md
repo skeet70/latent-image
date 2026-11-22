@@ -44,7 +44,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/media_permit:media-permit-candidate` | Production | media_permit | 5 |
 | `//replacement/peer_wait_control:peer-wait-control-image` | Production | peer_wait_control | 2 |
 | `//replacement/plain_load:plain-load-image` | Production | plain_load | 3 |
-| `//replacement/playback_actor:playback-actor-image` | Production | playback_actor | 2 |
+| `//replacement/playback_actor:playback-actor-image` | Production | playback_actor | 3 |
 | `//replacement/power_lifecycle:record-helpers` | Qualification | power_lifecycle | 6 |
 | `//replacement/primary_initializer:primary-initializer-image` | Production | primary_initializer | 3 |
 | `//replacement/property_service:property-service-image` | Production | kernel, property_service, record_store, settings_storage | 12 |
@@ -666,6 +666,7 @@ Classification: `linked`. [Declarations](playback_actor/shims.json).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | machine-0 action-table rows in `table.S` and `playback-actor.ld` | veneer or carrier at a stock address | the stock queue-4 dispatcher 0x011e8bf8 | no | the owned dispatcher calls the owned machine directly | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Publication, 1 symbols, 0 definite references) |
 | `imports.ld` import stubs | trampoline into retained stock | the retained playback status sources, notifications, pending-event, mode-work and device-notification services | no | the owned playback machines and notification services replace them | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Import, 32 symbols, 0 definite references) |
+| Owned machine-0 actions in `playback_actor/src/stock.rs` | stock-ABI export | the stock dispatcher's no-argument action call and its use of r0 as the dispatch result | partly | an owned dispatcher calls a typed owned machine API | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Export, 31 symbols, 0 definite references) |
 
 ## power_lifecycle
 
