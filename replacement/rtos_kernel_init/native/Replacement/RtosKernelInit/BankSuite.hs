@@ -302,7 +302,7 @@ caseSpec domain role loader owned bank suffix one =
         ]
           ++ [region "bank" (imageBase body) (B.length (imageBytes body)) ReadExecute (imageBytes body) | Just body <- [bankFor role]]
     , caseFunctions =
-        [(wire (imageBase code), slot - imageBase code), (wire (slot + 4), codeEnd - slot - 4), (wire phaseCode, 0x20)]
+        [(wire (imageBase code), slot - imageBase code), (wire (slot + 4), entry - slot - 4), (wire entry, codeEnd - entry), (wire phaseCode, 0x20)]
           ++ [(wire (imageBase body), fromIntegral (B.length (imageBytes body))) | Just body <- [bankFor role]]
     , caseInitial =
         [(Sp, stackPointer), (Lr, exitAddress), (Cpsr, svcMasked)]
@@ -320,6 +320,7 @@ caseSpec domain role loader owned bank suffix one =
     }
   where
     kernelAt = ramAt domain kernelBase
+    entry = entryAddress domain (caseAt one)
     slot = vectorSlot domain
     stub = Image (vfpEnable domain) (word32le 0xe12f_ff1e)
     code = case role of
