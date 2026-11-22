@@ -1,6 +1,50 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files(["imports.ld"])
+
+_SOURCES = ["src/machine0.rs", "src/stock.rs"]
+
+PLAYBACK_ACTOR_CONTROLS = [
+    "abort_keeps_state",
+    "start_unpublished",
+    "error_without_restart",
+    "packet_082d_stateless",
+    "mode_value_dropped",
+]
+
+_VARIANTS = [("", [])] + [
+    ("-control-" + control.replace("_", "-"), ["--cfg", "playback_control_" + control])
+    for control in PLAYBACK_ACTOR_CONTROLS
+]
+
+[xm1_rust_staticlib(
+    name = "playback-actor-rust" + suffix,
+    src = "src/lib.rs",
+    crate_name = "xm1_playback_actor",
+    data = _SOURCES,
+    rustc_flags = ["-C", "overflow-checks=off"] + flags,
+) for suffix, flags in _VARIANTS]
+
+[xm1_rust_elf(
+    name = "playback-actor-image" + suffix,
+    rust_staticlib = ":playback-actor-rust" + suffix,
+    asm_srcs = ["table.S"],
+    entry = "xm1_playback_m0_action02",
+    link_script = "playback-actor.ld",
+    link_includes = ["imports.ld"],
+    extra_ldflags = ["-Wl,--gc-sections"],
+) for suffix, _ in _VARIANTS]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
 
 haskell_library(
     name = "actor",
@@ -10,6 +54,36 @@ haskell_library(
     deps = [
         "//host:base",
         "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "cases",
+    srcs = ["Replacement/PlaybackActor/Cases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+haskell_binary(
+    name = "playback-actor-suite",
+    srcs = ["SuiteMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "SuiteMain.hs",
+    deps = [
+        ":cases",
+        "//emulation:case-sha256",
+        "//host/firmware:bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//replacement/file_service:native-lib",
     ],
 )
 
@@ -32,4 +106,19 @@ haskell_binary(
         "//host:text",
         "//host:vector",
     ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":host-tests",
+        ":playback-actor-observe",
+        ":playback-actor-suite",
+    ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
 )
