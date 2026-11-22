@@ -276,14 +276,16 @@ writePendingPeak (MemoryKey key) name peak = do
   renameFile temporary final
 
 -- | Records this scope's @memory.peak@ under KEY once this process, after any
--- exec, and every descendant that inherits the pipe have exited. A scope
--- stopped by systemd leaves no record.
+-- exec, and every descendant that inherits the pipe have exited. After an OOM
+-- kill in the scope it records @memory.peak@ plus @memory.swap.peak@, at least
+-- @memory.max@. A scope stopped by systemd otherwise leaves no record.
 startPeakRecorder :: MemoryKey -> ScopeName -> IO ()
 startPeakRecorder (MemoryKey key) (ScopeName unit) = do
   groups <- readStrict "/proc/self/cgroup"
   group <- case [drop 3 line | line <- lines groups, take 3 line == "0::"] of
     [found] -> pure found
     _ -> ioError (userError "cannot establish this process's cgroup")
+  root <- cgroupRoot
   pending <- pendingPeakDirectory <$> memoryDirectory
   createDirectoryIfMissing True pending
   (watchRead, watchWrite) <- createPipe
@@ -291,9 +293,29 @@ startPeakRecorder (MemoryKey key) (ScopeName unit) = do
   setFdOption watchWrite CloseOnExec False
   watch <- fdToHandle watchRead
   let final = pending </> unit
-      script = "while read -r _; do :; done; read -r peak < \"$1\" || exit 0; printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
-  void $ createProcess (proc "sh" ["-c", script, "sh", "/sys/fs/cgroup" ++ group ++ "/memory.peak", final ++ ".partial", final, key])
+      script = unlines
+        [ "trap '' TERM"
+        , "while read -r _; do :; done"
+        , "read -r peak < \"$1/memory.peak\" || exit 0"
+        , "kills=0"
+        , "while read -r name value; do [ \"$name\" != oom_kill ] || kills=$value; done < \"$1/memory.events\""
+        , "if [ \"$kills\" -gt 0 ]; then"
+        , "  read -r swap < \"$1/memory.swap.peak\" || swap=0"
+        , "  read -r cap < \"$1/memory.max\" || cap=0"
+        , "  [ \"$cap\" != max ] || cap=0"
+        , "  peak=$((peak + swap))"
+        , "  [ \"$cap\" -le \"$peak\" ] || peak=$cap"
+        , "elif [ \"$(systemctl --user show \"$5\" -p ActiveState --value)\" = deactivating ]; then"
+        , "  exit 0"
+        , "fi"
+        , "printf '%s\\n%s\\n' \"$peak\" \"$4\" > \"$2\" && mv -f \"$2\" \"$3\""
+        ]
+  void $ createProcess (proc "sh" ["-c", script, "sh", root ++ group, final ++ ".partial", final, key, unit])
     { std_in = UseHandle watch, std_out = NoStream, std_err = NoStream, close_fds = True }
+
+-- | @/sys/fs/cgroup@, or @XM1_HOST_CGROUP_ROOT@.
+cgroupRoot :: IO FilePath
+cgroupRoot = fromMaybe "/sys/fs/cgroup" <$> lookupEnv "XM1_HOST_CGROUP_ROOT"
 
 -- | Reserves the scope's @MemoryHigh@, or its @MemoryMax@ when that is lower
 -- or @MemoryHigh@ is unset, inside the already-started scope. Swap caps are
@@ -413,11 +435,10 @@ heldTokens fd budget = do
 
 -- | Over admitted scopes holding HOLDERS, the reservation not yet in use:
 -- held tokens less @memory.current@ plus @memory.swap.current@, at least zero.
--- A scope whose cgroup is gone counts zero. The cgroup root is
--- @/sys/fs/cgroup@, or @XM1_HOST_CGROUP_ROOT@.
+-- A scope whose cgroup is gone counts zero.
 outstandingBytes :: FilePath -> [(FileOffset, ProcessID)] -> IO Integer
 outstandingBytes directory holders = do
-  root <- fromMaybe "/sys/fs/cgroup" <$> lookupEnv "XM1_HOST_CGROUP_ROOT"
+  root <- cgroupRoot
   groups <- forM holders $ \(index, _) ->
     (fmap (\(ScopeIdentity _ _ (ScopeCgroup group _)) -> group) <$> readScopeRecord (directory </> ("scope-" ++ show index)))
       `catchIOError` const (pure Nothing)
@@ -689,7 +710,10 @@ admit requestedBase command rest = do
   when running (removeIfPresent script)
   setEnv admittedVariable "1"
   (admitted, outcome) <- runContained memory swap reservation scoped unit takeLane bazelArguments
-  case (admitted, unitMemoryPeak (outcomeState outcome)) of
+  let state = outcomeState outcome
+      killed = unitResult state == "oom-kill"
+  case (admitted, unitMemoryPeak state) of
+    (Just _, Just peak) | killed -> writePendingPeak key unit (max (peak + fromMaybe 0 (unitMemorySwapPeak state)) (memoryMaxBytes memory))
     (Just _, Just peak) -> writePendingPeak key unit peak
     _ -> pure ()
   let verdict = judge outcome
@@ -1070,6 +1094,7 @@ data UnitState = UnitState
   { unitResult :: String
   , unitCpuNanos :: Maybe Integer
   , unitMemoryPeak :: Maybe Integer
+  , unitMemorySwapPeak :: Maybe Integer
   }
 
 data DaemonCounters = DaemonCounters
@@ -1134,7 +1159,7 @@ runContained memoryCap swapCap reservation scoped unit admission bazelArguments 
   state <-
     if scoped
       then unitState unit (isNothing exitStatus)
-      else pure (UnitState "uncapped" Nothing Nothing)
+      else pure (UnitState "uncapped" Nothing Nothing Nothing)
   after <- daemonCounters
   _ <- try (hClose releaseHandle) :: IO (Either IOException ())
   _ <- waitForProcess handle
@@ -1160,12 +1185,12 @@ unitState unit died = do
   let field name = lookup name properties
       number name = field name >>= readMaybe
   pure $ case field "LoadState" of
-    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak")
-    _ -> UnitState "unknown" Nothing Nothing
+    Just "loaded" -> UnitState (maybe "unknown" id (field "Result")) (number "CPUUsageNSec") (number "MemoryPeak") (number "MemorySwapPeak")
+    _ -> UnitState "unknown" Nothing Nothing Nothing
   where
     showUnit = do
       (_, out, _) <- readProcessWithExitCode "systemctl"
-        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak"] ""
+        ["--user", "show", unit, "-p", "LoadState", "-p", "ActiveState", "-p", "Result", "-p", "CPUUsageNSec", "-p", "MemoryPeak", "-p", "MemorySwapPeak"] ""
       pure [(key, drop 1 value) | line <- lines out, let (key, value) = break (== '=') line]
     settle 0 = pure ()
     settle remaining = do

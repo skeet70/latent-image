@@ -493,7 +493,7 @@ run source builder wrapper = do
       pure (budgetCode /= ExitSuccess && not ("probe-in-slot " `isInfixOf` budgetOutput))
   budgetOk <- expect "a budget above MemTotal less the 8 GiB host reserve or below one token, or smaller than one scope's RAM, is refused rather than waited for"
     (and budgetCases)
-  let repeated = change "XM1_RUN_LABEL" "repeat-label" (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "2G" native))
+  let repeated = change "XM1_HOST_CGROUP_ROOT" "/sys/fs/cgroup" (change "XM1_RUN_LABEL" "repeat-label" (change "XM1_NATIVE_SWAP_MAX" "0" (change "XM1_NATIVE_MEMORY_MAX" "2G" native)))
       repeatRun = do
         job <- spawn repeated
         seen <- admission job
@@ -508,6 +508,22 @@ run source builder wrapper = do
       && observedText "probe-memory-high " secondRepeat == Just "268435456"
       && observedText "probe-memory-max " secondRepeat == Just "2147483648"
       && firstRepeatCode == Just ExitSuccess && secondRepeatCode == Just ExitSuccess)
+  let oomCgroups = root </> "oom-cgroup"
+  oomJob <- spawn (change "XM1_HOST_CGROUP_ROOT" oomCgroups repeated)
+  oomSeen <- admission oomJob
+  let oomPid = observedPid "probe-pid " oomSeen
+  oomGroups <- maybe (pure "") (\oomOwner -> readFile ("/proc/" ++ show oomOwner ++ "/cgroup") >>= \text -> length text `seq` pure text) oomPid
+  forM_ [drop 3 line | line <- lines oomGroups, take 3 line == "0::"] $ \group -> do
+    createDirectoryIfMissing True (oomCgroups ++ group)
+    forM_ [("memory.peak", "268435456"), ("memory.swap.peak", "0"), ("memory.max", "2147483648"), ("memory.events", "low 0\nhigh 0\nmax 1\noom 1\noom_kill 1\noom_group_kill 0")] $ \(file, value) ->
+      writeFile (oomCgroups ++ group </> file) (value ++ "\n")
+  mapM_ (signalProcess sigKILL) oomPid
+  _ <- finish oomJob
+  waitUnitEnded environment 50 (fromMaybe "missing.scope" (observedText "probe-unit " oomSeen))
+  (afterOom, afterOomCode) <- repeatRun
+  oomOk <- expect "after an OOM kill at a 256 MiB peak, a run label's next scope reserves its RAM cap"
+    (observedText "probe-memory-high " oomSeen == Just "268435456"
+      && observedText "probe-memory-high " afterOom == Just "2147483648" && afterOomCode == Just ExitSuccess)
   let missingRuntime = root </> "no-session"
       sessionless = change "XDG_RUNTIME_DIR" missingRuntime
         (change "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ missingRuntime ++ "/bus") environment)
@@ -587,7 +603,7 @@ run source builder wrapper = do
   _ <- finish explicitJob
   explicitLabel <- readRunLabel explicitWorkspace
   explicitLabelOk <- expect "XM1_RUN_LABEL overrides the slot's program label" (explicitLabel == Just "explicit-label")
-  pure (and (concat requestedSlots) && and [slotlessWait, nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, repeatOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
+  pure (and (concat requestedSlots) && and [slotlessWait, nativeCliOk, defaultFullOk, overrideCapsOk, fullOk, largeNativeOk, overlap, atomicOk, pinnedOk, exitsOk, buildOverlap, buildBudget, buildExit, ramQueueOk, legacyRangeOk, smallOk, nativeLimit, nestedOk, grantOk, grantSecondOk, grantWrongSlotOk, grantMovedOk, grantNoPurposeOk, grantRegrantOk, grantOtherOk, grandchildOk, nestedBuildOk, exitOk, crashOk, survivorOk, reusedManagedOk, legacyOk, reusedLegacyOk, invalidLegacyOk, storageOk, capOk, budgetOk, repeatOk, oomOk, sessionOk, startupOk, migrationLockOk, migrationOk, unknownMigrationOk, programLabelOk, explicitLabelOk])
 
 change :: String -> String -> [(String, String)] -> [(String, String)]
 change key value environment = (key, value) : filter ((/= key) . fst) environment
