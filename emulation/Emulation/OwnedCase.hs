@@ -32,6 +32,7 @@ module Emulation.OwnedCase
   , writeBatchWithProfile
   , writeBatchWithInputPool
   , loadObservedBatch
+  , foldObservedBatch
   , registerValue
   , regionBytesOf
   , cpsrControl
@@ -45,7 +46,7 @@ module Emulation.OwnedCase
   ) where
 
 import Control.Exception (IOException, evaluate, try)
-import Control.Monad (foldM, forM_, unless, void, when)
+import Control.Monad (foldM, forM_, unless, when)
 import Data.Aeson (Value (Bool), object, (.=))
 import qualified Data.ByteString as B
 import Data.Bits (shiftR, (.&.))
@@ -521,6 +522,14 @@ stageChecked pool path content = do
 loadObservedBatch :: FilePath -> FilePath -> IO [(CaseId, NativeObservation)]
 loadObservedBatch runner path = do
   collected <- newIORef []
+  foldObservedBatch runner path (\ident observation -> modifyIORef' collected ((ident, observation) :))
+  reverse <$> readIORef collected
+
+-- | 'loadObservedBatch' handing each case's evaluated observation to the step as the runner reports
+-- it, in batch order, and keeping none of them.
+foldObservedBatch :: FilePath -> FilePath -> (CaseId -> NativeObservation -> IO ()) -> IO ()
+foldObservedBatch runner path step = do
+  refused <- newIORef []
   summary <- runBatch runner path $ \report -> do
     B.writeFile (takeDirectory path </> (caseIdText (reportCase report) ++ ".native-result.json")) (encodeCanonical (reportValue report))
     let value = reportValue report
@@ -530,11 +539,15 @@ loadObservedBatch runner path = do
             exit <- reportRunnerExit value
             observeNative exit regions (get value "runner")
     ident <- evaluate (reportCase report)
-    either (void . evaluate . length) evaluateObservation observed
-    modifyIORef' collected ((ident, observed) :)
-  results <- reverse <$> readIORef collected
+    case observed of
+      Left reason -> do
+        line <- evaluate (caseIdText ident ++ ": " ++ reason)
+        _ <- evaluate (length line)
+        modifyIORef' refused (line :)
+      Right observation -> evaluateObservation observation >> step ident observation
+  failures <- reverse <$> readIORef refused
   let missing =
-        [caseIdText ident ++ ": " ++ reason | (ident, Left reason) <- results]
+        failures
           ++ [caseIdText (batchCaseId c) ++ ": not_run" | c <- summaryCases summary, batchCaseStatus c == CaseNotRun]
       headline =
         unwords
@@ -544,7 +557,6 @@ loadObservedBatch runner path = do
           )
   unless (summaryStatus summary == BatchComplete && null missing) $
     error (unlines (headline : missing))
-  pure [(ident, observation) | (ident, Right observation) <- results]
 
 registerValue :: NativeObservation -> Register -> Word32
 registerValue observation register =

@@ -42,12 +42,14 @@ haskell_library(
         "Replacement/RtosScheduler/Layout.hs",
         "Replacement/RtosScheduler/Oracle.hs",
         "Replacement/RtosScheduler/Regions.hs",
+        "Replacement/RtosScheduler/S3bTally.hs",
         "Replacement/RtosScheduler/Suite.hs",
         "Replacement/RtosScheduler/Verdict.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = _GHCOPTS,
     deps = [
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
         "//host:aeson",
@@ -133,6 +135,25 @@ haskell_binary(
         ("scheduler-oracle-full-tests", "large", "full", ["manual"]),
     ]
 ]
+
+# Folds 8,192 observations each carrying a distinct 64 KiB region outside the writable regions, and
+# checks the folded verdict against keeping every observation on a small service.
+haskell_test(
+    name = "s3b-tally-tests",
+    size = "small",
+    srcs = ["S3bTallyTests.hs"],
+    main_file = "S3bTallyTests.hs",
+    ghcopts = _GHCOPTS + ["-rtsopts", "-with-rtsopts=-T"],
+    deps = [
+        ":scheduler-oracle-lib",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
 
 haskell_binary(
     name = "scheduler-s2-oracle",

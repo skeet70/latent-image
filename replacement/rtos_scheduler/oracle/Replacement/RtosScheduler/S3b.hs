@@ -1,12 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
+import Control.Exception (evaluate)
 import Control.Monad (filterM, forM, forM_, unless)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Bits ((.&.), xor)
 import Data.List (isPrefixOf, sortOn)
 import qualified Data.ByteString as B
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Word (Word32, Word8)
 import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Emulation.NativeObservation
@@ -17,6 +20,7 @@ import Emulation.Sha256 (sha256File, sha256Hex)
 import FujiAF.Host (get, s, set, str)
 import FujiAF.StorageBudget (checkStorageBudget)
 import qualified Replacement.RtosPlatform.Aggregate as Agg
+import Replacement.RtosScheduler.S3bTally
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeDirectoryRecursive)
 import System.Environment (getArgs, getExecutablePath)
 import System.FilePath ((</>))
@@ -129,44 +133,34 @@ spec domainB service (Row handle context cpsr state flags exists discarded self 
        (selected,w (if state .&. 1 /= 0 then task else selectedTask))]
       ++ [(at,w value) | state .&. 1 /= 0, (at,value) <- [(heads,task),(heads+4,task),(task,heads),(task+4,heads)]]
 
-comparable :: CaseSpec -> NativeObservation -> NativeObservation -> Bool
-comparable spec a b = nativeStatus a == nativeStatus b && memoryHolds && all same registers && mode a == mode b && visibleWrites a == visibleWrites b
- where
-  sp = fromMaybe 0 (lookup Sp (caseInitial spec))
-  registers = [R0] ++ (if nativeStatus a==Returned then [R4 .. R11]++[Sp] else [])
-  same r = M.lookup r (nativeRegisters a)==M.lookup r (nativeRegisters b)
-  mode observation = (.&. 0x1ff) <$> M.lookup Cpsr (nativeRegisters observation)
-  writable permission = case permission of ReadWrite -> True; Device -> True; _ -> False
-  stackLow = 0x959700
-  memoryHolds = all regionHolds (caseRegions spec)
-  regionHolds (CaseRegion raw permission)
-    | not (writable permission) = True
-    | otherwise = case (M.lookup ident (M.fromList (nativeMemory a)), M.lookup ident (M.fromList (nativeMemory b))) of
-        (Just x, Just y) -> liveBytes base x == liveBytes base y
-        _ -> False
-    where
-      ident = regionIdOf raw
-      base = fromIntegral (C.baseAddress raw)
-  liveBytes base bytes
-    | base == stackLow = B.drop (fromIntegral (min (fromIntegral (B.length bytes)) (sp - stackLow))) bytes
-    | otherwise = bytes
-  visibleWrites observation = [(fromIntegral at, fromIntegral size, value) | Just kernel <- [nativeKernel observation], Just order <- [observedOrder kernel], OrderedWrite (Write (GuestAddress at) (WriteBytes size)) value <- order, deviceAt (fromIntegral at) (fromIntegral size)]
-  deviceAt at size = any regionDevice (caseRegions spec)
-   where
-    regionDevice (CaseRegion raw permission) =
-      let base = fromIntegral (C.baseAddress raw)
-          top = base + fromIntegral (B.length (C.regionBytes raw))
-       in case permission of Device -> base <= at && at + size <= top; _ -> False
+-- | Cases per runner batch. The batch adapter holds every case of a batch until it ends.
+batchCases :: Int
+batchCases = 256
 
-runCases :: FilePath -> Maybe FilePath -> FilePath -> [(String, CaseSpec)] -> IO (M.Map String NativeObservation, Int)
-runCases runner reuseDirectory directory cases = do
+-- | The batch directory of the case at this position of the service's case list.
+batchDirectory :: Int -> String
+batchDirectory position = "batch-" ++ show (position `div` batchCases)
+
+caseLabel :: (Int, Role) -> String
+caseLabel (i, role) = roleLabel role ++ show i
+
+-- | Runs the cases in batches of 'batchCases', folding each observation into the tally as it arrives.
+runCases :: FilePath -> Maybe FilePath -> FilePath -> Tally -> [((Int, Role), CaseSpec)] -> IO (Tally, Int)
+runCases runner reuseDirectory directory initial cases = do
   checkStorageBudget directory
   runnerDigest <- sha256Hex <$> sha256File runner
-  results <- forM (zip [0 :: Int ..] (chunks cases)) $ \(batch, labelled) -> do
-    let batchName = "batch-" ++ show batch
+  tally <- newIORef initial
+  let keys = M.fromList [(caseLabel key, key) | (key, _) <- cases]
+      fold label observation = case M.lookup label keys of
+        Nothing -> fail ("S3b runner reported an unknown case " ++ label)
+        Just (i, role) -> modifyIORef' tally (\current -> observe current i role observation)
+  reusedCounts <- forM (zip [0 :: Int ..] (chunks cases)) $ \(batch, labelled) -> do
+    let batchName = batchDirectory (batch * batchCases)
         currentDirectory = directory </> batchName
+    count <- evaluate (length labelled)
     path <- writeBatch currentDirectory (map snd labelled)
-    reused <- fmap catMaybes $ forM labelled $ \(label, _) ->
+    reused <- fmap catMaybes $ forM labelled $ \(key, _) -> do
+      let label = caseLabel key
       case reuseDirectory of
         Nothing -> pure Nothing
         Just savedDirectory -> do
@@ -187,17 +181,23 @@ runCases runner reuseDirectory directory cases = do
                   (_, judged) <- C.judgeRunner current regions report exit (encodeCanonical (get saved "runner")) B.empty
                   B.writeFile (currentDirectory </> (label ++ ".native-result.json")) (encodeCanonical judged)
                   observation <- either (fail . show) pure (observeNative exit regions (get judged "runner"))
-                  pure (Just (CaseId label, observation))
-    let reusedLabels = M.fromList [(label, ()) | (CaseId label, _) <- reused]
-        freshSpecs = [specification | (label, specification) <- labelled, M.notMember label reusedLabels]
-    fresh <- if null freshSpecs then pure [] else loadObservedBatch runner =<< writeBatch currentDirectory freshSpecs
-    let observed = reused ++ fresh
-    unless (length observed == length labelled) (fail (path ++ ": observation count differs"))
-    pure ([(label, observation {nativeMemory = [(ident, B.copy bytes) | (ident, bytes) <- nativeMemory observation, not ("code-" `isPrefixOf` regionName ident)]}) | (CaseId label, observation) <- observed], length reused)
-  pure (M.fromList (concatMap fst results), sum (map snd results))
+                  evaluateObservation observation
+                  fold label observation
+                  pure (Just label)
+    let reusedLabels = S.fromList reused
+        freshSpecs = [specification | (key, specification) <- labelled, S.notMember (caseLabel key) reusedLabels]
+    observed <- newIORef (length reused)
+    unless (null freshSpecs) $ do
+      freshPath <- writeBatch currentDirectory freshSpecs
+      foldObservedBatch runner freshPath (\(CaseId label) observation -> fold label observation >> modifyIORef' observed (+ 1))
+    total <- readIORef observed
+    unless (total == count) (fail (path ++ ": observation count differs"))
+    pure (length reused)
+  final <- readIORef tally
+  pure (final, sum reusedCounts)
  where
   chunks [] = []
-  chunks items = let (batch, rest) = splitAt 4096 items in batch : chunks rest
+  chunks items = let (batch, rest) = splitAt batchCases items in batch : chunks rest
 
 main :: IO ()
 main = do
@@ -262,64 +262,25 @@ main = do
         forM [minBound..maxBound] $ \s -> do
           let cases=rows s
               scratchInputs specification = specification {caseInitial = [(register, if register `elem` [R1, R2, R3, R12] then value `xor` 0xffffffff else value) | (register, value) <- caseInitial specification]}
-              roles=[("stock",stock,stockCodeSpans s,stockFunctionSpans s,id),("owned",candidate,ownedCodeSpans s,ownedFunctionSpans s,id),("equivalent",candidate,ownedCodeSpans s,ownedFunctionSpans s,scratchInputs),("mutant",poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s,id)]
-              labelled=[(role++show i,alter (spec b s row (role++show i) codeSpans functionSpans bytes)) | (role,bytes,codeSpans,functionSpans,alter)<-roles,(i,row)<-zip [0::Int ..] cases]
+              roles=[(Stock,stock,stockCodeSpans s,stockFunctionSpans s,id),(Owned,candidate,ownedCodeSpans s,ownedFunctionSpans s,id),(Equivalent,candidate,ownedCodeSpans s,ownedFunctionSpans s,scratchInputs),(Mutant,poke candidate [(entry s+delta-base,w 0xe3e00010<>w 0xe12fff1e)],ownedCodeSpans s,ownedFunctionSpans s,id)]
+              labelled=[((i,role),alter (spec b s row (caseLabel (i,role)) codeSpans functionSpans bytes)) | (i,row)<-zip [0::Int ..] cases,(role,bytes,codeSpans,functionSpans,alter)<-roles]
               dir=work </> (show b++show s)
-          (observed, reused) <- runCases runner (fmap (</> (show b ++ show s)) reuseRoot) dir labelled
+              stockSpec i=spec b s (cases!!i) ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
+          (tally, reused) <- runCases runner (fmap (</> (show b ++ show s)) reuseRoot) dir (emptyTally stockSpec) labelled
           evidence <- forM [0 .. length cases - 1] $ \i -> do
             let label = "stock" ++ show i
-                batch = "batch-" ++ show (i `div` 4096)
+                batch = batchDirectory (i * length roles)
                 handler = entry s + delta
                 size = fromIntegral (extent s)
             found <- evidenceAt (dir </> batch </> (label ++ ".native-result.json")) handler size
-            pure (label, (handler, size, evidenceTrace found + evidenceProvenance found))
-          let at role i=observed M.! (role++show i)
-              evidenceMap = M.fromList evidence
-              completed=and [nativeStatus (at "stock" i) == status && M.lookup R0 (nativeRegisters (at "stock" i)) == Just value | (i,row) <- zip [0 :: Int ..] cases, let (status,value)=expected b s row]
-              stockSpec i row=spec b s row ("stock"++show i) (stockCodeSpans s) (stockFunctionSpans s) stock
-              matches role=length [() | i<-[0..length cases-1],comparable (stockSpec i (cases!!i)) (at "stock" i) (at role i)]
-              corruptByte name offset observation = observation { nativeMemory = [(ident, if regionName ident == name then B.take offset bytes <> B.singleton (B.index bytes offset + 1) <> B.drop (offset + 1) bytes else bytes) | (ident, bytes) <- nativeMemory observation] }
-              controls = case cases of
-                [] -> []
-                row : _ ->
-                  let reference = at "stock" 0
-                      fixture = stockSpec 0 row
-                      refuses change = not (comparable fixture reference (change reference))
-                   in [refuses (corruptByte "tasks-a" 0x0c), refuses (corruptByte "globals-a" 0), refuses (corruptByte "stack" 0x100), comparable fixture reference (corruptByte "stack" 0 reference)]
-              negativeControl = length controls == 4 && and controls
-              controlRows :: [(String, Bool)]
-              controlRows = zip ["task-state", "globals-word", "stack-byte", "stack-base"] controls
-              stockInstructions = [object ["case".=i,"instructions".=instructionCount (nativeInstructions (at "stock" i))] | i<-[0..length cases-1]]
-              caseDifferences i = [role | role <- ["owned","equivalent"], not (comparable (stockSpec i (cases !! i)) (at "stock" i) (at role i))]
-              reportedCases = [i | i <- [0 .. length cases - 1], Just _ <- [M.lookup ("stock" ++ show i) evidenceMap]]
-              caseRows = [ object
-                  [ "id" .= ("stock" ++ show i)
-                  , "case" .= i
-                  , "entry" .= handler
-                  , "extent" .= size
-                  , "stock_instructions_inside" .= inside
-                  , "stock_instructions" .= instructionCount (nativeInstructions (at "stock" i))
-                  , "status" .= show (nativeStatus (at "stock" i))
-                  , "differences" .= caseDifferences i
-                  ]
-                | i <- reportedCases
-                , Just (handler, size, inside) <- [M.lookup ("stock" ++ show i) evidenceMap]
-                ]
-              failures = length [() | i <- reportedCases, not (null (caseDifferences i))]
-              mutantRows = [ object
-                  [ "name" .= ("mutant-" ++ show s)
-                  , "expected" .= ("the service entry replaced by mvn r0,#16; bx lr is reported different" :: String)
-                  , "reported" .= (matches "mutant" < length cases)
-                  , "differences" .= ([] :: [String])
-                  , "diagnostic_differences" .= ([] :: [String])
-                  ] ]
-              observationRows = [object ["name".=name, "reported".=held] | (name,held)<-controlRows]
-              holds=completed && matches "owned"==length cases && matches "equivalent"==length cases && matches "mutant"<length cases && negativeControl
-          unless holds $ putStrLn (show (b,s,completed,matches "owned",length cases,[(i,nativeStatus (at "stock" i),nativeStatus (at "owned" i)) | i<-[0..length cases-1],not (comparable (stockSpec i (cases!!i)) (at "stock" i) (at "owned" i))]))
+            pure (i, (handler, size, evidenceTrace found + evidenceProvenance found))
+          verdict <- either fail pure (serviceVerdict b (show s) (map (expected b s) cases) (M.fromList evidence) reused tally)
+          let holds = verdictHolds verdict
+          unless holds $ putStrLn (show (b,s,verdictCompleted verdict,verdictOwnedMatches verdict,length cases,verdictOwnedDifferences verdict))
           if holds then removeDirectoryRecursive dir else pure ()
-          let report=object ["domain_b".=b,"service".=show s,"cases".=length cases,"case_rows".=caseRows,"reused_observations".=reused,"stock_completed".=completed,"owned_matches".=matches "owned","equivalent_matches".=matches "equivalent","mutant_matches".=matches "mutant","negative_control".=negativeControl,"controls".=mutantRows,"observation_controls".=observationRows,"negative_controls".=[object ["control".=name,"holds".=held] | (name,held)<-controlRows],"stock_instructions".=stockInstructions,"passed".=holds]
-          B.writeFile (work </> (show b++show s++".json")) (encodeCanonical report)
-          pure (ServiceReport b s holds report (length cases) inputs caseRows failures mutantRows observationRows loaderDigest candidateDigest)
+          B.writeFile (work </> (show b++show s++".json")) (encodeCanonical (verdictReport verdict))
+          failures <- evaluate (verdictFailures verdict)
+          pure (ServiceReport b s holds (verdictReport verdict) (length cases) inputs (verdictCaseRows verdict) failures (verdictControls verdict) (verdictObservationControls verdict) loaderDigest candidateDigest)
       let flat=concat reports
           passed=all srHolds flat
           families=[object ["domain_b".=srDomainB r,"family".=show (srService r),"cases".=srCaseCount r,"passed".=srHolds r] | r<-flat]
