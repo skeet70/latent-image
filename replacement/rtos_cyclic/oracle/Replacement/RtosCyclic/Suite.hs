@@ -806,7 +806,7 @@ caseFor facts domain role stockImage ownedInput one =
     , caseCp14Identity = Just (if domain == DomainA then 0x4003 else 0x4004)
     , caseKernel =
         if status == Returned
-          then Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [])
+          then Just (KernelCase plainLimit Nothing (Just 0x80001234) (Just 0) (Just 0) [R1, R2, R3, R12, Lr] [] Nothing)
           else Nothing
     }
   where

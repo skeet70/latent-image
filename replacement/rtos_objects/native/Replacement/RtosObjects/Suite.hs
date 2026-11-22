@@ -709,7 +709,7 @@ caseFor facts executing role loader payload one
       , caseExpectedMemory = [(RegionId "caller-frame", callerBytes one)]
       , caseIgnoredMemory = []
       , caseCp14Identity = Just (if executing == DomainA then 0x4003 else 0x4004)
-      , caseKernel = Just (KernelCase (maybe plainLimit (InstructionLimit . fromIntegral) caseBudget) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored stacks)
+      , caseKernel = Just (KernelCase (maybe plainLimit (InstructionLimit . fromIntegral) caseBudget) (if caseBoundary one == TaskArrival then Just (wireAddress (GuestAddress stopAddress)) else Nothing) (Just 0x80001234) (Just 0) (Just 0) ignored stacks Nothing)
       }
   where
     entry = callEntry executing (caseCall one)

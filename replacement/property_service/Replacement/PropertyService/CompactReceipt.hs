@@ -251,6 +251,8 @@ nativeJSON native = object
       N.OrderedWrite write (N.WriteValue value) -> object ["kind" .= ("write" :: String), "write" .= nativeWriteJSON write, "value" .= value]
       N.OrderedBarrier barrier -> object ["kind" .= ("barrier" :: String), "barrier" .= show barrier]
       N.OrderedSystemWrite register value -> object ["kind" .= ("system_write" :: String), "register" .= show register, "value" .= value]
+      N.OrderedDeviceRead loaded (N.WriteValue value) -> object ["kind" .= ("device_read" :: String), "read" .= nativeWriteJSON loaded, "value" .= value]
+      N.OrderedMaintenance operation value -> object ["kind" .= ("maintenance" :: String), "operation" .= show operation, "value" .= value]
 
 sdkJSON :: SDKReport -> Value
 sdkJSON sdk = object

@@ -42,8 +42,8 @@
         "required": ["id", "address", "size", "permissions", "initial"],
         "properties": {
           "id": {"$ref": "#/$defs/id"}, "address": {"$ref": "#/$defs/u32"},
-          "size": {"$ref": "#/$defs/size"}, "permissions": {"enum": ["r", "rw", "rx", "device"], "description": "device: one interrupt-controller bank word 0xfffb30cc, 0xfffb40cc, 0xfffb30ec or 0xfffb40ec of a kernel case, size 4, taking aligned word stores only"},
-          "uncached_alias": {"const": true, "description": "Schema version 2 only. The region's backing is also mapped at address | 0x40000000 with the same permissions, coherently: no cache is modeled. The region is page-aligned in address and size, ends by 0x40000000 and is not a device word; no view may overlap another region's view, and an rx alias view must end by 0x7ffffffc. The alias view counts toward neither maxItems nor the mapped-byte total; observations report the region at address only."},
+          "size": {"$ref": "#/$defs/size"}, "permissions": {"enum": ["r", "rw", "rx", "device"], "description": "device: a kernel case's word-aligned, word-multiple span inside the interrupt-controller banks [0xfffb3000, 0xfffb5000), taking aligned word loads and stores only; loads are logged as device_read rows. Memory-backed, with no register model."},
+          "uncached_alias": {"const": true, "description": "Schema version 2 only. The region's backing is also mapped at address | 0x40000000 with the same permissions, coherently: no cache is modeled. The region is page-aligned in address and size, ends by 0x40000000 and is not a device region; no view may overlap another region's view, and an rx alias view must end by 0x7ffffffc. The alias view counts toward neither maxItems nor the mapped-byte total; observations report the region at address only."},
           "initial": {
             "oneOf": [
               {"type": "object", "additionalProperties": false, "required": ["zero"], "properties": {"zero": {"const": true}}},
@@ -118,6 +118,24 @@
             "properties": {
               "low": {"$ref": "#/$defs/u32", "pattern": "^0x[0-9a-f]{7}[08]$"},
               "high": {"$ref": "#/$defs/u32", "pattern": "^0x[0-9a-f]{7}[08]$"}
+            }
+          }
+        },
+        "cache": {
+          "type": "object", "additionalProperties": false,
+          "required": ["sctlr", "clidr", "csselr", "ccsidr"],
+          "description": "Admits MRC/MCR SCTLR (p15,0,c1,c0,0), MRC CLIDR (p15,1,c0,c0,1), MRC/MCR CSSELR (p15,2,c0,c0,0), MRC CCSIDR (p15,1,c0,c0,0) served at the current CSSELR, and the MCR maintenance writes ICIALLU, ICIMVAU, DCIMVAC, DCISW, DCCMVAC, DCCSW, DCCIMVAC, DCCISW and p15,0,c15,c5,0. SCTLR and CSSELR writes are system rows and maintenance writes are maintenance rows of memory_provenance, each with its value. A CCSIDR read at an undeclared selector stops as unsupported_instruction. No cache is modeled. Selectors are distinct.",
+          "properties": {
+            "sctlr": {"$ref": "#/$defs/u32"},
+            "clidr": {"$ref": "#/$defs/u32"},
+            "csselr": {"$ref": "#/$defs/u32"},
+            "ccsidr": {
+              "type": "array", "minItems": 1, "maxItems": 16,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["selector", "value"],
+                "properties": {"selector": {"$ref": "#/$defs/u32"}, "value": {"$ref": "#/$defs/u32"}}
+              }
             }
           }
         }

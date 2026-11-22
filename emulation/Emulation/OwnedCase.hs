@@ -15,6 +15,7 @@ module Emulation.OwnedCase
   , IgnoredMemory (..)
   , IgnoredReason (..)
   , KernelCase (..)
+  , CacheRegisters (..)
   , StackContext
   , mkStackContext
   , InstructionLimit (..)
@@ -23,6 +24,8 @@ module Emulation.OwnedCase
   , caseOutcome
   , KernelDifference (..)
   , compareKernelCase
+  , PlatformEvent (..)
+  , platformOrder
   , writeCase
   , MemoryProfile (..)
   , writeCaseWithProfile
@@ -54,17 +57,20 @@ import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
-import Data.Word (Word32)
+import Data.Word (Word32, Word64, Word8)
 import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), DigestHex (..), MemoryProfile (..), Region (..), RegionViews (..), artifactCount, batchStatusLabel, loadCase, profileSizeBytes, regionViewsOf, runBatch, runCase)
 import Emulation.NativeObservation
-  ( GuestAddress (..)
+  ( Barrier
+  , GuestAddress (..)
   , KernelObservation (..)
+  , Maintenance
   , NativeObservation (..)
   , evaluateObservation
   , Ordered (..)
   , Register (..)
   , RegionId (..)
   , RunnerStatus (..)
+  , SystemRegister (..)
   , Write (..)
   , WriteBytes (..)
   , WriteValue (..)
@@ -150,7 +156,8 @@ functionSymbol symbols name = case lookupSymbol symbols name of
 lookupSymbol :: M.Map String Symbol -> String -> Symbol
 lookupSymbol symbols name = fromMaybe (error ("kernel symbol missing: " ++ name)) (M.lookup name symbols)
 
--- | 'Device' is one interrupt-controller bank word of a kernel case, taking aligned word stores only.
+-- | 'Device' is a word-aligned, word-multiple span of the interrupt-controller banks
+-- @[0xfffb3000,0xfffb5000)@ in a kernel case, taking aligned word loads and stores only.
 data Permission = ReadOnly | ReadWrite | ReadExecute | Device
 
 permissionLabel :: Permission -> String
@@ -254,6 +261,18 @@ data KernelCase = KernelCase
     kernelUncompared :: [Register]
   , -- | Declared private stack contexts; empty for a single-context case.
     kernelStackContexts :: [StackContext]
+  , -- | Admits the SCTLR, CLIDR, CSSELR and CCSIDR words and the cache maintenance writes.
+    kernelCache :: Maybe CacheRegisters
+  }
+
+-- | Initial SCTLR and CSSELR, CLIDR, and the CCSIDR each CSSELR selector reads. Selectors are
+-- distinct, one to sixteen; a CCSIDR read at any other selector stops the case as
+-- @unsupported_instruction@. No cache is modeled.
+data CacheRegisters = CacheRegisters
+  { cacheSctlr :: Word32
+  , cacheClidr :: Word32
+  , cacheCsselr :: Word32
+  , cacheCcsidr :: [(Word32, Word32)]
   }
 
 caseLimit :: CaseSpec -> InstructionLimit
@@ -288,8 +307,9 @@ data KernelDifference
 
 -- | Two roles of one kernel case: outcome, every register but the declared exclusions with CPSR
 -- bits 8:0 always, the final bytes of the spec's writable and device regions, the final TPIDRURW and
--- FPEXC, and the multiset of memory writes with their values and of system register writes. Barrier
--- order is left to per-case assertions on 'observedOrder'.
+-- FPEXC, and the multiset of memory writes with their values, of system register writes and of
+-- maintenance operations with their operands. Order is left to 'platformOrder' and per-case
+-- assertions on 'observedOrder'.
 compareKernelCase :: CaseSpec -> NativeObservation -> NativeObservation -> [KernelDifference]
 compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel reference, nativeKernel subject) of
   (Just kernel, Just referenceKernel, Just subjectKernel) ->
@@ -323,9 +343,43 @@ compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel r
       ReadExecute -> False
     system observed = (observedTpidrurw observed, observedFpexc observed)
     writes observed = sort . concatMap written <$> observedOrder observed
-    written (OrderedWrite (Write (GuestAddress address) (WriteBytes bytes)) (WriteValue stored)) = [Left (address, bytes, stored)]
-    written (OrderedSystemWrite register value) = [Right (register, value)]
+    written (OrderedWrite (Write (GuestAddress address) (WriteBytes bytes)) (WriteValue stored)) = [MemoryEffect address bytes stored]
+    written (OrderedSystemWrite register value) = [SystemEffect register value]
+    written (OrderedMaintenance operation operand) = [MaintenanceEffect operation operand]
+    written (OrderedDeviceRead _ _) = []
     written (OrderedBarrier _) = []
+
+data Effect
+  = MemoryEffect Word64 Word8 Word64
+  | SystemEffect SystemRegister Word32
+  | MaintenanceEffect Maintenance Word32
+  deriving (Eq, Ord)
+
+-- | A platform effect of a kernel case.
+data PlatformEvent
+  = -- | A device-region load and the word it read.
+    PlatformDeviceRead GuestAddress Word32
+  | PlatformDeviceWrite GuestAddress Word32
+  | -- | A maintenance operation and its Rt operand.
+    PlatformMaintenance Maintenance Word32
+  | PlatformSystemWrite SystemRegister Word32
+  | PlatformBarrier Barrier
+  deriving (Eq, Show)
+
+-- | The kernel observation's device loads and stores inside the spec's 'Device' regions,
+-- maintenance operations, system register writes and barriers, in execution order. Nothing for a
+-- case without a kernel observation or with a truncated log.
+platformOrder :: CaseSpec -> NativeObservation -> Maybe [PlatformEvent]
+platformOrder spec observation = concatMap event <$> (nativeKernel observation >>= observedOrder)
+  where
+    devices = [(baseAddress region, baseAddress region + regionSize region) | CaseRegion region Device <- caseRegions spec]
+    device (GuestAddress address) = any (\(low, high) -> low <= toInteger address && toInteger address < high) devices
+    event ordered = case ordered of
+      OrderedWrite (Write address _) (WriteValue value) -> [PlatformDeviceWrite address (fromIntegral value) | device address]
+      OrderedDeviceRead (Write address _) (WriteValue value) -> [PlatformDeviceRead address (fromIntegral value) | device address]
+      OrderedMaintenance operation operand -> [PlatformMaintenance operation operand]
+      OrderedSystemWrite register value -> [PlatformSystemWrite register value]
+      OrderedBarrier barrier -> [PlatformBarrier barrier]
 
 newtype InitializerId = InitializerId String
 newtype InitializerOffset = InitializerOffset Int
@@ -440,6 +494,16 @@ kernelJson kernel =
              .= [object ["low" .= hexAddress low, "high" .= hexAddress high] | StackContext (low, high) <- kernelStackContexts kernel]
          | not (null (kernelStackContexts kernel))
          ]
+      ++ ["cache" .= cacheJson cache | Just cache <- [kernelCache kernel]]
+
+cacheJson :: CacheRegisters -> Value
+cacheJson cache =
+  object
+    [ "sctlr" .= hexWord32 (cacheSctlr cache)
+    , "clidr" .= hexWord32 (cacheClidr cache)
+    , "csselr" .= hexWord32 (cacheCsselr cache)
+    , "ccsidr" .= [object ["selector" .= hexWord32 selector, "value" .= hexWord32 value] | (selector, value) <- cacheCcsidr cache]
+    ]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase = writeCaseWithProfile DefaultMemory

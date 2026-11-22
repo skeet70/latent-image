@@ -105,6 +105,8 @@ struct Case {
     /// The wire's kernel row of a kernel case.
     kernel: Option<String>,
     stack_contexts: Option<String>,
+    /// The wire's cache-register row of a kernel case.
+    cache: Option<String>,
     resource8: bool,
     /// Bases of regions whose wire row carries the uncached-alias marker.
     aliases: Vec<u32>,
@@ -164,6 +166,7 @@ impl Case {
             identity: None,
             kernel: None,
             stack_contexts: None,
+            cache: None,
             resource8: false,
             aliases: Vec::new(),
         }
@@ -234,6 +237,17 @@ impl Case {
         self
     }
 
+    /// The `p` row of a case declaring SCTLR, CLIDR, CSSELR and `(selector, ccsidr)` pairs.
+    fn cache(self, sctlr: u32, clidr: u32, csselr: u32, sizes: &[(u32, u32)]) -> Self {
+        let pairs: Vec<String> = sizes.iter().map(|(selector, ccsidr)| format!(" {selector:x} {ccsidr:x}")).collect();
+        self.cache_row(&format!("p {sctlr:x} {clidr:x} {csselr:x} {}{}", sizes.len(), pairs.concat()))
+    }
+
+    fn cache_row(mut self, row: &str) -> Self {
+        self.cache = Some(row.to_owned());
+        self
+    }
+
     /// Four regions sharing page 0x4000: r, rw, r, an unmapped gap, then rw.
     fn shared_page(self) -> Self {
         self.region(0x4000, READ, &[0x44, 0x33, 0x22, 0x11])
@@ -267,6 +281,9 @@ impl Case {
         }
         if let Some(contexts) = &self.stack_contexts {
             text += &format!("\n{contexts}");
+        }
+        if let Some(cache) = &self.cache {
+            text += &format!("\n{cache}");
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len() + self.scripts.len());
         for (index, region) in self.regions.iter().enumerate() {
@@ -342,6 +359,7 @@ struct UnobservedExtent {
 enum Kind {
     Read,
     Write,
+    DeviceRead,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -380,6 +398,7 @@ enum Row {
     Access(Provenance),
     Barrier(BarrierRow),
     System(SystemRow),
+    Maintenance(MaintenanceRow),
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -393,6 +412,8 @@ enum SystemTag {
 enum SystemRegister {
     Tpidrurw,
     Fpexc,
+    Sctlr,
+    Csselr,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -405,6 +426,43 @@ struct SystemRow {
 
 fn system(pc: u32, register: SystemRegister, value: u32) -> Row {
     Row::System(SystemRow { pc: format!("0x{pc:08x}"), kind: SystemTag::System, register, value: format!("0x{value:08x}") })
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum MaintenanceTag {
+    Maintenance,
+}
+
+#[derive(Clone, Copy, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum Maintenance {
+    Iciallu,
+    Icimvau,
+    Dcimvac,
+    Dcisw,
+    Dccmvac,
+    Dccsw,
+    Dccimvac,
+    Dccisw,
+    InvalidateAllData,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct MaintenanceRow {
+    pc: String,
+    kind: MaintenanceTag,
+    operation: Maintenance,
+    value: String,
+}
+
+fn maintenance(pc: u32, operation: Maintenance, value: u32) -> Row {
+    Row::Maintenance(MaintenanceRow {
+        pc: format!("0x{pc:08x}"),
+        kind: MaintenanceTag::Maintenance,
+        operation,
+        value: format!("0x{value:08x}"),
+    })
 }
 
 #[derive(Clone, Copy, Deserialize, Debug, PartialEq)]
@@ -2252,7 +2310,7 @@ fn reserved_barrier_options_and_other_cp15_c7_words_are_refused() {
 }
 
 #[test]
-fn cache_identification_and_set_way_maintenance_require_a_stateful_model() {
+fn cache_words_are_refused_regardless_of_condition_without_a_cache_declaration() {
     for word in [
         0xee30_0f30, // mrc p15, 1, r0, c0, c0, 1
         0xee50_0f10, // mrc p15, 2, r0, c0, c0, 0
@@ -2456,9 +2514,36 @@ fn the_bank_words_take_word_stores_in_order_after_a_barrier() {
 }
 
 #[test]
-fn bank_word_loads_and_narrow_stores_are_memory_guards() {
-    // ldr r0, [r2]; strb r0, [r2]; strh r0, [r2]; strd r0, r1, [r2]
-    for word in [0xe592_0000, 0xe5c2_0000, 0xe1c2_00b0, 0xe1c2_00f0] {
+fn device_spans_take_aligned_word_reads_and_writes_logged_apart_from_ordinary_reads() {
+    // ldr r3, [r2, #8]; str r0, [r2]; ldr r4, [r2]; ldr r5, [r6]
+    for base in [0xfffb_3000, 0xfffb_4ff0] {
+        let observed = Case::new(&[0xe592_3008, STR_R0_R2, 0xe592_4000, 0xe596_5000, BX_LR])
+            .kernel(Kernel::default())
+            .region(base, DEVICE, &words(&[0, 0, 0x5a5a_1234, 0]))
+            .region(DATA, READ, &words(&[7]))
+            .register(0, 0x0100_0000)
+            .register(2, base)
+            .register(6, DATA)
+            .run();
+        observed.assert_returned();
+        assert_eq!((observed.register("r3"), observed.register("r4"), observed.register("r5")), (0x5a5a_1234, 0x0100_0000, 7));
+        assert_eq!(observed.bytes(base), "000000010000000034125a5a00000000");
+        assert_eq!(
+            observed.observation.memory_provenance,
+            [
+                access(CODE, Kind::DeviceRead, base + 8, 0x5a5a_1234),
+                access(CODE + 4, Kind::Write, base, 0x0100_0000),
+                access(CODE + 8, Kind::DeviceRead, base, 0x0100_0000),
+                access(CODE + 12, Kind::Read, DATA, 7),
+            ]
+        );
+    }
+}
+
+#[test]
+fn narrow_and_overrunning_device_accesses_are_memory_guards() {
+    // ldrb r0, [r2]; strb r0, [r2]; strh r0, [r2]; ldrh r0, [r2]; strd r0, r1, [r2]; ldrd r0, r1, [r2]
+    for word in [0xe5d2_0000, 0xe5c2_0000, 0xe1c2_00b0, 0xe1d2_00b0, 0xe1c2_00f0, 0xe1c2_00d0] {
         let observed = Case::new(&[word, BX_LR])
             .kernel(Kernel::default())
             .region(BANK, DEVICE, &[0; 4])
@@ -2494,16 +2579,115 @@ fn malformed_kernel_cases_are_invalid() {
         valid.clone().kernel(Kernel { fpexc: Some(FPEXC_EN | 1), ..Kernel::default() }),
         user,
         privileged,
-        valid.clone().region(0xfffb_30d0, DEVICE, &[0; 4]),
     ];
-    let mut wide = valid.clone();
-    wide.regions[2] = Region { address: BANK, size: 8, permission: DEVICE, bytes: vec![0; 8] };
+    // Outside either bank, unaligned, or not a whole number of words.
+    for (address, size) in [(0xfffb_2ffc, 8), (0xfffb_4ffc, 8), (0xfffb_5000, 4), (0xfffb_3002, 4), (0xfffb_3000, 6)] {
+        cases.push(valid.clone().region(address, DEVICE, &vec![0; size]));
+    }
     let mut malformed = valid.clone();
     malformed.kernel = Some("k n n n".to_owned());
-    cases.extend([wide, malformed]);
+    cases.push(malformed);
     for case in cases {
         let observed = case.run();
         assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cache registers
+
+const L1_SIZES: [(u32, u32); 2] = [(0, 0x700f_e01a), (1, 0x201f_e01a)];
+/// `mrc p15, 1, r9, c0, c0, 0` (CCSIDR) and `mcr p15, 2, r8, c0, c0, 0` (CSSELR).
+const CCSIDR_TO_R9: u32 = 0xee30_9f10;
+const CSSELR_FROM_R8: u32 = 0xee40_8f10;
+/// `mcr p15, 0, r0, c7, c14, 1` (DCCIMVAC).
+const DCCIMVAC_R0: u32 = 0xee07_0f3e;
+
+#[test]
+fn declared_cache_registers_serve_reads_and_log_sctlr_and_csselr_writes() {
+    // mrc SCTLR r4; mrc CLIDR r5; mrc CSSELR r7; mrc CCSIDR r9; mcr CSSELR r8;
+    // mrc CCSIDR r10; mcr SCTLR r6; mrc SCTLR r11
+    let observed = Case::new(&[0xee11_4f10, 0xee30_5f30, 0xee50_7f10, CCSIDR_TO_R9, CSSELR_FROM_R8, 0xee30_af10, 0xee01_6f10, 0xee11_bf10, BX_LR])
+        .kernel(Kernel::default())
+        .cache(0x00c5_0878, 0x0920_0003, 0, &L1_SIZES)
+        .register(6, 0x00c5_187d)
+        .register(8, 1)
+        .run();
+    observed.assert_returned();
+    let read: Vec<u32> = ["r4", "r5", "r7", "r9", "r10", "r11"].iter().map(|label| observed.register(label)).collect();
+    assert_eq!(read, [0x00c5_0878, 0x0920_0003, 0, 0x700f_e01a, 0x201f_e01a, 0x00c5_187d]);
+    assert_eq!(
+        observed.observation.memory_provenance,
+        [system(CODE + 16, SystemRegister::Csselr, 1), system(CODE + 24, SystemRegister::Sctlr, 0x00c5_187d)]
+    );
+}
+
+#[test]
+fn maintenance_writes_are_logged_in_order_with_their_operands() {
+    let operations = [
+        (0xee07_0f15, Maintenance::Iciallu),
+        (0xee07_0f35, Maintenance::Icimvau),
+        (0xee07_0f36, Maintenance::Dcimvac),
+        (0xee07_0f56, Maintenance::Dcisw),
+        (0xee07_0f3a, Maintenance::Dccmvac),
+        (0xee07_0f5a, Maintenance::Dccsw),
+        (DCCIMVAC_R0, Maintenance::Dccimvac),
+        (0xee07_0f5e, Maintenance::Dccisw),
+        (0xee0f_0f15, Maintenance::InvalidateAllData),
+    ];
+    let mut code: Vec<u32> = operations.iter().map(|(word, _)| *word).collect();
+    // mcrne DCCIMVAC with Z set; mcr DCCIMVAC r1; dsb sy
+    code.extend([DCCIMVAC_R0 & 0x0fff_ffff | 0x1000_0000, 0xee07_1f3e, DSB_SY, BX_LR]);
+    let observed = Case::new(&code).kernel(Kernel::default()).cache(0, 0, 0, &L1_SIZES).register(0, 0x4020).register(1, 0x4040).run();
+    observed.assert_returned();
+    let mut expected: Vec<Row> =
+        operations.iter().enumerate().map(|(index, (_, operation))| maintenance(CODE + 4 * index as u32, *operation, 0x4020)).collect();
+    expected.push(maintenance(CODE + 40, Maintenance::Dccimvac, 0x4040));
+    expected.push(barrier(CODE + 44, Barrier::Dsb));
+    assert_eq!(observed.observation.memory_provenance, expected);
+}
+
+#[test]
+fn cache_words_without_a_declaration_or_with_pc_are_refused() {
+    // SCTLR, CLIDR and CCSIDR reads, CSSELR write, ICIALLU, DCCISW and the c15 invalidate-all
+    for word in [0xee11_4f10, 0xee30_5f30, CCSIDR_TO_R9, CSSELR_FROM_R8, 0xee07_0f15, 0xee07_0f5e, 0xee0f_0f15] {
+        let case = Case::new(&[word, BX_LR]).kernel(Kernel::default());
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+    // mrc CCSIDR pc; mcr DCCIMVAC pc; mcr2 DCCIMVAC; mcr p15, 0, r0, c7, c6, 0; mcr p15, 0, r0, c15, c5, 1
+    for word in [0xee30_ff10, 0xee07_ff3e, 0xfe07_0f3e, 0xee07_0f16, 0xee0f_0f35] {
+        let case = Case::new(&[word, BX_LR]).kernel(Kernel::default()).cache(0, 0, 0, &L1_SIZES);
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+}
+
+#[test]
+fn a_ccsidr_read_at_an_undeclared_selector_stops_without_effect() {
+    let selected = Case::new(&[CSSELR_FROM_R8, CCSIDR_TO_R9, BX_LR]).kernel(Kernel::default()).cache(0, 0, 0, &L1_SIZES).register(8, 5).run();
+    selected.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
+    assert_eq!(selected.register("r9"), 0);
+    assert_eq!(selected.observation.memory_provenance, [system(CODE, SystemRegister::Csselr, 5)]);
+    let initial = Case::new(&[CCSIDR_TO_R9, BX_LR]).kernel(Kernel::default()).cache(0, 0, 3, &L1_SIZES);
+    assert_status_write_has_no_effect(&initial, &initial.run());
+}
+
+#[test]
+fn malformed_cache_register_rows_are_invalid() {
+    let base = Case::new(&[BX_LR]).kernel(Kernel::default());
+    let sixteen: Vec<(u32, u32)> = (0..16).map(|selector| (selector, 0x1000 + selector)).collect();
+    base.clone().cache(0, 0, 0, &sixteen).run().assert_returned();
+    let seventeen: Vec<(u32, u32)> = (0..17).map(|selector| (selector, 0)).collect();
+    let mut privileged = base.clone().cache(0, 0, 0, &L1_SIZES);
+    privileged.kernel = None;
+    for case in [
+        base.clone().cache(0, 0, 0, &[]),
+        base.clone().cache(0, 0, 0, &seventeen),
+        base.clone().cache(0, 0, 0, &[(1, 2), (1, 3)]),
+        base.clone().cache_row("p 0 0 0 1 0"),
+        base.clone().cache_row("p 0 0 0 1 0 G"),
+        privileged,
+    ] {
+        assert_eq!(case.run().status(), Status::InvalidCase, "{}", case.wire());
     }
 }
 

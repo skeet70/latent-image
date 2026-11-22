@@ -1,18 +1,23 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_rlib", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
+
+_MODULES = [
+    "src/cache.rs",
+    "src/controller.rs",
+    "src/mask.rs",
+    "//replacement/rtos_exception:src/lib.rs",
+    "//replacement/rtos_layout:src/lib.rs",
+    "//replacement/rtos_reservation:src/lib.rs",
+]
 
 xm1_rust_staticlib(
     name = "irq-rust",
     src = "src/lib.rs",
     crate_name = "xm1_rtos_irq_control",
-    data = [
-        "src/tests.rs",
-        "//replacement/rtos_layout:src/lib.rs",
-        "//replacement/rtos_reservation:src/lib.rs",
-    ],
+    data = ["src/tests.rs"] + _MODULES,
 )
 
 [
@@ -20,12 +25,7 @@ xm1_rust_staticlib(
         name = "irq-abi-%s-rust" % domain,
         src = "stage/abi.rs",
         crate_name = "xm1_rtos_irq_control_abi",
-        data = [
-            "src/lib.rs",
-            "src/tests.rs",
-            "//replacement/rtos_layout:src/lib.rs",
-            "//replacement/rtos_reservation:src/lib.rs",
-        ],
+        data = ["src/lib.rs", "src/tests.rs"] + _MODULES,
         rustc_flags = [
             "--cfg",
             "'feature=\"domain-%s\"'" % domain,
@@ -47,14 +47,89 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+# The bank bodies under domain-qualified symbols.
+[
+    xm1_rust_rlib(
+        name = "irq-bank-%s" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_irq_bank_%s" % domain,
+        out = "arm/libxm1_rtos_irq_bank_%s.rlib" % domain,
+        data = ["src/lib.rs", "src/tests.rs"] + _MODULES,
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"bank\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+# The same bodies at the fixed body origin behind stock-address veneers, with the rest of
+# each retained extent filled.
+[
+    xm1_rust_staticlib(
+        name = "irq-bank-probe-%s-rust" % domain,
+        src = "stage/abi.rs",
+        crate_name = "xm1_rtos_irq_bank_%s" % domain,
+        data = ["src/lib.rs", "src/tests.rs"] + _MODULES,
+        rustc_flags = [
+            "--cfg",
+            "'feature=\"domain-%s\"'" % domain,
+            "--cfg",
+            "'feature=\"stage\"'",
+            "--cfg",
+            "'feature=\"bank\"'",
+            "--cfg",
+            "'feature=\"probe\"'",
+        ],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "irq-bank-probe-%s" % domain,
+        rust_staticlib = ":irq-bank-probe-%s-rust" % domain,
+        entry = "xm1_rtos_irq_slot_enable",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_includes = ["//replacement/fixed_image:memory-region"],
+        link_script = "irq-bank-probe-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+# One carrier binary per retained extent, and the bank.
+[
+    genrule(
+        name = "irq-bank-probe-%s-split" % domain,
+        srcs = [":irq-bank-probe-%s.elf" % domain],
+        outs = [
+            "irq-bank-probe-%s-slots.bin" % domain,
+            "irq-bank-probe-%s-mask-cache.bin" % domain,
+            "irq-bank-probe-%s-controller.bin" % domain,
+            "irq-bank-probe-%s-define.bin" % domain,
+            "irq-bank-probe-%s-bank.bin" % domain,
+        ],
+        cmd = ("objcopy=$(location @lab_llvm//:bin/llvm-objcopy) elf=$(location :irq-bank-probe-%s.elf) && " % domain +
+               "$$objcopy -O binary -j .irq_slots $$elf $(location irq-bank-probe-%s-slots.bin) && " % domain +
+               "$$objcopy -O binary -j .irq_mask_cache $$elf $(location irq-bank-probe-%s-mask-cache.bin) && " % domain +
+               "$$objcopy -O binary -j .irq_controller $$elf $(location irq-bank-probe-%s-controller.bin) && " % domain +
+               "$$objcopy -O binary -j .irq_define $$elf $(location irq-bank-probe-%s-define.bin) && " % domain +
+               "$$objcopy -O binary -j .bank $$elf $(location irq-bank-probe-%s-bank.bin)" % domain),
+        tools = ["@lab_llvm//:bin/llvm-objcopy"],
+    )
+    for domain in ["a", "b"]
+]
+
 genrule(
     name = "irq-host-tests-build",
     srcs = [
         "src/lib.rs",
         "src/tests.rs",
-        "//replacement/rtos_layout:src/lib.rs",
-        "//replacement/rtos_reservation:src/lib.rs",
-    ],
+    ] + _MODULES,
     outs = ["irq-host-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
     executable = True,
@@ -119,6 +194,63 @@ haskell_binary(
         "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:storage-budget",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_library(
+    name = "irq-bank-suite",
+    srcs = ["native/Replacement/RtosIrqControl/BankSuite.hs"],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:cached-native-batch",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+_CARRIER_PIECES = ["slots", "mask-cache", "controller", "define"]
+
+# Stock against the bank-form bodies behind stock-entry veneers, with bank mutants.
+haskell_binary(
+    name = "irq-bank-cohort",
+    srcs = ["native/BankMain.hs"],
+    main_file = "native/BankMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+    ] + [
+        argument
+        for domain in ["a", "b"]
+        for piece in _CARRIER_PIECES + ["bank"]
+        for argument in [
+            "--bank-%s" % domain if piece == "bank" else "--carrier-%s-%s" % (domain, piece),
+            "$(rootpath :irq-bank-probe-%s-%s.bin)" % (domain, piece),
+        ]
+    ],
+    data = [
+        ":irq-bank-probe-%s-%s.bin" % (domain, piece)
+        for domain in ["a", "b"]
+        for piece in _CARRIER_PIECES + ["bank"]
+    ] + ["//emulation:native-runner"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":irq-bank-suite",
+        "//emulation:cached-native-batch",
+        "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
