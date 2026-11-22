@@ -34,7 +34,7 @@ for role in stock owned; do
   [[ $role == owned ]] && extra=(--ram-push-modal-scoped --modal75-owned-archive "$inputs/engine.a"
     --modal75-retired "$inputs/retired.json" --menu-engine-owned --menu-value-owned)
   status=0
-  env XM1_EMULATOR_SLOTS="${XM1_EMULATOR_SLOTS:-1}" XM1_EMULATOR_MEMORY_MAX=2G XM1_EMULATOR_SWAP_MAX=0 \
+  env XM1_EMULATOR_MEMORY_MAX=2G XM1_EMULATOR_SWAP_MAX=0 \
     XM1_RAM_PUSH_CHECKPOINT_ROOT=private-data/emulator-checkpoints/ram-push \
     devenv shell -- "$viewer" --workspace . --ram-push-e2e --cardless --fujimod --unreviewed-relink \
     --fujimod-run-document "$run_document" --firmware "$inputs/firmware.DAT" --installed-nand "$inputs/adjustment.nand" \
