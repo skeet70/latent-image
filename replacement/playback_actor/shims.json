@@ -50,6 +50,35 @@
         }
       ],
       "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
+    },
+    {
+      "id": "playback_actor-03",
+      "shim": "Owned machine-0 actions in `playback_actor/src/stock.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "the stock dispatcher's no-argument action call and its use of r0 as the dispatch result",
+      "owned": "partly",
+      "removal": "an owned dispatcher calls a typed owned machine API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/playback_actor:playback-actor-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_playback_m0_action02", "xm1_playback_m0_action03", "xm1_playback_m0_action04", "xm1_playback_m0_action05",
+            "xm1_playback_m0_action06", "xm1_playback_m0_action07", "xm1_playback_m0_action08", "xm1_playback_m0_action09",
+            "xm1_playback_m0_action10", "xm1_playback_m0_action11", "xm1_playback_m0_action12", "xm1_playback_m0_action13",
+            "xm1_playback_m0_action14", "xm1_playback_m0_action15", "xm1_playback_m0_action16", "xm1_playback_m0_action17",
+            "xm1_playback_m0_action18", "xm1_playback_m0_action19", "xm1_playback_m0_action20", "xm1_playback_m0_action21",
+            "xm1_playback_m0_action22", "xm1_playback_m0_action23", "xm1_playback_m0_action24", "xm1_playback_m0_action25",
+            "xm1_playback_m0_action26", "xm1_playback_m0_action27", "xm1_playback_m0_action28", "xm1_playback_m0_action29",
+            "xm1_playback_m0_action30", "xm1_playback_m0_action31", "xm1_playback_m0_action32"
+          ],
+          "contract": "replacement/playback_actor/playback-actor.ld",
+          "requirement": "The linker places every action inside machine 0's retired plain-image extent with no writable statics.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {"caller_closure": "unestablished", "same_image_comparison": "unestablished", "direct_owned_api": "unestablished"}
     }
   ]
 }
