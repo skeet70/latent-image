@@ -77,7 +77,7 @@ main = do
                 rowsEnd = rows + 4 * fromIntegral (length (machineStockActions m))
              in (address >= low && address + size <= high) || (address == rows && address + size == rowsEnd)
           offset a = fromIntegral (a - plainBase) :: Int
-          word a = foldr (\i acc -> acc * 256 + fromIntegral (B.index plain (offset a + i))) 0 [3, 2, 1, 0] :: Word32
+          word a = foldr (\i acc -> acc * 256 + fromIntegral (B.index plain (offset a + i))) 0 [0, 1, 2, 3] :: Word32
       forM_ sections $ \s -> unless (admitted s) (refuse ("section " ++ E.sectionName s ++ " at " ++ hex (E.sectionAddress s) ++ " lies outside every carrier"))
       forM_ machines $ \m -> forM_ (zip [0 ..] (machineStockActions m)) $ \(i, stock) ->
         unless (word (machineRows m + 4 * i) == stock) (refuse (machineName m ++ " table row " ++ show i ++ " is not stock"))
@@ -113,4 +113,4 @@ main = do
         ]
     _ -> refuse "usage: playback-actor-stage PLAIN OWNED_ELF OUT_PLAIN OUT_CONTRACT"
   where
-    word' bytes a = foldr (\i acc -> acc * 256 + fromIntegral (B.index bytes (fromIntegral (a - plainBase) + i))) 0 [3, 2, 1, 0] :: Word32
+    word' bytes a = foldr (\i acc -> acc * 256 + fromIntegral (B.index bytes (fromIntegral (a - plainBase) + i))) 0 [0, 1, 2, 3] :: Word32
