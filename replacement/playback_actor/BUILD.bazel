@@ -1,0 +1,35 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "actor",
+    srcs = ["Replacement/PlaybackActor/Actor.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "playback-actor-observe",
+    srcs = ["ObserveMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
+    main_file = "ObserveMain.hs",
+    deps = [
+        ":actor",
+        "//emulation:case-sha256",
+        "//emulation:emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)

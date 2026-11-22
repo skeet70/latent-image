@@ -3229,6 +3229,7 @@ haskell_library(
     src_strip_prefix = ".",
     visibility = [
         "//replacement/file_service:__pkg__",
+        "//replacement/playback_actor:__pkg__",
         "//transport:__pkg__",
     ],
     deps = [
