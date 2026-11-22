@@ -51,6 +51,7 @@ import System.IO.Error (catchIOError, isDoesNotExistError)
 import System.Posix.Files (fileID, getFdStatus, readSymbolicLink)
 import System.Posix.IO (FdOption (CloseOnExec), FileLock, LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadOnly, ReadWrite), closeFd, createPipe, defaultFileFlags, fdToHandle, getLock, openFd, setFdOption, setLock, waitToSetLock)
 import System.Posix.Process (executeFile, getProcessID)
+import System.Posix.Time (epochTime)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT)
 import System.Posix.Types (Fd (..), FileID, FileOffset, ProcessID)
 import System.Process (CreateProcess (..), StdStream (NoStream, UseHandle), createProcess, proc, readProcessWithExitCode, waitForProcess)
@@ -354,21 +355,40 @@ waitingStride = 4194304
 smallerWaiterPolls :: Int
 smallerWaiterPolls = 3
 
+-- | @waiting.lock@ offsets from here are priority waiters: one that has waited
+-- 'agingSeconds' locks @priorityBase + arrival * waitingStride + pid@, with
+-- @arrival@ in epoch seconds.
+priorityBase :: FileOffset
+priorityBase = 2 ^ (40 :: Int)
+
+-- | @XM1_HOST_ADMISSION_AGING_SECONDS@, or 20 minutes.
+agingSeconds :: IO Int
+agingSeconds = do
+  raw <- lookupEnv "XM1_HOST_ADMISSION_AGING_SECONDS"
+  case raw of
+    Nothing -> pure 1200
+    Just text | Just seconds <- readMaybe text, seconds >= 0 -> pure seconds
+    _ -> ioError (userError "XM1_HOST_ADMISSION_AGING_SECONDS must be a non-negative integer")
+
 -- | A new admission takes its tokens when they fit the budget, when
 -- @MemAvailable@ less 'liveHeadroomBytes' and 'outstandingBytes' covers them,
--- and after deferring to smaller waiters for 'smallerWaiterPolls'. A legacy
--- scope already holds its memory and skips the last two conditions.
+-- when no priority waiter arrived before it, and, unless it is itself a
+-- priority waiter, after deferring to smaller waiters for 'smallerWaiterPolls'.
+-- A legacy scope already holds its memory and skips the last three conditions.
 reserveMemoryWithLegacy :: Maybe LegacyReservation -> Reservation -> ScopeName -> IO Fd
 reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
   budget <- memoryBudget
   unless (tokens <= budgetTokens budget) $
     ioError (userError ("a reservation of " ++ show (reservationBytes reservation) ++ " bytes exceeds the host RAM budget of "
       ++ show (toInteger (budgetTokens budget) * tokenBytes) ++ " bytes"))
+  aging <- agingSeconds
+  arrival <- epochTime
   directory <- memoryDirectory
   pid <- getProcessID
   queue <- openFd (directory </> "waiting.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
   setFdOption queue CloseOnExec True
   let place = fromIntegral tokens * waitingStride + fromIntegral pid
+      priorityPlace = priorityBase + fromIntegral (fromEnum arrival) * waitingStride + fromIntegral pid
       admitting = isNothing legacy
       attempt registered deferred = do
         gate <- openFd (directory </> "gate.lock") ReadWrite defaultFileFlags {creat = Just 0o600}
@@ -389,12 +409,15 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
               then (\available outstanding -> available - liveHeadroomBytes - outstanding)
                 <$> availableMemoryBytes <*> outstandingBytes directory holders
               else pure (reservationBytes reservation)
-            smaller <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
+            now <- epochTime
+            let aged = admitting && fromEnum now - fromEnum arrival >= aging
+            older <- if admitting then isJust <$> getLock queue (WriteLock, AbsoluteSeek, priorityBase, priorityPlace - priorityBase) else pure False
+            smaller <- if admitting && not aged then isJust <$> getLock queue (WriteLock, AbsoluteSeek, 0, place) else pure False
             let occupied = nub (map fst holders ++ protected)
                 free = filter (`notElem` occupied) (map fromIntegral [0 .. censusTokens budget - 1])
                 fits = length occupied + tokens <= budgetTokens budget && spare >= reservationBytes reservation
                 deferring = fits && smaller && deferred < smallerWaiterPolls
-            chosen <- if fits && not deferring
+            chosen <- if fits && not deferring && not older
               then collect fd (take tokens free)
               else pure Nothing
             case chosen of
@@ -402,10 +425,11 @@ reserveMemoryWithLegacy legacy reservation@(Reservation tokens) scope = do
                 closeFd fd
                 closeFd gate
                 when (admitting && not registered) (setLock queue (WriteLock, AbsoluteSeek, place, 1))
+                when aged (setLock queue (WriteLock, AbsoluteSeek, priorityPlace, 1))
                 hPutStrLn stderr ("host admission: waiting for host RAM (" ++ show tokens ++ " x 256MiB; "
                   ++ show (length occupied) ++ " of " ++ show (budgetTokens budget) ++ " held; "
                   ++ show (max 0 spare) ++ " bytes available above the live headroom and outstanding reservations"
-                  ++ (if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
+                  ++ (if older then "; behind a priority waiter that arrived earlier" else if deferring then "; deferring to a smaller reservation" else "") ++ "); owners="
                   ++ show (nub (map snd holders)))
                 hFlush stderr
                 threadDelay 500_000

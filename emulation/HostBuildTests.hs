@@ -236,8 +236,30 @@ run binary = do
   largeHeld <- not <$> started "order-large"
   writeFile (release "order-small") ""
   orderCodes <- map fst <$> mapM settled [small, large]
-  smallestFirst <- expect "when both fit, the smaller waiting reservation is admitted first"
+  smallestFirst <- expect "before the aging threshold, when both fit, the smaller waiting reservation is admitted first"
     (neitherEarly && smallFirst && largeHeld && all (== Just ExitSuccess) orderCodes)
+
+  let agingInfo = root </> "meminfo-aging"
+      agingBudget = [("XM1_HOST_MEMINFO", agingInfo), ("XM1_HOST_MEMORY_BUDGET", "4G"), ("XM1_HOST_BUILD_SWAP_MAX", "0"),
+        ("XM1_HOST_ADMISSION_AGING_SECONDS", "1")]
+  appendFile (home </> ".cache" </> "xm1-host-memory" </> "history")
+    (unlines [show gib ++ "\thost-build build //aging:holder", show gib ++ "\thost-build build //aging:small", show (3 * gib) ++ "\thost-build build //aging:large"])
+  writeMeminfo agingInfo (64 * gib) (64 * gib)
+  agingHolder <- startTargets "aging-holder" (("XM1_HOST_BUILD_MEMORY_MAX", "2G") : agingBudget) ["//aging:holder"]
+  agingHolderStarted <- waitFor (started "aging-holder")
+  writeFile (release "aging-large") ""
+  agingLarge <- startTargets "aging-large" (("XM1_HOST_BUILD_MEMORY_MAX", "4G") : agingBudget) ["//aging:large"]
+  threadDelay 2_500_000
+  writeFile (release "aging-small") ""
+  agingSmall <- startTargets "aging-small" (("XM1_HOST_BUILD_MEMORY_MAX", "2G") : agingBudget) ["//aging:small"]
+  threadDelay 2_000_000
+  neitherAdmitted <- not <$> ((||) <$> started "aging-large" <*> started "aging-small")
+  writeFile (release "aging-holder") ""
+  (agingCodes, agingErrors) <- unzip <$> mapM settled [agingHolder, agingLarge, agingSmall]
+  agingStarts <- filter (\name -> name `elem` ["aging-large", "aging-small"]) . concatMap (take 1 . drop 1 . words) . filter ("start " `isPrefixOf`) . lines <$> readFile' logFile
+  agedFirst <- expect "a waiter past the aging threshold blocks a newer smaller one that fits until running scopes drain and it is admitted"
+    (agingHolderStarted && neitherAdmitted && agingStarts == ["aging-large", "aging-small"] && all (== Just ExitSuccess) agingCodes)
+  unless agedFirst (putStrLn (unlines agingErrors))
 
   let outstandingInfo = root </> "meminfo-outstanding"
       outstandingBudget = [("XM1_HOST_MEMINFO", outstandingInfo), ("XM1_HOST_BUILD_MEMORY_MAX", "2G"), ("XM1_HOST_BUILD_SWAP_MAX", "0")]
@@ -467,7 +489,7 @@ run binary = do
   _ <- waitForProcess legacy
   legacyCompatible <- expect "a legacy whole-file lock blocks both build lanes"
     (legacyPid /= Nothing && not legacyEarly && legacyCode == ExitSuccess)
-  pure (and ([storageRefused, invalidReserveRefused, overrideBounded, defaultReserve, firstReservesClassEstimate, repeatReservesEstimate, availableGate, laneless, smallestFirst, outstandingGate, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
+  pure (and ([storageRefused, invalidReserveRefused, overrideBounded, defaultReserve, firstReservesClassEstimate, repeatReservesEstimate, availableGate, laneless, smallestFirst, agedFirst, outstandingGate, overlapped, passed, laneHeld, released, failed, refused, holders, baseObserved, legacyCompatible] ++ boundaries ++ memoryCases ++ invalidMemoryCases))
 
 data UnavailableOutputBase = OverBoundBase | CutBaseArgument | ControlByteBase | NonAsciiBase
 
@@ -579,7 +601,8 @@ testEnvironment home bin logFile = do
         if any ((== name) . fst) environment then environment else (name, value) : environment
       dropped = ["HOME", "PATH", "XM1_EMULATOR_SLOT", "XM1_HOST_BUILD", "XM1_STORAGE_MIN_FREE", "XM1_HOST_MEMORY_BUDGET", "XM1_HOST_MEMINFO", "XM1_HOST_CGROUP_ROOT",
         "XM1_HOST_BUILD_MEMORY_MAX", "XM1_HOST_BUILD_SWAP_MAX", "XM1_EMULATOR_MEMORY_MAX", "XM1_EMULATOR_SWAP_MAX",
-        "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL"]
+        "XM1_NATIVE_MEMORY_MAX", "XM1_NATIVE_SWAP_MAX", "XM1_STORAGE_ACCOUNTING_CONFIG", "XM1_STORAGE_ACCOUNTING_STATE", "XM1_STORAGE_ACCOUNTING_TOOL",
+        "XM1_HOST_ADMISSION_AGING_SECONDS"]
   pure $ ("HOME", home) : ("PATH", path) : ("FAKE_LOG", logFile) : ("XM1_STORAGE_MIN_FREE", "1")
     : filter ((`notElem` dropped) . fst)
       (keep "XDG_RUNTIME_DIR" runtime (keep "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ++ runtime ++ "/bus") inherited))
