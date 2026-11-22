@@ -283,7 +283,7 @@ checkPowerDestructor emulator receipt = do
   before <- readWindows emulator
   writeJson (receipt </> "destructor-before.json") before
   emulatorTraceSites emulator destructorSites
-  (start, _) <- emulatorTraceHits emulator 0
+  start <- emulatorTraceHitTotal emulator
   response <- pulse emulator "power"
   diagnostics <- either (ioError . userError) pure . eitherDecodeStrict'
     =<< B.readFile (receipt </> "bridge/state.json")

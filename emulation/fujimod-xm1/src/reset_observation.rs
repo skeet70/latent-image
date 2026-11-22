@@ -219,7 +219,7 @@ impl ResetObserver {
         self.record.segments.push(Segment {
             phase,
             instructions: machine.instructions(),
-            hits_end: machine.traces.hits.len(),
+            hits_end: machine.traces.hit_count(),
             watch: state,
             regions: regions(machine, &self.region_ranges)?,
         });

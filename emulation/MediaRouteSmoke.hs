@@ -849,14 +849,28 @@ parseHit value@(Object o) = do
   pure (Hit site (map register ["r0", "r1", "r2", "r3"]) (num "instructions" o) value)
 parseHit _ = Nothing
 
-traceHits :: Bridge -> Int -> IO (Int, [Hit])
-traceHits bridge from = do
+-- | The highest `from` sent to trace-hits since the session started or capture observation began.
+-- The RAM-push bridge drops hits below it and refuses a lower `from`.
+newtype TraceHitFloor = TraceHitFloor Int
+
+-- | The hit count and the hits from index `from` on; `from` becomes the session's floor.
+traceHits :: Bridge -> Observed -> Int -> IO (Int, [Hit])
+traceHits bridge observed from = do
+  TraceHitFloor floor' <- readIORef (obsHitFloor observed)
+  require (from >= floor') ("trace-hits from " ++ show from ++ " precedes the acknowledged floor " ++ show floor')
   reply <- call bridge (command "trace-hits" ["from" .= from])
+  writeIORef (obsHitFloor observed) (TraceHitFloor from)
   count <- maybe (harness "trace-hits lacks count") pure (num "count" reply)
   hits <- case KM.lookup "hits" reply of
     Just (Array items) -> pure (mapMaybe parseHit (toList items))
     _ -> harness "trace-hits lacks hits"
   pure (count, hits)
+
+-- | The hit count and the hits from the session's floor on, without moving the floor.
+traceHitsAtFloor :: Bridge -> Observed -> IO (Int, [Hit])
+traceHitsAtFloor bridge observed = do
+  TraceHitFloor floor' <- readIORef (obsHitFloor observed)
+  traceHits bridge observed floor'
 
 data CaptureProgress = CaptureProgress
   { captureCoverage :: CS.Coverage
@@ -1120,6 +1134,7 @@ data Observed = Observed
   , obsJpegActive :: IORef Bool
   , obsJpegCursor :: IORef PJ.Cursor
   , obsJpegBatch :: IORef Int
+  , obsHitFloor :: IORef TraceHitFloor
   }
 
 data NewFile = NewFile { newJpeg :: Bool, newValue :: Value }
@@ -1134,6 +1149,7 @@ newObserved = Observed <$> newIORef Nothing <*> newIORef [] <*> newIORef 0 <*> n
   <*> newIORef Nothing
   <*> newIORef []
   <*> newIORef False <*> newIORef PJ.initialCursor <*> newIORef 0
+  <*> newIORef (TraceHitFloor 0)
 
 -- | Folds hits into the ledger and returns their journal record; after the press, kept hits also feed the verdict.
 foldHits :: Observed -> TracePhase -> [Hit] -> IO Value
@@ -1253,7 +1269,7 @@ playbackAdvance directory bridge journal observed target owned request = call br
             Just value | value > 0 -> pure (PlaybackPauseId value)
             _ -> harness "trace pause lacks its monotonic identity"
           note journal "playback-pause" (Object reply)
-          (_, hits) <- traceHits bridge 0
+          (_, hits) <- traceHitsAtFloor bridge observed
           hit <- maybe (harness "trace pause lacks its event") pure (case reverse hits of h:_ -> Just h; [] -> Nothing)
           require (case hitRaw hit of Object o -> num "core" o == Just (0 :: Int); _ -> False) "decode pause is not on the primary CPU"
           paused <- either harness pure (decodePause (hitLabel hit))
@@ -1538,7 +1554,7 @@ runRoute options owned ownedPreparation ownedWitness directory original bridge j
   note journal "capture-pre-press-a" (shotValue prePressA)
   settleDial <- call bridge (command "mode-dial" ["position" .= windowDial])
   note journal "mode-dial-before-press" (Object settleDial)
-  (startHits, preHits) <- traceHits bridge 0
+  (startHits, preHits) <- traceHits bridge observed 0
   foldHits observed BeforePress preHits >>= note journal "trace-before-press"
   writeIORef (obsHitIndex observed) (Just startHits)
   (sdFields0, sd0) <- mediaState bridge
@@ -1563,12 +1579,13 @@ runRoute options owned ownedPreparation ownedWitness directory original bridge j
     _ <- call bridge (command "trace-sites" ["sites" .= object [K.fromString (hex32 (siteAddress s)) .= siteLabel s | s <- armed]])
     note journal "capture-continuation-sites" (toJSON (map siteValue captureContinuationSites))
     note journal "capture-observation-selection" (captureObservationValue route (optCaptureObservation options))
-    (_, remaining) <- traceHits bridge startHits
+    (_, remaining) <- traceHits bridge observed startHits
     foldHits observed BeforePress remaining >>= note journal "trace-before-observation"
     begun <- call bridge CS.beginRequest
     either harness pure (CS.validateBegin (Object begun))
     note journal "capture-observation-begin" (Object begun)
     writeIORef (obsHitIndex observed) Nothing
+    writeIORef (obsHitFloor observed) (TraceHitFloor 0)
     state <- call bridge (command "capture-observation-state" [])
     note journal "capture-observation-pre-sequence" (Object state)
     at <- maybe (harness "capture state lacks instruction boundary") pure (objectAt "snapshot" state >>= num "instructions")
@@ -1637,7 +1654,7 @@ runRoute options owned ownedPreparation ownedWitness directory original bridge j
                 progress <- readIORef (obsCapture observed)
                 pure (hitIndex, maybe Null captureProgressValue progress, Null, activity)
               else do
-                (next, hits) <- traceHits bridge hitIndex
+                (next, hits) <- traceHits bridge observed hitIndex
                 record <- foldHits observed AfterPress (filter (\hit -> hitLabel hit `elem` map siteLabel sites) hits)
                 let other = Map.fromListWith (+) [(hitLabel hit, 1 :: Int) | hit <- hits, hitLabel hit `notElem` map siteLabel sites]
                 pure (next, record, toJSON other, any (routeActivity route) hits)
