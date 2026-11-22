@@ -403,6 +403,13 @@ Scope: Current staged-effective loader union and complete named native matrix, n
 
 <!-- /evidence-record E-RTOS-PLATFORM-CURRENT-UNION-NATIVE-150 -->
 
+## Fixed-bank interrupt and cache services
+
+The [interrupt and cache contract](../reports/rtos-irq-cache-services.md) fixes the retained kernel0 interrupt-controller, interrupt-mask and cache-maintenance entries of both domains, their callers and raw consumers. `//replacement/rtos_irq_control:irq-bank-{a,b}` are the bank rlibs; `:irq-bank-probe-{a,b}-split` give the carrier pieces and bank body that `:irq-bank-cohort` compares against stock on the native runner, with controller banks admitted as device regions and CP15 maintenance recorded against case-declared cache registers.
+
+<!-- evidence-record E-RTOS-IRQ-CACHE-BANK-NATIVE-150 -->
+<!-- /evidence-record E-RTOS-IRQ-CACHE-BANK-NATIVE-150 -->
+
 ## Playback decode observation
 
 <!-- evidence-record E-FUJIMOD-XM1-PLAY-JPEG-150 -->
