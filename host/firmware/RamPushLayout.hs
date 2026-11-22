@@ -509,7 +509,7 @@ menuEngineRegionStartFor variant base
 
 menuEngineRegionExtentFor :: BankVariant -> Word32
 menuEngineRegionExtentFor variant
-  | hasPublicationGroup MenuValuePublication variant = 0x16000
+  | hasPublicationGroup MenuValuePublication variant = 0x20000
   -- The render region plus 0x30000 bytes for the frame step and the render, core, libm and builtins code it places here.
   | hasPublicationGroup RenderFramePublication variant = 0x50000
   | otherwise = menuEngineRegionStart 0 + menuEngineRegionExtent - menuEngineRegionStartFor variant 0

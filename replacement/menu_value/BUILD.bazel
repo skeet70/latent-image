@@ -3,16 +3,15 @@ load("//build-support:rust_source_boundary.bzl", "rust_source_boundary_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_rlib")
 
-# The value transaction with its guest seam. The adapter is a module of this
-# crate under rb_menu_value_owned, so the seam and the transaction are one
-# subsystem and one rlib.
+# The IMAGE SIZE commit with its guest seam: the adapter is a module of this
+# crate under rb_menu_value_owned.
 xm1_rust_rlib(
     name = "arm-owned",
     src = "src/lib.rs",
     crate_name = "menu_value",
     out = "libmenu_value_owned.rlib",
     data = [
-        ":value-adapter-sources",
+        ":adapter-sources",
         ":module",
         "//replacement/bank/tables:menu-value-table.rs",
     ],
@@ -32,11 +31,7 @@ xm1_rust_rlib(
         "--cfg",
         "rb_menu_value_owned",
     ],
-    visibility = [
-        "//replacement/bank:__pkg__",
-        "//replacement/menu_engine:__pkg__",
-        "//replacement/render_adapter:__pkg__",
-    ],
+    visibility = ["//replacement/bank:__pkg__"],
 )
 
 filegroup(
@@ -55,18 +50,6 @@ filegroup(
         "adapter/mod.rs",
     ],
     visibility = ["//replacement/bank:__pkg__"],
-)
-
-filegroup(
-    name = "value-adapter-sources",
-    srcs = [
-        "adapter/entry.S",
-        "adapter/mod.rs",
-    ],
-    visibility = [
-        "//host/firmware:__pkg__",
-        "//replacement/bank:__pkg__",
-    ],
 )
 
 genrule(
@@ -107,6 +90,9 @@ rust_source_boundary_test(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + ["BUILD.bazel"],
+    srcs = glob(["shims.json", "**/*.json", "**/*.ld"]) + [
+        ":adapter-sources",
+        "BUILD.bazel",
+    ],
     visibility = ["//replacement/shim_check:__pkg__"],
 )

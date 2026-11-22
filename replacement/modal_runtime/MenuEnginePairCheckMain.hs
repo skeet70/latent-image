@@ -15,7 +15,7 @@ import qualified Data.Aeson.Types as J
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
-import Data.List (nub, sort, stripPrefix)
+import Data.List (nub, partition, sort, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import qualified EngineStack as S
@@ -54,8 +54,8 @@ checkLifetime directory = do
   lifetime <- either fail pure (J.eitherDecodeStrict' bytes)
   either fail pure (E.checkLifetimeCoverage lifetime)
 
-runRetained :: RenderConfig -> Bool -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
-runRetained config write tree stockTables document stockPath ownedPath = do
+runRetained :: ArmRequirement -> RenderConfig -> Bool -> MenuTree -> TablesDocument -> TablesDocument -> FilePath -> FilePath -> IO Bool
+runRetained arm config write tree stockTables document stockPath ownedPath = do
   stock <- receiptObservations stockPath
   owned <- receiptObservations ownedPath
   unless (not (null stock) && not (null owned)) (fail "a role has no e2e observations")
@@ -76,7 +76,7 @@ runRetained config write tree stockTables document stockPath ownedPath = do
   variant <- either fail pure (J.eitherDecodeStrict' manifestBytes >>= J.parseEither validateEngineManifest)
   elf <- B.readFile (ownedPath </> "relinked" </> "kernel.elf") >>= either fail pure . ELF.parseElf
   let size = runtimeAllocationSizeFor variant
-  valueLifecycle <- checkValue variant owned
+  valueSeam <- checkValue arm variant (stockPath, stock) (ownedPath, owned)
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
@@ -134,7 +134,7 @@ runRetained config write tree stockTables document stockPath ownedPath = do
                           putStrLn ("render: " ++ show (renderCoverage config) ++ " stock-stack=" ++ show stockStack
                             ++ " owned-stack=" ++ show ownedStack ++ " banks=" ++ show banks)
                           pure True
-  pure (and (results ++ stacks ++ [paired, rendered, valueLifecycle]))
+  pure (and (results ++ stacks ++ [paired, rendered, valueSeam]))
  where
   adapterStep () hit = if noRenderAdapter hit then Right () else Left "retained render reached an owned adapter"
 
@@ -143,14 +143,24 @@ noRenderAdapter hit = case hitSite hit of
   OtherSite label -> label `notElem` ["render-tree-adapter","render-picker-adapter","render-pane-adapter"]
   _ -> True
 
-checkValue :: BankVariant -> [ObservationReader] -> IO Bool
-checkValue variant segments
-  | variant /= modalValueBankVariant = pure True
+checkValue :: ArmRequirement -> BankVariant -> (FilePath, [ObservationReader]) -> (FilePath, [ObservationReader]) -> IO Bool
+checkValue arm variant (stockPath, stock) (ownedPath, owned)
+  | variant /= modalValueBankVariant = case arm of
+      ArmRequired -> hPutStrLn stderr "value seam: --value-arm-required needs the value package" >> pure False
+      ArmOptional -> pure True
   | otherwise = do
-      checked <- checkValueLifecycleReader segments
+      declared <- forM [(StockRole, stockPath), (OwnedRole, ownedPath)] $ \(role, path) -> do
+        value <- B.readFile (path </> "e2e-result.json") >>= either fail pure . J.eitherDecodeStrict'
+        pure (requireValueDeclarations role value)
+      checked <- either (pure . Left) (const (checkValueSeamReader arm stock owned)) (sequence_ declared)
       case checked of
-        Left failure -> hPutStrLn stderr ("value lifecycle: " ++ failure) >> pure False
-        Right () -> putStrLn "value lifecycle: owned begin, apply, confirm, cancel and handback executed without the replaced stock arm" >> pure True
+        Left failure -> mapM_ (hPutStrLn stderr . ("value seam: " ++)) (lines failure) >> pure False
+        Right report -> do
+          putStrLn ("value seam: " ++ show (residentArmEntries report) ++ " resident stock IMAGE SIZE arm entries, each matched by one owned apply"
+            ++ " (phases " ++ show (armPhases report) ++ "); " ++ show (notificationCalls report)
+            ++ " 0xd5b350 notifications equal in order over " ++ show (valueSegments report) ++ " segments; live settings equal in "
+            ++ show (liveSettingsSegments report) ++ " segments")
+          pure True
 
 validateEngineManifest :: J.Value -> J.Parser BankVariant
 validateEngineManifest = J.withObject "engine manifest" $ \fields -> do
@@ -188,7 +198,11 @@ countDrawers directory = do
 
 runCheck :: [String] -> IO ()
 runCheck arguments = do
-  (render, writeReceipt, frameRecord, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options arguments)
+  (arm, rest) <- case partition (== "--value-arm-required") arguments of
+    ([], rest) -> pure (ArmOptional, rest)
+    ([_], rest) -> pure (ArmRequired, rest)
+    _ -> fail "--value-arm-required is repeated"
+  (render, writeReceipt, frameRecord, tablesPath, planPath, stockPath, ownedPath) <- either fail pure (options rest)
   publication <- forM frameRecord $ \path ->
     B.readFile path >>= either fail pure . (\bytes -> J.eitherDecodeStrict' bytes >>= J.parseEither parseFramePublication)
   stockTables <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
@@ -198,7 +212,7 @@ runCheck arguments = do
   let tree = menuTree document
   case render of
     Just (RetainedRender config) -> do
-      ok <- runRetained config writeReceipt tree stockTables document stockPath ownedPath
+      ok <- runRetained arm config writeReceipt tree stockTables document stockPath ownedPath
       unless ok exitFailure
       exitSuccess
     _ -> pure ()
@@ -237,7 +251,7 @@ runCheck arguments = do
       unless ((selected == modalRenderFrameBankVariant) == (publication /= Nothing)) (fail "--render-frame-record names the render-frame variant's record, and only that variant's")
       pure selected
   let size = runtimeAllocationSizeFor variant
-  valueLifecycle <- checkValue variant owned
+  valueSeam <- checkValue arm variant (stockPath, stock) (ownedPath, owned)
   bound <- either fail pure (S.checkEngineStack S.taskOneBudget elf (\address -> base <= address && address - base < size))
   let margin = S.budgetStockMargin S.taskOneBudget
       required = S.reportEngine bound + S.reportModal bound + margin
@@ -298,7 +312,7 @@ runCheck arguments = do
             ++ show (stockStack,ownedStack))
           BL.writeFile (ownedPath </> "render-banks.json") (J.encode banks <> "\n")
           pure True
-  unless (and (valueLifecycle : rendered : paired : results ++ stacks)) exitFailure
+  unless (and (valueSeam : rendered : paired : results ++ stacks)) exitFailure
 
 options :: [String] -> Either String (Maybe RenderSelection,Bool,Maybe FilePath,FilePath,FilePath,FilePath,FilePath)
 options = go Nothing False Nothing
@@ -319,7 +333,7 @@ options = go Nothing False Nothing
     Just digits | [(value,"")] <- readHex digits -> go (Just (mapSelection (\config -> config {renderStackBase = value}) selection)) write frame rest
     _ -> Left "render stack base requires a hex word"
   go selection write frame ["--tables",tables,"--package-plan",plan,"--stock",stock,"--owned",owned] = Right (selection,write,frame,tables,plan,stock,owned)
-  go _ _ _ _ = Left "usage: menu-engine-pair-check [--render [--render-frame-record RECORD]|--retained-render [--write-render-receipt] [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
+  go _ _ _ _ = Left "usage: menu-engine-pair-check [--render [--render-frame-record RECORD]|--retained-render [--write-render-receipt] [--render-draw-free] [--render-banks JSON] [--render-clock-resource 0xID] [--render-stack-base 0xBASE]] [--value-arm-required] --tables TABLES --package-plan PLAN --stock RECEIPT --owned RECEIPT"
 
 -- | `publication` is the role's render-frame package, if it installed one.
 writeRenderReceipt :: Maybe FramePublication -> FilePath -> [ObservationReader] -> IO ()

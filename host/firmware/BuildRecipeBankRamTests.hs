@@ -188,8 +188,8 @@ main = do
       && bankVariantFromIdentity Nothing 226 == Right lifecycleBankVariant)
   check "value counts extend the engine region by its own extent"
     (publicationCountFor valueVariant == 226 && publicationActivationCountFor valueVariant == 95
-      && runtimeAllocationSizeFor valueVariant == 0x33d00
-      && menuEngineRegionStartFor valueVariant 0 == 0x1dd00 && menuEngineRegionExtentFor valueVariant == 0x16000
+      && runtimeAllocationSizeFor valueVariant == 0x3dd00
+      && menuEngineRegionStartFor valueVariant 0 == 0x1dd00 && menuEngineRegionExtentFor valueVariant == 0x20000
       && all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtentFor valueVariant <= menuEngineRegionStartFor valueVariant base - base) alignedBases)
   check "value order installs the value hook after the engine hook"
     (valueOrder == order <> map PublicationIndex [223 .. 225]

@@ -29,6 +29,7 @@ use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
+use fujimod_emulator_exr2_isp_output::OutputChannel;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -376,6 +377,8 @@ enum Request {
     Key { key: String, hold_instructions: Option<u64>, release_instructions: Option<u64>, settle_instructions: Option<u64> },
     ShutterSequence,
     ImageInputFingerprint { node: NodeName },
+    /// Sets the output banks' shared fixed transfer clock: a route-relative scenario input.
+    OutputClock { node: NodeName, ticks: u64 },
     CaptureObservationWindow,
     ReleaseContext { segment: Option<ReleaseSegment> },
     ModeDial { position: ModeDialPosition },
@@ -447,6 +450,7 @@ enum RequestKind {
     Key,
     ShutterSequence,
     ImageInputFingerprint,
+    OutputClock,
     CaptureObservationWindow,
     ReleaseContext,
     ModeDial,
@@ -506,6 +510,7 @@ impl Request {
             Request::Key { .. } => RequestKind::Key,
             Request::ShutterSequence => RequestKind::ShutterSequence,
             Request::ImageInputFingerprint { .. } => RequestKind::ImageInputFingerprint,
+            Request::OutputClock { .. } => RequestKind::OutputClock,
             Request::CaptureObservationWindow => RequestKind::CaptureObservationWindow,
             Request::ReleaseContext { .. } => RequestKind::ReleaseContext,
             Request::ModeDial { .. } => RequestKind::ModeDial,
@@ -1679,6 +1684,17 @@ impl Server {
                     |device| device.fingerprint(),
                 )?;
                 json!({"instructions": machine.instructions(), "fingerprint": fingerprint})
+            }
+            Request::OutputClock { node, ticks } => {
+                let machine = &self.bridge.machine;
+                machine.session.board.inspect_device::<OutputChannel, _>(
+                    machine.session.node(&node.0)?,
+                    |device| device.set_fixed_clock(ticks),
+                )?;
+                let entry = json!({"output_clock": {"node": node.0, "ticks": ticks,
+                    "instructions": machine.instructions()}});
+                self.key_log.push(entry.clone());
+                entry
             }
             Request::CaptureObservationWindow => {
                 if self.bridge.machine.traces.capture_observation_active() || self.bridge.machine.traces.pauses_active() {

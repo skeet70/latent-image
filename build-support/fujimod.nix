@@ -23,6 +23,8 @@ let
     # Translation admission checks A32 and Thumb instructions before execution.
     # The LZ patch latches a completion inside a transient enable clear
     # pending on its start route (E-FUJIMOD-LZ-ENABLE-WINDOW-150, source-inferred).
+    # The output-clock patch lets a scenario change the output banks' shared
+    # transfer clock at run time (E-MENU-VALUE-CHANGED-SELECTION-150).
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
@@ -37,7 +39,9 @@ let
       ./fujimod-observation-backing-tests.patch
       ./fujimod-owned-nand-pages.patch
       ./fujimod-passive-af-retention.patch
+      ./fujimod-preservation-evidence.patch
       ./fujimod-lz-masked-completion.patch
+      ./fujimod-output-clock.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's

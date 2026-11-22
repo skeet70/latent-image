@@ -152,13 +152,8 @@ xm1_rust_staticlib(
     ],
 )
 
-# The same link unit with the owned value transaction seam.
-_ENGINE_VALUE_RLIB_DEPS = dict(_ENGINE_RLIB_DEPS)
-_ENGINE_VALUE_RLIB_DEPS.update({
-    "menu_engine_adapter": "//replacement/menu_engine:adapter-value-arm",
-    "menu_value": "//replacement/menu_value:arm-owned",
-    "render_adapter": "//replacement/render_adapter:arm-value",
-})
+# The same link unit with the owned IMAGE SIZE seam.
+_ENGINE_VALUE_RLIB_DEPS = dict(_ENGINE_RLIB_DEPS, menu_value = "//replacement/menu_value:arm-owned")
 
 xm1_rust_staticlib(
     name = "bank-modal75-engine-render-value",

@@ -206,6 +206,134 @@ permitTests = do
   unfinished <- either error pure (parseModalReport permitLimit (set "counts"
     (set "active_frames" (Number 1) (set "observations" (Number 1) permitCounts)) permitEnvelope))
   check "disabled report with unfinished frames refuses end" (isLeft (checkModalEnd unfinished))
+  let source = object ["core" .= (0 :: Int), "vector" .= (0x18 :: Word32),
+        "bank_transfer" .= (0x40208 :: Word32), "status" .= (0x40360 :: Word32),
+        "returning" .= (0x40364 :: Word32), "adapter" .= ("board" :: String)]
+      emptyEarlier = object ["total" .= (0 :: Int), "dropped" .= (0 :: Int), "coverage_complete" .= True,
+        "target_post_prefix_lr" .= Null, "vector_lr_subtract" .= (4 :: Int),
+        "matching_events" .= ([] :: [Value]), "raw_equal_wrong_phase_events" .= ([] :: [Value]),
+        "normalization_underflow_events" .= ([] :: [Value]), "retained" .= ([] :: [Value])]
+      passive = object ["core" .= (0 :: Int), "source" .= source, "started" .= (1 :: Int), "completed" .= (1 :: Int),
+        "native_events" .= (4 :: Int), "active" .= False, "failure" .= Null,
+        "certificates_issued" .= (0 :: Int), "certificates_consumed" .= (0 :: Int),
+        "task_identity_verified" .= False, "production_admission" .= False, "certificate" .= Null,
+        "context" .= ("bounded context" :: String), "native_evidence" .= ([] :: [Value]),
+        "first_irq" .= Null, "earlier_irq_provenance" .= emptyEarlier]
+      stillFailed = set "preservation_shadow" passive (modalReportJson failed)
+  shadowedFailure <- either error pure (parseModalReport permitLimit stillFailed)
+  check "unconsumed shadow evidence cannot consume the failed production handoff"
+    (isLeft (checkModalEnd shadowedFailure) && modalReportFailure shadowedFailure == modalReportFailure failed)
+  check "shadow evidence cannot assert production authority without a one-use certificate"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow" (set "production_admission" (Bool True) passive) permitEnvelope)))
+  let tcm = [Null, object ["address" .= (0x70000000 :: Word32), "bytes" .= (8192 :: Int)]]
+      certificateSource address word = object ["address" .= (address :: Word32),
+        "physical" .= (address :: Word32), "word" .= (word :: Word32), "tcm" .= tcm]
+      certificate = object [
+        "task" .= ("TaskIdentity primary task 1" :: String),
+        "publication_count" .= (226 :: Int), "forward" .= (226 :: Int), "reverse" .= (226 :: Int),
+        "retirement_source" .= certificateSource 0x00bfb028 0xe92d4ff0,
+        "status_source" .= certificateSource 0x00040360 0xe169f001,
+        "return_source" .= certificateSource 0x00040364 0xe8fdd00f,
+        "old_svc_spsr" .= (0x53 :: Word32), "entry_cpsr" .= (0x80000153 :: Word32),
+        "returned_cpsr" .= (0x80000053 :: Word32), "frame_address" .= (10800532 :: Word32),
+        "frame_physical" .= (10800532 :: Word32),
+        "frame_words" .= ([0, 9717120, 1, 9717124, 1074099628, 9, 1074087392, 10800572, 12565776] :: [Word32])]
+      certified = set "certificates_issued" (Number 1)
+        (set "certificates_consumed" (Number 1)
+          (set "task_identity_verified" (Bool True)
+            (set "production_admission" (Bool True)
+              (set "certificate" certificate passive))))
+      admittedLifetime = set "rollback_core" (Number 0) (completedReceipt 226)
+      admittedEnvelope = set "preservation_shadow" certified
+        (set "lifetime" admittedLifetime (completedEnvelope 226))
+      statusSource = get "status_source" certificate
+      wrongStatusAddress = set "certificate" (set "status_source"
+        (set "address" (Number 0) statusSource) certificate) certified
+      wrongStatusPhysical = set "certificate" (set "status_source"
+        (set "physical" (Number 0x40364) statusSource) certificate) certified
+      mixedHandoffs = set "started" (Number 2) (set "completed" (Number 2) certified)
+  check "an admitted certificate binds its exact source plan and enclosing lifetime receipt"
+    (not (isLeft (parseModalReport permitLimit admittedEnvelope)))
+  check "admission refuses a certificate from another instruction address"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" wrongStatusAddress (set "lifetime" admittedLifetime (completedEnvelope 226)))))
+  check "admission refuses a certificate from another physical instruction"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" wrongStatusPhysical (set "lifetime" admittedLifetime (completedEnvelope 226)))))
+  check "admission refuses a missing enclosing lifetime receipt"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" certified (set "lifetime" Null (completedEnvelope 226)))))
+  check "admission refuses a different enclosing publication epoch"
+    (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" certified (set "lifetime"
+        (set "rollback_core" (Number 0) (completedReceipt 225)) (completedEnvelope 226)))))
+  check "ordinary strict-equality handoffs do not need certificate issuance"
+    (not (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" mixedHandoffs (set "lifetime" admittedLifetime (completedEnvelope 226))))))
+  let outerFailedShadow = set "production_admission" (Bool False) certified
+      outerFailedEnvelope = set "failure" (String "outer guard failed")
+        (set "physical_fetch_coverage" (Bool False)
+          (set "task_identity_verified" (Bool False)
+            (set "preservation_shadow" outerFailedShadow
+              (set "lifetime" admittedLifetime (completedEnvelope 226)))))
+  outerFailed <- either error pure (parseModalReport permitLimit outerFailedEnvelope)
+  check "an enclosing failure clears admission but retains consumed-certificate identity"
+    (isLeft (checkModalEnd outerFailed))
+  let
+      verifiedThenFailed = set "failure" (String "late packet")
+        (set "certificates_issued" (Number 1)
+          (set "certificates_consumed" (Number 1)
+            (set "task_identity_verified" (Bool True)
+              (set "certificate" certificate passive))))
+  check "a later shadow failure retains an already verified one-use task identity without admission"
+    (not (isLeft (parseModalReport permitLimit
+      (set "preservation_shadow" verifiedThenFailed permitEnvelope))))
+  let vectorEvent = object ["instructions" .= (101 :: Int), "address" .= (0x18 :: Word32),
+        "physical" .= (0x18 :: Word32), "bytes" .= (4 :: Int), "progress" .= (0 :: Int),
+        "pstate" .= (0x800001d2 :: Word32), "tcm" .= [Null, object ["address" .= (0x70000000 :: Int), "bytes" .= (8192 :: Int)]],
+        "word" .= (0xea000000 :: Word32),
+        "cpsr" .= (0x800001d2 :: Word32), "irq_spsr" .= (0x800001d3 :: Word32),
+        "sp" .= (0xa4cd00 :: Word32), "lr" .= (0x69cc04 :: Word32)]
+      rawEqualVector = set "lr" (Number 0x69cc00) vectorEvent
+      underflowVector = set "lr" (Number 3) vectorEvent
+      unmaskedVector = set "cpsr" (Number 0x800000d2) vectorEvent
+      earlier = object ["total" .= (1 :: Int), "dropped" .= (0 :: Int), "coverage_complete" .= True,
+        "target_post_prefix_lr" .= (0x69cc00 :: Word32), "vector_lr_subtract" .= (4 :: Int),
+        "matching_events" .= [vectorEvent], "raw_equal_wrong_phase_events" .= ([] :: [Value]),
+        "normalization_underflow_events" .= ([] :: [Value]), "retained" .= [vectorEvent]]
+      rawEqualEarlier = set "matching_events" (toArray ([] :: [Value]))
+        (set "raw_equal_wrong_phase_events" (toArray [rawEqualVector])
+          (set "retained" (toArray [rawEqualVector]) earlier))
+      underflowEarlier = set "matching_events" (toArray ([] :: [Value]))
+        (set "normalization_underflow_events" (toArray [underflowVector])
+          (set "retained" (toArray [underflowVector]) earlier))
+      unmaskedEarlier = set "matching_events" (toArray [unmaskedVector])
+        (set "retained" (toArray [unmaskedVector]) earlier)
+      withEarlier = set "preservation_shadow" (set "earlier_irq_provenance" earlier passive) permitEnvelope
+  check "passive shadow accepts a phase-normalized earlier IRQ match"
+    (not (isLeft (parseModalReport permitLimit withEarlier)))
+  check "passive shadow classifies raw-equal LR values as wrong-phase evidence"
+    (not (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance" rawEqualEarlier passive) permitEnvelope))))
+  check "passive shadow classifies vector LR subtraction underflow"
+    (not (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance" underflowEarlier passive) permitEnvelope))))
+  check "passive shadow refuses a raw-equal LR as a normalized match"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance"
+        (set "matching_events" (toArray [rawEqualVector])
+          (set "raw_equal_wrong_phase_events" (toArray ([] :: [Value])) rawEqualEarlier)) passive)
+      permitEnvelope)))
+  check "passive shadow refuses inconsistent earlier IRQ retention counters"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance" (set "dropped" (Number 1) earlier) passive) permitEnvelope)))
+  check "passive shadow refuses an unmasked earlier IRQ vector event"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "earlier_irq_provenance" unmaskedEarlier passive)
+      permitEnvelope)))
+  check "shadow plan separates the architectural IRQ vector from authenticated bank-transfer code"
+    (isLeft (parseModalReport permitLimit (set "preservation_shadow"
+      (set "source" (set "vector" (Number 0x40208) source) passive) permitEnvelope)))
  where
   toArray values = get "values" (object ["values" .= values])
 

@@ -250,20 +250,25 @@ pairs =
   , CaseId "picker-15", CaseId "picker-163", CaseId "picker-211", CaseId "picker-214", CaseId "picker-239", CaseId "picker-250", CaseId "picker-26"
   , CaseId "picker-260", CaseId "picker-270", CaseId "picker-271", CaseId "picker-272", CaseId "picker-273", CaseId "picker-297", CaseId "picker-312"
   , CaseId "picker-314", CaseId "picker-320", CaseId "picker-36", CaseId "picker-450", CaseId "picker-488"
+  , CaseId "value-close-pop"
   ]
+
+-- | The routes whose stock role must enter the IMAGE SIZE arm while the package is resident.
+valueArmArguments :: CaseId -> [String]
+valueArmArguments name = ["--value-arm-required" | name == CaseId "value-close-pop"]
 
 sha :: String -> Sha256
 sha = either error id . parseSha256Hex
 
 expectedRunDocument, expectedTrajectories, expectedFirmware, expectedAdjustment :: Sha256
 expectedRunDocument = sha "2184474fa40c2f8ad86e963ceb0898c5776ec597332805ee1365748de4df04e8"
-expectedTrajectories = sha "aee608db82f49d574730210f66f1bdc7a84cd6b00d61ff7347b0260cca6b37ad"
+expectedTrajectories = sha "8b02169c330bce4ae7f3b8093505d1874a90076c551b90ade0e7bf86b471b6d8"
 expectedFirmware = sha "acb0fbbb9507421f48a6254920cafb5ce20e1fd6bf821bc80c912c1f99c29ca8"
 expectedAdjustment = sha "baf475358f1b8ec5b619fd4891cd32a1c8225c0d9341e60318031106a4354aa0"
 
 expectedArchive, expectedRetired, expectedTables, expectedPlan, expectedClock, expectedRom :: Sha256
-expectedArchive = sha "0eb8673c593e5210d6cb405990fd3eb19bebe994671fa602ff65c320a82e6150"
-expectedRetired = sha "5b289e1796ff1653abd1d9e50169c71d4e63bb61d65677d36345b442993172f6"
+expectedArchive = sha "ee5f49a26a79764593881aaa5d2585b70fcba12176f4e9b191cb68276cf57b85"
+expectedRetired = sha "4808a6fe7ffec15ebbff6a2f482e1dad0c55e6565f437390b37d594635479c3b"
 expectedTables = sha "7fa536b6f4ab72205be57f407ce7224fa0bbc397aca2061ad2fac3e14ba2021d"
 expectedPlan = sha "b7ee628a84ad930e309bccf74bf69ec8065f22c12ec5b5b059db842bf7bba05a"
 expectedClock = sha "f9ee8573fe6d1c16d872369290d48735172174541215d2dda5ea5d17233012a1"
@@ -273,7 +278,7 @@ memoryMaxBytes :: Integer
 memoryMaxBytes = 2147483648
 
 defaultQualRoot :: FilePath
-defaultQualRoot = "private-data/scratch/QualifierSpeed/qualification3"
+defaultQualRoot = "private-data/scratch/MenuValueFix/qualification"
 
 qualRoot, binRoot :: Qualification -> FilePath
 qualRoot = qualificationRoot
@@ -282,10 +287,10 @@ checkerRoot :: FilePath
 checkerRoot = "bazel-bin"
 
 trajectoryRoot, runDocument, inputsRoot, archivePath, tablesPath, planPath, clockPath :: FilePath
-trajectoryRoot = "private-data/scratch/MenuEngineSteps/inputs/trajectories"
+trajectoryRoot = "private-data/scratch/MenuValueFix/inputs/value-trajectories7"
 runDocument = "private-data/scratch/ControllerStrategy/engine225/controlled-rtc/xm1-150.json"
-inputsRoot = "private-data/scratch/QualifierSpeed/inputs"
-archivePath = "private-data/scratch/MenuEngineSteps/inputs/engine.a"
+inputsRoot = "private-data/scratch/MenuValueFix/inputs/value-current7"
+archivePath = inputsRoot </> "engine.a"
 tablesPath = "private-data/scratch/ControllerStrategy/menu-tables.json"
 planPath = inputsRoot </> "bank-plan.json"
 clockPath = "emulation/menu-engine-pair-trajectories/clock-exclusions.json"
@@ -388,13 +393,14 @@ planMode q scope = do
   requireCleanSource
   identity <- verifySource
   verifyInputs q
+  jobs <- buildJobsFromEnvironment
   printJson $ object
     [ "schema" .= (1 :: Int)
     , "status" .= ("planned-not-executed" :: String)
     , "qualification_scope" .= scopeText scope
     , "source" .= sourceJson identity
     , "inputs" .= inputJson (inputIdentity q)
-    , "resources" .= resourcesValue
+    , "resources" .= resourcesValue jobs
     , "gate" .= (caseText gateCase ++ "." ++ roleText gateRole)
     , "reuse" .= object
         [ "old_matrix_eligible" .= False
@@ -559,13 +565,13 @@ inputJson inputs = object $
   , "roles" .= (2 * inputPairs inputs)
   ] ++ ownedBaseInputs (inputOwnedBase inputs)
 
-resourcesValue :: Value
-resourcesValue = object
+resourcesValue :: BuildJobs -> Value
+resourcesValue (BuildJobs jobs) = object
   [ "emulator_memory_max_bytes" .= memoryMaxBytes
   , "emulator_swap_max_bytes" .= (0 :: Integer)
   , "build_memory_max_bytes" .= Admission.memoryMaxBytes (Admission.classMemoryMax Admission.Build)
   , "emulator_slots" .= (3 :: Int)
-  , "bazel_jobs" .= (2 :: Int)
+  , "bazel_jobs" .= jobs
   , "native_batches" .= (0 :: Int)
   ]
 
@@ -648,10 +654,22 @@ buildAndTest q = do
   checkStorageBudget (qualRoot q)
   freezeTools q
 
+newtype BuildJobs = BuildJobs Int
+
+buildJobsFromEnvironment :: IO BuildJobs
+buildJobsFromEnvironment = do
+  configured <- lookupEnv "MENU_BOUNDED_QUAL_BUILD_JOBS"
+  case configured of
+    Nothing -> pure (BuildJobs 2)
+    Just text -> case readMaybe text of
+      Just count | count > 0 -> pure (BuildJobs count)
+      _ -> failH ("MENU_BOUNDED_QUAL_BUILD_JOBS is not a positive integer: " ++ text)
+
 runHostBuild :: Qualification -> [String] -> BuildPhase -> [String] -> FilePath -> IO VerdictLine
 runHostBuild q baseArguments phase targets logPath = do
+  BuildJobs jobs <- buildJobsFromEnvironment
   let arguments = ["shell", "--", "host-build"] ++ baseArguments
-        ++ [buildCommand phase, "--jobs=2", "--local_test_jobs=1"]
+        ++ [buildCommand phase, "--lockfile_mode=off", "--jobs=" ++ show jobs, "--local_test_jobs=1"]
         ++ ["--test_output=errors" | CheckTargets <- [phase]]
         ++ targets
       blocked predicate detail code = do
@@ -721,13 +739,14 @@ readBoundedScope roleRoot = do
   unless (swap == 0) (failH ("memory.swap.max is " ++ show swap))
   createDirectoryIfMissing True roleRoot
   peak <- peakBytes directory
+  BuildJobs jobs <- buildJobsFromEnvironment
   kills <- oomKills directory
   events <- oomEvents directory
   writeJson (roleRoot </> "resources-baseline.json") $ object
     [ "memory_max" .= limit
     , "swap_max" .= swap
     , "emulator_slots" .= (3 :: Int)
-    , "bazel_jobs" .= (2 :: Int)
+    , "bazel_jobs" .= jobs
     , "baseline_peak" .= peak
     , "baseline_oom_kills" .= kills
     , "baseline_oom_events" .= events
@@ -786,6 +805,7 @@ publishHeadroom :: Qualification -> RunOutcome -> SourceProvenance -> InputIdent
 publishHeadroom q outcome source inputs = do
   gateValue <- decodeFile (qualRoot q </> "gate.json") >>= either failH pure
   tools <- toolIdentity q
+  jobs <- buildJobsFromEnvironment
   let directory = qualRoot q </> "headroom"
       terminalPath = directory </> "terminal.json"
       reviewPath = directory </> "review-packet.json"
@@ -798,7 +818,7 @@ publishHeadroom q outcome source inputs = do
         , "source" .= sourceJson source
         , "inputs" .= inputJson inputs
         , "tools" .= toolJson tools
-        , "resources" .= resourcesValue
+        , "resources" .= resourcesValue jobs
         , "gate" .= gateValue
         , "execution" .= object
             [ "executed_roles" .= executed
@@ -1127,7 +1147,7 @@ runViewer q name role directory logPath = do
         Owned -> [ "--ram-push-modal-scoped"
                  , "--modal75-owned-archive", fst (ownedArchive q)
                  , "--modal75-retired", inputsRoot </> "retired.json"
-                 , "--menu-engine-owned" ]
+                 , "--menu-engine-owned", "--menu-value-owned" ]
             ++ [argument | proofPresent && prelinkedPresent, argument <- ["--modal75-prelinked", checkpointRoot </> "prelinked"]]
       common = [ "--workspace", "."
                , "--ram-push-e2e", "--cardless", "--fujimod", "--unreviewed-relink"
@@ -1157,7 +1177,7 @@ runPairCheck q name = do
   started <- getMonotonicTimeNSec
   pairStatus <- spawn (binRoot q </> "menu-engine-pair-check")
     ([ "--retained-render", "--write-render-receipt", "--tables", tablesPath, "--package-plan", planPath
-     , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
+     , "--stock", stock, "--owned", owned ] ++ valueArmArguments name) (check </> "pair-check.log") []
   settingsStatus <- spawn (binRoot q </> "modal-settings-compare")
     [stock, owned, check </> "settings.json"] (check </> "settings.log") []
   let exclusion
@@ -1247,7 +1267,7 @@ runPairCheckCurrent q name = do
   mirrorReceipt (roleDirectory q name Owned </> "receipt") owned
   pairStatus <- spawn (checkerRoot </> "replacement/modal_runtime/menu-engine-pair-check")
     ([ "--retained-render", "--tables", tablesPath, "--package-plan", planPath
-     , "--stock", stock, "--owned", owned ]) (check </> "pair-check.log") []
+     , "--stock", stock, "--owned", owned ] ++ valueArmArguments name) (check </> "pair-check.log") []
   settingsStatus <- spawn (checkerRoot </> "emulation/modal-settings-compare")
     [stock, owned, check </> "settings.json"] (check </> "settings.log") []
   let exclusion
@@ -1378,13 +1398,14 @@ publish q matrix source inputs = do
         ]
       qualified = all snd predicates
       status = if qualified then MatrixQualified else MatrixUnqualified
+  jobs <- buildJobsFromEnvironment
   terminal <- pure $ object
     [ "schema" .= (1 :: Int)
     , "status" .= matrixVerdictText status
     , "source" .= sourceJson source
     , "inputs" .= inputJson inputs
     , "tools" .= toolJson tools
-    , "resources" .= resourcesValue
+    , "resources" .= resourcesValue jobs
     , "gate" .= either (const Null) gateJson gateParsed
     , "execution" .= object
         [ "required_pairs" .= requiredPairs
@@ -1408,7 +1429,7 @@ publish q matrix source inputs = do
         ]
     , "failed_case" .= failedCase roles checks
     , "remaining_scope" .= object
-        [ "image_size" .= ("responsive wrapping and the RestoreL cancel choice remain screen-specific" :: String)
+        [ "image_size" .= ("this matrix covers the opening-time landing apply; a changed selection is gated separately (E-MENU-VALUE-CHANGED-SELECTION-150): under the run document both roles submit an identical 0x4010 and stay pending; completion within the submitting DOWN, and completion released by a route step after a pending half-press, OK or BACK, are compared under labelled shared scenario inputs. Stock completes only with status 0 (0x01029188, 0x01029430), so there is no failure completion; cancellation by a later 0x4010 is unreachable because both roles refuse the second DOWN, and the pipeline-init clear (0x010287c8) has no natural input on this route" :: String)
         , "full_matrix" .= (if qualified then "claimed by this matrix" else "not claimed" :: String)
         , "hardware" .= ("not claimed" :: String)
         ]
@@ -1548,13 +1569,14 @@ writeFailurePacket :: Qualification -> String -> Failure -> IO ()
 writeFailurePacket q status (Failure predicate detail artifact) = do
   createDirectoryIfMissing True (qualRoot q)
   source <- verifySource
+  jobs <- buildJobsFromEnvironment
   let value = object
         [ "schema" .= (1 :: Int)
         , "status" .= status
         , "qualification" .= ("not-qualified" :: String)
         , "source" .= sourceJson source
         , "inputs" .= inputJson (inputIdentity q)
-        , "resources" .= resourcesValue
+        , "resources" .= resourcesValue jobs
         , "failed_case" .= object ["predicate" .= predicateText predicate, "detail" .= detail, "artifact" .= artifact]
         , "predicates" .= [object ["name" .= predicateText predicate, "pass" .= False, "detail" .= detail]]
         , "remaining_scope" .= object ["full_matrix" .= ("not claimed" :: String)]

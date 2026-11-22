@@ -1,11 +1,11 @@
 {
   "unit": "menu_value",
-  "summary": "The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table word.",
-  "classification": "reference-only",
+  "summary": "The IMAGE SIZE apply unit, published at the stock commit dispatcher's case word; other property arms remain retained.",
+  "classification": "module",
   "rows": [
     {
       "id": "menu_value-01",
-      "shim": "`rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld`",
+      "shim": "`rb_menu_value_size_arm` in `adapter/entry.S`, published at the stock IMAGE SIZE case word",
       "kind": "veneer or carrier at a stock address",
       "other_side": "the stock dispatcher's jump-table word for property `0xf6`",
       "owned": "no",
@@ -15,7 +15,7 @@
         {
           "kind": "reference-only",
           "contract": "replacement/menu_value/BUILD.bazel",
-          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld`"
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_arm` in `adapter/entry.S` enters the owned apply or returns to the retained arm/shared tail."
         }
       ],
       "predicates": {
@@ -26,17 +26,17 @@
     },
     {
       "id": "menu_value-02",
-      "shim": "`rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs`",
+      "shim": "`rb_menu_value_size_apply` export in `adapter/mod.rs`",
       "kind": "stock-ABI export",
-      "other_side": "stock stage consumers and controller arms",
+      "other_side": "the IMAGE SIZE assembly veneer",
       "owned": "no",
-      "removal": "every stage consumer and controller arm is owned",
+      "removal": "the owned dispatcher calls the typed transaction directly without this assembly-to-Rust ABI seam",
       "state": "required",
       "evidence": [
         {
           "kind": "reference-only",
           "contract": "replacement/menu_value/BUILD.bazel",
-          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs`"
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_apply` in `adapter/mod.rs` is the veneer-to-Rust ABI."
         }
       ],
       "predicates": {
@@ -47,7 +47,7 @@
     },
     {
       "id": "menu_value-03",
-      "shim": "`rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state)",
+      "shim": "`rb_menu_value_call_*` retained services: size cell, aspect cell, change marker, current-property marker and display update",
       "kind": "trampoline into retained stock",
       "other_side": "stock property, cell and display services",
       "owned": "no",
@@ -57,7 +57,7 @@
         {
           "kind": "reference-only",
           "contract": "replacement/menu_value/BUILD.bazel",
-          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state)"
+          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. The five `rb_menu_value_call_*` imports in `adapter/mod.rs` remain retained."
         }
       ],
       "predicates": {
@@ -67,18 +67,18 @@
       }
     },
     {
-      "id": "menu_value-04",
-      "shim": "`rb_menu_value_cancel`/`rb_menu_value_confirm` exports",
-      "kind": "C-ABI bridge between two owned units",
-      "other_side": "modal_runtime",
-      "owned": "yes",
-      "removal": "modal dispatch calls the crate directly and both sides compare with stock in one image",
+      "id": "menu_value-05",
+      "shim": "Current/saved choice cells and display-mode state read in `adapter/mod.rs`",
+      "kind": "guest-memory layout view",
+      "other_side": "retained stock choice and snapshot state",
+      "owned": "no",
+      "removal": "owned menu/settings state replaces these cells and no retained reader requires their layout",
       "state": "required",
       "evidence": [
         {
           "kind": "reference-only",
-          "contract": "replacement/menu_value/BUILD.bazel",
-          "requirement": "The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_cancel`/`rb_menu_value_confirm` exports"
+          "contract": "replacement/menu_value/adapter/mod.rs",
+          "requirement": "Fixed current/saved size, aspect and third-choice cells and MODE_CELL remain read from retained state. Linked-image layout and caller closure are not established by this declaration."
         }
       ],
       "predicates": {

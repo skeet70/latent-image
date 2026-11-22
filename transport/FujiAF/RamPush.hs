@@ -392,7 +392,7 @@ emulatorExperimentPayload name =
   in payload { payloadRelinkInputs = ("EXPERIMENT_ADMISSION", "emulator-only") : payloadRelinkInputs payload }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalValuePayload, bankModalRenderFramePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
+payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, bankModalRenderFramePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of

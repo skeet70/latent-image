@@ -28,6 +28,7 @@ module Emulation.ModalObservation
   , ModalRequest
   , modalRequest
   , modalRequestLimit
+  , preservationShadowRequest
   , parseModalBeginRequest
   , parseModalBeginRequestForPackage
   , parseRecordedModalBeginRequest
@@ -287,15 +288,15 @@ modalScope (ModalLinked start bytes) seam owned helpers prehook = do
       (Left "modal owned prehook must equal the complete prehook helper entry")
   pure (ModalScope seam owned helpers prehook)
 
-data ModalRequest = ModalRequest ModalStock (Maybe (ModalLinked, ModalScope)) ModalLimit (Maybe ModalLifetimeSource) deriving (Eq)
+data ModalRequest = ModalRequest ModalStock (Maybe (ModalLinked, ModalScope)) ModalLimit (Maybe ModalLifetimeSource) (Maybe Value) deriving (Eq)
 
 modalRequest :: ModalStock -> Maybe (ModalLinked, ModalScope) -> ModalLimit -> Either String ModalRequest
 modalRequest stock scoped limit = do
   forM_ scoped $ \(linked, ModalScope seam owned helpers prehook) -> modalScope linked seam owned helpers prehook
-  pure (ModalRequest stock scoped limit Nothing)
+  pure (ModalRequest stock scoped limit Nothing Nothing)
 
 modalBeginRequestJson :: ModalRequest -> Value
-modalBeginRequestJson (ModalRequest (ModalStock stock) scoped limit lifetime) = object
+modalBeginRequestJson (ModalRequest (ModalStock stock) scoped limit lifetime shadow) = object
   ([ "command" .= ("modal-observation-begin" :: String)
    , "stock" .= B.unpack stock
    , "linked" .= fmap (\(ModalLinked start bytes, _) -> object ["start" .= watchAddressValue start, "bytes" .= B.unpack bytes]) scoped
@@ -304,9 +305,35 @@ modalBeginRequestJson (ModalRequest (ModalStock stock) scoped limit lifetime) = 
    , "helpers" .= [bounds range | Just (_, ModalScope _ _ helpers _) <- [scoped], range <- [modalPrehookCode helpers, modalCallCode helpers]]
    , "limit" .= modalLimitValue limit
    ] ++ ["owned_prehook" .= watchAddressValue prehook | Just (_, ModalScope _ _ _ (Just prehook)) <- [scoped]]
-     ++ maybe [] (\source -> ["context_sources" .= map sourceImageJson (lifetimeContext source), "lifetime" .= lifetimeRequestJson source]) lifetime)
+     ++ maybe [] (\source -> ["context_sources" .= map sourceImageJson (lifetimeContext source), "lifetime" .= lifetimeRequestJson source]) lifetime
+     ++ maybe [] (\plan -> ["preservation_shadow" .= plan]) shadow)
  where
   bounds range = let (low, high) = watchRangeBounds range in [low, high]
+
+preservationShadowRequest :: Value -> ModalRequest -> Either String ModalRequest
+preservationShadowRequest value (ModalRequest stock scoped limit lifetime previous) = do
+  unless (lifetime /= Nothing && previous == Nothing) (Left "shadow requires one installed-lifetime request")
+  plan <- parseShadowPlan value
+  pure (ModalRequest stock scoped limit lifetime (Just plan))
+
+parseShadowPlan :: Value -> Either String Value
+parseShadowPlan value = do
+  let adapterFields = maybe [] (const ["adapter"]) (optionalField "adapter" value)
+  modalKeys (["core", "vector", "bank_transfer", "status", "returning"] ++ adapterFields) value
+  core <- modalField "core" value >>= modalWord
+  unless (core <= 1) (Left "shadow core is unavailable")
+  vector <- modalField "vector" value >>= modalWord32
+  bankTransfer <- modalField "bank_transfer" value >>= modalWord32
+  status <- modalField "status" value >>= modalWord32
+  returning <- modalField "returning" value >>= modalWord32
+  unless (vector == 0x18 && all ((== 0) . (`mod` 4)) [bankTransfer,status,returning] && status >= 20
+    && toInteger returning == toInteger status + 4) (Left "shadow source plan is not bounded A32")
+  adapter <- case optionalField "adapter" value of
+    Nothing -> Right (String "board")
+    Just name | name `elem` [String "board", String "context"] -> Right name
+    _ -> Left "unknown shadow observation adapter"
+  pure (object ["core" .= core, "vector" .= vector, "bank_transfer" .= bankTransfer,
+    "status" .= status, "returning" .= returning, "adapter" .= adapter])
 
 data ModalPolicy = StockBaseline | ScopedOwned75 deriving (Eq, Show)
 
@@ -404,6 +431,7 @@ data ModalReport = ModalReport
   , modalTaskIdentityVerified :: Bool
   , modalContextSourceSpans :: ModalCount
   , modalFailure :: Maybe ModalFailure
+  , modalShadowReport :: Maybe Value
   } deriving (Eq, Show)
 
 modalReportFailure :: ModalReport -> Maybe T.Text
@@ -414,7 +442,7 @@ policyText StockBaseline = "stock-baseline"
 policyText ScopedOwned75 = "scoped-owned75"
 
 modalReportJson :: ModalReport -> Value
-modalReportJson report = object
+modalReportJson report = object $
   [ "enabled" .= modalReportEnabled report
   , "policy" .= policyText (modalReportPolicy report)
   , "counts" .= countsJson (modalReportCounts report)
@@ -428,7 +456,7 @@ modalReportJson report = object
   , "lifetime" .= fmap lifetimeReceiptJson (modalLifetimeReceipt report)
   , "watch" .= fmap (\(ModalWatchSummary _ raw) -> raw) (modalWatchSummary report)
   , "context_source_spans" .= countValue (modalContextSourceSpans report)
-  ]
+  ] ++ maybe [] (\shadow -> ["preservation_shadow" .= shadow]) (modalShadowReport report)
  where
   countsJson counts = object
     [ "observations" .= countValue (modalObservations counts)
@@ -480,8 +508,9 @@ modalList _ _ = Left "modal evidence is not an array"
 
 parseModalReport :: ModalLimit -> Value -> Either String ModalReport
 parseModalReport limit value = do
-  modalKeys ["enabled", "policy", "counts", "stock_fetches", "captured_domains", "failure", "physical_fetch_coverage",
-    "task_identity_verified", "physical_guard", "task_entries", "lifetime", "watch", "context_source_spans"] value
+  let shadowFields = maybe [] (const ["preservation_shadow"]) (optionalField "preservation_shadow" value)
+  modalKeys (["enabled", "policy", "counts", "stock_fetches", "captured_domains", "failure", "physical_fetch_coverage",
+    "task_identity_verified", "physical_guard", "task_entries", "lifetime", "watch", "context_source_spans"] ++ shadowFields) value
   enabled <- modalField "enabled" value >>= modalBool
   policy <- modalField "policy" value >>= \entry -> case entry of
     String "stock-baseline" -> Right StockBaseline
@@ -495,6 +524,7 @@ parseModalReport limit value = do
   tasks <- modalField "task_entries" value >>= modalList limit >>= mapM parseTaskEntry
   lifetime <- modalField "lifetime" value >>= parseNullable parseLifetimeReceipt
   watch <- modalField "watch" value >>= parseNullable parseModalWatchSummary
+  shadow <- maybe (Right Nothing) (parseNullable (parseShadowReport lifetime)) (optionalField "preservation_shadow" value)
   countsValue <- modalField "counts" value
   modalKeys ["observations", "entries", "owned_handoffs", "fallback_handoffs", "returns", "active_frames", "peak_core_depth"] countsValue
   let count key = ModalCount <$> (modalField key countsValue >>= modalWord)
@@ -519,11 +549,166 @@ parseModalReport limit value = do
   let taskCount = toInteger (length tasks)
       ownedCount = toInteger (countValue (modalOwnedHandoffs counts))
       entryCount = toInteger (countValue (modalEntries counts))
-  unless (not taskVerified || policy == ScopedOwned75 && physicalCoverage && countValue contextSpans == 16 && taskCount > 0 && ownedCount <= taskCount && taskCount <= entryCount
-    && (enabled || taskCount == ownedCount))
+      shadowTaskClaim = maybe False ((== Right (Bool True)) . modalField "task_identity_verified") shadow
+      shadowAdmission = maybe False ((== Right (Bool True)) . modalField "production_admission") shadow
+      ownedTaskClaim = policy == ScopedOwned75 && taskCount > 0 && ownedCount <= taskCount
+        && taskCount <= entryCount && (enabled || taskCount == ownedCount)
+  unless (not taskVerified || physicalCoverage && countValue contextSpans == 16
+    && (ownedTaskClaim || shadowTaskClaim && shadowAdmission))
     (Left "modal report makes an unsupported task identity claim")
-  pure (ModalReport enabled policy counts fetches domains guard tasks lifetime watch physicalCoverage taskVerified contextSpans failure)
+  unless (not shadowAdmission || taskVerified)
+    (Left "modal report drops an admitted shadow task identity")
+  pure (ModalReport enabled policy counts fetches domains guard tasks lifetime watch physicalCoverage taskVerified contextSpans failure shadow)
  where
+  parseShadowReport lifetime entry = do
+    modalKeys ["core", "source", "started", "completed", "native_events", "active", "failure",
+      "certificates_issued", "certificates_consumed", "task_identity_verified",
+      "production_admission", "certificate", "context", "native_evidence", "first_irq",
+      "earlier_irq_provenance"] entry
+    coreEntry <- modalField "core" entry
+    core <- modalWord coreEntry
+    coreId <- parseCore coreEntry
+    source <- modalField "source" entry
+    canonical <- parseShadowPlan source
+    unless (source == canonical && modalField "core" source == Right (Number (fromIntegral core)))
+      (Left "shadow report does not bind its canonical source and core")
+    started <- modalField "started" entry >>= modalWord
+    completed <- modalField "completed" entry >>= modalWord
+    _ <- modalField "native_events" entry >>= modalWord
+    active <- modalField "active" entry >>= modalBool
+    failure <- modalField "failure" entry >>= \item -> case item of
+      Null -> Right Nothing
+      String text | not (T.null text) -> Right (Just text)
+      _ -> Left "shadow failure must be nonempty text or null"
+    issued <- modalField "certificates_issued" entry >>= modalWord
+    consumed <- modalField "certificates_consumed" entry >>= modalWord
+    taskClaim <- modalField "task_identity_verified" entry >>= modalBool
+    admission <- modalField "production_admission" entry >>= modalBool
+    certificate <- modalField "certificate" entry >>= parseNullable (parseCertificate canonical coreId lifetime admission)
+    unless (completed <= started && consumed <= issued && issued <= completed
+      && (failure /= Nothing || started - completed == (if active then 1 else 0)))
+      (Left "shadow report has inconsistent completion counters")
+    unless (isJust certificate == (issued > 0)
+      && taskClaim == (issued > 0 && issued == consumed)
+      && (not admission || taskClaim && failure == Nothing && not active
+        && completed == started))
+      (Left "shadow report makes an unsupported production certificate claim")
+    _ <- modalField "context" entry >>= parseNullable shadowText
+    modalField "native_evidence" entry >>= shadowEvidence
+    modalField "first_irq" entry >>= \raw -> case raw of
+      Null -> Right ()
+      _ -> do
+        modalKeys ["context", "evidence"] raw
+        _ <- modalField "context" raw >>= shadowText
+        modalField "evidence" raw >>= shadowEvidence
+    modalField "earlier_irq_provenance" entry >>= parseEarlierIrq
+    pure entry
+  parseCertificate source core lifetime admission entry = do
+    modalKeys ["task", "publication_count", "forward", "reverse", "retirement_source",
+      "status_source", "return_source", "old_svc_spsr", "entry_cpsr", "returned_cpsr",
+      "frame_address", "frame_physical", "frame_words"] entry
+    _ <- modalField "task" entry >>= shadowText
+    publications <- modalField "publication_count" entry >>= modalWord
+    forward <- modalField "forward" entry >>= modalWord
+    reverseCount <- modalField "reverse" entry >>= modalWord
+    unless (publications > 0 && forward == publications && reverseCount == publications)
+      (Left "shadow certificate is not bound to one complete publication epoch")
+    status <- modalField "status" source >>= modalWord32
+    returning <- modalField "returning" source >>= modalWord32
+    parseCertificateSource 0x00bfb028 0xe92d4ff0 =<< modalField "retirement_source" entry
+    parseCertificateSource status 0xe169f001 =<< modalField "status_source" entry
+    parseCertificateSource returning 0xe8fdd00f =<< modalField "return_source" entry
+    when admission $ do
+      receipt <- maybe (Left "admitted shadow certificate lacks its enclosing lifetime receipt") Right lifetime
+      unless (countValue (receiptPublicationCount receipt) == publications
+        && countValue (receiptForwardWrites receipt) == publications
+        && countValue (receiptReverseWrites receipt) == publications
+        && countValue (receiptPendingStores receipt) == 0
+        && receiptInstallCore receipt == Just core && receiptRollbackCore receipt == Just core
+        && receiptFailure receipt == Nothing
+        && receiptPhase receipt `elem` [RollbackStored, RollbackVerified, Ended])
+        (Left "admitted shadow certificate differs from its enclosing lifetime receipt")
+    oldStatus <- modalField "old_svc_spsr" entry >>= modalWord32
+    entryCpsr <- modalField "entry_cpsr" entry >>= modalWord32
+    returnedCpsr <- modalField "returned_cpsr" entry >>= modalWord32
+    frameAddress <- modalField "frame_address" entry >>= modalWord32
+    framePhysical <- modalField "frame_physical" entry >>= modalWord32
+    frameWords <- modalField "frame_words" entry >>= modalList (either error id (modalLimit 9))
+      >>= mapM modalWord32
+    unless (length frameWords == 9 && frameAddress .&. 0xbfffffff == framePhysical
+      && returnedCpsr == (oldStatus .&. 0x00ffff00) + (entryCpsr .&. 0xff0000ff))
+      (Left "shadow certificate has an invalid frame or return-status derivation")
+    pure entry
+  parseCertificateSource expectedAddress expectedWord entry = do
+    modalKeys ["address", "physical", "word", "tcm"] entry
+    address <- modalField "address" entry >>= modalWord32
+    physical <- modalField "physical" entry >>= modalWord32
+    word <- modalField "word" entry >>= modalWord32
+    modalField "tcm" entry >>= earlierTcm
+    unless (address == expectedAddress && physical == expectedAddress && word == expectedWord)
+      (Left "shadow certificate has a noncanonical source instruction")
+  parseEarlierIrq entry = do
+    modalKeys ["total", "dropped", "coverage_complete", "target_post_prefix_lr",
+      "vector_lr_subtract", "matching_events", "raw_equal_wrong_phase_events",
+      "normalization_underflow_events", "retained"] entry
+    total <- modalField "total" entry >>= modalWord
+    dropped <- modalField "dropped" entry >>= modalWord
+    complete <- modalField "coverage_complete" entry >>= modalBool
+    target <- modalField "target_post_prefix_lr" entry >>= \item -> case item of
+      Null -> Right Nothing
+      _ -> Just <$> modalWord32 item
+    lrSubtract <- modalField "vector_lr_subtract" entry >>= modalWord32
+    unless (lrSubtract == 4) (Left "earlier IRQ provenance has an unsupported LR phase relation")
+    retained <- modalField "retained" entry >>= earlierEvents
+    matching <- modalField "matching_events" entry >>= earlierEvents
+    rawEqual <- modalField "raw_equal_wrong_phase_events" entry >>= earlierEvents
+    underflow <- modalField "normalization_underflow_events" entry >>= earlierEvents
+    let expectedRetained = min total 16
+        normalized relationTarget (_, lr) = lr >= lrSubtract && lr - lrSubtract == relationTarget
+        rawWrong relationTarget event@(_, lr) =
+          lr == relationTarget && not (normalized relationTarget event)
+    unless (fromIntegral (length retained) == expectedRetained
+      && dropped == total - expectedRetained && complete == (dropped == 0))
+      (Left "earlier IRQ provenance has inconsistent bounded-retention counters")
+    unless (maybe (null matching && null rawEqual && null underflow) (\relationTarget ->
+      matching == filter (normalized relationTarget) retained
+      && rawEqual == filter (rawWrong relationTarget) retained
+      && underflow == filter (\(_, lr) -> lr < lrSubtract) retained) target)
+      (Left "earlier IRQ provenance misclassifies LR phase evidence")
+  earlierEvents (Array rows) | V.length rows <= 16 = mapM earlierEvent (V.toList rows)
+  earlierEvents _ = Left "earlier IRQ provenance exceeds its fixed event bound"
+  earlierEvent entry = do
+    modalKeys ["instructions", "address", "physical", "bytes", "progress", "pstate", "tcm",
+      "word", "cpsr", "irq_spsr", "sp", "lr"] entry
+    _ <- modalField "instructions" entry >>= modalWord
+    address <- modalField "address" entry >>= modalWord32
+    _ <- modalField "physical" entry >>= modalWord32
+    bytes <- modalField "bytes" entry >>= modalWord
+    _ <- modalField "progress" entry >>= modalWord
+    pstate <- modalField "pstate" entry >>= modalWord32
+    modalField "tcm" entry >>= earlierTcm
+    _ <- modalField "word" entry >>= modalWord32
+    cpsr <- modalField "cpsr" entry >>= modalWord32
+    _ <- modalField "irq_spsr" entry >>= modalWord32
+    _ <- modalField "sp" entry >>= modalWord32
+    lr <- modalField "lr" entry >>= modalWord32
+    unless (address == 0x18 && bytes == 4 && pstate == cpsr
+      && cpsr .&. 0x1f == 0x12 && cpsr .&. 0x180 == 0x180)
+      (Left "earlier IRQ provenance is not a stable masked IRQ vector entry")
+    pure (entry, lr)
+  earlierTcm Null = Right ()
+  earlierTcm (Array windows) | V.length windows == 2 = mapM_ earlierTcmWindow windows
+  earlierTcm _ = Left "earlier IRQ provenance has malformed TCM identity"
+  earlierTcmWindow Null = Right ()
+  earlierTcmWindow entry = do
+    modalKeys ["address", "bytes"] entry
+    _ <- modalField "address" entry >>= modalWord
+    bytes <- modalField "bytes" entry >>= modalWord
+    unless (bytes > 0) (Left "earlier IRQ provenance TCM identity is empty")
+  shadowText (String text) | not (T.null text) && T.length text <= 16384 = Right text
+  shadowText _ = Left "shadow evidence text is not bounded"
+  shadowEvidence (Array rows) | V.length rows <= 16 = mapM_ shadowText rows
+  shadowEvidence _ = Left "shadow evidence exceeds its fixed packet bound"
   pointFields entry = do
     core <- modalField "core" entry >>= modalWord >>= \number -> case number of
       0 -> Right Core0
@@ -548,11 +733,13 @@ parseModalReport limit value = do
       <*> (CapturedEvent <$> (modalField "event" entry >>= modalWord32))
 
 checkModalBegin :: ModalRequest -> ModalReport -> Either String ()
-checkModalBegin (ModalRequest _ scoped _ lifetime) report = do
+checkModalBegin (ModalRequest _ scoped _ lifetime shadow) report = do
   unless (modalReportEnabled report) (Left "modal observation did not enable")
   unless (modalReportPolicy report == maybe StockBaseline (const ScopedOwned75) scoped) (Left "modal policy differs from the request")
   unless (countValue (modalContextSourceSpans report) == maybe 0 (fromIntegral . length . lifetimeContext) lifetime)
     (Left "modal report context source count differs from request")
+  actualShadow <- traverse (modalField "source") (modalShadowReport report)
+  unless (actualShadow == shadow) (Left "shadow source or presence differs from the requested observation")
   forM_ lifetime $ \binding -> do
     unless (modalPhysicalCoverage report) (Left "modal lifetime physical guard did not arm")
     checkTask33StackGuardReceipt binding (modalLifetimeReceipt report)
@@ -602,7 +789,7 @@ type CatalogueParser = Value -> [Catalogue.ContextSourceSlice] -> Either String 
 parseModalBeginRequestUsing :: BeginRequestFormat -> CatalogueParser -> Value -> Either String ModalRequest
 parseModalBeginRequestUsing format parseCatalogue value = do
   let required = ["command", "stock", "linked", "seam", "owned", "limit"]
-      optional = case value of Object fields -> [key | key <- ["owned_prehook", "helpers", "context_sources", "lifetime"], KM.member key fields]; _ -> []
+      optional = case value of Object fields -> [key | key <- ["owned_prehook", "helpers", "context_sources", "lifetime", "preservation_shadow"], KM.member key fields]; _ -> []
   modalKeys (required ++ optional) value
   unless (modalField "command" value == Right (String "modal-observation-begin")) (Left "not a modal begin request")
   stock <- modalField "stock" value >>= byteArray 0xfc >>= modalStock
@@ -644,10 +831,11 @@ parseModalBeginRequestUsing format parseCatalogue value = do
       scope <- modalScope linked seam owned helperExtents prehook
       pure (Just (linked, scope))
   request <- modalRequest stock scoped limit
-  case (optionalField "context_sources" value, optionalField "lifetime" value) of
+  bound <- case (optionalField "context_sources" value, optionalField "lifetime" value) of
     (Nothing, Nothing) -> pure request
     (Just context, Just lifetime) -> parseLifetimeBinding format parseCatalogue scoped context lifetime >>= lifetimeModalRequest request
     _ -> Left "modal lifetime request requires both context sources and lifetime"
+  maybe (Right bound) (\plan -> preservationShadowRequest plan bound) (optionalField "preservation_shadow" value)
  where
   byteArray = parseModalBytes
   parseExtent = parseModalExtent
@@ -673,7 +861,7 @@ parseRecordedModalBeginRequest observation = do
       requestFields <- withoutReadonly lifetime
       unless (modalField "context_sources" binding == Right context && declaredFields == requestFields)
         (Left "recorded stock lifetime source differs from its request")
-      decoded@(ModalRequest _ scoped _ source) <-
+      decoded@(ModalRequest _ scoped _ source _) <-
         parseModalBeginRequestUsing RecordedStockBeginRequest Catalogue.parseContextCatalogue request
       bound <- maybe (Left "recorded stock request has no lifetime source") Right source
       declaredImages <- modalField "readonly" declaredLifetime
@@ -695,7 +883,7 @@ parseRecordedModalBeginRequest observation = do
       pure decoded
 
 modalRequestLimit :: ModalRequest -> ModalLimit
-modalRequestLimit (ModalRequest _ _ limit _) = limit
+modalRequestLimit (ModalRequest _ _ limit _ _) = limit
 
 data ScopedModalSource = ScopedModalSource ModalLinked ModalScope Sha256 Sha256
 
@@ -1185,7 +1373,7 @@ littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
 
 lifetimeModalRequest :: ModalRequest -> ModalLifetimeSource -> Either String ModalRequest
-lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
+lifetimeModalRequest (ModalRequest stock scoped _ _ shadow) source = do
   unless (length (lifetimeContext source) == 16) (Left "modal lifetime requires complete loader context binding")
   case lifetimeCatalogueBinding source of
     RuntimeContextUnbound -> Left "modal lifetime requires a source-bound context catalogue"
@@ -1209,7 +1397,7 @@ lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
   let readonly = case scoped of
         Nothing -> lifetimeReadonly source
         Just (ModalLinked start bytes, _) -> filter (/= SourceImage start bytes) (lifetimeReadonly source)
-  pure (ModalRequest stock scoped modalLifetimeObservationLimit (Just source { lifetimeReadonly = readonly }))
+  pure (ModalRequest stock scoped modalLifetimeObservationLimit (Just source { lifetimeReadonly = readonly }) shadow)
 
 parseModalLifetimeWatchAck :: Value -> Either String FixedWatchAck
 parseModalLifetimeWatchAck value = projectCacheOnlyWatch value >>= parseFixedWatchAck
@@ -1517,7 +1705,7 @@ modalLifetimeCoverage report = case modalLifetimeReceipt report of
       && modalPhysicalCoverage report && countValue (modalContextSourceSpans report) == 16
 
 checkCompletedModalLifetime :: ModalRequest -> ArrayWriteReport -> FinalModalWatch -> ModalReport -> Either String ()
-checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) audit final@(FinalModalWatch observation _) report = do
+checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source _) audit final@(FinalModalWatch observation _) report = do
   checkModalEnd report
   unless (modalReportPolicy report == maybe StockBaseline (const ScopedOwned75) scoped)
     (Left "completed modal policy differs from the source-bound request")
@@ -1655,7 +1843,7 @@ lifetimeSettingsWrites binding rows = reverse . snd <$> foldM step ([], []) rows
     , let shift = case order of LittleEndian -> index; BigEndian -> B.length before - 1 - index ]
 
 completedSettingsWrites :: ModalRequest -> FinalModalWatch -> Either String [SettingsWrite]
-completedSettingsWrites (ModalRequest _ _ _ source) (FinalModalWatch observation _) = do
+completedSettingsWrites (ModalRequest _ _ _ source _) (FinalModalWatch observation _) = do
   binding <- maybe (Left "modal request has no installed lifetime binding") Right source
   lifetimeSettingsWrites binding (fixedWatchRecords observation)
 
@@ -1805,7 +1993,7 @@ parseLifetimeBinding format parseCatalogue scoped contextValue value = do
     retired settingsWriters settingsReloads stackGuard Nothing (SourceContextBound catalogue) propertyCounts)
 
 modalLifetimeWatchRanges :: ModalRequest -> Either String [WatchRange]
-modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
+modalLifetimeWatchRanges (ModalRequest _ scoped _ source _) = do
   binding <- maybe (Left "modal lifetime request lacks source binding") Right source
   imageRanges <- mapM sourceImageRange (lifetimeReadonly binding ++ lifetimeContext binding
     ++ [SourceImage start bytes | Just (ModalLinked start bytes, _) <- [scoped]])
@@ -1828,7 +2016,7 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
   pure watched
 
 checkModalLifetimeWatchSources :: ModalRequest -> Value -> Either String ()
-checkModalLifetimeWatchSources (ModalRequest _ scoped _ source) value = do
+checkModalLifetimeWatchSources (ModalRequest _ scoped _ source _) value = do
   binding <- maybe (Left "modal lifetime request lacks source binding") Right source
   catalogue <- case lifetimeCatalogueBinding binding of
     RuntimeContextUnbound -> Left "modal cache-only watch lacks a source-bound context catalogue"
@@ -1875,7 +2063,7 @@ checkLifetimeArrayAudit request armed final = do
   checkModalLifetimeWatchSources request armedValue
   checkModalLifetimeWatchSources request finalSummary
   acknowledgement <- lifetimeWatchAcknowledgement armedValue >>= parseModalLifetimeWatchAck
-  let fetchClasses = maybe [] lifetimeFetchClasses (case request of ModalRequest _ _ _ source -> source)
+  let fetchClasses = maybe [] lifetimeFetchClasses (case request of ModalRequest _ _ _ source _ -> source)
   rangeLimit <- watchRangeLimit (length expected + length fetchClasses)
   gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites modalLifetimeWriterLimit expected fetchClasses acknowledgement observation
   pure (ArrayWriteReport (writesInArrays observation) gate)
