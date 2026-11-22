@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -78,11 +78,83 @@ haskell_binary(
     ],
 )
 
+haskell_library(
+    name = "carrier",
+    srcs = ["Replacement/DcfNumbering/Carrier.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host/firmware:reference-scan-model",
+    ],
+)
+
+haskell_binary(
+    name = "stage-dcf-numbering",
+    srcs = ["StageMain.hs"],
+    main_file = "StageMain.hs",
+    args = ["$(rootpath //lz:lz-encode)", "$(rootpath //host/firmware:rebuild-update)", "$(rootpath //lz:fflzd)"],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":carrier",
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:font-window",
+        "//host:host-support",
+        "//host:update-container",
+        "//host/firmware:reference-scan-model",
+    ],
+)
+
+haskell_test(
+    name = "carrier-tests",
+    srcs = ["CarrierTests.hs"],
+    main_file = "CarrierTests.hs",
+    args = ["$(rootpath :dcf-numbering-image%s.%s)" % (suffix, extension) for suffix, _ in _VARIANTS for extension in ["bin", "symbols"]],
+    data = [":dcf-numbering-image%s.%s" % (suffix, extension) for suffix, _ in _VARIANTS for extension in ["bin", "symbols"]],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":carrier",
+        "//host:base",
+        "//host:bytestring",
+        "//host/firmware:reference-scan-model",
+    ],
+)
+
+haskell_binary(
+    name = "dcf-numbering-observe",
+    srcs = ["ObserveMain.hs"],
+    main_file = "ObserveMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
 filegroup(
     name = "all",
     srcs = [
+        ":dcf-numbering-observe",
         ":dcf-numbering-suite",
         ":host-tests",
+        ":stage-dcf-numbering",
     ] + [":dcf-numbering-image" + suffix for suffix, _ in _VARIANTS],
 )
 

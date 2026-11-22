@@ -3228,6 +3228,7 @@ haskell_library(
     ],
     src_strip_prefix = ".",
     visibility = [
+        "//replacement/dcf_numbering:__pkg__",
         "//replacement/file_service:__pkg__",
         "//transport:__pkg__",
     ],
