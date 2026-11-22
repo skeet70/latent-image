@@ -201,8 +201,7 @@ fn abort<S: Services>(services: &mut S) -> i32 {
 }
 
 fn packet_081e<S: Services>(services: &mut S) {
-    let value = if cfg!(playback_control_mode_value_dropped) { 0 } else { services.mode_value() };
-    services.notify_device(&DevicePacket::new(0x81e, value));
+    services.notify_device(&DevicePacket::new(0x81e, services.mode_value()));
 }
 
 fn packet_082d<S: Services>(services: &mut S) {
@@ -324,7 +323,9 @@ pub fn action10<S: Services>(services: &mut S) -> i32 {
 pub fn action11<S: Services>(services: &mut S) -> i32 {
     services.status(Source::Parameter);
     services.call(Call::NotifyPrimary);
-    services.clear_buffer_step();
+    if !cfg!(playback_control_buffer_step_kept) {
+        services.clear_buffer_step();
+    }
     services.call(Call::PostPendingEvent);
     2
 }
@@ -409,11 +410,11 @@ fn machine34_tail<S: Services>(services: &mut S, status: Status, packet_082d_sta
             0
         }
         Status::Packet082d => {
-            if packet_082d_state && !cfg!(playback_control_packet_082d_stateless) {
+            if packet_082d_state {
                 services.set_state(State::Work);
             }
             packet_082d(services);
-            17
+            if cfg!(playback_control_packet_082d_result_dropped) { 0 } else { 17 }
         }
         Status::Notify081f => posted(services, Some(State::Posted), Some(Call::Notify081f), 15),
         Status::Notify0819 => posted(services, Some(State::Posted), Some(Call::Notify0819), 16),

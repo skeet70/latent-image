@@ -11,8 +11,8 @@ PLAYBACK_ACTOR_CONTROLS = [
     "abort_keeps_state",
     "start_unpublished",
     "error_without_restart",
-    "packet_082d_stateless",
-    "mode_value_dropped",
+    "packet_082d_result_dropped",
+    "buffer_step_kept",
 ]
 
 _VARIANTS = [("", [])] + [
