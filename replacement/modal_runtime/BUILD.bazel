@@ -732,6 +732,51 @@ haskell_test(
 )
 
 haskell_library(
+    name = "menu-value-change-lib",
+    srcs = ["Replacement/ModalRuntime/ValueChange.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":menu-engine-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "menu-value-change-check",
+    srcs = ["MenuValueChangeCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts", "-with-rtsopts=-A8m -M1400m"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-value-change-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "menu-value-change-tests",
+    size = "small",
+    srcs = ["MenuValueChangeTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-engine-pair-lib",
+        ":menu-value-change-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+    ],
+)
+
+haskell_library(
     name = "memory-counters",
     srcs = ["Replacement/ModalRuntime/MemoryCounters.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

@@ -1,5 +1,5 @@
-//! The menu value transaction: the row token to settings value commit the
-//! stage consumer posts after the engine accepts an event.
+//! The menu value commit: resolves the row token the stage consumer posts
+//! after the engine accepts an event into settings property writes.
 //!
 //! The IMAGE SIZE property is a composite: its token selects a size/aspect
 //! pair that is converted into the two ordinary properties. Effects the caller
@@ -9,13 +9,11 @@
 
 #![allow(unexpected_cfgs, unused_attributes)]
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), allow(dead_code))]
 
 use core::fmt;
 
-/// The IMAGE SIZE composite writes its size and aspect properties and captures
-/// the retained properties on the entry.
-pub const MAX_WRITES: usize = 5;
+/// The IMAGE SIZE composite writes its size and aspect properties.
+pub const MAX_WRITES: usize = 2;
 
 /// The IMAGE SIZE composite's retained effects.
 pub const MAX_RETAINED: usize = 5;
@@ -124,9 +122,6 @@ pub struct ImageSizePair {
 pub struct ImageSizeRule {
     pub size_property: PropertyId,
     pub aspect_property: PropertyId,
-    pub change_property: PropertyId,
-    pub change_property_1f: PropertyId,
-    pub marker_property: PropertyId,
 }
 
 /// The source-bound conversion and pair tables.
@@ -170,7 +165,7 @@ impl ValueTables {
         self.image_size
     }
 
-    /// The transaction a posted `(property, token)` pair selects.
+    /// The target a posted `(property, token)` pair selects.
     #[inline]
     pub fn target(&self, property: PropertyId, token: RowToken) -> ValueTarget {
         match self.image_size {
@@ -180,7 +175,7 @@ impl ValueTables {
     }
 }
 
-/// The properties a transaction can change.
+/// The properties a commit can change.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ValueTarget {
     Ordinary { property: PropertyId, token: RowToken },
@@ -271,6 +266,14 @@ pub struct Commit {
     pub image_size: Option<ImageSizePair>,
 }
 
+impl Commit {
+    pub fn write_to(&self, settings: &mut impl Settings) {
+        for write in self.writes.iter() {
+            settings.write(write.property, write.value);
+        }
+    }
+}
+
 /// Why a target did not resolve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Refusal {
@@ -280,9 +283,8 @@ pub enum Refusal {
     MissingImageSizeRule,
 }
 
-/// The settings service the transaction reads and writes.
+/// The settings service a commit writes.
 pub trait Settings {
-    fn read(&self, property: PropertyId) -> ChoiceCode;
     fn write(&mut self, property: PropertyId, value: ChoiceCode);
 }
 
@@ -366,90 +368,6 @@ fn convert_key(tables: &ValueTables, property: PropertyId, key: u32) -> Result<C
         value: key,
         mode: ConversionMode::Effective,
     })
-}
-
-/// Resolves and applies `target` to `settings` in stock order.
-#[inline]
-pub fn commit(tables: &ValueTables, target: ValueTarget, settings: &mut impl Settings) -> Result<Commit, Refusal> {
-    let result = resolve(tables, target)?;
-    for write in result.writes.iter() {
-        settings.write(write.property, write.value);
-    }
-    Ok(result)
-}
-
-/// The entry choice captured at open, and the selections committed until the
-/// picker ends.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Transaction {
-    target: ValueTarget,
-    entry: PropertyWrites,
-}
-
-impl Transaction {
-    /// Captures the values of the properties `target` can change.
-    #[inline]
-    pub fn begin(tables: &ValueTables, target: ValueTarget, settings: &impl Settings) -> Result<Self, Refusal> {
-        let entry = match target {
-            ValueTarget::Ordinary { property, .. } => {
-                tables.conversion(property).ok_or(Refusal::MissingTable(property))?;
-                let mut entry = PropertyWrites::default();
-                entry.push(PropertyWrite { property, value: settings.read(property) });
-                entry
-            }
-            ValueTarget::ImageSize { .. } => {
-                let rule = tables.image_size_rule().ok_or(Refusal::MissingImageSizeRule)?;
-                for property in [rule.size_property, rule.aspect_property] {
-                    tables.conversion(property).ok_or(Refusal::MissingTable(property))?;
-                }
-                let mut entry = PropertyWrites::default();
-                for property in [
-                    rule.size_property,
-                    rule.aspect_property,
-                    rule.change_property,
-                    rule.change_property_1f,
-                    rule.marker_property,
-                ] {
-                    entry.push(PropertyWrite { property, value: settings.read(property) });
-                }
-                entry
-            }
-        };
-        Ok(Self { target, entry })
-    }
-
-    pub fn entry(&self) -> PropertyWrites {
-        self.entry
-    }
-
-    #[inline]
-    pub fn select(
-        &self,
-        tables: &ValueTables,
-        token: RowToken,
-        settings: &mut impl Settings,
-    ) -> Result<Commit, Refusal> {
-        commit(tables, self.at(token), settings)
-    }
-
-    /// Restores only the properties this transaction captured.
-    #[inline]
-    pub fn back(&self, settings: &mut impl Settings) -> PropertyWrites {
-        for write in self.entry.iter() {
-            settings.write(write.property, write.value);
-        }
-        self.entry
-    }
-
-    /// No property is written; the committed values stay.
-    pub fn confirm(self) {}
-
-    fn at(&self, token: RowToken) -> ValueTarget {
-        match self.target {
-            ValueTarget::Ordinary { property, .. } => ValueTarget::Ordinary { property, token },
-            ValueTarget::ImageSize { .. } => ValueTarget::ImageSize { token },
-        }
-    }
 }
 
 #[cfg(test)]

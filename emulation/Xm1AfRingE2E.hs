@@ -184,6 +184,8 @@ runTrajectory :: Emulator -> [Segment] -> IO ([Value], Bool)
 runTrajectory emulator segments = do
   require (all ((== PacketCompletion) . stepCompletion) (concatMap segmentSteps segments))
     "AF-ring trajectories do not admit presented-frame completion"
+  require (all ((== Nothing) . stepOutputClock) (concatMap segmentSteps segments))
+    "AF-ring trajectories do not admit an output clock change"
   results <- forM segments $ \segment -> do
     mode <- traverse (emulatorModeDial emulator) (segmentModeDial segment)
     steps <- forM (segmentSteps segment) $ \step -> do

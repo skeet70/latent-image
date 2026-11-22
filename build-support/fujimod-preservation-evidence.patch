@@ -1,0 +1,2074 @@
+--- a/crates/emulator-cpu/src/lib.rs
++++ b/crates/emulator-cpu/src/lib.rs
+@@ -14,6 +14,7 @@
+ pub mod exclusive;
+ pub mod loops;
+ pub mod memory;
++pub mod preservation;
+ pub mod timeline;
+ #[cfg(target_os = "emscripten")]
+ mod wasm_backing;
+@@ -571,6 +572,12 @@
+         data: *mut c_void,
+         range: HookRange,
+     },
++    /// Fixed-size owner-thread state and frame evidence; never admits execution.
++    Preservation {
++        callback: unsafe fn(preservation::PreservationEvidence, *mut c_void),
++        data: *mut c_void,
++        range: HookRange,
++    },
+     Block {
+         callback: unsafe fn(Block, *mut c_void),
+         data: *mut c_void,
+@@ -624,6 +631,7 @@
+ pub struct Translation {
+     pub instruction: InstructionDisposition,
+     pub observe_block: bool,
++    pub preservation: bool,
+ }
+ #[derive(Clone, Copy)]
+ pub struct TranslationHooks {
+--- /dev/null
++++ b/crates/emulator-cpu/src/preservation.rs
+@@ -0,0 +1,113 @@
++//! Passive owner-thread evidence. None of these events admits an instruction or handoff.
++use crate::{Identity, InstructionEntry, InstructionTcm};
++pub mod shadow;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct EvidenceId {
++    pub owner: Identity,
++    pub serial: std::num::NonZeroU64,
++}
++impl EvidenceId {
++    pub fn next(owner: Identity, previous: Option<Self>) -> Option<Self> {
++        let serial = match previous {
++            None => 1,
++            Some(previous) if previous.owner == owner => previous.serial.get().checked_add(1)?,
++            Some(_) => return None,
++        };
++        Some(Self { owner, serial: std::num::NonZeroU64::new(serial)? })
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ExecutionSource {
++    pub address: u32,
++    pub physical: u64,
++    pub word: u32,
++    pub tcm: [Option<InstructionTcm>; 2],
++}
++
++/// The native A32 layout is copied, never selected by changing processor mode.
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct Arm32State {
++    pub registers: [u32; 16],
++    pub cpsr: u32,
++    pub spsr: u32,
++    pub svc_spsr: u32,
++    pub irq_spsr: u32,
++    pub svc_sp: u32,
++    pub irq_sp: u32,
++    pub svc_lr: u32,
++    pub irq_lr: u32,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct SavedFrame {
++    pub address: u32,
++    pub physical: u64,
++    pub words: [u32; 9],
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct InstructionRetirement {
++    pub execution: EvidenceId,
++    pub observation: Option<InstructionEntry>,
++    pub resumed_from: Option<InstructionEntry>,
++    pub source: ExecutionSource,
++    pub before: Arm32State,
++    pub after: Arm32State,
++    pub frame: SavedFrame,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ExceptionEntry {
++    pub execution: EvidenceId,
++    pub before: Arm32State,
++    pub after: Arm32State,
++    pub vector: u32,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct SavedStatusWrite {
++    pub exception: EvidenceId,
++    pub source: ExecutionSource,
++    pub before: Arm32State,
++    pub after: Arm32State,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ExceptionReturn {
++    pub exception: EvidenceId,
++    pub source: ExecutionSource,
++    pub before: Arm32State,
++    pub after: Arm32State,
++    pub written_status: u32,
++    pub mask: u32,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum EvidenceFailure {
++    UnsupportedProcessor,
++    UnsupportedInstruction,
++    MissingEntry,
++    MissingRetirement,
++    SourceChanged,
++    IncompleteFrame,
++    Faulted,
++    Restarted,
++    Duplicate,
++    IdentityExhausted,
++    UnpairedException,
++    ExceptionDepth,
++    EvidenceCapacity,
++    UnresolvedMemory,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum PreservationEvidence {
++    Retired(InstructionRetirement),
++    Entered(ExceptionEntry),
++    SavedStatus(SavedStatusWrite),
++    Returned(ExceptionReturn),
++    Refused { address: u64, reason: EvidenceFailure },
++}
+--- /dev/null
++++ b/crates/emulator-cpu/src/preservation/shadow.rs
+@@ -0,0 +1,222 @@
++//! A passive proposal checker. A successful check never authorizes execution.
++use super::*;
++use crate::InstructionEntry;
++#[derive(Clone, Copy, Debug)]
++pub struct Binding<C: Copy + Eq> {
++    pub entry: InstructionEntry,
++    pub registers: [u32; 16],
++    pub cpsr: u32,
++    pub context: C,
++}
++
++/// Source-bound stock SVC-bank restoration: saved IRQ status, F preserved, MSR
++/// SPSR_fc followed by LDM sp!, {r0-r3, ip, lr, pc}^. The caller authenticates
++/// the containing stock image and its lifetime, not just these two words.
++#[derive(Clone, Copy, Debug)]
++pub struct StockReturn {
++    pub vector: u32,
++    pub status: ExecutionSource,
++    pub returning: ExecutionSource,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Failure {
++    Binding, Duplicate, MissingRetirement, Retirement, Frame, WrongCore,
++    ExceptionOrder, ExceptionEntry, UnsupportedSource, SavedStatus,
++    ExceptionReturn, Destination, Context, Incomplete, Backend(EvidenceFailure),
++}
++
++#[derive(Clone, Copy)]
++struct Irq {
++    entry: ExceptionEntry,
++    predicted: Arm32State,
++    written: Option<SavedStatusWrite>,
++}
++
++pub struct Shadow<C: Copy + Eq> {
++    binding: Binding<C>,
++    stock: StockReturn,
++    retired: Option<InstructionRetirement>,
++    irq: Option<Irq>,
++    expected: Option<Arm32State>,
++    last_id: Option<EvidenceId>,
++    completed: bool,
++    failure: Option<Failure>,
++}
++
++impl<C: Copy + Eq> Shadow<C> {
++    pub fn new(binding: Binding<C>, stock: StockReturn) -> Result<Self, Failure> {
++        if binding.entry.address != u64::from(binding.registers[15])
++            || binding.entry.bytes != 4 || binding.entry.pstate != binding.cpsr
++            || binding.entry.physical.is_none() || binding.cpsr & 0x0100003f != 0x13
++            || binding.registers[13] & 7 != 0
++            || stock.status.word != 0xe169f001 || stock.returning.word != 0xe8fdd00f
++            || stock.status.address.checked_add(4) != Some(stock.returning.address)
++            || stock.status.physical.checked_add(4) != Some(stock.returning.physical) {
++            return Err(Failure::Binding);
++        }
++        Ok(Self { binding, stock, retired: None, irq: None, expected: None,
++            last_id: None, completed: false, failure: None })
++    }
++
++    pub fn failure(&self) -> Option<Failure> { self.failure }
++    pub fn completed(&self) -> bool { self.completed && self.failure.is_none() }
++
++    fn reject<T>(&mut self, reason: Failure) -> Result<T, Failure> {
++        let first = *self.failure.get_or_insert(reason);
++        Err(first)
++    }
++
++    fn identity(&mut self, id: EvidenceId) -> Result<(), Failure> {
++        if id.owner != self.binding.entry.id.owner { return Err(Failure::WrongCore); }
++        if self.last_id.is_some_and(|old| id.serial <= old.serial) { return Err(Failure::Duplicate); }
++        self.last_id = Some(id);
++        Ok(())
++    }
++
++    pub fn observe(&mut self, event: PreservationEvidence) -> Result<(), Failure> {
++        if let Some(first) = self.failure { return Err(first); }
++        if self.completed { return self.reject(Failure::Duplicate); }
++        let result = self.observe_inner(event);
++        if let Err(reason) = result { return self.reject(reason); }
++        Ok(())
++    }
++
++    fn observe_inner(&mut self, event: PreservationEvidence) -> Result<(), Failure> {
++        match event {
++            PreservationEvidence::Refused { reason, .. } => Err(Failure::Backend(reason)),
++            PreservationEvidence::Retired(retired) => {
++                self.identity(retired.execution)?;
++                if self.retired.is_some() || self.irq.is_some() { return Err(Failure::Duplicate); }
++                let observed = retired.observation.ok_or(Failure::Binding)?;
++                if observed.id != self.binding.entry.id
++                    && retired.resumed_from != Some(self.binding.entry) {
++                    return Err(Failure::Binding);
++                }
++                if observed.address != self.binding.entry.address
++                    || observed.physical != self.binding.entry.physical
++                    || observed.tcm != self.binding.entry.tcm
++                    || observed.id.owner != self.binding.entry.id.owner
++                    || retired.source.address != self.binding.registers[15]
++                    || Some(retired.source.physical) != self.binding.entry.physical
++                    || retired.source.tcm != self.binding.entry.tcm
++                    || retired.source.word != 0xe92d4ff0
++                    || retired.before.registers != self.binding.registers
++                    || retired.before.cpsr != self.binding.cpsr {
++                    return Err(Failure::Retirement);
++                }
++                let mut expected = retired.before;
++                expected.registers[13] = expected.registers[13].checked_sub(36).ok_or(Failure::Frame)?;
++                expected.registers[15] = expected.registers[15].checked_add(4).ok_or(Failure::Destination)?;
++                if retired.after != expected { return Err(Failure::Retirement); }
++                let words = std::array::from_fn(|index| if index < 8 {
++                    self.binding.registers[index + 4]
++                } else { self.binding.registers[14] });
++                if retired.frame.address != expected.registers[13] || retired.frame.words != words {
++                    return Err(Failure::Frame);
++                }
++                self.retired = Some(retired);
++                self.expected = Some(expected);
++                Ok(())
++            }
++            PreservationEvidence::Entered(entry) => {
++                self.identity(entry.execution)?;
++                if self.irq.is_some() { return Err(Failure::ExceptionOrder); }
++                let before = self.expected.ok_or(Failure::MissingRetirement)?;
++                if entry.before != before || entry.vector != self.stock.vector
++                    || before.cpsr & 0x1f != 0x13 || before.cpsr & 0x80 != 0 {
++                    return Err(Failure::ExceptionEntry);
++                }
++                let mut expected = before;
++                expected.cpsr = (before.cpsr & !(0x1f | 0x20 | 0x0600fc00 | 0x01000000 | 0x200))
++                    | 0x12 | 0x80 | 0x100;
++                expected.spsr = before.cpsr;
++                expected.svc_spsr = before.spsr;
++                expected.svc_sp = before.registers[13];
++                expected.svc_lr = before.registers[14];
++                expected.registers[13] = before.irq_sp;
++                expected.registers[14] = before.registers[15].checked_add(4).ok_or(Failure::ExceptionEntry)?;
++                expected.registers[15] = entry.vector;
++                if entry.after != expected { return Err(Failure::ExceptionEntry); }
++                let mut predicted = before;
++                predicted.spsr = (before.spsr & !0xff0000ff) | (before.cpsr & 0xff0000ff);
++                predicted.cpsr = predicted.spsr;
++                predicted.svc_spsr = before.spsr;
++                predicted.irq_spsr = before.cpsr;
++                predicted.svc_sp = before.registers[13].checked_sub(28).ok_or(Failure::ExceptionEntry)?;
++                predicted.svc_lr = before.registers[14];
++                predicted.irq_sp = 0xd3;
++                predicted.irq_lr = before.registers[15].checked_add(4).ok_or(Failure::ExceptionEntry)?;
++                self.irq = Some(Irq { entry, predicted, written: None });
++                Ok(())
++            }
++            PreservationEvidence::SavedStatus(written) => {
++                let irq = self.irq.as_mut().ok_or(Failure::ExceptionOrder)?;
++                if written.exception != irq.entry.execution || irq.written.is_some() {
++                    return Err(Failure::ExceptionOrder);
++                }
++                if written.source != self.stock.status {
++                    return Err(Failure::UnsupportedSource);
++                }
++                let old_svc = irq.entry.before.spsr;
++                let saved = irq.entry.before.cpsr;
++                if written.before.cpsr & 0x1bf != 0x193 || written.before.spsr != old_svc
++                    || written.before.cpsr & 0x40 != saved & 0x40
++                    || written.before.registers[1] != saved
++                    || written.before.svc_spsr != old_svc
++                    || written.before.irq_spsr != irq.predicted.irq_spsr
++                    || written.before.svc_sp != irq.predicted.svc_sp
++                    || written.before.svc_lr != irq.predicted.svc_lr
++                    || written.before.irq_sp != irq.predicted.irq_sp
++                    || written.before.irq_lr != irq.predicted.irq_lr {
++                    return Err(Failure::SavedStatus);
++                }
++                let mut expected = written.before;
++                expected.spsr = irq.predicted.spsr;
++                expected.registers[15] = written.source.address.checked_add(4).ok_or(Failure::SavedStatus)?;
++                if written.after != expected { return Err(Failure::SavedStatus); }
++                irq.written = Some(written);
++                Ok(())
++            }
++            PreservationEvidence::Returned(returned) => {
++                let irq = self.irq.ok_or(Failure::ExceptionOrder)?;
++                let written = irq.written.ok_or(Failure::SavedStatus)?;
++                if returned.exception != irq.entry.execution { return Err(Failure::ExceptionOrder); }
++                if returned.source != self.stock.returning {
++                    return Err(Failure::UnsupportedSource);
++                }
++                if returned.before != written.after || returned.written_status != written.after.spsr
++                    || returned.mask != 0xff1fffff { return Err(Failure::ExceptionReturn); }
++                let expected = irq.predicted;
++                if returned.after != expected { return Err(Failure::ExceptionReturn); }
++                self.expected = Some(expected);
++                self.irq = None;
++                Ok(())
++            }
++        }
++    }
++
++    /// The one-use destination check remains separate from retirement evidence.
++    pub fn handoff(&mut self, registers: [u32; 16], cpsr: u32, frame: SavedFrame,
++        context: C) -> Result<(), Failure> {
++        if let Some(first) = self.failure { return Err(first); }
++        if self.completed { return self.reject(Failure::Duplicate); }
++        if self.irq.is_some() { return self.reject(Failure::Incomplete); }
++        let Some(expected) = self.expected else { return self.reject(Failure::MissingRetirement); };
++        if context != self.binding.context { return self.reject(Failure::Context); }
++        if registers != expected.registers || cpsr != expected.cpsr {
++            return self.reject(Failure::Destination);
++        }
++        if self.retired.is_none_or(|retired| retired.frame != frame) {
++            return self.reject(Failure::Frame);
++        }
++        self.completed = true;
++        Ok(())
++    }
++
++    pub fn finish(&mut self) -> Result<(), Failure> {
++        if let Some(first) = self.failure { return Err(first); }
++        if !self.completed { return self.reject(Failure::Incomplete); }
++        Ok(())
++    }
++}
+--- a/crates/emulator-cpu-unicorn/src/ffi.rs
++++ b/crates/emulator-cpu-unicorn/src/ffi.rs
+@@ -1,11 +1,15 @@
+ //! Minimal, version-pinned Unicorn 2.1.4 public C ABI. No Python binding handles.
+ //! Definitions checked against include/unicorn/{unicorn,arm}.h at tag 2.1.4.
+-use fujimod_emulator_cpu::BackingObserver;
++use fujimod_emulator_cpu::{BackingObserver, preservation::Arm32State};
+ use std::ffi::{c_char, c_int, c_void};
+ 
+ pub type Engine = *mut c_void;
+ pub type Context = *mut c_void;
+ pub type Error = c_int;
++pub type PreservationCallback = unsafe extern "C" fn(
++    *mut c_void, u32, u32, u32, u32, u32, *const Arm32State,
++);
++pub const FEATURE_PRESERVATION: u32 = 1 << 8;
+ pub const FEATURE_PAUSE_ACCOUNTING_LAYOUT: u32 = 1 << 3;
+ pub const FEATURE_PARALLEL_TCG: u32 = 1 << 4;
+ pub const FEATURE_ACCESS_REFUSAL: u32 = 1 << 5;
+@@ -54,6 +58,10 @@
+     pub set_parallel_cpus: Option<unsafe extern "C" fn(Engine, bool) -> Error>,
+     /// Test exit requests only at block entry; hook exits stay immediate.
+     pub set_block_exits: Option<unsafe extern "C" fn(Engine, bool) -> Error>,
++    pub preservation: Option<unsafe extern "C" fn(
++        Engine, Option<PreservationCallback>, *mut c_void, bool,
++    ) -> Error>,
++    pub capture_arm32: Option<unsafe extern "C" fn(Engine, *mut Arm32State) -> Error>,
+     // uc_embedder_features bits (0 without the export): 1 = block hook size bit 31
+     // is the Thumb state while a translation filter is installed.
+     // Bit 4: stoppable Thumb instruction entries with synchronized ITSTATE.
+@@ -210,6 +218,11 @@
+         fn uc_embedder_refuse_access(engine: Engine) -> Error;
+         fn uc_embedder_set_parallel_cpus(engine: Engine, enabled: bool) -> Error;
+         fn uc_embedder_set_block_exits(engine: Engine, enabled: bool) -> Error;
++        fn uc_embedder_set_preservation(
++            engine: Engine, callback: Option<PreservationCallback>,
++            data: *mut c_void, exceptions: bool,
++        ) -> Error;
++        fn uc_embedder_capture_arm32(engine: Engine, state: *mut Arm32State) -> Error;
+         fn uc_embedder_accounting(engine: Engine) -> *mut Accounting;
+         fn uc_embedder_exit_counters(engine: Engine) -> *const u64;
+         fn uc_embedder_features() -> u32;
+@@ -227,6 +240,8 @@
+             refuse_access: Some(uc_embedder_refuse_access),
+             set_parallel_cpus: Some(uc_embedder_set_parallel_cpus),
+             set_block_exits: Some(uc_embedder_set_block_exits),
++            preservation: Some(uc_embedder_set_preservation),
++            capture_arm32: Some(uc_embedder_capture_arm32),
+             accounting: Some(uc_embedder_accounting),
+             exit_counters: Some(uc_embedder_exit_counters),
+             features: unsafe { uc_embedder_features() },
+--- a/crates/emulator-cpu-unicorn/src/lib.rs
++++ b/crates/emulator-cpu-unicorn/src/lib.rs
+@@ -129,6 +129,30 @@
+     mmio: RefCell<BTreeMap<u64, MmioMapping>>,
+ }
+ impl Core {
++    /// The owner keeps callback data live until successful removal or engine destruction.
++    pub(crate) unsafe fn preservation_hooks(
++        &self, callback: Option<ffi::PreservationCallback>, data: *mut c_void,
++        exceptions: bool,
++    ) -> Result<(), String> {
++        if self.api.extensions.features & ffi::FEATURE_PRESERVATION == 0 {
++            return Err("CPU backend lacks native preservation evidence".into());
++        }
++        let install = self.api.extensions.preservation
++            .ok_or("CPU backend lacks native preservation registration")?;
++        self.check(unsafe { install(self.raw, callback, data, exceptions) })
++    }
++
++    pub(crate) fn capture_arm32(
++        &self,
++    ) -> Result<fujimod_emulator_cpu::preservation::Arm32State, String> {
++        let capture = self.api.extensions.capture_arm32
++            .ok_or("CPU backend lacks owner-thread A32 capture")?;
++        let mut state = std::mem::MaybeUninit::uninit();
++        self.check(unsafe { capture(self.raw, state.as_mut_ptr()) })?;
++        // The successful native capture initializes every field of the fixed ABI.
++        Ok(unsafe { state.assume_init() })
++    }
++
+     pub(crate) fn set_parallel_cpus(&self, enabled: bool) -> Result<(), String> {
+         let set = self
+             .api
+@@ -802,6 +826,9 @@
+             Hook::TranslationAdmission { .. } => {
+                 return Err("translation admission requires the R-profile backend".into());
+             }
++            Hook::Preservation { .. } => {
++                return Err("preservation evidence requires the R-profile backend".into());
++            }
+             Hook::Instruction { range, .. } => (4, instruction as *const (), range),
+             Hook::Block { range, .. } => (8, block as *const (), range),
+             Hook::Exception { .. } => (1, exception as *const (), HookRange::All),
+@@ -1095,6 +1122,7 @@
+         InstructionDisposition::ObserveAndEndBlock => 2,
+     };
+     action | if decision.observe_block { 4 } else { 0 }
++        | if decision.preservation { 8 } else { 0 }
+ }
+ unsafe extern "C" fn restart(data: *mut c_void, pc: u64) {
+     let hooks = unsafe { &*data.cast::<TranslationHooks>() };
+--- a/crates/emulator-cpu-unicorn/src/rprofile.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile.rs
+@@ -46,7 +46,7 @@
+ 
+ /// Architectural IRQ entry, separated from the controller's selection and
+ /// acknowledge protocol. Entry consumes no guest instruction or virtual tick.
+-pub fn enter_irq(cpu: &dyn Cpu) -> Result<Option<IrqEntry>, String> {
++pub fn enter_irq(cpu: &dyn Cpu, before: Option<&mut dyn FnMut()>) -> Result<Option<IrqEntry>, String> {
+     if cpu.model() != Model::CortexR5F {
+         return Err("R-profile IRQ entry requires a Cortex-R5F processor".into());
+     }
+@@ -83,6 +83,7 @@
+         0x18
+     };
+     let next = (cpsr & !(0x1f | 0x20 | 0x0600fc00 | 0x01000000 | 0x200)) | 0x12 | 0x80 | 0x100;
++    if let Some(before) = before { before(); }
+     cpu.write_register(arm::CPSR, &next.to_le_bytes())?;
+     cpu.write_register(arm::SPSR, &cpsr.to_le_bytes())?;
+     cpu.write_register(arm::CORE[14], &pc.wrapping_add(4).to_le_bytes())?;
+@@ -335,7 +336,7 @@
+             cpu.write_register(arm::PC, &0x1000u32.to_le_bytes())
+                 .unwrap();
+             assert_eq!(
+-                enter_irq(&cpu).unwrap(),
++                enter_irq(&cpu, None).unwrap(),
+                 Some(IrqEntry {
+                     pc: 0x1000,
+                     cpsr,
+@@ -366,7 +367,7 @@
+             .unwrap();
+         cpu.write_register(arm::PC, &0x1000u32.to_le_bytes())
+             .unwrap();
+-        assert_eq!(enter_irq(&cpu).unwrap(), None);
++        assert_eq!(enter_irq(&cpu, None).unwrap(), None);
+         assert_eq!(scalar(&cpu, arm::CPSR), 0xd3);
+         assert_eq!(scalar(&cpu, arm::PC), 0x1000);
+         let control = system_control(&cpu, None);
+@@ -375,7 +376,7 @@
+                 .unwrap();
+             system_control(&cpu, Some(control | (1 << bit)));
+             assert!(
+-                enter_irq(&cpu)
++                enter_irq(&cpu, None)
+                     .unwrap_err()
+                     .contains("exception entry is not implemented")
+             );
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+@@ -23,6 +23,7 @@
+ mod mutation;
+ mod observers;
+ mod pmu;
++mod preservation;
+ mod run;
+ mod snapshot;
+ mod tcm;
+@@ -32,6 +33,8 @@
+ mod tcm_tests;
+ #[cfg(test)]
+ mod tests;
++#[cfg(test)]
++mod preservation_tests;
+ 
+ #[derive(Clone, Copy, Default, serde::Deserialize)]
+ #[serde(deny_unknown_fields)]
+@@ -105,6 +108,7 @@
+     entry_serial: Cell<Option<InstructionEntryId>>,
+     refusal: RefCell<Option<ExecutionRefusal>>,
+     mutation: mutation::Admission,
++    preservation: preservation::Capture,
+ }
+ 
+ pub struct Core {
+@@ -211,6 +215,7 @@
+             entry_serial: Cell::new(None),
+             refusal: RefCell::new(None),
+             mutation: mutation::Admission::default(),
++            preservation: preservation::Capture::default(),
+         });
+         e.id.set(e.memory.register(Rc::downgrade(&e)));
+         unsafe {
+@@ -495,6 +500,7 @@
+                 InstructionDisposition::Execute
+             },
+             observe_block: watch || !self.observer_index.borrow().blocks.at(address).is_empty(),
++            preservation: !thumb && !self.observer_index.borrow().preservation.at(address).is_empty(),
+         })
+     }
+     fn block(&self, block: Block) -> Result<(), String> {
+@@ -519,6 +525,10 @@
+                 }
+             }
+         }
++        if !self.observer_index.borrow().preservation.is_empty()
++            && self.restarted.get().is_none() && self.failure.borrow().is_none() {
++            self.preservation.publish(self);
++        }
+         Ok(())
+     }
+     fn enter_block(&self, block: Block) -> Result<(), String> {
+@@ -862,6 +872,7 @@
+             Translation {
+                 instruction: InstructionDisposition::ObserveAndEndBlock,
+                 observe_block: true,
++                preservation: false,
+             }
+         }
+     }
+@@ -871,6 +882,10 @@
+     e.guarded(|| {
+         // The instruction has not completed; its isolated retry will publish.
+         e.pending_stores.borrow_mut().clear();
++        if !e.observer_index.borrow().preservation.is_empty() {
++            e.preservation.invalidate(e,
++                fujimod_emulator_cpu::preservation::EvidenceFailure::Restarted);
++        }
+         // Interactive peers may already have synchronized against the full
+         // coarse block admission. Retaining its tail keeps that published
+         // progress monotonic while the pending store is retried in isolation.
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
+@@ -46,6 +46,10 @@
+     }
+     fn set_execution_policy(&self, policy: ExecutionPolicy) -> Result<(), String> {
+         let e = &self.execution;
++        if e.parallel_tcg && policy != ExecutionPolicy::Exact
++            && !e.observer_index.borrow().preservation.is_empty() {
++            return Err("worker preservation evidence requires serialized exact execution".into());
++        }
+         if e.memory.run_reserved(e.id.get()) {
+             return Err("execution policy requires a stopped processor".into());
+         }
+@@ -111,9 +115,17 @@
+         self.execution.cpu.read_register(r, bytes)
+     }
+     fn write_register(&self, r: Register, bytes: &[u8]) -> Result<(), String> {
++        if self.execution.preservation.dispatching() {
++            return Err("register mutation during preservation dispatch is refused".into());
++        }
++        self.execution.preservation.expire_lineage(&self.execution,
++            fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
+         self.execution.cpu.write_register(r, bytes)
+     }
+     fn coprocessor(&self, r: arm::Coprocessor, value: Option<u64>) -> Result<u64, String> {
++        if self.execution.preservation.dispatching() {
++            return Err("coprocessor access during preservation dispatch is refused".into());
++        }
+         if r.cp == 15 && r.opc1 == 0 && r.crn == 9 && r.crm == 1 {
+             if r.wide || r.opc2 > 1 || r.secure > 1 {
+                 return Err("unmodeled R-profile TCM selector".into());
+@@ -454,7 +466,7 @@
+         )
+     }
+     fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
+-        self.execution.cpu.invalidate_code(range)
++        self.execution.invalidate_code(range)
+     }
+     fn execution_refused(&self) -> bool {
+         self.execution.refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused)
+@@ -485,7 +497,7 @@
+     fn run(&self, request: Run) -> Result<Exit, ExecutionError> {
+         let e = &self.execution;
+         let _guest_tick_scope = crate::rprofile::GuestTickScope::new();
+-        if e.active.get() {
++        if e.active.get() || e.preservation.dispatching() {
+             return Err("nested R-profile execution is refused".into());
+         }
+         let _owner_barrier_run = e.owner_barrier_run_guard();
+@@ -509,10 +521,15 @@
+                     .into(),
+             );
+         }
++        let mut evidence_run = (!e.observer_index.borrow().preservation.is_empty())
++            .then(|| preservation::RunValidity::new(e));
+         let _run = e
+             .memory
+             .reserve_run(e.id.get(), e.policy.get(), e.parallel_tcg)?;
+         e.memory.flush()?;
++        if !e.observer_index.borrow().preservation.is_empty() {
++            e.preservation.admit(e, request.begin);
++        }
+         e.cap.set(
+             request
+                 .instructions
+@@ -531,9 +548,14 @@
+         if e.irq.get() {
+             // Entry must use the requested architectural PC, including Thumb.
+             e.set(arm::PC, begin as u32)?;
+-            if let Some(entry) = crate::rprofile::enter_irq(&*e.cpu)? {
++            let capture = !e.observer_index.borrow().preservation.is_empty();
++            let mut before_irq = || e.preservation.before_irq(e);
++            let before: Option<&mut dyn FnMut()> =
++                if capture { Some(&mut before_irq) } else { None };
++            if let Some(entry) = crate::rprofile::enter_irq(&*e.cpu, before)? {
+                 e.clear_exclusive()?;
+                 begin = entry.vector as u64;
++                if capture { e.preservation.after_irq(e, entry.vector); }
+                 e.observe_exception(arm::Exception::Irq);
+             }
+         }
+@@ -550,6 +572,7 @@
+         if let Some(clock) = e.clock.get() {
+             e.clock.set(Some(clock.after(e.count.get())?));
+         }
++        if let Some(validity) = &mut evidence_run { validity.success = result.is_ok(); }
+         result
+     }
+ 
+@@ -579,6 +602,10 @@
+                     .ok_or("missing observed entry")?,
+             );
+         }
++        if !e.observer_index.borrow().preservation.is_empty() {
++            e.preservation.paused(e.entry.get().filter(|entry|
++                !e.observer_index.borrow().preservation.at(entry.address).is_empty()));
++        }
+         self.stop()
+     }
+     fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
+@@ -609,14 +636,23 @@
+         self.capture(previous)
+     }
+     fn restore(&self, snapshot: &dyn Snapshot) -> Result<(), String> {
+-        self.restore_captured(snapshot)
++        let e = &self.execution;
++        if e.preservation.dispatching() {
++            return Err("context restore during preservation dispatch is refused".into());
++        }
++        let result = self.restore_captured(snapshot);
++        if result.is_ok() && !e.observer_index.borrow().preservation.is_empty() {
++            e.preservation.invalidate(e,
++                fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
++        }
++        result
+     }
+     fn import_snapshot(&self, bytes: &[u8]) -> Result<Box<dyn Snapshot>, String> {
+         self.import_captured(bytes)
+     }
+     unsafe fn install_hook(&self, hook: Hook) -> Result<HookId, String> {
+         let e = &self.execution;
+-        if e.mutation.dispatching() {
++        if e.mutation.dispatching() || e.preservation.dispatching() {
+             return Err("cannot install a hook during mutation dispatch".into());
+         }
+         e.observer_index
+@@ -639,6 +675,25 @@
+             .checked_add(1)
+             .ok_or("R-profile hook identity overflow")?;
+         let native = match hook {
++            Hook::Preservation { range, .. } => {
++                let HookRange::Inclusive { begin, end } = range else {
++                    return Err("preservation evidence requires a finite instruction range".into());
++                };
++                if begin % 4 != 0 || begin > end || end > u32::MAX as u64
++                    || e.parallel_tcg && e.policy.get() != ExecutionPolicy::Exact
++                    || self.model() != Model::CortexR5F
++                    || e.memory.run_reserved(e.id.get()) {
++                    return Err("unsupported preservation range, processor or execution state".into());
++                }
++                if e.observer_index.borrow().preservation.is_empty() {
++                    unsafe { e.cpu.preservation_hooks(
++                        Some(preservation::native), Rc::as_ptr(e).cast_mut().cast(), true,
++                    )?; }
++                } else {
++                    self.retranslate(range)?;
++                }
++                None
++            }
+             Hook::Instruction { range, .. } | Hook::Block { range, .. } | Hook::TranslationAdmission { range, .. } => {
+                 self.retranslate(range)?;
+                 None
+@@ -682,7 +737,7 @@
+     }
+     fn remove_hook(&self, hook: HookId) -> Result<(), String> {
+         let e = &self.execution;
+-        if e.mutation.dispatching() {
++        if e.mutation.dispatching() || e.preservation.dispatching() {
+             return Err("cannot remove a hook during mutation dispatch".into());
+         }
+         e.observer_index
+@@ -695,6 +750,18 @@
+         let observers = e.observers.borrow();
+         let observer = observers.get(&hook.key).ok_or("unknown R-profile hook")?;
+         match observer.hook {
++            Hook::Preservation { range, .. } => {
++                let last = observers.values()
++                    .filter(|observer| matches!(observer.hook, Hook::Preservation { .. }))
++                    .count() == 1;
++                e.preservation.invalidate(e,
++                    fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
++                if last {
++                    unsafe { e.cpu.preservation_hooks(None, std::ptr::null_mut(), false)?; }
++                } else {
++                    self.retranslate(range)?;
++                }
++            }
+             Hook::Instruction { range, .. } | Hook::Block { range, .. } | Hook::TranslationAdmission { range, .. } => {
+                 self.retranslate(range)?;
+             }
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
+@@ -92,6 +92,7 @@
+ #[derive(Default)]
+ pub(super) struct Index {
+     pub instructions: Ranges,
++    pub preservation: Ranges,
+     pub blocks: Ranges,
+     pub admissions: Ranges,
+     pub stores: Ranges,
+@@ -108,6 +109,7 @@
+         match hook {
+             Hook::Mutation { .. } => self.mutations.push((key, hook)),
+             Hook::Instruction { range, .. } => self.instructions.insert(key, hook, range),
++            Hook::Preservation { range, .. } => self.preservation.insert(key, hook, range),
+             Hook::TranslationAdmission { range, .. } => self.admissions.insert(key, hook, range),
+             Hook::Block { range, .. } => self.blocks.insert(key, hook, range),
+             Hook::CompletedStore { range, .. } => self.stores.insert(key, hook, range),
+@@ -132,6 +134,7 @@
+         match hook {
+             Hook::Mutation { .. } => self.mutations.retain(|(id, _)| *id != key),
+             Hook::Instruction { range, .. } => self.instructions.remove(key, range),
++            Hook::Preservation { range, .. } => self.preservation.remove(key, range),
+             Hook::TranslationAdmission { range, .. } => self.admissions.remove(key, range),
+             Hook::Block { range, .. } => self.blocks.remove(key, range),
+             Hook::CompletedStore { range, .. } => self.stores.remove(key, range),
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
+@@ -32,6 +32,22 @@
+                 e.pending_stores.borrow_mut().clear();
+                 settlement
+             };
++            if !e.observer_index.borrow().preservation.is_empty() {
++                use fujimod_emulator_cpu::preservation::EvidenceFailure;
++                let reason = if result.is_err() || settlement.is_err() || e.exception.get().is_some()
++                    || e.failure.borrow().is_some() {
++                    EvidenceFailure::Faulted
++                } else if e.restarted.get().is_some() {
++                    EvidenceFailure::Restarted
++                } else {
++                    EvidenceFailure::MissingRetirement
++                };
++                if matches!(reason, EvidenceFailure::Faulted | EvidenceFailure::Restarted) {
++                    e.preservation.invalidate(e, reason);
++                } else {
++                    e.preservation.finish_run(e, reason);
++                }
++            }
+             e.active.set(false);
+             e.memory.end();
+             settlement?;
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
+@@ -65,6 +65,9 @@
+         event: CpuMutation,
+         apply: impl FnOnce() -> Result<T, String>,
+     ) -> Result<T, String> {
++        if self.preservation.dispatching() {
++            return Err("CPU mutation during preservation dispatch is refused".into());
++        }
+         let admission = &self.mutation;
+         if admission.dispatching.get() {
+             return Err(admission.refuse(Refusal::Reentered));
+@@ -93,6 +96,8 @@
+                 }
+             }
+         }
++        self.preservation.expire_lineage(self,
++            fujimod_emulator_cpu::preservation::EvidenceFailure::SourceChanged);
+         let result = apply();
+         match admission.refusal.get() {
+             Some(first) => Err(first.error()),
+--- /dev/null
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/preservation.rs
+@@ -0,0 +1,355 @@
++//! Native post-effect capture. This module never changes architectural execution.
++use super::*;
++use fujimod_emulator_cpu::preservation::*;
++
++#[derive(Clone, Copy)]
++struct Pending {
++    id: EvidenceId,
++    source: ExecutionSource,
++    before: Arm32State,
++    observation: Option<InstructionEntry>,
++    resumed_from: Option<InstructionEntry>,
++}
++
++#[derive(Default)]
++pub(super) struct Capture {
++    serial: Cell<Option<EvidenceId>>,
++    instruction: Cell<Option<Pending>>,
++    status: Cell<Option<Pending>>,
++    returning: Cell<Option<Pending>>,
++    entering: Cell<Option<(EvidenceId, Arm32State)>>,
++    exceptions: RefCell<[Option<EvidenceId>; 8]>,
++    depth: Cell<usize>,
++    dispatching: Cell<bool>,
++    completed: RefCell<[Option<InstructionRetirement>; 32]>,
++    completed_len: Cell<usize>,
++    paused: Cell<Option<InstructionEntry>>,
++    resuming: Cell<Option<InstructionEntry>>,
++}
++pub(super) struct RunValidity<'a> {
++    execution: &'a Execution,
++    pub(super) success: bool,
++}
++impl<'a> RunValidity<'a> {
++    pub(super) fn new(execution: &'a Execution) -> Self { Self { execution, success: false } }
++}
++impl Drop for RunValidity<'_> {
++    fn drop(&mut self) {
++        if !self.success {
++            self.execution.preservation.invalidate(self.execution, EvidenceFailure::Faulted);
++        }
++    }
++}
++
++
++struct Dispatch<'a>(&'a Cell<bool>);
++impl Drop for Dispatch<'_> {
++    fn drop(&mut self) { self.0.set(false); }
++}
++
++impl Capture {
++    pub(super) fn dispatching(&self) -> bool { self.dispatching.get() }
++    pub(super) fn paused(&self, entry: Option<InstructionEntry>) {
++        self.resuming.take();
++        self.paused.set(entry);
++    }
++
++    pub(super) fn admit(&self, execution: &Execution, begin: u64) {
++        let paused = self.paused.take();
++        self.resuming.set(paused.filter(|entry|
++            entry.address == (begin & !1)
++                && (begin & 1 != 0) == (entry.pstate & 32 != 0)
++                && execution.scalar(arm::CPSR).ok() == Some(entry.pstate)));
++        if paused.is_some() && self.resuming.get().is_none() {
++            execution.evidence_failed(paused.unwrap().address, EvidenceFailure::SourceChanged);
++        }
++    }
++
++    pub(super) fn expire_lineage(&self, execution: &Execution, reason: EvidenceFailure) {
++        let paused = self.paused.take().or(self.resuming.take());
++        if let Some(entry) = paused { execution.evidence_failed(entry.address, reason); }
++    }
++
++    fn code_invalidated(&self, execution: &Execution, range: Option<(u64, u64)>) {
++        if self.paused.get().or(self.resuming.get()).is_some_and(|entry|
++            range.is_none_or(|(begin, end)| entry.address < end
++                && begin < entry.address.saturating_add(u64::from(entry.bytes)))) {
++            self.expire_lineage(execution, EvidenceFailure::SourceChanged);
++        }
++    }
++
++    fn next(&self, execution: &Execution) -> Option<EvidenceId> {
++        let id = EvidenceId::next(execution.cpu.identity(), self.serial.get());
++        if let Some(id) = id { self.serial.set(Some(id)); }
++        else { execution.evidence_failed(0, EvidenceFailure::IdentityExhausted); }
++        id
++    }
++
++    pub(super) fn invalidate(&self, execution: &Execution, reason: EvidenceFailure) {
++        self.expire_lineage(execution, reason);
++        self.finish_run(execution, reason);
++        let entering = self.entering.take().is_some();
++        let depth = self.depth.replace(0);
++        if entering || depth != 0 { execution.evidence_failed(0, reason); }
++        self.exceptions.borrow_mut().fill(None);
++    }
++
++    pub(super) fn finish_run(&self, execution: &Execution, reason: EvidenceFailure) {
++        for pending in [self.instruction.take(), self.status.take(), self.returning.take()]
++            .into_iter().flatten() {
++            execution.evidence_failed(u64::from(pending.source.address), reason);
++        }
++        let count = self.completed_len.replace(0);
++        for index in 0..count {
++            if let Some(retired) = self.completed.borrow_mut()[index].take() {
++                execution.evidence_failed(u64::from(retired.source.address), reason);
++            }
++        }
++        if self.resuming.get().is_some() {
++            self.expire_lineage(execution, reason);
++        }
++    }
++
++    pub(super) fn publish(&self, execution: &Execution) {
++        let count = self.completed_len.replace(0);
++        for index in 0..count {
++            let retired = self.completed.borrow_mut()[index].take();
++            if let Some(retired) = retired {
++                execution.emit_evidence(PreservationEvidence::Retired(retired));
++            }
++        }
++    }
++
++    fn pending(&self, execution: &Execution, address: u32, word: u32, before: Arm32State)
++        -> Option<Pending>
++    {
++        let source = match execution.evidence_source(address, word) {
++            Some(source) => source,
++            None => {
++                execution.evidence_failed(u64::from(address), EvidenceFailure::UnresolvedMemory);
++                return None;
++            }
++        };
++        let observation = execution.entry.get().filter(|entry| {
++            entry.address == u64::from(address)
++                && entry.physical == Some(source.physical)
++                && entry.bytes == 4
++                && entry.pstate == before.cpsr
++                && entry.tcm == source.tcm
++        });
++        let resumed_from = self.resuming.take().filter(|entry| {
++            entry.address == u64::from(address) && entry.physical == Some(source.physical)
++                && entry.bytes == 4 && entry.tcm == source.tcm && entry.pstate == before.cpsr
++        });
++        Some(Pending { id: self.next(execution)?, source, before, observation, resumed_from })
++    }
++
++    fn top(&self) -> Option<EvidenceId> {
++        self.depth.get().checked_sub(1).and_then(|index| self.exceptions.borrow()[index])
++    }
++
++    pub(super) fn before_irq(&self, execution: &Execution) {
++        if execution.observer_index.borrow().preservation.is_empty() { return; }
++        self.expire_lineage(execution, EvidenceFailure::MissingRetirement);
++        let Some(id) = self.next(execution) else { return; };
++        match execution.cpu.capture_arm32() {
++            Ok(before) => {
++                if self.entering.replace(Some((id, before))).is_some() {
++                    execution.evidence_failed(u64::from(before.registers[15]), EvidenceFailure::Duplicate);
++                }
++            }
++            Err(_) => execution.evidence_failed(0, EvidenceFailure::UnsupportedProcessor),
++        }
++    }
++
++    pub(super) fn after_irq(&self, execution: &Execution, vector: u32) {
++        let Some((id, before)) = self.entering.take() else { return; };
++        let depth = self.depth.get();
++        if depth == self.exceptions.borrow().len() {
++            execution.evidence_failed(u64::from(vector), EvidenceFailure::ExceptionDepth);
++            return;
++        }
++        match execution.cpu.capture_arm32() {
++            Ok(mut after) => {
++                after.registers[15] = vector;
++                self.exceptions.borrow_mut()[depth] = Some(id);
++                self.depth.set(depth + 1);
++                execution.emit_evidence(PreservationEvidence::Entered(ExceptionEntry {
++                    execution: id, before, after, vector,
++                }));
++            }
++            Err(_) => execution.evidence_failed(u64::from(vector), EvidenceFailure::UnsupportedProcessor),
++        }
++    }
++
++    fn native(&self, execution: &Execution, phase: u32, address: u32, word: u32,
++              status: u32, mask: u32, state: Arm32State) {
++        match phase {
++            0 | 2 | 4 => {
++                let Some(pending) = self.pending(execution, address, word, state) else { return; };
++                let slot = match phase { 0 => &self.instruction, 2 => &self.status, _ => &self.returning };
++                if slot.replace(Some(pending)).is_some() {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::MissingRetirement);
++                }
++            }
++            1 => {
++                let Some(pending) = self.instruction.take() else {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::MissingEntry);
++                    return;
++                };
++                if pending.source.address != address || pending.source.word != word
++                    || execution.evidence_source(address, word) != Some(pending.source) {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::SourceChanged);
++                    return;
++                }
++                if word != 0xe92d4ff0 {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::UnsupportedInstruction);
++                    return;
++                }
++                if pending.before.registers[13].checked_sub(36) != Some(state.registers[13]) {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::IncompleteFrame);
++                    return;
++                }
++                let Some(frame) = execution.evidence_frame(state.registers[13], state.cpsr) else {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::IncompleteFrame);
++                    return;
++                };
++                let index = self.completed_len.get();
++                if index == 32 {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::EvidenceCapacity);
++                    return;
++                }
++                self.completed.borrow_mut()[index] = Some(InstructionRetirement {
++                    execution: pending.id, source: pending.source, before: pending.before,
++                    observation: pending.observation,
++                    resumed_from: pending.resumed_from,
++                    after: state, frame,
++                });
++                self.completed_len.set(index + 1);
++            }
++            3 => {
++                let Some(pending) = self.status.take() else {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::MissingEntry);
++                    return;
++                };
++                let Some(exception) = self.top() else {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::UnpairedException);
++                    return;
++                };
++                if pending.source.address != address || pending.source.word != word
++                    || execution.evidence_source(address, word) != Some(pending.source) {
++                    execution.evidence_failed(u64::from(address), EvidenceFailure::SourceChanged);
++                    return;
++                }
++                execution.emit_evidence(PreservationEvidence::SavedStatus(SavedStatusWrite {
++                    exception, source: pending.source,
++                    before: pending.before, after: state,
++                }));
++            }
++            5 => {
++                let Some(pending) = self.returning.take() else {
++                    execution.evidence_failed(u64::from(state.registers[15]), EvidenceFailure::MissingEntry);
++                    return;
++                };
++                let Some(exception) = self.top() else {
++                    execution.evidence_failed(u64::from(pending.source.address), EvidenceFailure::UnpairedException);
++                    return;
++                };
++                if execution.evidence_source(pending.source.address, pending.source.word) != Some(pending.source) {
++                    execution.evidence_failed(u64::from(pending.source.address), EvidenceFailure::SourceChanged);
++                    return;
++                }
++                let depth = self.depth.get() - 1;
++                self.exceptions.borrow_mut()[depth] = None;
++                self.depth.set(depth);
++                execution.emit_evidence(PreservationEvidence::Returned(ExceptionReturn {
++                    exception, source: pending.source, before: pending.before, after: state,
++                    written_status: status, mask,
++                }));
++            }
++            _ => execution.evidence_failed(u64::from(address), EvidenceFailure::UnsupportedInstruction),
++        }
++    }
++}
++
++impl Execution {
++    pub(in crate::rprofile) fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
++        if self.preservation.dispatching() {
++            return Err("code invalidation during preservation dispatch is refused".into());
++        }
++        self.preservation.code_invalidated(self, range);
++        self.cpu.invalidate_code(range)
++    }
++
++    fn evidence_source(&self, address: u32, word: u32) -> Option<ExecutionSource> {
++        let address64 = u64::from(address);
++        if self.overlaps_tcm(address64, 4) { return None; }
++        let maps = self.maps.borrow();
++        let map = maps.iter().find(|map| map.address <= address64
++            && address64.checked_add(4).is_some_and(|end| end <= map.end())
++            && map.permissions & 4 != 0)?;
++        Some(ExecutionSource {
++            address, physical: map.physical?.checked_add(address64 - map.address)?, word,
++            tcm: std::array::from_fn(|bank| self.tcm[bank].extent()
++                .map(|(address, bytes)| InstructionTcm { address, bytes })),
++        })
++    }
++
++    fn evidence_frame(&self, address: u32, cpsr: u32) -> Option<SavedFrame> {
++        let address64 = u64::from(address);
++        if address % 4 != 0 || self.overlaps_tcm(address64, 36) { return None; }
++        let maps = self.maps.borrow();
++        let map = maps.iter().find(|map| map.address <= address64
++            && address64.checked_add(36).is_some_and(|end| end <= map.end())
++            && map.permissions & 1 != 0)?;
++        let physical = map.physical?.checked_add(address64 - map.address)?;
++        let offset = usize::try_from(address64 - map.address).ok()?;
++        let pointer = map.pointer.checked_add(offset)? as *const u8;
++        // The run owns this RAM mapping; no CPU API, device or observer is reentered.
++        let bytes = unsafe { std::slice::from_raw_parts(pointer, 36) };
++        let words = std::array::from_fn(|index| {
++            let value = <[u8; 4]>::try_from(&bytes[index * 4..index * 4 + 4]).unwrap();
++            if cpsr & (1 << 9) == 0 { u32::from_le_bytes(value) } else { u32::from_be_bytes(value) }
++        });
++        Some(SavedFrame { address, physical, words })
++    }
++
++    fn evidence_failed(&self, address: u64, reason: EvidenceFailure) {
++        self.emit_evidence(PreservationEvidence::Refused { address, reason });
++    }
++
++    fn emit_evidence(&self, event: PreservationEvidence) {
++        self.preservation.dispatching.set(true);
++        let _dispatch = Dispatch(&self.preservation.dispatching);
++        let observers = self.observers.borrow();
++        for observer in observers.values() {
++            let Hook::Preservation { callback, data, range } = observer.hook else { continue; };
++            if let PreservationEvidence::Retired(retired) = event {
++                let address = u64::from(retired.source.address);
++                let selected = match range {
++                    HookRange::All => false,
++                    HookRange::Inclusive { begin, end } => begin <= address && address <= end,
++                };
++                if !selected { continue; }
++            }
++            unsafe { callback(event, data) };
++        }
++    }
++}
++
++pub(super) unsafe extern "C" fn native(
++    data: *mut c_void, phase: u32, address: u32, word: u32, status: u32, mask: u32,
++    state: *const Arm32State,
++) {
++    let execution = unsafe { &*data.cast::<Execution>() };
++    let captured = catch_unwind(AssertUnwindSafe(|| {
++        if let Some(state) = unsafe { state.as_ref() } {
++            execution.preservation.native(execution, phase, address, word, status, mask, *state);
++        } else {
++            execution.evidence_failed(u64::from(address), EvidenceFailure::UnresolvedMemory);
++        }
++    }));
++    if captured.is_err() {
++        execution.fail("preservation observer panicked".into());
++    }
++}
+--- /dev/null
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/preservation_tests.rs
+@@ -0,0 +1,142 @@
++use super::*;
++use super::tests::{processor_with_options, set, words, run};
++use fujimod_emulator_cpu::preservation::{shadow, *};
++
++struct Capture {
++    cpu: *const Core,
++    entry: Cell<Option<InstructionEntry>>,
++    events: RefCell<Vec<PreservationEvidence>>,
++}
++unsafe fn entered(_: u64, _: u32, data: *mut c_void) {
++    let capture = unsafe { &*data.cast::<Capture>() };
++    capture.entry.set(unsafe { &*capture.cpu }.instruction_entry());
++}
++unsafe fn observed(event: PreservationEvidence, data: *mut c_void) {
++    let capture = unsafe { &*data.cast::<Capture>() };
++    let mut events = capture.events.borrow_mut();
++    assert!(events.len() < events.capacity(), "bounded native evidence fixture overflow");
++    events.push(event);
++}
++
++struct Trace {
++    binding: shadow::Binding<(u64, u64)>,
++    stock: shadow::StockReturn,
++    events: Vec<PreservationEvidence>,
++    after: Arm32State,
++    frame: SavedFrame,
++    fingerprint: serde_json::Value,
++    ram: Vec<u8>,
++}
++
++// Synthetic ARMv7-A/R instruction fixture. These standard encodings construct
++// the stock-shaped IRQ/SVC bank transfer and fc-only restore; no private camera
++// image, ISR callbacks, timers or firmware ownership is represented here.
++fn execute(enabled: bool) -> Trace {
++    let backing = Backing::aligned_zeros(0x8000, 4096).unwrap();
++    let cpu = processor_with_options(&Memory::default(), Options::default());
++    unsafe { cpu.map_physical(0, 0, 0x8000, 7, NonNull::new(backing.as_ptr()).unwrap()) }.unwrap();
++    words(&cpu, 0x18, &[0xea0007f8]); // b 0x2000
++    words(&cpu, 0x1000, &[0xe92d4ff0, 0xe320f003]);
++    words(&cpu, 0x2000, &[
++        0xe3a0d0d3, 0xe129f00d, 0xe92dd00f, 0xe3a000d2, 0xe129f000,
++        0xe24e0004, 0xe14f1000, 0xe2012040, 0xe3822093, 0xe129f002,
++        0xe58d0018, 0xe92d0002, 0xe8bd0002, 0xe10f2000, 0xe2022040,
++        0xe3c11040, 0xe1811002, 0xe169f001, 0xe8fdd00f,
++    ]);
++    set(&cpu, arm::CPSR, 0x13);
++    set(&cpu, arm::SPSR, 0x53);
++    set(&cpu, arm::CPSR, 0x12);
++    set(&cpu, arm::CORE[13], 0xd3);
++    set(&cpu, arm::SPSR, 0x53);
++    set(&cpu, arm::CPSR, 0x80000153);
++    for index in 0..13 { set(&cpu, arm::CORE[index], 0x10000000 + index as u32); }
++    set(&cpu, arm::CORE[13], 0x7000);
++    set(&cpu, arm::CORE[14], 0x1800);
++    set(&cpu, arm::PC, 0x1000);
++    cpu.set_execution_policy(ExecutionPolicy::Exact).unwrap();
++    cpu.set_guest_clock(Clock { now: 100, phase: 7,
++        ratio: timeline::Ratio::new(24, 1).unwrap() }).unwrap();
++    let before = cpu.execution.cpu.capture_arm32().unwrap();
++    let capture = Capture { cpu: &cpu, entry: Cell::new(None), events: RefCell::new(Vec::with_capacity(16)) };
++    let data = (&capture as *const Capture).cast_mut().cast();
++    let range = HookRange::Inclusive { begin: 0x1000, end: 0x1000 };
++    let entry_hook = unsafe { cpu.install_hook(Hook::Instruction { callback: entered, data, range }) }.unwrap();
++    let evidence_hook = enabled.then(|| unsafe {
++        cpu.install_hook(Hook::Preservation { callback: observed, data, range })
++    }.unwrap());
++    run(&cpu, 0x1000, 1).unwrap();
++    let entry = capture.entry.get().unwrap();
++    cpu.set_interrupt(Interrupt::Irq, true).unwrap();
++    cpu.run(Run { begin: 0x1004, until: Some(0x1004), watchdog_us: 0, instructions: Some(100) }).unwrap();
++    cpu.set_interrupt(Interrupt::Irq, false).unwrap();
++    let after = cpu.execution.cpu.capture_arm32().unwrap();
++    let mut saved = [0; 36];
++    cpu.read_memory(0x6fdc, &mut saved).unwrap();
++    let frame = SavedFrame { address: 0x6fdc, physical: 0x6fdc,
++        words: std::array::from_fn(|index| u32::from_le_bytes(
++            saved[index * 4..index * 4 + 4].try_into().unwrap())) };
++    let source = |address, word| ExecutionSource { address, physical: address as u64, word, tcm: [None; 2] };
++    let stock = shadow::StockReturn { vector: 0x18,
++        status: source(0x2044, 0xe169f001), returning: source(0x2048, 0xe8fdd00f) };
++    let binding = shadow::Binding { entry, registers: before.registers, cpsr: before.cpsr,
++        context: (1, 1) };
++    let fingerprint = cpu.fingerprint().unwrap();
++    let mut ram = vec![0; 0x8000];
++    cpu.read_memory(0, &mut ram).unwrap();
++    if let Some(hook) = evidence_hook { cpu.remove_hook(hook).unwrap(); }
++    cpu.remove_hook(entry_hook).unwrap();
++    Trace { binding, stock, events: capture.events.into_inner(), after, frame, fingerprint, ram }
++}
++
++fn check(trace: &Trace, events: &[PreservationEvidence], after: Arm32State, frame: SavedFrame)
++    -> Result<(), shadow::Failure> {
++    let mut shadow = shadow::Shadow::new(trace.binding, trace.stock)?;
++    for event in events { shadow.observe(*event)?; }
++    shadow.handoff(after.registers, after.cpsr, frame, trace.binding.context)?;
++    shadow.finish()
++}
++
++#[test]
++fn native_push_irq_retirement_and_late_handoff_preserve_state_without_masking_a() {
++    let trace = execute(true);
++    assert_eq!(trace.events.len(), 4);
++    assert_eq!(trace.after.registers[15], 0x1004);
++    assert_eq!(trace.binding.cpsr, 0x80000153);
++    assert_eq!(trace.after.cpsr, 0x80000053);
++    assert_eq!(check(&trace, &trace.events, trace.after, trace.frame), Ok(()));
++    let inactive = execute(false);
++    assert!(inactive.events.is_empty());
++    assert_eq!(trace.fingerprint, inactive.fingerprint);
++    assert_eq!(trace.ram, inactive.ram);
++}
++
++#[test]
++fn retirement_exception_and_late_corruption_are_sticky_refusals() {
++    let trace = execute(true);
++    let mut after = trace.after;
++    after.cpsr ^= 0x100;
++    assert_eq!(check(&trace, &trace.events, after, trace.frame), Err(shadow::Failure::Destination));
++    let mut frame = trace.frame;
++    frame.words[8] ^= 4;
++    assert_eq!(check(&trace, &trace.events, trace.after, frame), Err(shadow::Failure::Frame));
++    assert_eq!(check(&trace, &[], trace.after, trace.frame), Err(shadow::Failure::MissingRetirement));
++    assert_eq!(check(&trace, &trace.events[..2], trace.after, trace.frame), Err(shadow::Failure::Incomplete));
++    let mut events = trace.events.clone();
++    events.insert(1, events[0]);
++    assert_eq!(check(&trace, &events, trace.after, trace.frame), Err(shadow::Failure::Duplicate));
++    for bit in [0x100, 0x80000000, 0x40] {
++        let mut events = trace.events.clone();
++        let PreservationEvidence::SavedStatus(write) = &mut events[2] else { panic!("missing native status write") };
++        write.before.registers[1] ^= bit;
++        assert_eq!(check(&trace, &events, trace.after, trace.frame), Err(shadow::Failure::SavedStatus));
++    }
++    let mut events = trace.events.clone();
++    let PreservationEvidence::Entered(entry) = &mut events[1] else { panic!("missing native IRQ") };
++    entry.before.cpsr ^= 0x100;
++    assert_eq!(check(&trace, &events, trace.after, trace.frame), Err(shadow::Failure::ExceptionEntry));
++    let mut shadow = shadow::Shadow::new(trace.binding, trace.stock).unwrap();
++    assert_eq!(shadow.observe(PreservationEvidence::Refused { address: 0x1000, reason: EvidenceFailure::Faulted }),
++        Err(shadow::Failure::Backend(EvidenceFailure::Faulted)));
++    assert_eq!(shadow.observe(trace.events[0]), Err(shadow::Failure::Backend(EvidenceFailure::Faulted)));
++    assert_eq!(shadow.finish(), Err(shadow::Failure::Backend(EvidenceFailure::Faulted)));
++}
+--- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
+@@ -68,6 +68,7 @@
+     >,
+     run_result: RefCell<Option<Result<Exit, ExecutionError>>>,
+     callback_depth: Cell<u32>,
++    preservation_dispatching: Cell<bool>,
+     deferred_instruction_limit: Cell<Option<u64>>,
+     _owner: PhantomData<Rc<()>>,
+ }
+@@ -152,6 +153,7 @@
+                 pending_callback: RefCell::new(None),
+                 run_result: RefCell::new(None),
+                 callback_depth: Cell::new(0),
++                preservation_dispatching: Cell::new(false),
+                 deferred_instruction_limit: Cell::new(None),
+                 _owner: PhantomData,
+             })
+@@ -166,6 +168,10 @@
+ enum Message {
+     Request {
+         operation: Operation,
++        reply: Sender<RpcEvent>,
++    },
++    ExportSnapshot {
++        token: u64,
+         reply: Sender<Result<Value, String>>,
+     },
+     Run {
+@@ -183,6 +189,11 @@
+     Shutdown,
+ }
+ 
++enum RpcEvent {
++    Preservation { callback: usize, evidence: preservation::PreservationEvidence },
++    Complete(Result<Value, String>),
++}
++
+ enum Event {
+     Callback {
+         id: u64,
+@@ -218,6 +229,7 @@
+     },
+     Block(Block),
+     TranslationAdmission { address: u64, word: u32, thumb: bool },
++    Preservation(preservation::PreservationEvidence),
+     Exception(arm::Exception),
+     Synchronization,
+     Memory {
+@@ -242,6 +254,7 @@
+     Instruction,
+     TranslationAdmission,
+     Block,
++    Preservation,
+     Exception,
+     Synchronization,
+     Memory,
+@@ -256,6 +269,7 @@
+         Self::Instruction,
+         Self::TranslationAdmission,
+         Self::Block,
++        Self::Preservation,
+         Self::Exception,
+         Self::Synchronization,
+         Self::Memory,
+@@ -268,6 +282,7 @@
+             CallbackCall::MmioWrite { .. } => Self::MmioWrite,
+             CallbackCall::Instruction { .. } => Self::Instruction,
+             CallbackCall::TranslationAdmission { .. } => Self::TranslationAdmission,
++            CallbackCall::Preservation(_) => Self::Preservation,
+             CallbackCall::Block(_) => Self::Block,
+             CallbackCall::Exception(_) => Self::Exception,
+             CallbackCall::Synchronization => Self::Synchronization,
+@@ -282,6 +297,7 @@
+             Self::MmioWrite => "worker_callback_mmio_write",
+             Self::Instruction => "worker_callback_instruction",
+             Self::TranslationAdmission => "worker_callback_translation_admission",
++            Self::Preservation => "worker_callback_preservation",
+             Self::Block => "worker_callback_block",
+             Self::Exception => "worker_callback_exception",
+             Self::Synchronization => "worker_callback_synchronization",
+@@ -532,6 +548,7 @@
+ enum HookKind {
+     Instruction(HookRange),
+     TranslationAdmission(HookRange),
++    Preservation(HookRange),
+     Block(HookRange),
+     Exception,
+     Synchronization,
+@@ -579,6 +596,7 @@
+     next_snapshot: Cell<u64>,
+     next_event: Cell<u64>,
+     callback_error: RefCell<Option<String>>,
++    stopped_reply: RefCell<Option<Sender<RpcEvent>>>,
+     wakeup: RefCell<Option<RunWakeup>>,
+     shutdown: Cell<bool>,
+ }
+@@ -597,6 +615,15 @@
+     Some(u32::from_le_bytes(bytes))
+ }
+ impl WorkerLoop {
++    fn reply_rpc(&self, cpu: &core::Core, operation: Operation, reply: Sender<RpcEvent>) {
++        let previous = self.stopped_reply.replace(Some(reply));
++        let mut result = dispatch(self, cpu, operation);
++        let reply = self.stopped_reply.replace(previous).expect("stopped RPC lost its evidence channel");
++        if let Some(error) = self.callback_error.borrow().as_ref() {
++            result = Err(error.clone());
++        }
++        let _ = reply.send(RpcEvent::Complete(result));
++    }
+     fn notify_wakeup(&self) {
+         if let Some(wakeup) = self.wakeup.borrow().as_ref() {
+             wakeup.notify();
+@@ -618,14 +645,25 @@
+         let Some(cpu) = (unsafe { self.core.get().as_ref() }) else {
+             return CallbackResult::Error;
+         };
++        if matches!(call, CallbackCall::Preservation(_)) {
++            if let Some(reply) = self.stopped_reply.borrow().as_ref() {
++                let CallbackCall::Preservation(evidence) = call else { unreachable!() };
++                return if reply.send(RpcEvent::Preservation { callback, evidence }).is_ok() {
++                    CallbackResult::Unit
++                } else {
++                    *self.callback_error.borrow_mut() = Some("stopped preservation receiver disconnected".into());
++                    CallbackResult::Error
++                };
++            }
++            return self.wait_callback_parked(cpu, callback, call, None, None, None);
++        }
+         if let Err(error) = cpu.owner_callback_parked(true) {
+             *self.callback_error.borrow_mut() = Some(error);
+             cpu.stop().ok();
+             return CallbackResult::Error;
+         }
+-        let progress = cpu.instruction_progress();
+-        let pc = read_stopped_pc(cpu);
+-        let pstate = read_stopped_pstate(cpu);
++        let (progress, pc, pstate) =
++            (cpu.instruction_progress(), read_stopped_pc(cpu), read_stopped_pstate(cpu));
+         let is_synchronization = matches!(call, CallbackCall::Synchronization);
+         let result = self.wait_callback_parked(cpu, callback, call, progress, pc, pstate);
+         if is_synchronization && !matches!(result, CallbackResult::Error) {
+@@ -648,8 +686,14 @@
+         pc: Option<u32>,
+         pstate: Option<u32>,
+     ) -> CallbackResult {
++        let preserving = matches!(call, CallbackCall::Preservation(_));
+         let id = self.next_event.get();
+         self.next_event.set(id.wrapping_add(1).max(1));
++        let entry = if preserving {
++            None
++        } else {
++            cpu.instruction_entry()
++        };
+         if self
+             .events
+             .send(Event::Callback {
+@@ -657,7 +701,7 @@
+                 callback,
+                 call,
+                 progress,
+-                entry: cpu.instruction_entry(),
++                entry,
+                 pc,
+                 pstate,
+             })
+@@ -678,7 +722,9 @@
+                     tighten,
+                     applied,
+                 } if response_id == id => {
+-                    let apply = if !matches!(result, CallbackResult::Error) {
++                    let apply = if preserving && tighten.is_some() {
++                        Err("preservation dispatch cannot change the run budget".into())
++                    } else if !matches!(result, CallbackResult::Error) {
+                         tighten.map_or(Ok(()), |total| cpu.tighten_instruction_limit(total))
+                     } else {
+                         Ok(())
+@@ -699,9 +745,19 @@
+                     return result;
+                 }
+                 Message::Request { operation, reply } => {
+-                    let result = match unsafe { self.core.get().as_ref() } {
+-                        Some(cpu) => dispatch(self, cpu, operation),
+-                        None => Err("R-profile CPU worker is not initialized".into()),
++                    if preserving {
++                        let _ = reply.send(RpcEvent::Complete(Err("CPU reentry during preservation dispatch is refused".into())));
++                    } else if let Some(cpu) = unsafe { self.core.get().as_ref() } {
++                        self.reply_rpc(cpu, operation, reply);
++                    } else {
++                        let _ = reply.send(RpcEvent::Complete(Err("R-profile CPU worker is not initialized".into())));
++                    }
++                }
++                Message::ExportSnapshot { token, reply } => {
++                    let result = if preserving {
++                        Err("snapshot export during preservation dispatch is refused".into())
++                    } else {
++                        dispatch(self, cpu, Operation::ExportSnapshot(token))
+                     };
+                     let _ = reply.send(result);
+                 }
+@@ -790,6 +846,12 @@
+         )
+     }, CallbackResult::Bool(true))
+ }
++unsafe fn preservation(evidence: preservation::PreservationEvidence, data: *mut std::ffi::c_void) {
++    let context = unsafe { callback_context(data) };
++    unsafe {
++        callback_loop(data).wait_callback(context.callback, CallbackCall::Preservation(evidence));
++    }
++}
+ unsafe fn exception(exception: arm::Exception, data: *mut std::ffi::c_void) {
+     let context = unsafe { callback_context(data) };
+     unsafe {
+@@ -855,6 +917,7 @@
+         next_snapshot: Cell::new(1),
+         next_event: Cell::new(1),
+         callback_error: RefCell::new(None),
++        stopped_reply: RefCell::new(None),
+         wakeup: RefCell::new(None),
+         shutdown: Cell::new(false),
+     });
+@@ -900,7 +963,11 @@
+         };
+         match message {
+             Message::Request { operation, reply } => {
+-                let _ = reply.send(dispatch(&context, &cpu, operation));
++                context.callback_error.borrow_mut().take();
++                context.reply_rpc(&cpu, operation, reply);
++            }
++            Message::ExportSnapshot { token, reply } => {
++                let _ = reply.send(dispatch(&context, &cpu, Operation::ExportSnapshot(token)));
+             }
+             Message::Run { id, request } => {
+                 context.callback_error.borrow_mut().take();
+@@ -1128,6 +1195,9 @@
+                     HookKind::TranslationAdmission(range) => Hook::TranslationAdmission {
+                         callback: translation_admission, data, range,
+                     },
++                    HookKind::Preservation(range) => Hook::Preservation {
++                        callback: preservation, data, range,
++                    },
+                     HookKind::Block(range) => Hook::Block {
+                         callback: block,
+                         data,
+@@ -1212,6 +1282,9 @@
+ 
+ impl CpuWorker {
+     fn rpc(&self, operation: Operation) -> Result<Value, String> {
++        if self.preservation_dispatching.get() {
++            return Err("CPU reentry during preservation dispatch is refused".into());
++        }
+         #[cfg(test)]
+         self.rpc_calls.set(self.rpc_calls.get() + 1);
+         let counter = operation.counter();
+@@ -1223,9 +1296,22 @@
+             let count = &self.rpc_counts[counter as usize];
+             count.set(count.get().saturating_add(1));
+         }
+-        response
+-            .recv()
+-            .map_err(|_| "R-profile CPU worker reply disconnected")?
++        let mut callback_error = None;
++        loop {
++            match response.recv().map_err(|_| "R-profile CPU worker reply disconnected")? {
++                RpcEvent::Complete(result) => return match callback_error {
++                    Some(error) => Err(error), None => result,
++                },
++                RpcEvent::Preservation { callback, evidence } => {
++                    self.callback_events.set(self.callback_events.get().saturating_add(1));
++                    let count = &self.callback_counts[WorkerCallbackCounter::Preservation as usize];
++                    count.set(count.get().saturating_add(1));
++                    if matches!(self.service_callback(callback, CallbackCall::Preservation(evidence)), CallbackResult::Error) {
++                        callback_error.get_or_insert_with(|| "stopped preservation callback failed".to_string());
++                    }
++                }
++            }
++        }
+     }
+     fn unit(&self, operation: Operation) -> Result<(), String> {
+         match self.rpc(operation)? {
+@@ -1253,6 +1339,8 @@
+         };
+         self.callback_depth
+             .set(self.callback_depth.get().saturating_add(1));
++        let previous_preservation = self.preservation_dispatching.get();
++        self.preservation_dispatching.set(previous_preservation || matches!(&call, CallbackCall::Preservation(_)));
+         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+             match (entry, call) {
+                 (CallbackEntry::Mmio(mmio), CallbackCall::MmioRead { offset, size }) => {
+@@ -1281,6 +1369,13 @@
+                     CallbackCall::TranslationAdmission { address, word, thumb },
+                 ) => CallbackResult::Bool(callback(address, word, thumb, data)),
+                 (
++                    CallbackEntry::Hook(Hook::Preservation { callback, data, .. }),
++                    CallbackCall::Preservation(evidence),
++                ) => {
++                    callback(evidence, data);
++                    CallbackResult::Unit
++                }
++                (
+                     CallbackEntry::Hook(Hook::Block { callback, data, .. }),
+                     CallbackCall::Block(block),
+                 ) => {
+@@ -1330,6 +1425,7 @@
+         }));
+         self.callback_depth
+             .set(self.callback_depth.get().saturating_sub(1));
++        self.preservation_dispatching.set(previous_preservation);
+         result.unwrap_or(CallbackResult::Error)
+     }
+ 
+@@ -1488,6 +1584,9 @@
+         self.unit(Operation::SetGuestClock(clock))
+     }
+     fn read_register(&self, register: Register, out: &mut [u8]) -> Result<usize, String> {
++        if self.preservation_dispatching.get() {
++            return Err("register inspection during preservation dispatch is refused".into());
++        }
+         if matches!(register, Register::Pc | arm::PC)
+             && out.len() >= 4
+             && (self.callback_depth.get() != 0
+@@ -1672,7 +1771,7 @@
+         self.unit(Operation::InvalidateCode(range))
+     }
+     fn start_run(&self, request: Run) -> Result<RunToken, ExecutionError> {
+-        if self.running.get() {
++        if self.running.get() || self.preservation_dispatching.get() {
+             return Err(ExecutionError::Backend(
+                 "nested R-profile worker execution is refused".into(),
+             ));
+@@ -1821,6 +1920,9 @@
+         }
+     }
+     fn tighten_instruction_limit(&self, total: u64) -> Result<(), String> {
++        if self.preservation_dispatching.get() {
++            return Err("preservation dispatch cannot change the run budget".into());
++        }
+         if self.callback_depth.get() != 0 {
+             let total = self
+                 .deferred_instruction_limit
+@@ -1832,6 +1934,7 @@
+         self.unit(Operation::TightenInstructionLimit(total))
+     }
+     fn instruction_progress(&self) -> Option<u64> {
++        if self.preservation_dispatching.get() { return None; }
+         if (self.callback_depth.get() != 0
+             || self.pending_callback.borrow().is_some()
+             || self.run_result.borrow().is_some())
+@@ -1942,6 +2045,7 @@
+             let kind = match hook {
+                 Hook::Instruction { range, .. } => HookKind::Instruction(range),
+                 Hook::TranslationAdmission { range, .. } => HookKind::TranslationAdmission(range),
++                Hook::Preservation { range, .. } => HookKind::Preservation(range),
+                 Hook::Block { range, .. } => HookKind::Block(range),
+                 Hook::Exception { .. } => HookKind::Exception,
+                 Hook::Synchronization { .. } => HookKind::Synchronization,
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
+@@ -13,6 +13,16 @@
+ #include "unicorn/unicorn.h"
+ #include "list.h"
+ 
++typedef struct uc_arm32_evidence_state {
++    uint32_t registers[16];
++    uint32_t cpsr, spsr, svc_spsr, irq_spsr;
++    uint32_t svc_sp, irq_sp, svc_lr, irq_lr;
++} uc_arm32_evidence_state;
++
++typedef void (*uc_preservation_callback)(void *user, uint32_t phase,
++    uint32_t pc, uint32_t word, uint32_t status, uint32_t mask,
++    const uc_arm32_evidence_state *state);
++
+ // The max recursive nested uc_emu_start levels
+ #define UC_MAX_NESTED_LEVEL (64)
+ 
+@@ -473,6 +483,10 @@
+     void (*embedder_restart)(void *user, uint64_t pc);
+     void *embedder_filter_user;
+     int embedder_insn_decision;   // filter result for the instruction being translated
++    void (*embedder_arm32_capture)(struct uc_struct *, uc_arm32_evidence_state *);
++    uc_preservation_callback embedder_preservation;
++    void *embedder_preservation_user;
++    bool embedder_preservation_exceptions;
+     GHashTable *embedder_io_pcs;  // guest PCs of instructions ending their block
+     uint32_t embedder_retry_limit; // block hook: retranslate this block this short
+     bool embedder_restart_request; // write hook: restart the storing instruction
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/uc.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/uc.c
+@@ -3264,6 +3264,38 @@
+     return UC_ERR_OK;
+ }
+ 
++UNICORN_EXPORT
++uc_err uc_embedder_set_preservation(uc_engine *uc,
++                                    uc_preservation_callback callback,
++                                    void *user, bool exceptions)
++{
++    UC_INIT(uc);
++    if (!uc->embedder_arm32_capture) {
++        restore_jit_state(uc);
++        return UC_ERR_MODE;
++    }
++    if (uc->embedder_preservation != callback ||
++        uc->embedder_preservation_user != user ||
++        uc->embedder_preservation_exceptions != exceptions) {
++        uc->embedder_preservation = callback;
++        uc->embedder_preservation_user = user;
++        uc->embedder_preservation_exceptions = callback && exceptions;
++        uc->tb_flush(uc);
++    }
++    restore_jit_state(uc);
++    return UC_ERR_OK;
++}
++
++UNICORN_EXPORT
++uc_err uc_embedder_capture_arm32(uc_engine *uc, uc_arm32_evidence_state *state)
++{
++    if (!uc || !state || !uc->cpu || !uc->embedder_arm32_capture) {
++        return UC_ERR_MODE;
++    }
++    uc->embedder_arm32_capture(uc, state);
++    return UC_ERR_OK;
++}
++
+ // embedder: from a block hook, have the block just hooked retranslated with only
+ // `limit` (1..32767) instructions before it executes; 0 cancels.
+ UNICORN_EXPORT
+@@ -3316,7 +3348,7 @@
+ UNICORN_EXPORT
+ uint32_t uc_embedder_features(void)
+ {
+-    return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128;
++    return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
+ }
+ 
+ // Select parallel TCG translation semantics for this engine. The caller must
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/unicorn_arm.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/unicorn_arm.c
+@@ -8,6 +8,7 @@
+ #include "sysemu/tcg.h"
+ #include "cpu.h"
+ #include "uc_priv.h"
++#include "internals.h"
+ #include "unicorn_common.h"
+ #include "unicorn.h"
+ #include "stdio.h"
+@@ -15,6 +16,21 @@
+ 
+ ARMCPU *cpu_arm_init(struct uc_struct *uc);
+ 
++static void arm_capture_evidence(struct uc_struct *uc,
++                                 uc_arm32_evidence_state *state)
++{
++    CPUARMState *env = uc->cpu->env_ptr;
++    memcpy(state->registers, env->regs, sizeof(state->registers));
++    state->cpsr = cpsr_read(env);
++    state->spsr = env->spsr;
++    state->svc_spsr = env->banked_spsr[BANK_SVC];
++    state->irq_spsr = env->banked_spsr[BANK_IRQ];
++    state->svc_sp = env->banked_r13[BANK_SVC];
++    state->irq_sp = env->banked_r13[BANK_IRQ];
++    state->svc_lr = env->banked_r14[BANK_SVC];
++    state->irq_lr = env->banked_r14[BANK_IRQ];
++}
++
+ static void arm_set_pc(struct uc_struct *uc, uint64_t address)
+ {
+     ((CPUARMState *)uc->cpu->env_ptr)->pc = address;
+@@ -778,6 +794,7 @@
+     uc->reg_reset = reg_reset;
+     uc->set_pc = arm_set_pc;
+     uc->get_pc = arm_get_pc;
++    uc->embedder_arm32_capture = arm_capture_evidence;
+     uc->stop_interrupt = arm_stop_interrupt;
+     uc->release = arm_release;
+     uc->query = arm_query;
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
+@@ -10928,7 +10928,9 @@
+  * Legacy decoder.
+  */
+ 
+-static void disas_arm_insn(DisasContext *s, unsigned int insn)
++static void gen_preservation_evidence(DisasContext *dc, uint32_t phase);
++
++static void disas_arm_insn(DisasContext *s, unsigned int insn, uint32_t evidence)
+ {
+     unsigned int cond = insn >> 28;
+     TCGContext *tcg_ctx = s->uc->tcg_ctx;
+@@ -10955,6 +10957,16 @@
+         // the callback might want to stop emulation immediately
+         check_exit_request(tcg_ctx);
+     }
++    /* Pre-instruction observers may stop without executing this attempt. */
++    if (evidence & 1) {
++        gen_preservation_evidence(s, 0);
++    }
++    if (evidence & 2) {
++        gen_preservation_evidence(s, 2);
++    }
++    if (evidence & 4) {
++        gen_preservation_evidence(s, 4);
++    }
+ 
+     if (cond == 0xf) {
+         /* In ARMv3 and v4 the NV condition is UNPREDICTABLE; we
+@@ -11483,6 +11495,18 @@
+     gen_set_label(tcg_ctx, admitted);
+ }
+ 
++static void gen_preservation_evidence(DisasContext *dc, uint32_t phase)
++{
++    TCGContext *tcg_ctx = dc->uc->tcg_ctx;
++    TCGv_i32 event = tcg_const_i32(tcg_ctx, phase);
++    TCGv_i32 pc = tcg_const_i32(tcg_ctx, dc->pc_curr);
++    TCGv_i32 word = tcg_const_i32(tcg_ctx, dc->insn);
++    gen_helper_preservation_evidence(tcg_ctx, tcg_ctx->cpu_env, event, pc, word);
++    tcg_temp_free_i32(tcg_ctx, word);
++    tcg_temp_free_i32(tcg_ctx, pc);
++    tcg_temp_free_i32(tcg_ctx, event);
++}
++
+ static void arm_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+ {
+     DisasContext *dc = container_of(dcbase, DisasContext, base);
+@@ -11520,7 +11544,21 @@
+         dc->uc->embedder_insn_decision = dc->uc->embedder_insn_filter
+             ? dc->uc->embedder_insn_filter(dc->uc->embedder_filter_user, dc->pc_curr, insn) : 1;
+         gen_execution_refusal(dc);
+-        disas_arm_insn(dc, insn);
++        bool preservation = dc->uc->embedder_preservation &&
++                            (dc->uc->embedder_insn_decision & 8);
++        bool status_write = dc->uc->embedder_preservation_exceptions &&
++                            (insn & 0xfff0fff0u) == 0xe160f000u;
++        bool exception_return = dc->uc->embedder_preservation_exceptions &&
++                                (insn >> 28) == 14 &&
++                                (insn & 0x0e508000u) == 0x08508000u;
++        disas_arm_insn(dc, insn, (preservation ? 1 : 0) |
++                       (status_write ? 2 : 0) | (exception_return ? 4 : 0));
++        if (preservation) {
++            gen_preservation_evidence(dc, 1);
++        }
++        if (status_write) {
++            gen_preservation_evidence(dc, 3);
++        }
+ 
+         arm_post_translate_insn(dc);
+ 
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/op_helper.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/op_helper.c
+@@ -19,6 +19,7 @@
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
+ #include "cpu.h"
++#include "uc_priv.h"
+ #include "exec/helper-proto.h"
+ #include "internals.h"
+ #include "exec/exec-all.h"
+@@ -27,6 +28,31 @@
+ #define SIGNBIT (uint32_t)0x80000000
+ #define SIGNBIT64 ((uint64_t)1 << 63)
+ 
++static void preservation_evidence(CPUARMState *env, uint32_t phase,
++                                  uint32_t pc, uint32_t word,
++                                  uint32_t status, uint32_t mask)
++{
++    uc_engine *uc = env->uc;
++    if (uc->embedder_preservation && uc->embedder_arm32_capture) {
++        uc_arm32_evidence_state state;
++        uc->embedder_arm32_capture(uc, &state);
++        /* Synchronize the packet's architectural PC, not the lazy CPU field. */
++        if (phase == 0 || phase == 2 || phase == 4) {
++            state.registers[15] = pc;
++        } else if (phase == 1 || phase == 3) {
++            state.registers[15] = pc + 4;
++        }
++        uc->embedder_preservation(uc->embedder_preservation_user, phase,
++                                 pc, word, status, mask, &state);
++    }
++}
++
++void HELPER(preservation_evidence)(CPUARMState *env, uint32_t phase,
++                                    uint32_t pc, uint32_t word)
++{
++    preservation_evidence(env, phase, pc, word, 0, 0);
++}
++
+ static CPUState *do_raise_exception(CPUARMState *env, uint32_t excp,
+                                     uint32_t syndrome, uint32_t target_el)
+ {
+@@ -421,6 +447,9 @@
+     arm_rebuild_hflags(env);
+ 
+     arm_call_el_change_hook(env_archcpu(env));
++    if (env->uc->embedder_preservation_exceptions) {
++        preservation_evidence(env, 5, 0, 0, val, mask);
++    }
+ }
+ 
+ /* Access to user mode registers from privileged modes.  */
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/helper.h
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/helper.h
+@@ -1,5 +1,6 @@
+ DEF_HELPER_4(uc_tracecode, void, i32, i32, ptr, i64)
+ DEF_HELPER_6(uc_traceopcode, void, ptr, i64, i64, i32, ptr, i64)
++DEF_HELPER_4(preservation_evidence, void, env, i32, i32, i32)
+ 
+ DEF_HELPER_FLAGS_1(sxtb16, TCG_CALL_NO_RWG_SE, i32, i32)
+ DEF_HELPER_FLAGS_1(uxtb16, TCG_CALL_NO_RWG_SE, i32, i32)
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -3,6 +3,8 @@
+ mod fetch_attribution;
+ pub use fetch_attribution::{CpuDataAttribution, FetchAttribution, PassiveFetchAttribution};
+ mod passive;
++mod preservation;
++pub use preservation::PreservationWatch;
+ #[cfg(test)]
+ mod passive_tests;
+ pub use passive::{PassiveCaptureFailure, PassiveCaptureRefusal, PassiveRetention, PassiveRetentionStatus, PassiveStopReason};
+--- a/crates/emulator/src/board/mod.rs
++++ b/crates/emulator/src/board/mod.rs
+@@ -1702,7 +1702,7 @@
+         }
+         if s.core_interrupts[b.core].is_some()
+             && s.pins[b.core].0
+-            && fujimod_emulator_cpu_unicorn::rprofile::enter_irq(cpu)?.is_some()
++            && fujimod_emulator_cpu_unicorn::rprofile::enter_irq(cpu, None)?.is_some()
+         {
+             cpu.stop()?;
+             return Ok(());
+--- /dev/null
++++ b/crates/emulator/src/board/observation/preservation.rs
+@@ -0,0 +1,67 @@
++//! Bounded native evidence forwarding; callbacks never inspect or re-enter a CPU.
++use super::{Board, CoreIndex, ObservationContext, lifecycle};
++use fujimod_emulator_cpu::{Cpu, Hook, HookId, HookRange, preservation::PreservationEvidence};
++use std::{cell::Cell, ffi::c_void, rc::{Rc, Weak}};
++
++struct Context {
++    cpu: Weak<dyn Cpu>,
++    core: CoreIndex,
++    callback: Rc<dyn Fn(CoreIndex, PreservationEvidence)>,
++}
++
++/// Removal failure retains callback storage in the board's observer registry.
++pub struct PreservationWatch {
++    context: Rc<Context>,
++    hooks: Vec<HookId>,
++    memory: Weak<crate::board::memory::Memory>,
++    cleanup_failed: Rc<Cell<bool>>,
++}
++
++unsafe fn observed(evidence: PreservationEvidence, data: *mut c_void) {
++    let context = unsafe { &*data.cast::<Context>() };
++    (context.callback)(context.core, evidence);
++}
++
++impl PreservationWatch {
++    pub fn remove(&mut self) -> Result<(), String> {
++        let cpu = self.context.cpu.upgrade();
++        let result = lifecycle::remove_hooks(&mut self.hooks,
++            |&hook| cpu.as_ref().map_or(Ok(()), |cpu| cpu.remove_hook(hook)));
++        if result.is_err() { self.cleanup_failed.set(true); }
++        result
++    }
++}
++impl Drop for PreservationWatch {
++    fn drop(&mut self) {
++        if self.hooks.is_empty() || self.remove().is_ok() { return; }
++        if let Some(memory) = self.memory.upgrade() {
++            memory.observers.retain(Box::new((self.context.clone(), std::mem::take(&mut self.hooks))));
++        }
++    }
++}
++
++fn begin(
++    cpus: &[Rc<dyn Cpu>], memory: &Rc<crate::board::memory::Memory>, core: usize,
++    range: HookRange, callback: Rc<dyn Fn(CoreIndex, PreservationEvidence)>,
++) -> Result<PreservationWatch, String> {
++    let cpu = cpus.get(core).ok_or("preservation core is unavailable")?;
++    let context = Rc::new(Context { cpu: Rc::downgrade(cpu), core: CoreIndex(core), callback });
++    let data = Rc::as_ptr(&context).cast_mut().cast();
++    // The watch owns this context until removal, including the failed-removal path.
++    let hook = unsafe { cpu.install_hook(Hook::Preservation { callback: observed, data, range }) }?;
++    Ok(PreservationWatch { context, hooks: vec![hook], memory: Rc::downgrade(memory),
++        cleanup_failed: memory.observers.cleanup_failed.clone() })
++}
++
++impl Board {
++    pub fn preservation_evidence_begin(&self, core: usize, range: HookRange,
++        callback: Rc<dyn Fn(CoreIndex, PreservationEvidence)>) -> Result<PreservationWatch, String> {
++        begin(&self.cpus, &self.physical_memory, core, range, callback)
++    }
++}
++impl ObservationContext {
++    pub fn preservation_evidence_begin(&self, core: usize, range: HookRange,
++        callback: Rc<dyn Fn(CoreIndex, PreservationEvidence)>) -> Result<PreservationWatch, String> {
++        begin(&self.cpus, &self.memory, core, range, callback)
++    }
++}
+--- a/crates/emulator-cpu-unicorn/src/rprofile/worker/durable.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/worker/durable.rs
+@@ -6,8 +6,8 @@
+     pub(super) fn export_bytes(&self) -> Result<Vec<u8>, String> {
+         let (reply, response) = mpsc::channel();
+         self.commands
+-            .send(Message::Request {
+-                operation: Operation::ExportSnapshot(self.token),
++            .send(Message::ExportSnapshot {
++                token: self.token,
+                 reply,
+             })
+             .map_err(|_| "R-profile snapshot worker disconnected")?;
+--- a/crates/emulator-cpu-unicorn/src/rprofile/memory.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/memory.rs
+@@ -815,8 +815,7 @@
+                 break;
+             };
+             if let Some(core) = core {
+-                core.cpu
+-                    .invalidate_code(Some((invalidation.address, invalidation.address + 4096)))?;
++                core.invalidate_code(Some((invalidation.address, invalidation.address + 4096)))?;
+             }
+             let mut s = self.state();
+             if !s

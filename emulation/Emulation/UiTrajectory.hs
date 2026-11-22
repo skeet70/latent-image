@@ -60,7 +60,7 @@ import Data.Word (Word8, Word32, Word64)
 import Data.Int (Int32)
 import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRangeList, preservationRanges)
 import Emulation.WatchObservation (ExecutionInterval (..), executionIntervalLabel, Instructions (..), WatchAddress, WatchRange, unionWatchRanges, watchAddress, watchAddressValue, watchRange, watchRangeBounds)
-import EmulatorUsb (CrawlKey, SiteRead (..), KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
+import EmulatorUsb (CrawlKey, SiteRead (..), KeyPulse (..), KeyTiming (..), ModeDial (..), OutputClockTicks (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
 data MenuState = MenuState Int Int Int deriving (Eq, Show)
@@ -131,7 +131,11 @@ instance FromJSON ReadExpectation where
     ReadExpectation label . B.pack <$> bytes (T.unpack text)
 data StepCompletion = PacketCompletion | PresentedFrameCompletion CrawlKey deriving (Eq, Show)
 -- | `stepIdle` is the guest instructions run with no input before the press (FujiMod only).
-data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming, stepIdle :: Maybe Instructions, stepCompletion :: StepCompletion } deriving (Eq, Show)
+-- `stepOutputClock` sets the output banks' fixed transfer clock before that idle (FujiMod only):
+-- a route-relative scenario input, not X-M1 timing.
+data Step = Step
+  { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming, stepIdle :: Maybe Instructions
+  , stepOutputClock :: Maybe OutputClockTicks, stepCompletion :: StepCompletion } deriving (Eq, Show)
 
 data DisplaySettle = DisplayUnpressed | DisplayConsumed | DisplayUnsettled deriving (Eq)
 
@@ -156,14 +160,14 @@ maxStepIdle = 90000000
 
 instance FromJSON Step where
   parseJSON = withArray "step" $ \items -> case toList items of
-    [key, menu, setting, cursor] -> step key menu setting cursor (defaultKeyTiming, Nothing, PacketCompletion)
+    [key, menu, setting, cursor] -> step key menu setting cursor (defaultKeyTiming, Nothing, Nothing, PacketCompletion)
     [key, menu, setting, cursor, timing] -> step key menu setting cursor =<< withObject "step contract" (keyTiming key) timing
     _ -> fail "a step is [key, menu, setting, cursor] with an optional contract object"
     where
-      step key menu setting cursor (timing, idle, completion) =
-        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing <*> pure idle <*> pure completion
+      step key menu setting cursor (timing, idle, clock, completion) =
+        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing <*> pure idle <*> pure clock <*> pure completion
       keyTiming key timing = do
-        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions", "idle_instructions", "completion"]) (KM.keys timing))
+        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions", "idle_instructions", "output_clock_ticks", "completion"]) (KM.keys timing))
           (fail "unknown step contract field")
         completion <- timing .:? "completion" >>= \value -> case (value :: Maybe T.Text) of
           Nothing -> pure PacketCompletion
@@ -177,9 +181,11 @@ instance FromJSON Step where
         when (settle == Just 0) (fail "settle_instructions must be positive")
         idle <- timing .:? "idle_instructions"
         unless (all (\count -> count >= 1 && count <= maxStepIdle) idle) (fail ("idle_instructions must be 1.." ++ show maxStepIdle))
-        when (completion /= PacketCompletion && (isJust pulse || isJust settle || isJust idle))
+        clock <- timing .:? "output_clock_ticks"
+        when (clock == Just (0 :: Word64)) (fail "output_clock_ticks must be positive")
+        when (completion /= PacketCompletion && (isJust pulse || isJust settle || isJust idle || isJust clock))
           (fail "presented-frame uses the bridge's bounded display-key contract without timing overrides")
-        pure (KeyTiming pulse (SettleBudget <$> settle), Instructions . fromInteger <$> idle, completion)
+        pure (KeyTiming pulse (SettleBudget <$> settle), Instructions . fromInteger <$> idle, OutputClockTicks <$> clock, completion)
 
 data LifecycleRole = RetainedLifecycle | OwnedLifecycle deriving (Eq, Show)
 data LifecycleAction = LifecycleAction
@@ -966,7 +972,7 @@ variantMismatches retained variant
       , ("film_row", segmentFilmRow a == segmentFilmRow b)
       , ("save_lifecycle", segmentSaveLifecycle a == segmentSaveLifecycle b)
       , ("af_ownership", segmentAfOwnership a == segmentAfOwnership b) ]
-    assertion step = (stepKey step, stepExpected step, stepCompletion step)
+    assertion step = (stepKey step, stepExpected step, stepOutputClock step, stepCompletion step)
 
 -- | The first pressed step of SEGMENTS, with its segment's index, when it is a MENU its segment
 -- does not end on: the press that leaves the retained bridge's rendezvous overlay. The retained

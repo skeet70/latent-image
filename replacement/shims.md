@@ -139,8 +139,6 @@ These rows are derived from the C-ABI bridge declarations. Each removal predicat
 | develop | `rb_capture_*` externs in `src/pipeline` and `develop/src` | required | unestablished |
 | display_scanout | `xm1_scanout_*` and `xm1_power_lcd_operation_action` exports (31 families in `src/abi.rs`, panel and formatter modules) | required | unestablished |
 | lens_transport | `xm1_power_current_task`, `xm1_power_interrupt_lock`, `xm1_power_interrupt_unlock`, `xm1_power_service_post`, `xm1_power_set_task_flags`, `xm1_power_resource_route_request` externs | required | unestablished |
-| menu_value | `rb_menu_value_cancel`/`rb_menu_value_confirm` exports | required | unestablished |
-| modal_runtime | `rb_menu_value_cancel`/`rb_menu_value_confirm` externs | required | unestablished |
 | modal_runtime | `rb_modal_dispatch` export | required | unestablished |
 | power_lifecycle | `xm1_app_nand_*`, `record_store_*`, `xm1_calibration_*`, `xm1_property_*`, `xm1_getter_owned`, `xm1_setter_owned`, `xm1_storage_initialize`, `xm1_pipeline_image_*`, `xm1_task_submit/release`, `rb_modal_dispatch`, `xm1_scanout_*` externs | required | unestablished |
 | power_lifecycle | Power leaf C-ABI services: OSAL, resource routing, serial, timer, semaphore and audio service exports | required | unestablished |
@@ -569,16 +567,16 @@ Classification: `module`. [Declarations](menu_engine/shims.json).
 
 ## menu_value
 
-The menu value transaction, published at the dispatcher's IMAGE SIZE jump-table word.
+The IMAGE SIZE apply unit, published at the stock commit dispatcher's case word; other property arms remain retained.
 
-Classification: `reference-only`. [Declarations](menu_value/shims.json).
+Classification: `module`. [Declarations](menu_value/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld` | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_arm` in `adapter/entry.S`, placed by `adapter/image.ld` |
-| `rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs` | stock-ABI export | stock stage consumers and controller arms | no | every stage consumer and controller arm is owned | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_begin`, `rb_menu_value_size_apply`, `rb_menu_value_retained`, `rb_menu_value_cancel`, `rb_menu_value_confirm` exports in `src/lib.rs` |
-| `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state) | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_call_*` retained services (aspect/size cells, change marker, current property, display update, restore aux, snapshot cells/state) |
-| `rb_menu_value_cancel`/`rb_menu_value_confirm` exports | C-ABI bridge between two owned units | modal_runtime | yes | modal dispatch calls the crate directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_cancel`/`rb_menu_value_confirm` exports |
+| `rb_menu_value_size_arm` in `adapter/entry.S`, published at the stock IMAGE SIZE case word | veneer or carrier at a stock address | the stock dispatcher's jump-table word for property `0xf6` | no | the owned dispatcher calls the transaction directly | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_arm` in `adapter/entry.S` enters the owned apply or returns to the retained arm/shared tail. |
+| `rb_menu_value_size_apply` export in `adapter/mod.rs` | stock-ABI export | the IMAGE SIZE assembly veneer | no | the owned dispatcher calls the typed transaction directly without this assembly-to-Rust ABI seam | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. `rb_menu_value_size_apply` in `adapter/mod.rs` is the veneer-to-Rust ABI. |
+| `rb_menu_value_call_*` retained services: size cell, aspect cell, change marker, current-property marker and display update | trampoline into retained stock | stock property, cell and display services | no | the typed settings service and owned display own those services | required | unestablished | reference-only: The registered mechanism remains required; this unit has no declared produced linked ELF carrying this interface. The five `rb_menu_value_call_*` imports in `adapter/mod.rs` remain retained. |
+| Current/saved choice cells and display-mode state read in `adapter/mod.rs` | guest-memory layout view | retained stock choice and snapshot state | no | owned menu/settings state replaces these cells and no retained reader requires their layout | required | unestablished | reference-only: Fixed current/saved size, aspect and third-choice cells and MODE_CELL remain read from retained state. Linked-image layout and caller closure are not established by this declaration. |
 
 ## menu_widgets
 
@@ -595,13 +593,12 @@ Classification: `linked`. [Declarations](menu_widgets/shims.json).
 
 ## modal_runtime
 
-Modal dispatch, controller 75 and the cancellation hooks.
+Modal dispatch and controller 75.
 
 Classification: `module`. [Declarations](modal_runtime/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `rb_menu_value_cancel`/`rb_menu_value_confirm` externs | C-ABI bridge between two owned units | menu_value | yes | modal dispatch calls the crate directly and both sides compare with stock in one image | required | unestablished | reference-only: The registered mechanism remains required; this reference or qualification-only mechanism is not part of the selected linked image. `rb_menu_value_cancel`/`rb_menu_value_confirm` externs |
 | `rb_modal_entry` in `src/entry.S`, published at `0xbfb028`, with the stock+4 fallback for every controller other than 75 | veneer or carrier at a stock address | the stock dispatcher and 173 stock controllers | no | the owned dispatcher owns all 174 controllers | required | unestablished | `//host/firmware:bank-modal-elf-00c40000` (Publication, 1 symbols, 0 definite references); `//host/firmware:bank-modal-elf-00c4fc88` (Publication, 1 symbols, 0 definite references); `//host/firmware:engine-elf-modal75-menu-engine` (Publication, 1 symbols, 0 definite references); `//host/firmware:engine-elf-modal75-menu-engine-render` (Publication, 1 symbols, 0 definite references) |
 | `rb_modal_dispatch` export | C-ABI bridge between two owned units | power_lifecycle | yes | power links the dispatch crate directly and both sides compare with stock in one image | required | unestablished | `//host/firmware:bank-modal-elf-00c40000` (Export, 1 symbols, 0 definite references); `//host/firmware:bank-modal-elf-00c4fc88` (Export, 1 symbols, 0 definite references); `//host/firmware:engine-elf-modal75-menu-engine` (Export, 1 symbols, 0 definite references); `//host/firmware:engine-elf-modal75-menu-engine-render` (Export, 1 symbols, 0 definite references) |
 | `rb_modal_call_prehook`, `rb_modal_call` and `dispatch.S` callback glue | callback registry for guest words | the retained prehook `0xd0cc68` and stock action/transition callbacks | no | every callback is owned | required | unestablished | `//host/firmware:bank-modal-elf-00c40000` (RetainedEntry, 2 symbols, 0 definite references); `//host/firmware:bank-modal-elf-00c4fc88` (RetainedEntry, 2 symbols, 0 definite references); `//host/firmware:engine-elf-modal75-menu-engine` (RetainedEntry, 2 symbols, 0 definite references); `//host/firmware:engine-elf-modal75-menu-engine-render` (RetainedEntry, 2 symbols, 0 definite references) |
