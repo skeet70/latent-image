@@ -99,12 +99,10 @@ haskell_test(
         "$(rootpath :plain-overlay-observe)",
         "$(rootpath //replacement/save_file_machine:plain-overlay-unit.json)",
         "$(rootpath //replacement/save_file_machine:save-file-machine-image.elf)",
+        "$(rootpath //replacement/exif_writer:plain-overlay-unit.json)",
+        "$(rootpath //replacement/exif_writer:exif-writer-image.elf)",
     ],
-    data = [
-        ":plain-overlay-observe",
-        "//replacement/save_file_machine:plain-overlay-unit.json",
-        "//replacement/save_file_machine:save-file-machine-image.elf",
-    ],
+    data = [":plain-overlay-observe"] + _UNITS,
     ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
     main_file = "ObserveCompareTests.hs",
     deps = [

@@ -199,7 +199,19 @@ observe inputs directory record = do
       masked = mergedSpans (concatMap unitSpans units)
       overlays = nub (map unitOverlay units)
       sites = [(e, "entry:" ++ unitName u ++ ":" ++ entryName e) | u <- units, e <- unitEntries u]
-      capture e = object ["entry" .= ([] :: [Value]), "returns" .= [object ["base" .= object ["register" .= r], "count" .= n] | (r, n) <- entryOutputs e]]
+      capture e = object ["entry" .= ([] :: [Value]), "returns" .= map outputRead (entryOutputs e)]
+      outputRead (Output base offset size) =
+        object
+          ( [ "base" .= case base of
+                ArgumentRegister r -> object ["register" .= r]
+                StackArgument w -> object ["stack-word" .= w]
+            , "offset" .= offset
+            ]
+              ++ case size of
+                Bytes n -> ["count" .= n]
+                CountRegister r -> ["count" .= (0 :: Int), "count_register" .= r]
+                UpToResult n -> ["count" .= n]
+          )
       spec =
         object
           [ "schema" .= (1 :: Int)
@@ -325,7 +337,11 @@ event units hit = do
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
           (name, e) <- M.lookup site named
-          let outputs = [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
+          let result = registerOf hit 0
+              captured = [t | r <- arrayOf (field "reads" (field "observation" hit)), String t <- [field "bytes" r]]
+              judged (Output _ _ (UpToResult _)) bytes = T.take (2 * maybe 0 fromIntegral result) bytes
+              judged _ bytes = bytes
+              outputs = zipWith judged (entryOutputs e) captured
           Just (Event name "return" (outside address) (object (["kind" .= ("return" :: T.Text), "name" .= name, "return_address" .= hexWord address, "result" .= [fmap hexWord (registerOf hit 0) | entryReturns e], "outputs" .= outputs] ++ common)))
       | otherwise -> Nothing
 

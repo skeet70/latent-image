@@ -8,8 +8,10 @@
 -- stack addresses replaced by a marker. The stock role runs once to observe its final memory,
 -- log and results; every role then runs against those as its expectation. Equal requires both
 -- stock runs and the owned run to pass, every Exif block to satisfy the independent layout
--- checks of "Replacement.ExifWriter.Structure", and every control to fail at least one case
--- after reaching the case exit.
+-- checks of "Replacement.ExifWriter.Structure", every control to fail at least one case
+-- after reaching the case exit, and every declared correction to hold: stock stops at the
+-- correction's address on its malformed scenario, and owned returns there with the memory stock
+-- leaves on its reference scenario.
 module Main (main) where
 
 import qualified ArmElf as E
@@ -445,7 +447,7 @@ main = do
         unless (sha256Hex (sha256 bytes) == imageDigest image) (fail (imageLabel image ++ " identity differs"))
         pure (imageLabel image, Loaded (imageBase image) bytes)
       let plain = loadedBytes (fromMaybe (error "plain") (lookup "plain" loaded))
-          base = scenarios plain
+          base = scenarios plain ++ map correctionReference corrections
           observeStock phase batch = do
             observations <- runRole runner output loaded Stock phase [(scenario, initialExpectation scenario) | scenario <- batch]
             forM_ observations $ \observation ->
@@ -471,6 +473,25 @@ main = do
         let detected = [observationCase o | o <- results, atExit o, not (observationPassed o)]
             other = [(observationCase o, observationStatus o) | o <- results, not (atExit o)]
         pure (name, digest, detected, other)
+      judgedCorrections <- forM corrections $ \correction -> do
+        let malformed = correctionMalformed correction
+            reference = correctionReference correction
+            (patchBlock, patchOffset, patchBytes) = correctionPatch correction
+            patch bytes = B.take patchOffset bytes <> patchBytes <> B.drop (patchOffset + B.length patchBytes) bytes
+        referenceObservation <- case [o | (s, o) <- zip cases observed, scenarioName s == scenarioName reference] of
+          [o] -> pure o
+          _ -> fail ("no stock observation of " ++ scenarioName reference)
+        let fromReference = expectationOf reference referenceObservation
+            expectation = fromReference {expectedRegions = [(name, if name == patchBlock then patch bytes else bytes) | (name, bytes) <- expectedRegions fromReference]}
+            phase = "correction-" ++ correctionName correction
+        stockRun <- runRole runner output loaded Stock phase [(malformed, initialExpectation malformed)]
+        ownedRun <- runRole runner output loaded (Owned "owned" owned) phase [(malformed, expectation)]
+        case (stockRun, ownedRun) of
+          ([stock], [mine]) -> do
+            let stockPc = readAddress (text (field "pc" (observationRegisters stock)))
+                holds = not (atExit stock) && stockPc == correctionStockPc correction && observationPassed mine
+            pure (correction, stock, stockPc, mine, holds)
+          _ -> fail (phase ++ ": expected one observation per role")
       let compared =
             [ (scenario, stock, mine, problems)
             | (scenario, stock, mine) <- zip3 cases stocks owneds
@@ -490,7 +511,7 @@ main = do
           staleUnreachable = [gap | gap <- declared, gap `notElem` missing]
           unauthenticated = [entry | function <- Coverage.coverageFunctions covered, let entry = Coverage.functionEntry function, not (Coverage.functionAuthenticated function)]
           complete = null uncovered && null staleUnreachable && null unauthenticated
-          equal = null different && null undetected && complete
+          equal = null different && null undetected && complete && all (\(_, _, _, _, holds) -> holds) judgedCorrections
           report =
             object
               [ "suite" .= ("exif-writer" :: String)
@@ -521,6 +542,21 @@ main = do
                       , "detected" .= not (null detected)
                       ]
                   | (name, digest, detected, other) <- controls
+                  ]
+              , "corrections" .=
+                  [ object
+                      [ "name" .= correctionName correction
+                      , "case" .= scenarioName (correctionMalformed correction)
+                      , "reference" .= scenarioName (correctionReference correction)
+                      , "stock_status" .= observationStatus stock
+                      , "stock_pc" .= hexWord stockPc
+                      , "expected_stock_pc" .= hexWord (correctionStockPc correction)
+                      , "owned_status" .= observationStatus mine
+                      , "owned_passed" .= observationPassed mine
+                      , "owned_mismatches" .= observationMismatches mine
+                      , "holds" .= holds
+                      ]
+                  | (correction, stock, stockPc, mine, holds) <- judgedCorrections
                   ]
               , "stock_coverage" .=
                   object

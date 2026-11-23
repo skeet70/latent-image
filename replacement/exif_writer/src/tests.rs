@@ -163,6 +163,16 @@ fn selection_follows_the_option_flag_only_when_the_option_is_set() {
 }
 
 #[test]
+fn types_the_stock_table_does_not_define_have_size_one() {
+    let mut sim = guest(&[]);
+    sim.put(0x011c_2cb8 + 13, &[0, 0, 0, 0x5a]);
+    assert_eq!(writer::type_size(&sim, 12), 16);
+    assert_eq!(writer::type_size(&sim, 13), 1);
+    assert_eq!(writer::type_size(&sim, 16), 1);
+    assert_eq!(writer::type_size(&sim, 0xffff), 1);
+}
+
+#[test]
 fn finish_stores_the_app1_length_big_endian_and_the_thumbnail_length() {
     let mut sim = Sim::default();
     sim.w32(WRITER + 0x2c, OUTPUT + 4);

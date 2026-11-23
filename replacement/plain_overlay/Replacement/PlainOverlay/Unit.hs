@@ -14,6 +14,9 @@ module Replacement.PlainOverlay.Unit
   , Row (..)
   , rowSpan
   , Entry (..)
+  , Output (..)
+  , OutputBase (..)
+  , OutputLength (..)
   , Scanned (..)
   , scannedName
   , ReviewedData (..)
@@ -24,8 +27,9 @@ module Replacement.PlainOverlay.Unit
   , hexWord
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Monad (forM_, unless, when)
-import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value, object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Types as A
 import qualified Data.ByteString as B
@@ -75,9 +79,25 @@ rowSpan (Row a _) = Span a (a + 4)
 
 -- | A stock address callers enter; the ELF holds an A32 branch there into the unit. The entry
 -- reads `entryArguments` registers from r0, returns a value in r0 when `entryReturns`, and writes
--- the buffers `entryOutputs` names: (argument register, byte count).
-data Entry = Entry {entryName :: String, entryAddress :: Word32, entryArguments :: Int, entryReturns :: Bool, entryOutputs :: [(Int, Int)]}
+-- caller memory only in `entryOutputs`, apart from the unit's state.
+data Entry = Entry {entryName :: String, entryAddress :: Word32, entryArguments :: Int, entryReturns :: Bool, entryOutputs :: [Output]}
   deriving (Eq, Show)
+
+-- | A buffer an entry writes, `outputOffset` bytes past its base.
+data Output = Output {outputBase :: OutputBase, outputOffset :: Word32, outputLength :: OutputLength}
+  deriving (Eq, Show)
+
+-- | An argument register's value, or the word at `sp + n` at entry (an argument past r3).
+data OutputBase = ArgumentRegister Int | StackArgument Word32
+  deriving (Eq, Show)
+
+-- | A fixed byte count, the byte count an argument register holds, or the byte count r0 returns,
+-- at most the given number.
+data OutputLength = Bytes Int | CountRegister Int | UpToResult Int
+  deriving (Eq, Show)
+
+maximumOutput :: Int
+maximumOutput = 262144
 
 -- | The images the reference census scans.
 data Scanned = Image4 | Image5 | Plain | LoaderA | LoaderB | Image2 | Image3
@@ -144,8 +164,15 @@ instance FromJSON Unit where
     where
       entry = withObject "entry" $ \r -> do
         Hex address <- r .: "address"
-        outputs <- mapM (withObject "output" (\b -> (,) <$> b .: "register" <*> b .: "bytes")) =<< r .: "outputs"
+        outputs <- mapM output =<< r .: "outputs"
         (\n a ret -> Entry n address a ret outputs) <$> r .: "name" <*> r .: "arguments" <*> r .: "returns"
+      output = withObject "output" $ \b -> do
+        base <- (Just . ArgumentRegister <$> b .: "register") <|> (Just . StackArgument <$> b .: "stack_word") <|> pure Nothing
+        offset <- maybe 0 id <$> b .:? "offset"
+        size <- (Just . Bytes <$> b .: "bytes") <|> (Just . CountRegister <$> b .: "count_register") <|> (Just . UpToResult <$> b .: "up_to_result") <|> pure Nothing
+        case (base, size) of
+          (Just base', Just size') -> pure (Output base' offset size')
+          _ -> fail "an output names one of register or stack_word and one of bytes, count_register or up_to_result"
       reviewedEntry = withObject "reviewed word" $ \r -> do
         imageText <- r .: "image"
         image <- case [s | s <- [minBound .. maxBound], scannedName s == imageText] of
@@ -172,9 +199,17 @@ parseUnit bytes = do
     unless (within span') (refuse ("span " ++ hexWord s ++ " leaves overlay " ++ show (overlayNumber (unitOverlay unit))))
   forM_ [(a, b) | (a : rest) <- tails spans, b <- take 1 rest] $ \(Span _ e, Span s' _) ->
     unless (e <= s') (refuse ("spans overlap at " ++ hexWord s'))
-  forM_ (unitEntries unit) $ \(Entry entry address arguments _ outputs) -> do
+  forM_ (unitEntries unit) $ \(Entry entry address arguments returns outputs) -> do
     unless (aligned address && any (`inside` address) (unitExtents unit)) (refuse ("entry " ++ entry ++ " is not a word inside an extent"))
-    unless (0 <= arguments && arguments <= 4 && all (\(r, n) -> 0 <= r && r < arguments && n > 0) outputs) (refuse ("entry " ++ entry ++ " has register arguments outside r0..r3 or an empty output"))
+    unless (0 <= arguments && arguments <= 4) (refuse ("entry " ++ entry ++ " has register arguments outside r0..r3"))
+    let argument r = 0 <= r && r < arguments
+        validBase (ArgumentRegister r) = argument r
+        validBase (StackArgument w) = arguments == 4 && aligned w
+        validLength (Bytes n) = 0 < n && n <= maximumOutput
+        validLength (CountRegister r) = argument r
+        validLength (UpToResult n) = returns && 0 < n && n <= maximumOutput
+    forM_ outputs $ \(Output base _ size) ->
+      unless (validBase base && validLength size) (refuse ("entry " ++ entry ++ " declares an output through an argument it does not take, an empty or oversized length, or a returned length without a result"))
   forM_ (unitState unit) $ \(Span s e) -> unless (s < e) (refuse "empty state span")
   pure unit
 
@@ -187,7 +222,7 @@ unitValue unit =
     , "extents" .= map spanValue (unitExtents unit)
     , "rows" .= [object ["address" .= hexWord a, "stock" .= hexWord v] | Row a v <- unitRows unit]
     , "entries" .=
-        [ object ["name" .= n, "address" .= hexWord a, "arguments" .= k, "returns" .= ret, "outputs" .= [object ["register" .= r, "bytes" .= b] | (r, b) <- outs]]
+        [ object ["name" .= n, "address" .= hexWord a, "arguments" .= k, "returns" .= ret, "outputs" .= map outputValue outs]
         | Entry n a k ret outs <- unitEntries unit
         ]
     , "state" .= map spanValue (unitState unit)
@@ -195,3 +230,9 @@ unitValue unit =
     ]
   where
     spanValue (Span s e) = [hexWord s, hexWord e]
+    outputValue (Output base offset size) =
+      object
+        ( [case base of ArgumentRegister r -> "register" .= r; StackArgument w -> "stack_word" .= w]
+            ++ ["offset" .= offset | offset /= 0]
+            ++ [case size of Bytes n -> "bytes" .= n; CountRegister r -> "count_register" .= r; UpToResult n -> "up_to_result" .= n]
+        )

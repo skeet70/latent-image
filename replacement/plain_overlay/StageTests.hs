@@ -80,7 +80,14 @@ main = do
   check "an extent outside its overlay refuses" (isLeft (reparse saveUnit {unitExtents = [Span 0x011dc000 0x011dd000]}))
   check "overlapping extents refuse" (isLeft (reparse saveUnit {unitExtents = [Span 0x011d5090 0x011d5df8, Span 0x011d5d00 0x011d5e00]}))
   check "an entry outside the extents refuses" (isLeft (reparse saveUnit {unitEntries = [Entry "outside" 0x011d5df8 0 False []]}))
-  check "an output through a register the entry does not read refuses" (isLeft (reparse saveUnit {unitEntries = [Entry "begin" 0x011d5600 1 False [(1, 4)]]}))
+  check "an output through a register the entry does not read refuses"
+    (isLeft (reparse saveUnit {unitEntries = [Entry "begin" 0x011d5600 1 False [Output (ArgumentRegister 1) 0 (Bytes 4)]]}))
+  check "a length the entry's arguments do not carry refuses"
+    (isLeft (reparse saveUnit {unitEntries = [Entry "begin" 0x011d5600 2 False [Output (ArgumentRegister 0) 0 (CountRegister 2)]]}))
+  check "a returned length on an entry that returns nothing refuses"
+    (isLeft (reparse saveUnit {unitEntries = [Entry "begin" 0x011d5600 3 False [Output (ArgumentRegister 1) 0 (UpToResult 16)]]}))
+  check "a stack output on an entry with fewer than four register arguments refuses"
+    (isLeft (reparse saveUnit {unitEntries = [Entry "begin" 0x011d5600 3 False [Output (StackArgument 0) 0 (Bytes 12)]]}))
   check "a row inside an extent refuses" (isLeft (reparse saveUnit {unitRows = [Row tables 0]}))
   let base5 = 0xbf1a00
       begin = 0x011d5600

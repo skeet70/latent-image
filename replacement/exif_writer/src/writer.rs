@@ -29,6 +29,7 @@ const EXIF_IDENTIFIER: u32 = 0x011c_2af8;
 const INTEROP_VERSION: u32 = 0x011c_2b00;
 const INTEROP_R03: u32 = 0x011c_2b18;
 const TYPE_SIZES: u32 = 0x011c_2cb8;
+const LAST_DEFINED_TYPE: u32 = 12;
 const MAKER_SIGNATURE: u32 = 0x011d_0404;
 const SAVED_MASK_B: u32 = 0x011d_040c;
 const PRINTIM: u32 = 0x011d_22fc;
@@ -127,8 +128,12 @@ fn allocate<G: Guest>(g: &mut G, size: u32, cursor: &mut u32) -> u32 {
     size
 }
 
-/// `0x011c2c98`.
+/// `0x011c2c98`, corrected: a type above 12, which the stock table does not define, has size 1
+/// (reports/exif-writer-interface.md#declared-correction).
 pub fn type_size<G: Guest>(g: &G, value_type: u32) -> u32 {
+    if value_type > LAST_DEFINED_TYPE {
+        return 1;
+    }
     g.r8(TYPE_SIZES.wrapping_add(value_type)) as u32
 }
 

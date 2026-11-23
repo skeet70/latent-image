@@ -24,17 +24,48 @@ data Role = Role {roleHits :: [Value], roleFetches :: [(T.Text, Int)], roleResid
 stockRole :: Role
 stockRole = Role [] [] True "c0"
 
--- | An entry of `begin` (three register arguments) from image 5 with R1 and R3.
-entryHit :: T.Text -> T.Text -> Value
-entryHit r1 r3 =
+task :: Value
+task = object ["kernel" .= ("a" :: T.Text), "task_id" .= (3 :: Int), "kind" .= ("available" :: T.Text)]
+
+-- | An entry hit at SITE (`address`) from image 5 with r0..r3.
+entryAt :: T.Text -> T.Text -> [T.Text] -> Value
+entryAt site address values =
   object
-    [ "site" .= ("entry:save_file_machine:begin" :: T.Text), "address" .= ("0x11d5600" :: T.Text), "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int)
-    , "task" .= object ["kernel" .= ("a" :: T.Text), "task_id" .= (3 :: Int), "kind" .= ("available" :: T.Text)]
-    , "registers" .= object ["r0" .= ("0x1" :: T.Text), "r1" .= r1, "r2" .= ("0xe4e5dc" :: T.Text), "r3" .= r3]
+    [ "site" .= site, "address" .= address, "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int), "task" .= task
+    , "registers" .= object [K.fromText ("r" <> T.pack (show i)) .= v | (i, v) <- zip [0 :: Int ..] values]
     ]
 
+-- | The return to image 5 of the call entered at SITE, with r0 and the captured output bytes.
+returnFrom :: T.Text -> T.Text -> [T.Text] -> Value
+returnFrom site r0 captured =
+  object
+    [ "site" .= ("call-return" :: T.Text), "address" .= ("0xe51aec" :: T.Text), "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int), "task" .= task
+    , "registers" .= object ["r0" .= r0]
+    , "observation" .= object ["site" .= site, "reads" .= [object ["bytes" .= b] | b <- captured]]
+    ]
+
+-- | An entry of `begin` (three register arguments) with R1 and R3.
+entryHit :: T.Text -> T.Text -> Value
+entryHit r1 r3 = entryAt "entry:save_file_machine:begin" "0x11d5600" ["0x1", r1, "0xe4e5dc", r3]
+
+-- | `begin` returning with the word it leaves at descriptor + 0x14c.
+beginReturn :: T.Text -> Value
+beginReturn appended = returnFrom "0x11d5600" "0x0" [appended]
+
 reachedRole :: Role
-reachedRole = stockRole {roleHits = [entryHit "0x14e0000" "0x0"], roleFetches = [("0x11d5604", 3)]}
+reachedRole = stockRole {roleHits = [entryHit "0x14e0000" "0x0", beginReturn "00000000"], roleFetches = [("0x11d5604", 3)]}
+
+-- | `write_exif_header` returning 4, the first eight bytes of its output window WRITTEN, then its
+-- IFD0 identity and +0x154 words.
+headerRole :: T.Text -> Role
+headerRole written =
+  stockRole
+    { roleHits =
+        [ entryAt "entry:exif_writer:write_exif_header" "0x11db098" ["0x400000", "0x500000", "0x501000", "0x510000"]
+        , returnFrom "0x11db098" "0x4" [written, T.replicate 224 "0", T.replicate 16 "0"]
+        ]
+    , roleFetches = [("0x11db098", 1)]
+    }
 
 writeRole :: FilePath -> Value -> T.Text -> Role -> IO ()
 writeRole directory unit name role = do
@@ -65,16 +96,19 @@ verdictOf path = do
 main :: IO ()
 main = do
   arguments <- getArgs
-  (observe, manifest, elf) <- case arguments of
-    [tool, unitPath, elfPath] -> pure (tool, unitPath, elfPath)
-    _ -> fail "usage: observe-compare-tests PLAIN_OVERLAY_OBSERVE SAVE_UNIT SAVE_ELF"
+  (observe, manifest, elf, exifManifest, exifElf) <- case arguments of
+    [tool, unitPath, elfPath, exifPath, exifElfPath] -> pure (tool, unitPath, elfPath, exifPath, exifElfPath)
+    _ -> fail "usage: observe-compare-tests PLAIN_OVERLAY_OBSERVE SAVE_UNIT SAVE_ELF EXIF_UNIT EXIF_ELF"
   unit <- B.readFile manifest >>= either fail pure . A.eitherDecodeStrict'
+  exifUnit <- B.readFile exifManifest >>= either fail pure . A.eitherDecodeStrict'
   base <- maybe getTemporaryDirectory pure =<< lookupEnv "TEST_TMPDIR"
   let root = base </> "plain-overlay-observe-compare"
   createDirectory root
   writeRole (root </> "stock") unit "stock" stockRole
   writeRole (root </> "stock-reached") unit "stock" reachedRole
+  writeRole (root </> "stock-header") exifUnit "stock" (headerRole "ffd8ffe1cdcdcdcd")
   let ownedReached = reachedRole {roleFetches = [("0x11d5600", 1)]}
+      unitOf name = if "header" `T.isInfixOf` T.pack name then exifUnit else unit
       cases =
         [ ("unreached", "stock", "owned", stockRole, [elf], ExitSuccess, "equal")
         , ("fetch-in-owned-function", "stock", "owned", stockRole {roleFetches = [("0x11d5600", 1)]}, [elf], ExitSuccess, "equal")
@@ -85,12 +119,15 @@ main = do
         , ("stock-rerun", "stock", "stock", stockRole, [], ExitSuccess, "equal")
         , ("reached-equal", "stock-reached", "owned", ownedReached, [elf], ExitSuccess, "equal")
         , ("reached-memory-chunk", "stock-reached", "owned", ownedReached {roleChunk = "c1"}, [elf], ExitSuccess, "equal")
-        , ("reached-unread-register", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0000" "0x5"]}, [elf], ExitSuccess, "equal")
-        , ("reached-argument", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0004" "0x0"]}, [elf], ExitFailure 1, "different")
+        , ("reached-unread-register", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0000" "0x5", beginReturn "00000000"]}, [elf], ExitSuccess, "equal")
+        , ("reached-argument", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0004" "0x0", beginReturn "00000000"]}, [elf], ExitFailure 1, "different")
+        , ("reached-output-written-wrong", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0000" "0x0", beginReturn "01000000"]}, [elf], ExitFailure 1, "different")
+        , ("header-past-result", "stock-header", "owned", headerRole "ffd8ffe1aaaaaaaa", [exifElf], ExitSuccess, "equal")
+        , ("header-within-result", "stock-header", "owned", headerRole "ffd8ffe0cdcdcdcd", [exifElf], ExitFailure 1, "different")
         ]
   failures <- fmap concat . sequence $
     [ do
-        writeRole (root </> name) unit role observation
+        writeRole (root </> name) (unitOf name) role observation
         let output = root </> (name ++ ".json")
         (code, _, err) <- readProcessWithExitCode observe (["compare", root </> reference, root </> name, output] ++ elves) ""
         verdict <- verdictOf output

@@ -19,6 +19,8 @@ module Replacement.ExifWriter.Cases
   , Argument (..)
   , Step (..)
   , scenarios
+  , Correction (..)
+  , corrections
   , replaySources
   , parsedReplays
   , globalsBase
@@ -115,9 +117,13 @@ stockFunctions =
   ]
 
 -- | Stock overlay functions outside the extents that cases call: the thumbnail offset patch of
--- the RAF writer and the MPF index and attribute writers.
+-- the RAF writer, the MPF index and attribute writers, and the saved-Exif parser 0x011c36f8
+-- with the three helpers it calls.
 retainedCallers :: [(Word32, Word32)]
-retainedCallers = [(0x011c1d18, 48), (0x011c1d48, 64), (0x011c1d88, 120)]
+retainedCallers =
+  [ (0x011c1d18, 48), (0x011c1d48, 64), (0x011c1d88, 120)
+  , (0x011c2490, 40), (0x011c2b80, 64), (0x011c2bc0, 128), (0x011c36f8, 14136)
+  ]
 
 -- | Conditional branch directions of 'stockFunctions' no input reaches: (branch address,
 -- @taken@ or @not-taken@, the bytes that decide it).
@@ -166,10 +172,13 @@ data Service = Service
   , serviceEnd :: Word32
   }
 
--- | The services the writer calls, and @0x7221a0@, which @memset@ calls.
+-- | The services the writer calls, @0x7221a0@, which @memset@ calls, and the loader-A divide
+-- the overlay's parser calls with a type size and its division-by-zero trap.
 services :: [Service]
 services =
   [ Service "copy-bytes" "loader-a" 0x4357c 0x435ac
+  , Service "division-trap" "loader-a" 0x43604 0x43634
+  , Service "divide" "loader-a" 0x4d978 0x4da8c
   , Service "strcpy" "image4" 0x721b04 0x721b40
   , Service "strncpy" "image4" 0x721b40 0x721bac
   , Service "strlen" "image4" 0x721f30 0x721f6c
@@ -839,3 +848,38 @@ parsedReplays plain source output = do
           , scenarioHeader = Just (HeaderCall (pass + 1) option)
           }
   pure [replay 0, replay 1]
+
+-- | A declared correction: stock stops at @correctionStockPc@ on @correctionMalformed@; owned
+-- returns, leaving the memory stock leaves on @correctionReference@ with @correctionPatch@
+-- (block, offset, bytes) applied, the one input byte range the two scenarios differ in.
+data Correction = Correction
+  { correctionName :: String
+  , correctionMalformed :: Scenario
+  , correctionReference :: Scenario
+  , correctionStockPc :: Word32
+  , correctionPatch :: (String, Int, B.ByteString)
+  }
+
+-- | Type sizes above 12 (reports/exif-writer-interface.md#declared-correction): the overlay's
+-- parser 0x011c36f8 reading a maker-note directory whose one entry, tag 0x4101, carries type 13,
+-- whose stock table byte at 0x011c2cc5 is 0. Stock divides the copied length by that size at
+-- 0x011c6760 and stops in the loader-A trap 0x43604; owned sizes the type as 1 and parses the
+-- entry as the same directory with type 1.
+corrections :: [Correction]
+corrections = [Correction "type-size-unknown-type" (parse 13) (parse 1) 0x4360c ("ifd", 4, u16 13)]
+  where
+    ifdBase = 0x00506000
+    parse valueType =
+      Scenario
+        { scenarioName = "parser-maker-4101-type-" ++ show valueType
+        , scenarioProvenance = "The overlay's saved-Exif parser 0x011c36f8 on a little-endian maker-note directory of one entry, tag 0x4101 with type " ++ show valueType ++ " and count 3, the parser's state saving off, its source block at the maker block."
+        , scenarioBlocks =
+            [ Block "parser" parserBase (block 0x20 0 [(0x0, u32 makerBase), (0x14, u32 savedBase)])
+            , Block "state" savedBase (block savedBytes 0 [(0x34, u32 0x10000), (0x54, u32 ifdBase)])
+            , Block "ifd" ifdBase (block 0x40 0 [(0x0, u16 1), (0x2, u16 0x4101), (0x4, u16 valueType), (0x6, u32 3), (0xa, BC.pack "abc")])
+            , Block "maker" makerBase (B.replicate 0x1000 0)
+            ]
+        , scenarioCursor = 0
+        , scenarioSteps = [call 0x011c36f8 (map Literal [2, ifdBase, ifdBase, parserBase])]
+        , scenarioHeader = Nothing
+        }
