@@ -173,6 +173,21 @@ Scope: Host-only X-M1 1.50. Native Cortex-R5F runs of 0x011db098 over captures w
 
 <!-- /evidence-record E-EXIF-WRITER-NATIVE-150 -->
 
+## Save file machine
+
+[`save_file_machine/`](save_file_machine/) owns the overlay-46 machine that carries a save from the facade's `0x2b01` to the closed file and the completion `0x00e4e5dc` ([contract](../reports/save-file-machine.md)): the 29 stock functions of `[0x011d5090,0x011d5df8)`, with the registry record `0x014ddbfc`, the scatter-list writes, the cancel and error paths, the naming and the output mode. It shares the overlay-46 carrier with the Exif writer: `save-file-machine.ld` links a four-byte `sfm_entry_<name>` veneer at the seven called entries and the five callbacks the machine hands to the file service, keeps the dispatcher's event table, extension strings and state table at `0x011d5d44`, and packs the Rust handlers, state lists and bodies into the rest of the extent. `//replacement/save_file_machine:host-tests` runs the crate's tests.
+
+`save-file-machine-suite RUNNER LOADER_A IMAGE4 IMAGE5 PLAIN OWNED_ELF EXIF_ELF OUTPUT CONTROL=ELF ...` maps overlay 46 as stock, or with the Exif writer ELF over its extents and the machine ELF (owned or a control) over the machine's. A driver initialises the stock registries of workers 1 and 2 (`0x6e2390`), calls the entries and the result callbacks the way the facade and the media task do, and after every call drains the queue the stock post `0x6e2b80` fills through a stub of the kernel send, dispatching each message through the stock `0x6e2aa0`. The file-service posters, event report, DCF name, prefix mode, property byte, kernel task and flag services are logging stubs; `strcpy`, `strcat`, `memcpy` and `memset` run from their stock bytes behind a recorder, and the completion is stock image-5 `0x00e4e5dc`. The stock role's final memory, ordered log and results are the expectation; the suite folds the stock reports' branch bitmaps over the 29 functions and fails on any direction neither reached nor listed in `unreachableDirections` (`Replacement/SaveFileMachine/Cases.hs`, empty).
+
+```sh
+devenv shell -- host-build build //replacement/save_file_machine:all //replacement/exif_writer:exif-writer-image //emulation:native-runner
+devenv shell -- env XM1_NATIVE_MEMORY_MAX=2G run-output exec --label save-file-machine -- bash -c 'B=bazel-bin/replacement/save_file_machine/save-file-machine-image; A=private-data/analysis/x-m1-1.50; exec /var/home/murph/Code/latent-image/bazel-bin/emulation/emulator-slot --native bazel-bin/replacement/save_file_machine/save-file-machine-suite bazel-bin/emulation/native-runner $A/decode/loader-40000.bin $A/lz/id4-0061c400.bin $A/lz/id5-00bf1a00.bin $A/lz/plain-01100000.bin $B.elf bazel-bin/replacement/exif_writer/exif-writer-image.elf "$XM1_RUN_WORK/suite" index-unadvanced=$B-control-index-unadvanced.elf terminator-by-size=$B-control-terminator-by-size.elf append-mode-create=$B-control-append-mode-create.elf status3-unmapped=$B-control-status3-unmapped.elf path-unsaved=$B-control-path-unsaved.elf cancel-always-registers=$B-control-cancel-always-registers.elf append-full-at-14=$B-control-append-full-at-14.elf extension-swapped=$B-control-extension-swapped.elf name-cut-44=$B-control-name-cut-44.elf output-mode-3-as-1=$B-control-output-mode-3-as-1.elf write-error-completes=$B-control-write-error-completes.elf prefix-version-for-source=$B-control-prefix-version-for-source.elf seek-callback-open=$B-control-seek-callback-open.elf'
+```
+
+<!-- evidence-record E-SAVE-FILE-MACHINE-NATIVE-150 -->
+
+<!-- /evidence-record E-SAVE-FILE-MACHINE-NATIVE-150 -->
+
 ## Power lifecycle
 
 [`power_lifecycle/`](power_lifecycle/) is two crates. `xm1_power_services` (root `src/services.rs`) is the services leaf: OSAL and delay primitives, the timer services, queue construction, resource routes, the serial driver, area 2, standby, the shutdown path with its task 6, 7 and 8 executors, the settings and storage shutdown actors, a typed callback registry and the dispatch of stock's installed-callback words through it. `:services-host-tests` runs its host tests and `:services-arm` builds the ARM rlib.

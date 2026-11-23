@@ -7515,5 +7515,27 @@
       {"name": "owned_sha256", "path": "private-data/scratch/ExifWriter/runs/20261123T011014Z-exif-writer/result/exif-writer.json", "pointer": ["owned_sha256"]},
       {"name": "decomp_commit", "path": "private-data/scratch/ExifWriter/runs/20261123T011014Z-exif-writer/result/exif-writer.json", "pointer": ["decomp_commit"]}
     ]
+  },
+  {
+    "id": "E-SAVE-FILE-MACHINE-NATIVE-150",
+    "claim": "The owned overlay-46 save file machine (the 29 stock functions of [0x011d5090,0x011d5df8): start 0x011d5600 and 0x011d5688, cancel 0x011d5714, the scatter-list append, output mode and name entries, the five file-service result callbacks and the state handlers), linked in place behind the same retained calls and sharing one overlay-46 carrier with the owned Exif writer, matches the stock X-M1 1.50 plain-image bytes natively through the stock image-4 registry dispatch: the save-file-machine suite is {{native_verdict}} on {{native_cases}} synthetic cases and detects every one of {{native_controls}} deliberately wrong controls. The stock role reaches {{directions_covered}} of the {{directions}} conditional branch directions of the 29 functions with {{directions_unreachable}} declared unreachable, and coverage is complete ({{coverage_complete}}) (owned ELF {{owned_sha256}}, Exif writer ELF {{exif_writer_sha256}}, plain image {{firmware_sha256}}, decomp {{decomp_commit}}).",
+    "scope": "Host-only X-M1 1.50. Native Cortex-R5F runs that register, post and dispatch through stock image-4 0x6e2390..0x6e2bf0 with the kernel send replaced by a queue the driver drains: JPEG, MPO, RAF, RAW, WAV and named saves with both prefix sources and output modes 0 to 3 and 7; appends with the seek; empty, three-entry and fifteen-entry scatter lists; open, seek, write and close failures with status 3 and other statuses, with and without a completion; cancel while open, while closing, after a save, idle and between start and dispatch, with and without a pending call; the scatter-list append at free, size-only, slot-14 and full lists; output modes 0 to 4; name copy and the name setter's cut positions. File-service posters, event report, DCF name, prefix mode, property byte, kernel task and flag services are logging stubs; strcpy, strcat, memcpy and memset run from stock image-4 bytes behind a recorder; the completion is stock image-5 0x00e4e5dc. The stock role's final memory (machine RAM, registries, completion words, descriptors), ordered service log with stack addresses masked and results are the exact expectation for a second stock run, the owned run and each control.",
+    "notes": "Inputs are synthetic (replacement/save_file_machine/Replacement/SaveFileMachine/Cases.hs). The media task, the kernel queues and the card are not run; the file service's results are delivered by calling the machine's stock callback addresses. No carrier stages overlay 46 and no emulated capture reaches save (#139), so there is no full-system pair.",
+    "artifacts": [
+      "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json"
+    ],
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["plain_sha256"]},
+      {"name": "native_verdict", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["verdict"]},
+      {"name": "native_cases", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "native_controls", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "directions_covered", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["stock_coverage", "directions_covered"]},
+      {"name": "directions", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["stock_coverage", "directions"]},
+      {"name": "directions_unreachable", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["stock_coverage", "unreachable"], "operation": "length"},
+      {"name": "coverage_complete", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["stock_coverage", "complete"]},
+      {"name": "owned_sha256", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["owned_sha256"]},
+      {"name": "exif_writer_sha256", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["exif_writer_sha256"]},
+      {"name": "decomp_commit", "path": "private-data/scratch/SaveFileMachine/runs/20261123T053534Z-save-file-machine/result/save-file-machine.json", "pointer": ["decomp_commit"]}
+    ]
   }
 ]

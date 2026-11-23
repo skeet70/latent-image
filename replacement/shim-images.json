@@ -1921,7 +1921,7 @@
         "sfm_unregister",
         "sfm_write"
       ],
-      "expected_sha256": "PENDING"
+      "expected_sha256": "3ff9eaa714608d9a76c15a8d0c59a5548fcc680a52be76d94910798395ba5a1b"
     },
     {
       "id": "//replacement/secondary_stage:secondary-stage-image",
