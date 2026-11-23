@@ -345,13 +345,14 @@ observe inputs directory record = do
   let boundary = inputBoundary inputs
       machineReads = A.toJSON [[s, e - s] | Span s e <- [machineEvents, machineStates]]
       Span builderStart builderCall = message119Builder
+      -- Provenance sites sit inside functions and track no return.
       sites =
-        (dispatcher, "dispatch", Capture [] [], Just machineReads)
-          : [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s, Just machineReads) | s <- boundaryServices boundary]
-          ++ (builderCall, "provenance:send", Capture [] [], Just (A.toJSON [[builderStart, builderCall - builderStart]]))
-          : (message119Sent, "provenance:sent", Capture [] [], Nothing)
+        (dispatcher, "dispatch", Just (Capture [] []), Just machineReads)
+          : [(serviceAddress s, "service:" ++ serviceName s, Just (serviceCapture s), Just machineReads) | s <- boundaryServices boundary]
+          ++ (builderCall, "provenance:send", Nothing, Just (A.toJSON [[builderStart, builderCall - builderStart]]))
+          : (message119Sent, "provenance:sent", Nothing, Nothing)
           : concat
-            [ [(copySiteCall c, "provenance:copy:" ++ copySiteName c, Capture [] [], Nothing), (copySiteCall c + 4, "provenance:copy-end:" ++ copySiteName c, Capture [] [], Nothing)]
+            [ [(copySiteCall c, "provenance:copy:" ++ copySiteName c, Nothing, Nothing), (copySiteCall c + 4, "provenance:copy-end:" ++ copySiteName c, Nothing, Nothing)]
             | c <- messageCopies ]
       writes = map spanValue (mergedSpans (boundaryWrites boundary ++ provenanceMemory))
       readSpans = map spanValue provenanceMemory
@@ -361,7 +362,7 @@ observe inputs directory record = do
           [ "schema" .= (1 :: Int)
           , "sites" .= object [siteKey a .= label | (a, label, _, _) <- sites]
           , "reads" .= object [siteKey a .= r | (a, _, _, Just r) <- sites]
-          , "captures" .= object [siteKey a .= captureValue capture | (a, _, capture, _) <- sites]
+          , "captures" .= object [siteKey a .= captureValue capture | (a, _, Just capture, _) <- sites]
           , "task" .= ("logical" :: T.Text)
           , "hit_limit" .= hitLimit
           , "write_ranges" .= writes
