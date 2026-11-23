@@ -509,7 +509,8 @@ savedState plain pass = savedStateOf plain [(kind, map (typed kind) present) | (
        in Parsed tag valueType (fromIntegral (B.length bytes `div` max 1 (typeSize valueType))) bytes
 
 -- | The directories of the Exif block at the start of @output@, read as TIFF: IFD0, Exif, the
--- maker note (offsets from the note), GPS when IFD0 points to it, and IFD1.
+-- maker note (offsets from the note), GPS when IFD0 points to it, and IFD1. The MakerNote entry
+-- keeps its count without its bytes, which the maker directory holds.
 parseExif :: B.ByteString -> Either String [(Int, [Parsed])]
 parseExif output = do
   unless (B.take 4 output == B.pack [0xff, 0xd8, 0xff, 0xe1]) (Left "SOI and APP1 markers differ")
@@ -522,9 +523,11 @@ parseExif output = do
     [field] -> fst <$> directoryAt 0 (fromIntegral field)
     _ -> pure []
   (thumbnail, _) <- directoryAt 0 (fromIntegral next)
-  pure [(0, map fst primary), (1, map fst exif), (2, map fst maker), (5, map fst gps), (6, map fst thumbnail)]
+  pure [(0, map fst primary), (1, map (noteSlot . fst) exif), (2, map fst maker), (5, map fst gps), (6, map fst thumbnail)]
   where
     tiff = B.drop 12 output
+    noteSlot (Parsed 0x927c valueType count _) = Parsed 0x927c valueType count B.empty
+    noteSlot parsed = parsed
     pointed directory tag = case [field | (Parsed t _ _ _, field) <- directory, t == tag] of
       [field] -> Right (fromIntegral field)
       _ -> Left ("IFD0 carries no single tag " ++ show tag)
