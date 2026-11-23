@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | playback-actor-suite RUNNER PLAIN OWNED_ELF OUTPUT CONTROL=ELF ...
+-- | playback-actor-suite [--machines N,...] RUNNER PLAIN OWNED_ELF OUTPUT CONTROL=ELF ...
 --
--- Runs the owned machines' cases on the stock plain-image bytes, on the owned ELF and on each
--- deliberately wrong owned ELF. Equal requires every stock and owned case to meet its
--- independent expectation with no stock/owned difference, and every control to fail at
--- least one case after reaching the case exit.
+-- Runs the owned machines' cases (with --machines, only the named machines' cases) on the stock
+-- plain-image bytes, on the owned ELF and on each deliberately wrong owned ELF. Equal requires
+-- every stock and owned case to meet its independent expectation with no stock/owned difference,
+-- and every control to fail at least one case after reaching the case exit.
 module Main (main) where
 
 import qualified ArmElf as E
@@ -15,9 +15,10 @@ import Control.Monad (forM, forM_, unless)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
+import Data.Word (Word32)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.FileService.Native
-import Replacement.PlaybackActor.Cases (OwnedMachine (..), code, ownedMachines, scenarios)
+import Replacement.PlaybackActor.Cases (OwnedMachine (..), code, machineCases, ownedMachines)
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -47,9 +48,14 @@ splitControl argument = case break (== '=') argument of
   (name, '=' : path) -> (name, path)
   _ -> error ("control argument is not NAME=ELF: " ++ argument)
 
+-- | The machine numbers of a leading `--machines N,...` and the remaining arguments.
+selectMachines :: [String] -> (Maybe [Word32], [String])
+selectMachines ("--machines" : list : rest) = (Just (map read (words (map (\c -> if c == ',' then ' ' else c) list))), rest)
+selectMachines arguments = (Nothing, arguments)
+
 main :: IO ()
 main = do
-  arguments <- getArgs
+  (selected, arguments) <- selectMachines <$> getArgs
   case arguments of
     runner : plainPath : ownedPath : output : controlArguments@(_ : _) -> do
       exists <- doesPathExist output
@@ -57,7 +63,7 @@ main = do
       createDirectoryIfMissing True output
       image <- B.readFile plainPath
       unless (sha256Hex (sha256 image) == plainDigest) (fail "plain image identity differs")
-      let cases = scenarios image
+      let cases = concat [scenarios | (machine, scenarios) <- machineCases image, maybe True (machine `elem`) selected]
       (owned, ownedDigest) <- loadElf ownedPath
       stocks <- runRole runner output code image Stock cases
       owneds <- runRole runner output code image (Owned "owned" owned) cases
@@ -110,4 +116,4 @@ main = do
             ++ (if equal then "equal" else "different")
         )
       unless equal exitFailure
-    _ -> fail "usage: playback-actor-suite RUNNER PLAIN OWNED_ELF OUTPUT CONTROL=ELF ..."
+    _ -> fail "usage: playback-actor-suite [--machines N,...] RUNNER PLAIN OWNED_ELF OUTPUT CONTROL=ELF ..."

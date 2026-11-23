@@ -7,7 +7,7 @@
 -- the others are path models.
 module Replacement.PlaybackActor.Cases
   ( code
-  , scenarios
+  , machineCases
   , OwnedMachine (..)
   , ownedMachines
   ) where
@@ -19,7 +19,7 @@ import Replacement.FileService.Native
 import Replacement.PlaybackActor.Machine30 (machine30)
 import Replacement.PlaybackActor.Machine61 (machine61)
 import Replacement.PlaybackActor.Machine7 (machine7)
-import Replacement.PlaybackActor.Model (machineScenarios)
+import Replacement.PlaybackActor.Model (Machine (..), machineScenarios)
 
 plainBase :: Word32
 plainBase = 0x01100000
@@ -416,8 +416,9 @@ preludeServices p = case p of
   Invoke address -> void address
   Discard address -> returning address 0x31
 
-scenarios :: B.ByteString -> [Scenario]
-scenarios image = machine0Scenarios image ++ concatMap (machineScenarios image) [machine7, machine30, machine61]
+-- | Each owned machine's number and cases.
+machineCases :: B.ByteString -> [(Word32, [Scenario])]
+machineCases image = (0, machine0Scenarios image) : [(machineIndex m, machineScenarios image m) | m <- [machine7, machine30, machine61]]
 
 -- | Every machine-0 action with every status; the action at 0x011e8e48 also with every second
 -- status after navigation status 8.

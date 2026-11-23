@@ -1,9 +1,11 @@
 module Main (main) where
 
+import Control.Exception (evaluate)
 import Control.Monad (unless)
 import Data.Word (Word32)
 import Replacement.PlaybackActor.Provenance
 import System.Exit (exitFailure)
+import System.Timeout (timeout)
 
 copyLoad, copyStore, reader :: Word32
 copyLoad = 0x722130
@@ -15,9 +17,7 @@ config = Config [(0x100, 0x110), (0x200, 0x210)] [copyLoad] [copyStore]
 
 -- | The findings and the masks of the writes, in order.
 run :: [Event] -> ([Finding], [MaskedWrite])
-run = (\(_, f, m) -> (f, reverse m)) . foldl' go (tracker config, [], [])
-  where
-    go (t, found, masks) e = let (t', f, m) = step t e in (t', found ++ f, maybe masks (: masks) m)
+run events = let (_, findings, masks) = track (tracker config) events in (findings, [m | Just m <- masks])
 
 -- | A message of 8 bytes at 0x100 whose builder stored the first 4, copied to 0x200.
 copied :: [Event]
@@ -45,8 +45,14 @@ builder =
   , 0xe593202c, 0xe50b200c, 0xe5933030, 0xe50b3008, 0xe3a010c4, 0xe24b20c8
   ]
 
+-- | A window of reads, each interpreting one of the 4 marked bytes at 0x104.
+longWindow :: Int -> [Event]
+longWindow count = copied ++ [Read 0 reader (0x104 + fromIntegral (k `mod` 4)) 1 | k <- [0 .. count - 1]]
+
 main :: IO ()
 main = do
+  let longCount = 300000
+  long <- timeout 20000000 (evaluate (length (fst (run (longWindow longCount)))))
   let (copyFindings, copyMasks) = run copied
       (overFindings, overMasks) = run (copied ++ [Write 0 0x4000 0x204 [5, 6] [0, 0], Read 0 reader 0x204 2, Write 0 0x4000 0x204 [0, 0] [1, 1]])
       (readFindings, _) = run (copied ++ [Read 0 reader 0x206 1])
@@ -71,6 +77,8 @@ main = do
       , check "a mark created outside watched memory escapes" (length unwatchedFindings == 8)
       , check "the 0x119 builder stores 48 of its 196 payload bytes" (fmap (\s -> (length s, all (`elem` s) expectedStored)) stored == Right (48, True))
       , check "a byte store in the builder is refused" (either (const True) (const False) (builderStoredOffsets 196 (builder ++ [0xe54b2014])))
+      , check "a window of 300000 interpreting reads is tracked within 20 s" (long == Just longCount)
+      , check "a long window's findings keep their order" (take 5 (fst (run (longWindow longCount))) == [Interpreted reader (0x104 + k) (Origin 0 (4 + k)) | k <- [0, 1, 2, 3, 0]])
       ]
   unless (and results) exitFailure
   where

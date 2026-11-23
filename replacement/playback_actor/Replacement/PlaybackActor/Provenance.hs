@@ -12,6 +12,7 @@ module Replacement.PlaybackActor.Provenance
   , Tracker
   , tracker
   , step
+  , track
   , marked
   , builtMessages
   , builderStoredOffsets
@@ -65,11 +66,11 @@ data Config = Config
   }
 
 data Tracker = Tracker
-  { trackerConfig :: Config
-  , trackerMarks :: M.Map Word32 Origin
-  , trackerCopies :: M.Map Int Copy
-  , trackerFrames :: M.Map Int (Word32, Word32)
-  , trackerBuilt :: Int
+  { trackerConfig :: !Config
+  , trackerMarks :: !(M.Map Word32 Origin)
+  , trackerCopies :: !(M.Map Int Copy)
+  , trackerFrames :: !(M.Map Int (Word32, Word32))
+  , trackerBuilt :: !Int
   }
 
 tracker :: Config -> Tracker
@@ -142,6 +143,18 @@ step t e = case e of
         masked = MaskedWrite (zipWith keep prior before) (zipWith keep after value)
         keep m b = if isJust m then Nothing else Just b
      in (t {trackerMarks = marks}, [], Just masked)
+
+-- | Steps through the events in order: the tracker after them, their findings in order and each
+-- event's masked write. Each step is evaluated before the next.
+track :: Tracker -> [Event] -> (Tracker, [Finding], [Maybe MaskedWrite])
+track = go [] []
+  where
+    go found masks t [] = (t, reverse found, reverse masks)
+    go !found !masks !t (e : rest) =
+      let (t', findings, masked) = step t e
+       in forced masked `seq` go (foldl (flip (:)) found findings) (masked : masks) t' rest
+    forced (Just (MaskedWrite before value)) = foldr seq () before `seq` foldr seq () value
+    forced Nothing = ()
 
 -- | The payload offsets a builder stores, from its A32 words up to the send call: the payload is
 -- the last `sub r2, r11, #F` before the call, and each `str rX, [r11, #-I]` stores the word at

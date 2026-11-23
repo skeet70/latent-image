@@ -265,18 +265,15 @@ trackWindow state window hits records = do
   (t0, found0) <- readIORef state
   started <- getMonotonicTime
   putStrLn (window ++ ": " ++ show (length records) ++ " records, " ++ show (length hits) ++ " provenance hits")
-  let go (t, found, masks) (_, _, i, e) =
-        let (t', findings, masked) = P.step t (either id id e)
-            masks' = case (e, masked) of
-              (Right _, Just m) -> M.insert i m masks
-              _ -> masks
-         in (t', found ++ map (findingValue window) findings, masks')
-      (t1, found1, masks1) = foldl go (t0, found0, M.empty) (sortOn (\(n, o, i, _) -> (n, o, i)) timed)
-  _ <- evaluate (M.size (P.marked t1) + M.size masks1 + length found1)
+  let ordered = sortOn (\(n, o, i, _) -> (n, o, i)) timed
+      (t1, findings, masked) = P.track t0 [either id id e | (_, _, _, e) <- ordered]
+      masks = M.fromList [(i, m) | ((_, _, i, Right _), Just m) <- zip ordered masked]
+      found1 = found0 ++ map (findingValue window) findings
+  _ <- evaluate (M.size masks + length found1)
   finished <- getMonotonicTime
   putStrLn (window ++ ": tracked in " ++ show (finished - started) ++ " s, " ++ show (length found1) ++ " findings, " ++ show (M.size (P.marked t1)) ++ " marked")
   writeIORef state (t1, found1)
-  pure masks1
+  pure masks
 
 main :: IO ()
 main = do
