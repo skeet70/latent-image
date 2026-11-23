@@ -7,8 +7,6 @@ exports_files(["imports.ld"])
 
 _SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/machine61.rs", "src/request.rs", "src/stock.rs"]
 
-# Staged machines' controls; the native image also carries the native-only machines 30 and 61
-# and their controls.
 PLAYBACK_ACTOR_CONTROLS = [
     "abort_keeps_state",
     "start_unpublished",
@@ -17,9 +15,6 @@ PLAYBACK_ACTOR_CONTROLS = [
     "buffer_step_kept",
     "navigation_result_shifted",
     "m7_action47_result_shifted",
-]
-
-PLAYBACK_ACTOR_NATIVE_CONTROLS = PLAYBACK_ACTOR_CONTROLS + [
     "m30_gate_swapped",
     "m30_action17_result_shifted",
     "m61_action22_result_shifted",
@@ -28,11 +23,6 @@ PLAYBACK_ACTOR_NATIVE_CONTROLS = PLAYBACK_ACTOR_CONTROLS + [
 _VARIANTS = [("", [])] + [
     ("-control-" + control.replace("_", "-"), ["--cfg", "playback_control_" + control])
     for control in PLAYBACK_ACTOR_CONTROLS
-]
-
-_NATIVE_VARIANTS = [("", [])] + [
-    ("-control-" + control.replace("_", "-"), ["--cfg", "playback_control_" + control])
-    for control in PLAYBACK_ACTOR_NATIVE_CONTROLS
 ]
 
 [xm1_rust_staticlib(
@@ -52,24 +42,6 @@ _NATIVE_VARIANTS = [("", [])] + [
     link_includes = ["imports.ld"],
     extra_ldflags = ["-Wl,--gc-sections"],
 ) for suffix, _ in _VARIANTS]
-
-[xm1_rust_staticlib(
-    name = "playback-actor-native-rust" + suffix,
-    src = "src/lib.rs",
-    crate_name = "xm1_playback_actor",
-    data = _SOURCES,
-    rustc_flags = ["-C", "overflow-checks=off", "--cfg", "playback_native_machines"] + flags,
-) for suffix, flags in _NATIVE_VARIANTS]
-
-[xm1_rust_elf(
-    name = "playback-actor-native-image" + suffix,
-    rust_staticlib = ":playback-actor-native-rust" + suffix,
-    asm_srcs = ["table.S", "table-native.S"],
-    entry = "xm1_playback_m0_action02",
-    link_script = "playback-actor-native.ld",
-    link_includes = ["imports.ld", "imports-native.ld"],
-    extra_ldflags = ["-Wl,--gc-sections"],
-) for suffix, _ in _NATIVE_VARIANTS]
 
 genrule(
     name = "host-tests",
@@ -188,10 +160,7 @@ filegroup(
         ":playback-actor-observe",
         ":playback-actor-stage",
         ":playback-actor-suite",
-    ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS] + [
-        ":playback-actor-native-image" + suffix
-        for suffix, _ in _NATIVE_VARIANTS
-    ],
+    ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS],
 )
 
 filegroup(

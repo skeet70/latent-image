@@ -377,6 +377,8 @@ observe inputs directory record = do
       writes = map spanValue writeRanges
       readSpans = map spanValue provenanceMemory
       fetches = map spanValue (boundaryRetired boundary)
+      -- Before attach the reset observation watches only the boundary's writes, and a message
+      -- built there refuses the observation.
       spec =
         object
           [ "schema" .= (1 :: Int)
@@ -385,8 +387,7 @@ observe inputs directory record = do
           , "captures" .= object [siteKey a .= captureValue capture | (a, _, Just capture, _) <- sites]
           , "task" .= ("logical" :: T.Text)
           , "hit_limit" .= hitLimit
-          , "write_ranges" .= writes
-          , "read_ranges" .= readSpans
+          , "write_ranges" .= map spanValue (writeSpans (boundaryWrites boundary))
           , "fetch_ranges" .= fetches
           , "watch_limit" .= watchLimit
           ]
@@ -457,6 +458,8 @@ observe inputs directory record = do
         summary <- summarise ("reset-" ++ fromMaybe "?" (textOf (field "phase" s))) end (field "watch" s)
         pure (object ["phase" .= field "phase" s, "instructions" .= field "instructions" s, "hits_end" .= field "hits_end" s, "watch" .= summary])
       record "reset_segments" (A.toJSON segments)
+      builtBeforeAttach <- P.builtMessages . fst <$> readIORef provenance
+      need (builtBeforeAttach == 0) "a 0x119 message was built before attach, where its memory is not watched"
       record "hits_at_attach" (A.toJSON attached)
       shot <- emulatorCapture emulator "attached"
       record "attached_screen" shot

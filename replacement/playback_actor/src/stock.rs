@@ -2,11 +2,8 @@
 //! rows name.
 
 use crate::machine0::{self, Call, Source, State, WorkState};
-#[cfg(playback_native_machines)]
 use crate::machine30;
-#[cfg(playback_native_machines)]
 use crate::machine7;
-#[cfg(playback_native_machines)]
 use crate::machine61;
 use crate::DevicePacket;
 use core::mem::MaybeUninit;
@@ -16,28 +13,18 @@ const PACKET_FRAME_WORDS: usize = 20;
 
 const MACHINE_STATES: u32 = 0x014e_a5ac;
 const MACHINE0_STATE: u32 = MACHINE_STATES;
-#[cfg(playback_native_machines)]
 const MACHINE7_STATE: u32 = MACHINE_STATES + 2 * 7;
-#[cfg(playback_native_machines)]
 const MACHINE30_STATE: u32 = MACHINE_STATES + 2 * 30;
-#[cfg(playback_native_machines)]
 const MACHINE61_STATE: u32 = MACHINE_STATES + 2 * 61;
 const MODE_STATE: u32 = 0x014e_a678;
 const BUFFER_STEP: u32 = MODE_STATE + 0x18;
 const MODE_VALUE: u32 = MODE_STATE + 0x1c;
-#[cfg(playback_native_machines)]
 const REQUEST: u32 = crate::request::BLOCK;
-#[cfg(playback_native_machines)]
 const REQUEST_EVENT: u32 = crate::request::Message119::Event.address();
-#[cfg(playback_native_machines)]
 const TRANSFER: u32 = 0x014e_aed8;
-#[cfg(playback_native_machines)]
 const TRANSFER_STEP: u32 = TRANSFER + machine30::Word::Step as u32;
-#[cfg(playback_native_machines)]
 const STEP: u32 = 0x014e_b5d0;
-#[cfg(playback_native_machines)]
 const STEP_KIND: u32 = STEP + 4;
-#[cfg(playback_native_machines)]
 const SELECTION: u32 = 0x014e_a9bc;
 
 extern "C" {
@@ -75,7 +62,6 @@ extern "C" {
     fn playback_device_notification(packet: *const u32) -> i32;
 }
 
-#[cfg(playback_native_machines)]
 extern "C" {
     fn playback_service_0120ec28() -> i32;
     fn playback_service_01212a48() -> i32;
@@ -97,7 +83,6 @@ extern "C" {
     fn playback_service_01239178() -> i32;
 }
 
-#[cfg(playback_native_machines)]
 extern "C" {
     fn playback_dispatch_machine3_events() -> i32;
     fn playback_dispatch_machine46_events() -> i32;
@@ -153,7 +138,6 @@ extern "C" {
     fn playback_service_012441f0() -> i32;
 }
 
-#[cfg(playback_native_machines)]
 extern "C" {
     fn playback_service_0120c1a8() -> i32;
     fn playback_service_0121eda0() -> i32;
@@ -271,7 +255,6 @@ impl machine0::Services for Stock {
     }
 }
 
-#[cfg(playback_native_machines)]
 impl machine7::Services for Stock {
     fn call(&mut self, call: machine7::Call) -> i32 {
         use machine7::Call as C;
@@ -328,7 +311,6 @@ impl machine7::Services for Stock {
     }
 }
 
-#[cfg(playback_native_machines)]
 impl machine30::Services for Stock {
     fn call(&mut self, call: machine30::Call) -> i32 {
         use machine30::Call as C;
@@ -437,7 +419,6 @@ impl machine30::Services for Stock {
     }
 }
 
-#[cfg(playback_native_machines)]
 impl machine61::Services for Stock {
     fn call(&mut self, call: machine61::Call) -> i32 {
         use machine61::Call as C;
@@ -539,7 +520,6 @@ actions! { machine0 {
     xm1_playback_m0_action32 => action32,
 } }
 
-#[cfg(playback_native_machines)]
 actions! { machine7 {
     xm1_playback_m7_action02 => action02, xm1_playback_m7_action03 => action03,
     xm1_playback_m7_action04 => action04, xm1_playback_m7_action05 => action05,
@@ -568,7 +548,6 @@ actions! { machine7 {
     xm1_playback_m7_action50 => action50,
 } }
 
-#[cfg(playback_native_machines)]
 actions! { machine30 {
     xm1_playback_m30_action02 => action02, xm1_playback_m30_action03 => action03,
     xm1_playback_m30_action04 => action04, xm1_playback_m30_action05 => action05,
@@ -589,7 +568,6 @@ actions! { machine30 {
     xm1_playback_m30_action34 => action34, xm1_playback_m30_action35 => action35,
 } }
 
-#[cfg(playback_native_machines)]
 actions! { machine61 {
     xm1_playback_m61_action02 => action02, xm1_playback_m61_action03 => action03,
     xm1_playback_m61_action04 => action04, xm1_playback_m61_action05 => action05,
