@@ -15,6 +15,10 @@ EXIF_CONTROLS = [
     "odd_values_unpadded",
     "capacity_unclamped",
     "identity_not_copied",
+    "raw_base_unset",
+    "mpf_version_unfiltered",
+    "saved_parser_bank_fixed",
+    "image_records_unskipped",
 ]
 
 _VARIANTS = [("", [])] + [

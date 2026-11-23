@@ -213,6 +213,7 @@ pub fn write_primary<G: Guest>(g: &mut G, source: u32, destination: u32) -> u32 
     if writer_mode > 3 {
         return 0;
     }
+    #[cfg(not(exif_control_raw_base_unset))]
     if directory_format(g) == format::FILTERED && writer_mode == 3 {
         g.w32(SETTINGS + 8, destination);
         g.w32(WRITER, destination);
@@ -666,6 +667,8 @@ pub fn write_filtered_directory<G: Guest>(g: &mut G, kind: u32, source: u32, des
 
 /// `0x011c2154`: saves (`direction` 1) or loads (`direction` 0) a bank of the saved parser.
 pub fn transfer_saved_parser<G: Guest>(g: &mut G, parser: u32, bank: u32, direction: u32) -> i32 {
+    #[cfg(exif_control_saved_parser_bank_fixed)]
+    let bank = bank & 0;
     let (state, file) = match bank {
         0 => (SAVED_STATE[0], SAVED_FILE[0]),
         1 => (SAVED_STATE[1], SAVED_FILE[1]),
@@ -1010,7 +1013,10 @@ pub fn should_write_tag<G: Guest>(g: &G, kind: u32, tag: u32, s: u32) -> u32 {
             if tag != 0xb000 {
                 return 1;
             }
-            (word(0x1c) != 0) as u32
+            #[cfg(exif_control_mpf_version_unfiltered)]
+            return 1;
+            #[cfg(not(exif_control_mpf_version_unfiltered))]
+            return (word(0x1c) != 0) as u32;
         }
         _ => 1,
     }
@@ -1259,7 +1265,11 @@ pub mod callback {
                 let mut index: u32 = 0;
                 loop {
                     let record = source.wrapping_add(832 * index);
-                    if g.r32(record + 0x1d3c) == 1 || g.r32(record + 0x1d74) == 1 {
+                    #[cfg(not(exif_control_image_records_unskipped))]
+                    let present = g.r32(record + 0x1d3c) == 1 || g.r32(record + 0x1d74) == 1;
+                    #[cfg(exif_control_image_records_unskipped)]
+                    let present = true;
+                    if present {
                         let written = write_filtered_directory(g, kind::IMAGE_RECORD, record + 0x1d3c, at, cursor);
                         g.w32(size, written);
                         g.w32(offset, at.wrapping_sub(cursor));
