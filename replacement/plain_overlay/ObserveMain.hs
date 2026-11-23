@@ -70,6 +70,7 @@ data Inputs = Inputs
   , inputPaths :: M.Map String FilePath
   , inputUnits :: [FilePath]
   , inputDumps :: [Word32]
+  , inputPulse :: Maybe (Integer, Integer)
   , inputRoute :: [CrawlKey]
   }
 
@@ -123,15 +124,18 @@ parseInputs arguments = do
       others = [(k, v) | (k, v) <- pairs, k `notElem` ["unit", "dump-chunk"]]
       values = M.fromList others
       required = ["adjustment-nand", "boot-rom", "bridge", "output", "plain", "role", "run", "update"]
-  need (length others == M.size values && M.keys (foldr M.delete values ["card", "route", "prior"]) == required && not (null units))
-    "observe requires each of --role --update --plain --run --boot-rom --adjustment-nand --bridge --output once, at least one --unit, and at most one --card and --route"
+  need (length others == M.size values && M.keys (foldr M.delete values ["card", "route", "prior", "key-pulse"]) == required && not (null units))
+    "observe requires each of --role --update --plain --run --boot-rom --adjustment-nand --bridge --output once, at least one --unit, and at most one --card, --route, --prior and --key-pulse"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
   keys <- maybe (pure [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]) (mapM crawlKey . splitOn) (M.lookup "route" values)
   dumps <- mapM (\v -> maybe (ioError (userError ("--dump-chunk takes a MiB-aligned 0x address: " ++ v))) pure (aligned =<< hexValue (String (T.pack v)))) [v | ("dump-chunk", v) <- pairs]
-  pure (Inputs role (M.delete "role" (M.delete "route" values)) units dumps keys)
+  pulse <- forM (M.lookup "key-pulse" values) $ \v -> case reads <$> splitOn v of
+    [[(hold, "")], [(release, "")]] | hold > 0, release > 0 -> pure (hold, release)
+    _ -> ioError (userError ("--key-pulse takes HOLD,RELEASE instruction counts: " ++ v))
+  pure (Inputs role (foldr M.delete values ["role", "route", "key-pulse"]) units dumps pulse keys)
   where
     aligned a = if a `mod` fromIntegral memoryChunk == 0 && fromIntegral a < dramBytes then Just a else Nothing
     collect [] = pure []
@@ -143,6 +147,15 @@ parseInputs arguments = do
     crawlKey wire = case [key | key <- [minBound .. maxBound], crawlKeyWire key == wire] of
       [key] -> pure key
       _ -> ioError (userError ("--route names an unknown key: " ++ wire))
+
+-- | A route key: the bridge's default pulse and settle, or HOLD and RELEASE instructions and no
+-- settle, leaving the guest's response to the idle that follows.
+keyRequest :: Maybe (Integer, Integer) -> CrawlKey -> Value
+keyRequest pulse k =
+  object
+    ( ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k]
+        ++ concat [["hold_instructions" .= hold, "release_instructions" .= release, "settle_instructions" .= (1 :: Int)] | Just (hold, release) <- [pulse]]
+    )
 
 loadUnits :: [FilePath] -> IO [Unit]
 loadUnits paths = forM paths $ \path -> B.readFile path >>= either (ioError . userError) pure . parseUnit
@@ -496,7 +509,7 @@ observe inputs directory record = do
             case prior of
               Nothing -> do
                 _ <- emulatorBridgeCommand emulator watch
-                press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
+                press <- maybe (pure Null) (emulatorBridgeCommand emulator . keyRequest (inputPulse inputs)) key
                 settled <- idle emulator (maybe finalChunks (const settleChunks) key)
                 observed <- emulatorWatchEnd emulator
                 last' <- drain emulator
@@ -516,7 +529,7 @@ observe inputs directory record = do
                 pressedFrom <- readIORef lastEnd
                 pressRef <- newIORef Null
                 watchPiece emulator extents windowsLog "window" pressedFrom $ do
-                  press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
+                  press <- maybe (pure Null) (emulatorBridgeCommand emulator . keyRequest (inputPulse inputs)) key
                   writeIORef pressRef press
                   pure firstStart
                 press <- readIORef pressRef
