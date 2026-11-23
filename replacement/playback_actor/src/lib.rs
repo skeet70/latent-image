@@ -7,6 +7,7 @@
 pub mod machine0;
 #[cfg(any(test, playback_native_machines))]
 pub mod machine30;
+#[cfg(any(test, playback_native_machines))]
 pub mod machine7;
 #[cfg(target_arch = "arm")]
 #[allow(unsafe_code)]

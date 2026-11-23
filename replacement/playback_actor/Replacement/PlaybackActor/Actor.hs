@@ -52,7 +52,7 @@ stepState = Span 0x014eb5d0 0x014eb5d8
 
 -- | The staged machines' action extents.
 retired :: [Span]
-retired = [Span 0x011e8ce4 0x011ea434, Span 0x011eb824 0x011ec980]
+retired = [Span 0x011e8ce4 0x011ea434]
 
 none :: Capture
 none = Capture [] []

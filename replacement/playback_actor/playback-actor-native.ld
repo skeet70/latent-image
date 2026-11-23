@@ -1,5 +1,5 @@
-/* The staged machines and the native-only machine 30, laid out as in playback-actor.ld; the
-   highest machine extent takes the code no machine names. */
+/* The staged machine 0 and the native-only machines 7 and 30, laid out as in playback-actor.ld;
+   the highest machine extent takes the code no machine names. */
 ENTRY(xm1_playback_m0_action02)
 INCLUDE imports.ld
 SECTIONS {
