@@ -2,14 +2,14 @@
 
 -- | playback-actor-stage PLAIN OWNED_ELF OUT_PLAIN OUT_CONTRACT
 --
--- Writes the stock plain image with the owned ELF's machine sections in place: each machine's
--- action extent holds the owned code and trap words after it, and its action-table rows name
--- the owned actions. Every other byte stays stock. `rebuild-update replace-plain` then carries
--- OUT_PLAIN into a DAT.
+-- Writes the stock plain image with the owned ELF's machine sections in place: each machine whose
+-- action-table rows the ELF publishes has its action extent hold the owned code and trap words
+-- after it, and its rows name the owned actions. Every other byte stays stock.
+-- `rebuild-update replace-plain` then carries OUT_PLAIN into a DAT.
 module Main (main) where
 
 import qualified ArmElf as E
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM_, unless, when)
 import Data.Aeson (encode, object, (.=))
 import Data.Bits (shiftR)
 import qualified Data.ByteString as B
@@ -45,6 +45,22 @@ machines =
       , 0x011e98d8, 0x011e99b4, 0x011e9b08, 0x011e9b88, 0x011e9d8c, 0x011e9fa0, 0x011ea01c, 0x011ea030
       , 0x011ea044, 0x011ea05c, 0x011ea070, 0x011ea088, 0x011ea09c, 0x011ea154, 0x011ea1dc
       ]
+  , Machine "machine7" (0x011eb824, 0x011ec980) 0x0121a498
+      [ 0x011eb824, 0x011eb83c, 0x011eb860, 0x011eb888, 0x011eb8b0, 0x011eb8d8, 0x011eb958, 0x011eb980
+      , 0x011eb9a8, 0x011eb9d0, 0x011eb9f8, 0x011eba0c, 0x011eba38, 0x011eba54, 0x011ebabc, 0x011ebb38
+      , 0x011ebbb4, 0x011ebc30, 0x011ebcac, 0x011ebcc4, 0x011ebcec, 0x011ebd14, 0x011ebd3c, 0x011ebdb4
+      , 0x011ebe2c, 0x011ebe44, 0x011ebe68, 0x011ebecc, 0x011ebf54, 0x011ebf64, 0x011ebfc8, 0x011ec1c4
+      , 0x011ec3b8, 0x011ec3e4, 0x011ec4cc, 0x011ec518, 0x011ec554, 0x011ec59c, 0x011ec5d8, 0x011ec604
+      , 0x011ec63c, 0x011ec660, 0x011ec674, 0x011ec764, 0x011ec78c, 0x011ec7f0, 0x011ec868, 0x011ec8e0
+      , 0x011ec908
+      ]
+  , Machine "machine30" (0x011f31bc, 0x011f4810) 0x01219890
+      [ 0x011f31bc, 0x011f31d4, 0x011f320c, 0x011f3244, 0x011f325c, 0x011f3278, 0x011f3294, 0x011f3338
+      , 0x011f3370, 0x011f33a8, 0x011f33c0, 0x011f33dc, 0x011f351c, 0x011f3530, 0x011f3620, 0x011f3644
+      , 0x011f37f4, 0x011f3868, 0x011f3a60, 0x011f3c3c, 0x011f3cac, 0x011f3d8c, 0x011f3f5c, 0x011f40cc
+      , 0x011f41a0, 0x011f41d8, 0x011f425c, 0x011f42f8, 0x011f4410, 0x011f44b0, 0x011f4524, 0x011f45e4
+      , 0x011f4698, 0x011f4758
+      ]
   ]
 
 trapWord :: Word32
@@ -70,7 +86,12 @@ main = do
       elfBytes <- B.readFile elfPath
       elf <- either refuse pure (E.parseElf elfBytes)
       let sections = [s | s <- E.elfSections elf, E.sectionAllocated s, E.sectionSize s > 0]
-          admitted s = or [inExtent (E.sectionAddress s) (E.sectionSize s) m | m <- machines]
+          rowsOf m = [machineRows m .. machineRows m + 4 * fromIntegral (length (machineStockActions m)) - 1]
+          owned a = case [b | s <- sections, E.sectionAddress s <= a, a < E.sectionAddress s + E.sectionSize s, Just b <- [E.byteAt elf a]] of
+            b : _ -> Just b
+            [] -> Nothing
+          carried = [m | m <- machines, any (\a -> owned a /= Nothing) (rowsOf m)]
+          admitted s = or [inExtent (E.sectionAddress s) (E.sectionSize s) m | m <- carried]
           inExtent address size m =
             let (low, high) = machineActions m
                 rows = machineRows m
@@ -78,20 +99,16 @@ main = do
              in (address >= low && address + size <= high) || (address == rows && address + size == rowsEnd)
           offset a = fromIntegral (a - plainBase) :: Int
           word a = foldr (\i acc -> acc * 256 + fromIntegral (B.index plain (offset a + i))) 0 [0, 1, 2, 3] :: Word32
+      when (null carried) (refuse "the owned ELF publishes no machine's table rows")
       forM_ sections $ \s -> unless (admitted s) (refuse ("section " ++ E.sectionName s ++ " at " ++ hex (E.sectionAddress s) ++ " lies outside every carrier"))
-      forM_ machines $ \m -> forM_ (zip [0 ..] (machineStockActions m)) $ \(i, stock) ->
+      forM_ carried $ \m -> forM_ (zip [0 ..] (machineStockActions m)) $ \(i, stock) ->
         unless (word (machineRows m + 4 * i) == stock) (refuse (machineName m ++ " table row " ++ show i ++ " is not stock"))
-      let owned a = case [b | s <- sections, E.sectionAddress s <= a, a < E.sectionAddress s + E.sectionSize s, Just b <- [E.byteAt elf a]] of
-            b : _ -> Just b
-            [] -> Nothing
-          patch m =
+      let patch m =
             let (low, high) = machineActions m
-                rowsEnd = machineRows m + 4 * fromIntegral (length (machineStockActions m))
              in [(a, maybe (le trapWord !! fromIntegral (a `mod` 4)) id (owned a)) | a <- [low .. high - 1]]
-                  ++ [(a, maybe 0 id (owned a)) | a <- [machineRows m .. rowsEnd - 1]]
-          patches = concatMap patch machines
-      rowsComplete <- forM machines $ \m -> pure (all (\a -> owned a /= Nothing) [machineRows m .. machineRows m + 4 * fromIntegral (length (machineStockActions m)) - 1])
-      unless (and rowsComplete) (refuse "the owned ELF does not republish every table row")
+                  ++ [(a, maybe 0 id (owned a)) | a <- rowsOf m]
+          patches = concatMap patch carried
+      unless (all (\m -> all (\a -> owned a /= Nothing) (rowsOf m)) carried) (refuse "the owned ELF does not republish every table row")
       let changes = M.fromList [(offset a, b) | (a, b) <- patches]
           bytes = B.pack [M.findWithDefault (B.index plain i) i changes | i <- [0 .. B.length plain - 1]]
       B.writeFile outPlain bytes
@@ -107,7 +124,7 @@ main = do
                 , "rows" .= hex (machineRows m)
                 , "owned_rows" .= [hex (word' bytes (machineRows m + 4 * i)) | i <- [0 .. fromIntegral (length (machineStockActions m)) - 1]]
                 ]
-            | m <- machines
+            | m <- carried
             ]
         , "changed_bytes" .= length [() | i <- [0 .. B.length plain - 1], B.index plain i /= B.index bytes i]
         ]
