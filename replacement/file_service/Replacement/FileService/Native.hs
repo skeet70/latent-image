@@ -225,7 +225,8 @@ fixedBody elf = case sections of
 ownedFixed :: Extent
 ownedFixed = Extent (Layout.imageBase + Layout.headerBytes) Layout.imageLimit
 
--- | Stock functions, or the owned functions in the retired extents and those direct A32 branches reach from them.
+-- | Stock functions, or the owned functions in the retired extents and those reached from them by direct A32 branches
+-- or by owned function addresses loaded from PC-relative literals.
 functionsOf :: Code -> Role -> [(Word32, Word32)]
 functionsOf code Stock = codeStockFunctions code
 functionsOf code (Owned _ elf) = M.toList (reach entries seeds)
@@ -244,7 +245,7 @@ functionsOf code (Owned _ elf) = M.toList (reach entries seeds)
       _ -> Nothing
     reach found [] = found
     reach found (target : rest) = case containing target of
-      Just (low, size) | not (M.member low found) -> reach (M.insert low size found) (branchTargets low size ++ rest)
+      Just (low, size) | not (M.member low found) -> reach (M.insert low size found) (branchTargets low size ++ literalTargets low size ++ rest)
       _ -> reach found rest
     branchTargets low size =
       [ fromIntegral (toInteger address + 8 + 4 * signed)
@@ -254,6 +255,17 @@ functionsOf code (Owned _ elf) = M.toList (reach entries seeds)
       , instruction .&. 0x0e000000 == 0x0a000000
       , let offset = toInteger (instruction .&. 0xffffff)
             signed = if offset >= 0x800000 then offset - 0x1000000 else offset
+      ]
+    literalTargets low size =
+      [ value
+      | address <- [low, low + 4 .. low + size - 4]
+      , Just instruction <- [wordAt address]
+      , instruction `shiftR` 28 /= 0xf
+      , instruction .&. 0x0f7f0000 == 0x051f0000
+      , let offset = toInteger (instruction .&. 0xfff)
+            literal = toInteger address + 8 + (if instruction .&. 0x00800000 /= 0 then offset else negate offset)
+      , Just value <- [wordAt (fromIntegral literal)]
+      , M.member value functions
       ]
     wordAt :: Word32 -> Maybe Word32
     wordAt address = do
