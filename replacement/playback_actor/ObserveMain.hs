@@ -22,7 +22,7 @@
 module Main (main) where
 
 import Control.DeepSeq (rnf)
-import Control.Exception (SomeException, bracket, displayException, evaluate, try)
+import Control.Exception (SomeException, bracket, catch, displayException, evaluate, try)
 import Control.Monad (foldM, forM, forM_, replicateM, unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
@@ -50,6 +50,7 @@ import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), IOMode (..), hFlush, hSetBuffering, stdout, withBinaryFile)
+import System.IO.Error (ioeGetErrorString, isUserError)
 import GHC.Clock (getMonotonicTime)
 
 data Role = Stock | Owned deriving (Eq)
@@ -287,6 +288,14 @@ trackWindow state window hits records = do
   writeIORef state (t1, found1)
   pure masks
 
+-- | A screen capture, or the bridge's refusal (no display plane is up) as the screen.
+captureScreen :: Emulator -> String -> IO Value
+captureScreen emulator label = emulatorCapture emulator label `catch` refused
+  where
+    refused e
+      | isUserError e = pure (object ["refused" .= ioeGetErrorString e])
+      | otherwise = ioError e
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -461,7 +470,7 @@ observe inputs directory record = do
       builtBeforeAttach <- P.builtMessages . fst <$> readIORef provenance
       need (builtBeforeAttach == 0) "a 0x119 message was built before attach, where its memory is not watched"
       record "hits_at_attach" (A.toJSON attached)
-      shot <- emulatorCapture emulator "attached"
+      shot <- captureScreen emulator "attached"
       record "attached_screen" shot
       record "attached_memory" . A.toJSON =<< memory emulator "attached"
       forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> do
@@ -472,7 +481,7 @@ observe inputs directory record = do
         observed <- emulatorWatchEnd emulator
         last' <- drain emulator
         summary <- summarise ("step-" ++ show index) (last' + 1) observed
-        screen <- emulatorCapture emulator ("step-" ++ show index)
+        screen <- captureScreen emulator ("step-" ++ show index)
         state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
         putStrLn ("step-" ++ show index ++ ": captured")
         memoryDigest <- memory emulator (show index)
@@ -487,7 +496,7 @@ observe inputs directory record = do
       observed <- emulatorWatchEnd emulator
       last' <- drain emulator
       summary <- summarise "final" (last' + 1) observed
-      screen <- emulatorCapture emulator "final"
+      screen <- captureScreen emulator "final"
       memoryDigest <- memory emulator (show (length (inputRoute inputs) + 1))
       modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= summary, "screen" .= screen, "memory" .= memoryDigest] :)
       saveSteps
