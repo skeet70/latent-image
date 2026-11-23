@@ -7494,5 +7494,22 @@
       {"name": "playback_stock2", "path": "private-data/scratch/CaptureSave/runs/20261122T220856Z-dcf-numbering-playback-card/result/comparison-stock-2.json", "pointer": ["verdict"]},
       {"name": "playback_control", "path": "private-data/scratch/CaptureSave/runs/20261122T220856Z-dcf-numbering-playback-card/result/comparison-owned-profile-ignored.json", "pointer": ["verdict"]}
     ]
+  },
+  {
+    "id": "E-EXIF-WRITER-NATIVE-150",
+    "claim": "The owned overlay-46 Exif writer (header 0x011db098, finish 0x011db188 and the 31 other entries and tag-table callbacks of their closure), linked in place over the stock extents, matches the stock X-M1 1.50 plain-image bytes natively: the exif-writer suite is {{native_verdict}} on {{native_cases}} synthetic capture cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, plain image {{firmware_sha256}}, decomp {{decomp_commit}}).",
+    "scope": "Host-only X-M1 1.50. Native Cortex-R5F runs of 0x011db098 (filtered directories without and with GPS, two detected faces, saved-parse replays of passes 0 and 1) and 0x011db188, with the leaf services running from their stock loader-A and image-4 bytes behind a recorder. The stock role's observed final memory, ordered service calls (service and arguments, stack addresses masked) and results are the exact expectation for a second stock run, the owned ELF and every control; every Exif block also passes an independent TIFF layout check.",
+    "notes": "Inputs are synthetic (replacement/exif_writer/Replacement/ExifWriter/Cases.hs) shaped like an X-M1 JPEG capture; the saved replays read synthetic parse slots. No carrier stages overlay 46 and no emulated capture reaches save (#139), so there is no full-system pair (reports/exif-writer-interface.md). Filter and capacity branches no case reaches are not compared.",
+    "artifacts": [
+      "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json"
+    ],
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json", "pointer": ["plain_sha256"]},
+      {"name": "native_verdict", "path": "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json", "pointer": ["verdict"]},
+      {"name": "native_cases", "path": "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "native_controls", "path": "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "owned_sha256", "path": "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json", "pointer": ["owned_sha256"]},
+      {"name": "decomp_commit", "path": "private-data/scratch/ExifWriter/runs/20261123T003349Z-exif-writer/result/exif-writer.json", "pointer": ["decomp_commit"]}
+    ]
   }
 ]

@@ -25,6 +25,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 27 |
 | `//replacement/display_scanout:display-scanout` | Production | display_scanout | 4 |
 | `//replacement/display_scanout:display-scanout-panel` | Production | display_scanout | 4 |
+| `//replacement/exif_writer:exif-writer-image` | Production | exif_writer | 3 |
 | `//replacement/first_stage:first-stage-fixed-image` | Production | first_stage | 7 |
 | `//replacement/first_stage:first-stage-image` | Production | first_stage | 7 |
 | `//replacement/fixed_image:fixed-bank-image` | Production | display_scanout, file_service | 10 |
@@ -364,6 +365,18 @@ Classification: `module`. [Declarations](embassy_trial/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+
+## exif_writer
+
+The overlay-46 Exif writer carrier ELF: entry veneers at the stock entries and table callbacks, and import stubs for the leaf string and memory services.
+
+Classification: `linked`. [Declarations](exif_writer/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `exif_entry_*` in `entry.S` and `exif-writer.ld` | veneer or carrier at a stock address | stock callers of the Exif header and finish entries, the RAF, MPF and parser code that calls the shared helpers, and the callback words of the retained tag tables | no | every caller and tag table enters the owned writer directly | required | unestablished | `//replacement/exif_writer:exif-writer-image` (Publication, 33 symbols, 0 definite references) |
+| Owned bodies behind the entry veneers in `exif_writer/src/stock.rs` | stock-ABI export | the veneers at the 33 stock entries and the stock argument and return conventions of their callers and of the tag-table callback calls | partly | every caller uses a typed owned Exif writer API | required | unestablished | `//replacement/exif_writer:exif-writer-image` (Export, 33 symbols, 0 definite references) |
+| `imports.ld` import stubs | trampoline into retained stock | the retained loader-A byte copy and the image-4 memcpy, strcpy, strncpy, strlen and memset | no | owned memory and string primitives replace them | required | unestablished | `//replacement/exif_writer:exif-writer-image` (Import, 6 symbols, 0 definite references) |
 
 ## file_service
 

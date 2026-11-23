@@ -704,6 +704,28 @@
       "expected_sha256": "c1eb5279f4368705c7ece35fd28709ea6e292eacea3bcab55aec3ec99d35ea45"
     },
     {
+      "id": "//replacement/exif_writer:exif-writer-image",
+      "elf": "replacement/exif_writer/exif-writer-image.elf",
+      "units": [
+        "exif_writer"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/exif_writer/exif-writer.ld",
+        "replacement/exif_writer/imports.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "exif_copy_bytes",
+        "exif_copy_memory",
+        "exif_copy_string",
+        "exif_copy_string_bounded",
+        "exif_fill",
+        "exif_string_length"
+      ],
+      "expected_sha256": "072d4c0a862715c2358947b6997989e166701aad3b37b6a7bfb8697b2e0638ac"
+    },
+    {
       "id": "//replacement/first_stage:first-stage-fixed-image",
       "elf": "replacement/first_stage/first-stage-fixed-image.elf",
       "units": [

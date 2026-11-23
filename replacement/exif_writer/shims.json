@@ -1,0 +1,153 @@
+{
+  "unit": "exif_writer",
+  "summary": "The overlay-46 Exif writer carrier ELF: entry veneers at the stock entries and table callbacks, and import stubs for the leaf string and memory services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "exif_writer-01",
+      "shim": "`exif_entry_*` in `entry.S` and `exif-writer.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "stock callers of the Exif header and finish entries, the RAF, MPF and parser code that calls the shared helpers, and the callback words of the retained tag tables",
+      "owned": "no",
+      "removal": "every caller and tag table enters the owned writer directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/exif_writer:exif-writer-image",
+          "kind": "publication",
+          "symbols": [
+            "exif_entry_cb_copyright",
+            "exif_entry_cb_default_text",
+            "exif_entry_cb_exif_pointer",
+            "exif_entry_cb_gps_pointer",
+            "exif_entry_cb_image_records",
+            "exif_entry_cb_interoperability_pointer",
+            "exif_entry_cb_makernote",
+            "exif_entry_cb_one",
+            "exif_entry_cb_packed_halves",
+            "exif_entry_cb_printim",
+            "exif_entry_cb_source_bytes_122",
+            "exif_entry_cb_source_bytes_256",
+            "exif_entry_cb_source_word",
+            "exif_entry_cb_staged_block",
+            "exif_entry_cb_thumbnail_length",
+            "exif_entry_cb_thumbnail_offset",
+            "exif_entry_copy_value",
+            "exif_entry_finish",
+            "exif_entry_initialize",
+            "exif_entry_patch_thumbnail_length",
+            "exif_entry_saved_directory_slots",
+            "exif_entry_saved_directory_values",
+            "exif_entry_select_table",
+            "exif_entry_swap_halfword",
+            "exif_entry_table_count",
+            "exif_entry_transfer_saved_parser",
+            "exif_entry_type_size",
+            "exif_entry_write_exif",
+            "exif_entry_write_exif_header",
+            "exif_entry_write_filtered_directory",
+            "exif_entry_write_gps",
+            "exif_entry_write_makernote",
+            "exif_entry_write_primary"
+          ],
+          "contract": "replacement/exif_writer/exif-writer.ld",
+          "requirement": "`exif_entry_*` in `entry.S` and `exif-writer.ld`. stock callers of the Exif header and finish entries, the shared helpers and the tag-table callbacks. every caller and tag table enters the owned writer directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "exif_writer-03",
+      "shim": "Owned bodies behind the entry veneers in `exif_writer/src/stock.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "the veneers at the 33 stock entries and the stock argument and return conventions of their callers and of the tag-table callback calls",
+      "owned": "partly",
+      "removal": "every caller uses a typed owned Exif writer API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/exif_writer:exif-writer-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_exif_cb_copyright",
+            "xm1_exif_cb_default_text",
+            "xm1_exif_cb_exif_pointer",
+            "xm1_exif_cb_gps_pointer",
+            "xm1_exif_cb_image_records",
+            "xm1_exif_cb_interoperability_pointer",
+            "xm1_exif_cb_makernote",
+            "xm1_exif_cb_one",
+            "xm1_exif_cb_packed_halves",
+            "xm1_exif_cb_printim",
+            "xm1_exif_cb_source_bytes_122",
+            "xm1_exif_cb_source_bytes_256",
+            "xm1_exif_cb_source_word",
+            "xm1_exif_cb_staged_block",
+            "xm1_exif_cb_thumbnail_length",
+            "xm1_exif_cb_thumbnail_offset",
+            "xm1_exif_copy_value",
+            "xm1_exif_finish",
+            "xm1_exif_initialize",
+            "xm1_exif_patch_thumbnail_length",
+            "xm1_exif_saved_directory_slots",
+            "xm1_exif_saved_directory_values",
+            "xm1_exif_select_table",
+            "xm1_exif_swap_halfword",
+            "xm1_exif_table_count",
+            "xm1_exif_transfer_saved_parser",
+            "xm1_exif_type_size",
+            "xm1_exif_write_exif",
+            "xm1_exif_write_exif_header",
+            "xm1_exif_write_filtered_directory",
+            "xm1_exif_write_gps",
+            "xm1_exif_write_makernote",
+            "xm1_exif_write_primary"
+          ],
+          "contract": "replacement/exif_writer/exif-writer.ld",
+          "requirement": "The linker places every body inside the retired overlay-46 extents with no writable statics.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "exif_writer-02",
+      "shim": "`imports.ld` import stubs",
+      "kind": "trampoline into retained stock",
+      "other_side": "the retained loader-A byte copy and the image-4 memcpy, strcpy, strncpy, strlen and memset",
+      "owned": "no",
+      "removal": "owned memory and string primitives replace them",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/exif_writer:exif-writer-image",
+          "kind": "retained-import",
+          "symbols": [
+            "exif_copy_bytes",
+            "exif_copy_memory",
+            "exif_copy_string",
+            "exif_copy_string_bounded",
+            "exif_fill",
+            "exif_string_length"
+          ],
+          "contract": "replacement/exif_writer/imports.ld",
+          "requirement": "`imports.ld` import stubs. the retained loader-A byte copy and the image-4 memcpy, strcpy, strncpy, strlen and memset. owned memory and string primitives replace them",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}

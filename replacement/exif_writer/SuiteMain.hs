@@ -443,6 +443,7 @@ main = do
             object
               [ "suite" .= ("exif-writer" :: String)
               , "images" .= [object ["label" .= imageLabel image, "base" .= hexWord (imageBase image), "sha256" .= imageDigest image] | image <- images]
+              , "plain_sha256" .= concat [imageDigest image | image <- images, imageLabel image == "plain"]
               , "owned_sha256" .= ownedDigest
               , "decomp_commit" .= ("55436fc85c0560dd252b0410af6f2427fe198cd3" :: String)
               , "verdict" .= (if equal then "equal" else "different" :: String)

@@ -94,6 +94,6 @@ filegroup(
 
 filegroup(
     name = "shim-catalog-data",
-    srcs = glob(["**/*.ld"]) + ["BUILD.bazel"],
+    srcs = glob(["shims.json", "**/*.ld"]) + ["BUILD.bazel"],
     visibility = ["//replacement/shim_check:__pkg__"],
 )
