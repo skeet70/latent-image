@@ -545,6 +545,43 @@
       "expected_sha256": "d90e4b882c4d333b9d777faea2ba1aa43e32bbe8e27a8cded2142e3ac9a12a34"
     },
     {
+      "id": "//replacement/dcf_numbering:dcf-numbering-image",
+      "elf": "replacement/dcf_numbering/dcf-numbering-image.elf",
+      "units": [
+        "dcf_numbering"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/dcf_numbering/dcf-numbering.ld",
+        "replacement/dcf_numbering/imports.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "dcf_configuration_byte",
+        "dcf_copy_bytes",
+        "dcf_copy_memory",
+        "dcf_current_drive",
+        "dcf_drive_prefix",
+        "dcf_entry_cluster",
+        "dcf_fill_bytes",
+        "dcf_format_decimal",
+        "dcf_format_number",
+        "dcf_group_index",
+        "dcf_media_status",
+        "dcf_open_directory",
+        "dcf_path_groups",
+        "dcf_profile_directory",
+        "dcf_profile_file",
+        "dcf_refresh_snapshot",
+        "dcf_report_event",
+        "dcf_reset_profile",
+        "dcf_store_profile_directory",
+        "dcf_store_profile_file",
+        "dcf_translate_status"
+      ],
+      "expected_sha256": "d1fb3c6bc533dd51690d09c871c56c28b241795109a0feaa085511a3d82c4307"
+    },
+    {
       "id": "//replacement/develop:develop-candidate",
       "elf": "replacement/develop/develop-candidate.elf",
       "units": [
