@@ -49,11 +49,14 @@ Eighteen aligned words in the plain image fall inside `0x011cfe54`, all outside 
 - Each of the first five runs contains addresses held in the pointer arrays at `0x01215510..0x0121565c`, `0x01216fec..0x01217144` and `0x012186e0..0x0121883c`. The sixth follows the tables at `0x01232368`, `0x01232380` and `0x012323a8`, which code at `0x01230d1c..0x01231de4` addresses with `movw`/`movt`.
 - None is a usable code address. `0x011d00e1`, `0x011d011b` and `0x011d011d` are odd, so a `bx` would enter Thumb state in A32 code. `0x011d0100` (`str r9, [r3, #0x20]`) and `0x011d010c` (`beq`) lie inside `0x011cfe54`, not at its entry, and neither follows a `bl`, so neither is a return address. `0x011cfe54` is reached only by direct `bl` from the sub-writers.
 
-A carrier's reference census can therefore list these words as data. They do not block staging.
+The staging census lists the four aligned words among its reviewed sites and the odd ones as words that are not word-aligned. Over all seven scanned images it also found nine branches that would enter the extents in Thumb state and 18 further sites it reviews as data: halfword tables and high-entropy runs outside every function range, three A32 `bl` inside functions that read as Thumb `blx`, and two image-3 font words (`replacement/exif_writer/plain-overlay-unit.json`).
+
+## Staged image
+
+[`plain-overlay-stage`](../replacement/README.md#plain-image-overlay-staging) stages the writer with the [save file machine](save-file-machine.md) into the plain image and the DAT; overlay 46 is resident from attach on the cardless menu, card playback and PROTECT routes. On both card routes the overlay's saved-Exif parser (`0x011c25ec`, `0x011c36f8`, `0x011c6e30`) runs while playback reads the card's JPEGs and enters six owned entries: `saved_directory_slots`, `saved_directory_values`, `type_size`, `select_table`, `table_count` and `transfer_saved_parser`. Their interface (declared arguments, results and output bytes) is equal to stock, with no fetch of retired stock code (E-OVERLAY46-STAGED-PAIR-150). The header and directory writers are not reached.
 
 ## Blocks to a complete owned version
 
-- No carrier: main has no overlay-46 staging path, so the owned unit is qualified natively only. A staged image needs a carrier for the plain image's overlays and a reference census like the DCF one.
-- No emulated capture reaches the writer ([#139](https://github.com/skeet70/latent-image/issues/139)), so there is no full-system pair.
+- No emulated capture reaches the header and directory writers ([#139](https://github.com/skeet70/latent-image/issues/139)); full-system pairs cover only the six parser-shared entries.
 - The saved replay depends on a parse that the overlay's parsers leave behind. The suite replays synthetic slots and two stock-written Exif blocks read back as TIFF by the suite, not by the overlay's own parser.
 - The MPF index and attribute writers (`0x011c1d48`, `0x011c1d88`) and the RAF writers that share the helpers stay stock and call the owned entries.

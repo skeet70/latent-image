@@ -103,7 +103,10 @@ Cancel (`0x011d5714`, event 7) closes an open file without completing (state 3, 
 
 The [Exif writer](exif-writer-interface.md) shares the overlay: its extents end at `0x011d0404` and start again at `0x011db098`, so both owned images patch one overlay-46 carrier without overlap.
 
+## Staged image
+
+[`plain-overlay-stage`](../replacement/README.md#plain-image-overlay-staging) stages both units from their `plain-overlay-unit.json` into the plain image and the DAT. Overlay 46 is resident from attach on the cardless menu, card playback and PROTECT routes, and holds the staged bytes there. No route enters or fetches the machine, so the staged pairs show residency and non-interference for it, not behaviour (E-OVERLAY46-STAGED-PAIR-150).
+
 ## Blocks to a complete owned version
 
 - No emulated capture reaches save ([#139](https://github.com/skeet70/latent-image/issues/139)); the unit is qualified natively through the stock registry dispatch, with every stock branch direction reached (E-SAVE-FILE-MACHINE-NATIVE-150, [suite](../replacement/README.md#save-file-machine)).
-- Main has no overlay-46 staging path, so neither overlay unit is staged.
