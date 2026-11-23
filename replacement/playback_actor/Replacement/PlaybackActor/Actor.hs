@@ -26,7 +26,7 @@ module Replacement.PlaybackActor.Actor
   , provenanceMemory
   ) where
 
-import Data.List (intercalate, nub, nubBy, sort)
+import Data.List (intercalate, nub, sort)
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Numeric (showHex)
@@ -64,37 +64,121 @@ transferState = Span 0x014eaed8 0x014eb5d0
 stepState = Span 0x014eb5d0 0x014eb5d8
 
 -- | A playback machine with an owned implementation.
-data OwnedMachine = Machine0 | Machine7 | Machine30 | Machine61
+data OwnedMachine
+  = Machine0
+  | Machine1
+  | Machine2
+  | Machine3
+  | Machine4
+  | Machine5
+  | Machine6
+  | Machine7
+  | Machine8
+  | Machine30
+  | Machine34
+  | Machine44
+  | Machine45
+  | Machine46
+  | Machine47
+  | Machine56
+  | Machine57
+  | Machine61
+  | Machine66
+  | Machine70
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 machineNumber :: OwnedMachine -> Int
 machineNumber m = case m of
   Machine0 -> 0
+  Machine1 -> 1
+  Machine2 -> 2
+  Machine3 -> 3
+  Machine4 -> 4
+  Machine5 -> 5
+  Machine6 -> 6
   Machine7 -> 7
+  Machine8 -> 8
   Machine30 -> 30
+  Machine34 -> 34
+  Machine44 -> 44
+  Machine45 -> 45
+  Machine46 -> 46
+  Machine47 -> 47
+  Machine56 -> 56
+  Machine57 -> 57
   Machine61 -> 61
+  Machine66 -> 66
+  Machine70 -> 70
 
 machineExtent :: OwnedMachine -> Span
 machineExtent m = case m of
   Machine0 -> Span 0x011e8ce4 0x011ea434
+  Machine1 -> Span 0x011ea434 0x011ea5f0
+  Machine2 -> Span 0x011ea5f0 0x011eaa54
+  Machine3 -> Span 0x011eaa54 0x011eacb0
+  Machine4 -> Span 0x011eacb0 0x011eb31c
+  Machine5 -> Span 0x011eb31c 0x011eb500
+  Machine6 -> Span 0x011eb500 0x011eb824
   Machine7 -> Span 0x011eb824 0x011ec980
+  Machine8 -> Span 0x011ec980 0x011ecb1c
   Machine30 -> Span 0x011f31bc 0x011f4810
+  Machine34 -> Span 0x011f62c8 0x011f66ec
+  Machine44 -> Span 0x011f97b4 0x011fa1b4
+  Machine45 -> Span 0x011fa1b4 0x011fa618
+  Machine46 -> Span 0x011fa618 0x011facec
+  Machine47 -> Span 0x011facec 0x011fb44c
+  Machine56 -> Span 0x011fd988 0x011fdc1c
+  Machine57 -> Span 0x011fdc1c 0x011fdd38
   Machine61 -> Span 0x011fe4d0 0x011ff0dc
+  Machine66 -> Span 0x011ffd3c 0x011ffed0
+  Machine70 -> Span 0x01200f58 0x01201814
 
 machineServices :: OwnedMachine -> [Service]
 machineServices m = case m of
   Machine0 -> machine0Services
+  Machine1 -> machine1Services
+  Machine2 -> machine2Services
+  Machine3 -> machine3Services
+  Machine4 -> machine4Services
+  Machine5 -> machine5Services
+  Machine6 -> machine6Services
   Machine7 -> machine7And30Services
+  Machine8 -> machine8Services
   Machine30 -> machine7And30Services
+  Machine34 -> machine34Services
+  Machine44 -> machine44Services
+  Machine45 -> machine45Services
+  Machine46 -> machine46Services
+  Machine47 -> machine47Services
+  Machine56 -> machine56Services
+  Machine57 -> machine57Services
   Machine61 -> machine61Services
+  Machine66 -> machine66Services
+  Machine70 -> machine70Services
 
 -- | State a machine writes beyond the machine and mode halfwords every boundary watches.
 machineWrites :: OwnedMachine -> [Span]
 machineWrites m = case m of
   Machine0 -> []
+  Machine1 -> []
+  Machine2 -> []
+  Machine3 -> [Span 0x014eae1c 0x014eae20]
+  Machine4 -> [Span 0x01511339 0x0151133a, Span 0x01511348 0x0151134c]
+  Machine5 -> [Span 0x014eae84 0x014eae88]
+  Machine6 -> [Span 0x014eacb4 0x014eacbc, Span 0x014eacd4 0x014eacd8]
   Machine7 -> [requestState, stepState]
+  Machine8 -> []
   Machine30 -> [requestState, transferState]
+  Machine34 -> []
+  Machine44 -> []
+  Machine45 -> []
+  Machine46 -> [requestState]
+  Machine47 -> []
+  Machine56 -> []
+  Machine57 -> []
   Machine61 -> [selectionState]
+  Machine66 -> []
+  Machine70 -> [Span 0x0151316c 0x01513174, Span 0x0151317a 0x0151317b]
 
 -- | The machines an observation treats as owned: their action extents are retired, and their
 -- services and state are watched.
@@ -120,8 +204,14 @@ boundaryWire (Boundary machines) = intercalate "," (map (show . machineNumber) m
 boundaryRetired :: Boundary -> [Span]
 boundaryRetired (Boundary machines) = map machineExtent machines
 
+-- | One site per service address; its arguments and results are those any owned caller passes or
+-- reads.
 boundaryServices :: Boundary -> [Service]
-boundaryServices (Boundary machines) = nubBy (\a b -> serviceAddress a == serviceAddress b) (concatMap machineServices machines)
+boundaryServices (Boundary machines) = foldr merge [] (concatMap machineServices machines)
+  where
+    merge s rest = case break (\t -> serviceAddress t == serviceAddress s) rest of
+      (before, t : after) -> s {serviceArguments = nub (serviceArguments s ++ serviceArguments t), serviceResult = nub (serviceResult s ++ serviceResult t)} : before ++ after
+      (_, []) -> s : rest
 
 boundaryWrites :: Boundary -> [Span]
 boundaryWrites (Boundary machines) = [machineEvents, machineStates, modeState] ++ nub (concatMap machineWrites machines)
@@ -337,4 +427,287 @@ machine61Services =
   , withArgument 0x01243948 "service_01243948"
   , status 0x01243a6c "service_01243a6c"
   , withArgument 0x01245c7c "service_01245c7c"
+  ]
+
+machine1Services :: [Service]
+machine1Services =
+  [ status 0x0120b40c "service_0120b40c"
+  , status 0x0120cab0 "service_0120cab0"
+  , status 0x01210250 "service_01210250"
+  , status 0x012142f8 "service_012142f8"
+  , void 0x0121eb68 "trace"
+  , Service 0x0124c6fc "service_0124c6fc" ["r0"] [] none
+  ]
+
+machine2Services :: [Service]
+machine2Services =
+  [ status 0x00ec026c "service_00ec026c"
+  , status 0x00ec03dc "service_00ec03dc"
+  , void 0x0120c650 "publish_requested_mode"
+  , Service 0x0121ca80 "set_work_state" ["r0"] [] none
+  , Service 0x0121daa0 "service_0121daa0" ["r0"] [] none
+  , void 0x0121daf4 "service_0121daf4"
+  , void 0x0121db3c "service_0121db3c"
+  , void 0x0121db7c "service_0121db7c"
+  , void 0x0121dbb4 "service_0121dbb4"
+  , void 0x0121dc40 "service_0121dc40"
+  , Service 0x0121dc78 "service_0121dc78" ["r0"] [] none
+  , void 0x0121dcac "service_0121dcac"
+  , void 0x0121dd98 "service_0121dd98"
+  , Service 0x0121ddd0 "service_0121ddd0" ["r0"] [] none
+  , status 0x0121ddf0 "service_0121ddf0"
+  , status 0x0121de10 "service_0121de10"
+  , status 0x0121eabc "service_0121eabc"
+  , void 0x0121eb68 "trace"
+  ]
+
+machine3Services :: [Service]
+machine3Services =
+  [ void 0x0121eb68 "trace"
+  , void 0x0122062c "service_0122062c"
+  , withArgument 0x01220bdc "service_01220bdc"
+  , void 0x01220c94 "service_01220c94"
+  , void 0x01220cb8 "service_01220cb8"
+  , status 0x01220cc8 "service_01220cc8"
+  , status 0x01220dd0 "service_01220dd0"
+  , void 0x01220e68 "service_01220e68"
+  , withArgument 0x01220f34 "service_01220f34"
+  , status 0x01220f4c "service_01220f4c"
+  , void 0x01220fd0 "service_01220fd0"
+  , void 0x01220fe0 "service_01220fe0"
+  , status 0x01220ff0 "service_01220ff0"
+  ]
+
+machine4Services :: [Service]
+machine4Services =
+  [ void 0x0120e6e8 "service_0120e6e8"
+  , void 0x0121eb68 "trace"
+  , void 0x0123261c "service_0123261c"
+  , void 0x012390d4 "service_012390d4"
+  , status 0x01239178 "service_01239178"
+  , void 0x01249f84 "service_01249f84"
+  , void 0x01249fa0 "service_01249fa0"
+  , void 0x0124a010 "service_0124a010"
+  , status 0x0124a0a8 "service_0124a0a8"
+  , status 0x0124a0d4 "service_0124a0d4"
+  , status 0x0124a3c0 "service_0124a3c0"
+  , void 0x0124a42c "service_0124a42c"
+  , void 0x0124a480 "service_0124a480"
+  , void 0x0124a4b0 "service_0124a4b0"
+  , status 0x0124a518 "service_0124a518"
+  , status 0x0124a54c "service_0124a54c"
+  , status 0x0124a628 "service_0124a628"
+  , void 0x0124a650 "service_0124a650"
+  , void 0x0124a66c "service_0124a66c"
+  , void 0x0124a688 "service_0124a688"
+  , void 0x0124a698 "service_0124a698"
+  , void 0x0124a8c0 "service_0124a8c0"
+  , Service 0x0124a8d4 "service_0124a8d4" ["r0"] [] none
+  , void 0x0124a8fc "service_0124a8fc"
+  ]
+
+machine5Services :: [Service]
+machine5Services =
+  [ void 0x0121eb68 "trace"
+  , void 0x012200c4 "service_012200c4"
+  , void 0x012200ec "service_012200ec"
+  , void 0x01220120 "service_01220120"
+  , void 0x01220238 "service_01220238"
+  , void 0x0122026c "service_0122026c"
+  , void 0x01220294 "service_01220294"
+  ]
+
+machine6Services :: [Service]
+machine6Services =
+  [ void 0x01220314 "service_01220314"
+  , void 0x01220340 "service_01220340"
+  , void 0x01220378 "service_01220378"
+  , void 0x012203a4 "service_012203a4"
+  , void 0x012203d0 "service_012203d0"
+  , Service 0x012203f4 "service_012203f4" ["r0"] [] none
+  , void 0x01220480 "service_01220480"
+  , void 0x012204cc "service_012204cc"
+  , void 0x01220560 "service_01220560"
+  , void 0x0121eb68 "trace"
+  ]
+
+machine8Services :: [Service]
+machine8Services =
+  [ void 0x0121de50 "service_0121de50"
+  , void 0x0121de64 "service_0121de64"
+  , Service 0x0121de80 "service_0121de80" ["r0"] [] none
+  , Service 0x0121ded4 "service_0121ded4" ["r0"] [] none
+  , void 0x0121df20 "service_0121df20"
+  , void 0x0121df30 "service_0121df30"
+  ]
+
+machine34Services :: [Service]
+machine34Services =
+  [ status 0x0120b9e0 "service_0120b9e0"
+  , status 0x0120d22c "service_0120d22c"
+  , status 0x0120e42c "service_0120e42c"
+  , status 0x0120e830 "status_effect"
+  , status 0x0120eb10 "service_0120eb10"
+  , status 0x012108d0 "service_012108d0"
+  , status 0x012110f8 "service_012110f8"
+  , status 0x01211dd0 "service_01211dd0"
+  , status 0x01213c50 "service_01213c50"
+  , void 0x0121eb68 "trace"
+  ]
+
+machine44Services :: [Service]
+machine44Services =
+  [ status 0x0120bc20 "dispatch_machine3_events"
+  , status 0x0120bfd8 "service_0120bfd8"
+  , status 0x0120c1a8 "service_0120c1a8"
+  , void 0x0121eb68 "trace"
+  , void 0x0121ff9c "service_0121ff9c"
+  , void 0x0121ffc0 "service_0121ffc0"
+  , void 0x012202d0 "service_012202d0"
+  , void 0x012205e4 "service_012205e4"
+  , Service 0x012293a8 "service_012293a8" ["r0"] [] none
+  , Service 0x0123d3d4 "service_0123d3d4" ["r0"] [] none
+  , Service 0x0123d3f4 "service_0123d3f4" ["r0"] [] none
+  , status 0x0123d414 "service_0123d414"
+  , status 0x0123d454 "service_0123d454"
+  , status 0x0123d4d0 "service_0123d4d0"
+  , void 0x0123d54c "service_0123d54c"
+  , status 0x0123d584 "service_0123d584"
+  , void 0x0123d87c "service_0123d87c"
+  , void 0x0123d89c "service_0123d89c"
+  , void 0x0123d8bc "service_0123d8bc"
+  , void 0x0123da10 "service_0123da10"
+  , void 0x0123db1c "service_0123db1c"
+  , void 0x0123dc24 "service_0123dc24"
+  , void 0x0123dd1c "service_0123dd1c"
+  , void 0x0123dd38 "service_0123dd38"
+  , void 0x0123ddc0 "service_0123ddc0"
+  , status 0x0123de08 "service_0123de08"
+  , void 0x0123de38 "service_0123de38"
+  , void 0x0123df40 "service_0123df40"
+  , void 0x0123e084 "service_0123e084"
+  , void 0x0123e098 "service_0123e098"
+  ]
+
+machine45Services :: [Service]
+machine45Services =
+  [ status 0x0120c1a8 "service_0120c1a8"
+  , void 0x0121eb68 "trace"
+  , void 0x012202d0 "service_012202d0"
+  , Service 0x0123a7cc "service_0123a7cc" ["r0"] [] none
+  , Service 0x0123a7ec "service_0123a7ec" ["r0"] [] none
+  , status 0x0123a80c "service_0123a80c"
+  , status 0x0123aa04 "service_0123aa04"
+  , status 0x0123aa84 "service_0123aa84"
+  , status 0x0123ab00 "service_0123ab00"
+  , Service 0x0123ab84 "service_0123ab84" ["r0"] [] none
+  , status 0x0123b228 "service_0123b228"
+  ]
+
+machine46Services :: [Service]
+machine46Services =
+  [ status 0x0120bc20 "dispatch_machine3_events"
+  , status 0x0120bfd8 "service_0120bfd8"
+  , status 0x0120c1a8 "service_0120c1a8"
+  , void 0x0121eb68 "trace"
+  , void 0x0121ffc0 "service_0121ffc0"
+  , void 0x012202d0 "service_012202d0"
+  , void 0x012205e4 "service_012205e4"
+  , Service 0x0123b4b4 "service_0123b4b4" ["r0"] [] none
+  , Service 0x0123b4d4 "service_0123b4d4" ["r0"] [] none
+  , status 0x0123b4f4 "service_0123b4f4"
+  , status 0x0123b5a8 "service_0123b5a8"
+  , void 0x0123b688 "service_0123b688"
+  , void 0x0123b76c "service_0123b76c"
+  , void 0x0123b960 "service_0123b960"
+  , void 0x0123ba6c "service_0123ba6c"
+  , void 0x0123bb74 "service_0123bb74"
+  , status 0x0123bf2c "service_0123bf2c"
+  ]
+
+machine47Services :: [Service]
+machine47Services =
+  [ status 0x0120fe64 "service_0120fe64"
+  , status 0x0120ff70 "service_0120ff70"
+  , status 0x012100d8 "service_012100d8"
+  , status 0x012136fc "service_012136fc"
+  , void 0x0123a724 "service_0123a724"
+  , void 0x0123b470 "service_0123b470"
+  , Service 0x0123c2c8 "service_0123c2c8" ["r0"] [] none
+  , Service 0x0123c2e8 "service_0123c2e8" ["r0"] [] none
+  , Service 0x0123c308 "service_0123c308" ["r0"] [] none
+  , void 0x0123c328 "service_0123c328"
+  , void 0x0123c490 "service_0123c490"
+  , void 0x0123c4c8 "service_0123c4c8"
+  , status 0x0123cb4c "service_0123cb4c"
+  , void 0x0123cba8 "service_0123cba8"
+  , void 0x0123cbe0 "service_0123cbe0"
+  , void 0x0123cc18 "service_0123cc18"
+  , void 0x0123ce14 "service_0123ce14"
+  , void 0x0123cf48 "service_0123cf48"
+  , void 0x0123d078 "service_0123d078"
+  , void 0x0123d16c "service_0123d16c"
+  , status 0x0123d24c "service_0123d24c"
+  , void 0x0123d264 "service_0123d264"
+  , void 0x0123d390 "service_0123d390"
+  , void 0x0123e298 "service_0123e298"
+  ]
+
+machine56Services :: [Service]
+machine56Services =
+  [ status 0x01211250 "service_01211250"
+  , status 0x0121132c "service_0121132c"
+  , status 0x012135e8 "service_012135e8"
+  , void 0x0121eb68 "trace"
+  , void 0x0122b3f0 "service_0122b3f0"
+  , void 0x0122b440 "service_0122b440"
+  , void 0x0122b468 "service_0122b468"
+  , status 0x0122b800 "service_0122b800"
+  ]
+
+machine57Services :: [Service]
+machine57Services =
+  [ void 0x0121eb68 "trace"
+  , Service 0x0122b48c "service_0122b48c" ["r0"] [] none
+  , void 0x0122b4d8 "service_0122b4d8"
+  , void 0x0122b504 "service_0122b504"
+  ]
+
+machine66Services :: [Service]
+machine66Services =
+  [ status 0x01211e78 "service_01211e78"
+  , status 0x01211fdc "service_01211fdc"
+  , status 0x01212120 "service_01212120"
+  , status 0x01212310 "service_01212310"
+  , void 0x0121eb68 "trace"
+  ]
+
+machine70Services :: [Service]
+machine70Services =
+  [ status 0x00ec03dc "service_00ec03dc"
+  , void 0x0121eb68 "trace"
+  , status 0x0122c468 "service_0122c468"
+  , void 0x01233dcc "service_01233dcc"
+  , void 0x01233e0c "service_01233e0c"
+  , Service 0x0123265c "service_0123265c" ["r0"] [] none
+  , Service 0x01251c80 "service_01251c80" ["r0"] [] none
+  , Service 0x01251cd0 "service_01251cd0" ["r0"] [] none
+  , void 0x01251de8 "service_01251de8"
+  , Service 0x01251e10 "service_01251e10" ["r0"] [] none
+  , void 0x01251e40 "service_01251e40"
+  , void 0x01251e80 "service_01251e80"
+  , void 0x01251ea8 "service_01251ea8"
+  , Service 0x01251f24 "service_01251f24" ["r0"] [] none
+  , void 0x01251fc8 "service_01251fc8"
+  , status 0x0125202c "service_0125202c"
+  , Service 0x01252064 "service_01252064" ["r0"] [] none
+  , Service 0x012520b0 "service_012520b0" ["r0"] [] none
+  , void 0x012520ec "service_012520ec"
+  , void 0x01252328 "service_01252328"
+  , void 0x0125233c "service_0125233c"
+  , Service 0x01252374 "service_01252374" ["r0"] [] none
+  , status 0x01252430 "service_01252430"
+  , status 0x01252464 "service_01252464"
+  , void 0x01252490 "service_01252490"
+  , void 0x012524a0 "service_012524a0"
   ]

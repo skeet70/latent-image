@@ -137,8 +137,8 @@ mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
       | e >= s' = Span s (max e e') : rest
       | otherwise = Span s e : Span s' e' : rest
 
--- | The merged spans, the closest neighbours joined until at most the bridge's 8 write ranges remain.
--- Writes the join adds are recorded but fall outside every compared span.
+-- | The merged spans, the closest neighbours joined until at most the reset observation's 8 write
+-- ranges remain. Writes the join adds are recorded but fall outside every compared span.
 writeSpans :: [Span] -> [Span]
 writeSpans = bound . mergedSpans
   where
@@ -382,7 +382,7 @@ observe inputs directory record = do
           : concat
             [ [(copySiteCall c, "provenance:copy:" ++ copySiteName c, Nothing, Nothing), (copySiteCall c + 4, "provenance:copy-end:" ++ copySiteName c, Nothing, Nothing)]
             | c <- messageCopies ]
-      writeRanges = writeSpans (boundaryWrites boundary ++ provenanceMemory)
+      writeRanges = mergedSpans (boundaryWrites boundary ++ provenanceMemory)
       writes = map spanValue writeRanges
       readSpans = map spanValue provenanceMemory
       fetches = map spanValue (boundaryRetired boundary)

@@ -5,9 +5,25 @@
 #![deny(unsafe_code)]
 
 pub mod machine0;
+pub mod machine1;
+pub mod machine2;
+pub mod machine3;
 pub mod machine30;
-pub mod machine7;
+pub mod machine34;
+pub mod machine4;
+pub mod machine44;
+pub mod machine45;
+pub mod machine46;
+pub mod machine47;
+pub mod machine5;
+pub mod machine56;
+pub mod machine57;
+pub mod machine6;
 pub mod machine61;
+pub mod machine66;
+pub mod machine7;
+pub mod machine70;
+pub mod machine8;
 pub mod request;
 #[cfg(target_arch = "arm")]
 #[allow(unsafe_code)]

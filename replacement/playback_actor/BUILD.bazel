@@ -5,7 +5,30 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["imports.ld"])
 
-_SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/machine61.rs", "src/request.rs", "src/stock.rs"]
+_SOURCES = [
+    "src/machine0.rs",
+    "src/machine1.rs",
+    "src/machine2.rs",
+    "src/machine3.rs",
+    "src/machine4.rs",
+    "src/machine5.rs",
+    "src/machine6.rs",
+    "src/machine7.rs",
+    "src/machine8.rs",
+    "src/machine30.rs",
+    "src/machine34.rs",
+    "src/machine44.rs",
+    "src/machine45.rs",
+    "src/machine46.rs",
+    "src/machine47.rs",
+    "src/machine56.rs",
+    "src/machine57.rs",
+    "src/machine61.rs",
+    "src/machine66.rs",
+    "src/machine70.rs",
+    "src/request.rs",
+    "src/stock.rs",
+]
 
 PLAYBACK_ACTOR_CONTROLS = [
     "abort_keeps_state",
@@ -18,6 +41,22 @@ PLAYBACK_ACTOR_CONTROLS = [
     "m30_gate_swapped",
     "m30_action17_result_shifted",
     "m61_action22_result_shifted",
+    "m1_action12_result_shifted",
+    "m2_action11_result_shifted",
+    "m3_action09_result_shifted",
+    "m4_action06_result_shifted",
+    "m5_action09_result_shifted",
+    "m6_action06_result_shifted",
+    "m8_action03_result_shifted",
+    "m34_action10_result_shifted",
+    "m44_action16_result_shifted",
+    "m45_action09_result_shifted",
+    "m46_action09_result_shifted",
+    "m47_action10_result_shifted",
+    "m56_action11_result_shifted",
+    "m57_action08_result_shifted",
+    "m66_action06_result_shifted",
+    "m70_action21_result_shifted",
 ]
 
 _VARIANTS = [("", [])] + [
@@ -82,9 +121,25 @@ haskell_library(
     name = "cases",
     srcs = [
         "Replacement/PlaybackActor/Cases.hs",
+        "Replacement/PlaybackActor/Machine1.hs",
+        "Replacement/PlaybackActor/Machine2.hs",
+        "Replacement/PlaybackActor/Machine3.hs",
         "Replacement/PlaybackActor/Machine30.hs",
+        "Replacement/PlaybackActor/Machine34.hs",
+        "Replacement/PlaybackActor/Machine4.hs",
+        "Replacement/PlaybackActor/Machine44.hs",
+        "Replacement/PlaybackActor/Machine45.hs",
+        "Replacement/PlaybackActor/Machine46.hs",
+        "Replacement/PlaybackActor/Machine47.hs",
+        "Replacement/PlaybackActor/Machine5.hs",
+        "Replacement/PlaybackActor/Machine56.hs",
+        "Replacement/PlaybackActor/Machine57.hs",
+        "Replacement/PlaybackActor/Machine6.hs",
         "Replacement/PlaybackActor/Machine61.hs",
+        "Replacement/PlaybackActor/Machine66.hs",
         "Replacement/PlaybackActor/Machine7.hs",
+        "Replacement/PlaybackActor/Machine70.hs",
+        "Replacement/PlaybackActor/Machine8.hs",
         "Replacement/PlaybackActor/Model.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -122,6 +177,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     main_file = "StageMain.hs",
     deps = [
+        ":cases",
         "//emulation:case-sha256",
         "//host/firmware:bank-allowlist",
         "//host:aeson",

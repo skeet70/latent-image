@@ -16,9 +16,25 @@ import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import Data.Word (Word32)
 import Replacement.FileService.Native
+import Replacement.PlaybackActor.Machine1 (machine1)
+import Replacement.PlaybackActor.Machine2 (machine2)
+import Replacement.PlaybackActor.Machine3 (machine3)
 import Replacement.PlaybackActor.Machine30 (machine30)
+import qualified Replacement.PlaybackActor.Machine34 as Machine34
+import Replacement.PlaybackActor.Machine4 (machine4)
+import Replacement.PlaybackActor.Machine44 (machine44)
+import Replacement.PlaybackActor.Machine45 (machine45)
+import Replacement.PlaybackActor.Machine46 (machine46)
+import Replacement.PlaybackActor.Machine47 (machine47)
+import Replacement.PlaybackActor.Machine5 (machine5)
+import Replacement.PlaybackActor.Machine56 (machine56)
+import Replacement.PlaybackActor.Machine57 (machine57)
+import Replacement.PlaybackActor.Machine6 (machine6)
 import Replacement.PlaybackActor.Machine61 (machine61)
+import Replacement.PlaybackActor.Machine66 (machine66)
 import Replacement.PlaybackActor.Machine7 (machine7)
+import Replacement.PlaybackActor.Machine70 (machine70)
+import Replacement.PlaybackActor.Machine8 (machine8)
 import Replacement.PlaybackActor.Model (Machine (..), machineScenarios)
 
 plainBase :: Word32
@@ -65,6 +81,104 @@ ownedMachines =
       ]
       0x011ff0dc
       0x01215c34
+  , OwnedMachine "machine1" "xm1_playback_m1_action"
+      [ 0x011ea434, 0x011ea458, 0x011ea47c, 0x011ea490, 0x011ea4a8, 0x011ea4c8, 0x011ea4d8, 0x011ea524
+      , 0x011ea534, 0x011ea554, 0x011ea5a0, 0x011ea5b0, 0x011ea5c4, 0x011ea5d8
+      ]
+      0x011ea5f0
+      0x01218d98
+  , OwnedMachine "machine2" "xm1_playback_m2_action"
+      [ 0x011ea5f0, 0x011ea640, 0x011ea654, 0x011ea6f0, 0x011ea708, 0x011ea730, 0x011ea748, 0x011ea7ac
+      , 0x011ea824, 0x011ea880, 0x011ea8fc, 0x011ea958, 0x011ea9d0, 0x011eaa2c
+      ]
+      0x011eaa54
+      0x012173a4
+  , OwnedMachine "machine3" "xm1_playback_m3_action"
+      [ 0x011eaa54, 0x011eaa94, 0x011eaaa8, 0x011eab48, 0x011eab70, 0x011eab84, 0x011eab98, 0x011eabb0
+      , 0x011eac58
+      ]
+      0x011eacb0
+      0x01218e9c
+  , OwnedMachine "machine4" "xm1_playback_m4_action"
+      [ 0x011eacb0, 0x011eacfc, 0x011ead10, 0x011ead28, 0x011ead60, 0x011eadf4, 0x011eae5c, 0x011eaef0
+      , 0x011eaf58, 0x011eb00c, 0x011eb074, 0x011eb108, 0x011eb11c, 0x011eb144, 0x011eb1f4, 0x011eb278
+      , 0x011eb28c, 0x011eb2e0
+      ]
+      0x011eb31c
+      0x0121a3c8
+  , OwnedMachine "machine5" "xm1_playback_m5_action"
+      [ 0x011eb31c, 0x011eb344, 0x011eb358, 0x011eb370, 0x011eb394, 0x011eb3ac, 0x011eb3c0, 0x011eb3e4
+      , 0x011eb484
+      ]
+      0x011eb500
+      0x012175c4
+  , OwnedMachine "machine6" "xm1_playback_m6_action"
+      [ 0x011eb500, 0x011eb57c, 0x011eb60c, 0x011eb668, 0x011eb6c8, 0x011eb738, 0x011eb798, 0x011eb7d4
+      , 0x011eb7e8, 0x011eb800
+      ]
+      0x011eb824
+      0x012193c8
+  , OwnedMachine "machine8" "xm1_playback_m8_action"
+      [ 0x011ec980, 0x011ec9a4, 0x011ec9d4, 0x011eca04, 0x011eca3c, 0x011eca74, 0x011eca98, 0x011ecabc
+      , 0x011ecae0, 0x011ecb04
+      ]
+      0x011ecb1c
+      0x0121a398
+  , OwnedMachine "machine34" "xm1_playback_m34_action"
+      [ 0x011f62c8, 0x011f6324, 0x011f6380, 0x011f63e4, 0x011f6450, 0x011f64ac, 0x011f64f8, 0x011f6544
+      , 0x011f6590, 0x011f65dc, 0x011f65f4, 0x011f6608, 0x011f6668
+      ]
+      0x011f66ec
+      0x012177f4
+  , OwnedMachine "machine44" "xm1_playback_m44_action"
+      [ 0x011f97b4, 0x011f98b0, 0x011f98c4, 0x011f98dc, 0x011f9914, 0x011f994c, 0x011f998c, 0x011f99a4
+      , 0x011f99dc, 0x011f9a80, 0x011f9ad0, 0x011f9bf0, 0x011f9cd0, 0x011f9d54, 0x011f9e70, 0x011f9f34
+      , 0x011f9fe4, 0x011fa098, 0x011fa124
+      ]
+      0x011fa1b4
+      0x01217c8c
+  , OwnedMachine "machine45" "xm1_playback_m45_action"
+      [ 0x011fa1b4, 0x011fa250, 0x011fa264, 0x011fa2b4, 0x011fa354, 0x011fa44c, 0x011fa464, 0x011fa49c
+      , 0x011fa55c
+      ]
+      0x011fa618
+      0x01217b50
+  , OwnedMachine "machine46" "xm1_playback_m46_action"
+      [ 0x011fa618, 0x011fa6c8, 0x011fa6dc, 0x011fa6f4, 0x011fa72c, 0x011fa764, 0x011fa77c, 0x011fa7b4
+      , 0x011fa868, 0x011fa984, 0x011faa64, 0x011faae8, 0x011fabd4, 0x011fac60
+      ]
+      0x011facec
+      0x01216ea8
+  , OwnedMachine "machine47" "xm1_playback_m47_action"
+      [ 0x011facec, 0x011faf18, 0x011faf2c, 0x011faf44, 0x011faf7c, 0x011fafac, 0x011fafdc, 0x011fb00c
+      , 0x011fb260, 0x011fb2e8, 0x011fb344, 0x011fb3c4
+      ]
+      0x011fb44c
+      0x01217710
+  , OwnedMachine "machine56" "xm1_playback_m56_action"
+      [ 0x011fd988, 0x011fd9a0, 0x011fd9c0, 0x011fd9e0, 0x011fd9f0, 0x011fda18, 0x011fda2c, 0x011fda3c
+      , 0x011fda4c, 0x011fda64, 0x011fdaa0, 0x011fdadc, 0x011fdb18, 0x011fdb48, 0x011fdb78, 0x011fdba8
+      , 0x011fdbf4
+      ]
+      0x011fdc1c
+      0x01217358
+  , OwnedMachine "machine57" "xm1_playback_m57_action"
+      [ 0x011fdc1c, 0x011fdc34, 0x011fdc58, 0x011fdc7c, 0x011fdcbc, 0x011fdcd0, 0x011fdce8
+      ]
+      0x011fdd38
+      0x01216bfc
+  , OwnedMachine "machine66" "xm1_playback_m66_action"
+      [ 0x011ffd3c, 0x011ffd54, 0x011ffd78, 0x011ffda0, 0x011ffdc8, 0x011ffdf0, 0x011ffebc
+      ]
+      0x011ffed0
+      0x01218f64
+  , OwnedMachine "machine70" "xm1_playback_m70_action"
+      [ 0x01200f58, 0x01200f70, 0x01200f98, 0x01200fb0, 0x01200fcc, 0x01200ff0, 0x01201004, 0x01201028
+      , 0x012010b0, 0x012010d4, 0x012010f8, 0x01201160, 0x012011c0, 0x01201218, 0x01201274, 0x012012e8
+      , 0x01201494, 0x01201510, 0x012016f0, 0x01201778, 0x012017b4
+      ]
+      0x01201814
+      0x01216a18
   ]
 
 rowsEnd :: OwnedMachine -> Word32
@@ -418,7 +532,12 @@ preludeServices p = case p of
 
 -- | Each owned machine's number and cases.
 machineCases :: B.ByteString -> [(Word32, [Scenario])]
-machineCases image = (0, machine0Scenarios image) : [(machineIndex m, machineScenarios image m) | m <- [machine7, machine30, machine61]]
+machineCases image = (0, machine0Scenarios image) : [(machineIndex m, machineScenarios image m) | m <- models]
+  where
+    models =
+      [ machine1, machine2, machine3, machine4, machine5, machine6, machine7, machine8, machine30, Machine34.machine34
+      , machine44, machine45, machine46, machine47, machine56, machine57, machine61, machine66, machine70
+      ]
 
 -- | Every machine-0 action with every status; the action at 0x011e8e48 also with every second
 -- status after navigation status 8.

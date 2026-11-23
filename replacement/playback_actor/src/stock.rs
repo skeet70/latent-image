@@ -2,9 +2,25 @@
 //! rows name.
 
 use crate::machine0::{self, Call, Source, State, WorkState};
+use crate::machine1;
+use crate::machine2;
+use crate::machine3;
 use crate::machine30;
-use crate::machine7;
+use crate::machine34;
+use crate::machine4;
+use crate::machine44;
+use crate::machine45;
+use crate::machine46;
+use crate::machine47;
+use crate::machine5;
+use crate::machine56;
+use crate::machine57;
+use crate::machine6;
 use crate::machine61;
+use crate::machine66;
+use crate::machine7;
+use crate::machine70;
+use crate::machine8;
 use crate::DevicePacket;
 use core::mem::MaybeUninit;
 use core::ptr::{read_volatile, write_volatile};
@@ -13,9 +29,24 @@ const PACKET_FRAME_WORDS: usize = 20;
 
 const MACHINE_STATES: u32 = 0x014e_a5ac;
 const MACHINE0_STATE: u32 = MACHINE_STATES;
+const MACHINE1_STATE: u32 = MACHINE_STATES + 2;
+const MACHINE2_STATE: u32 = MACHINE_STATES + 2 * 2;
+const MACHINE3_STATE: u32 = MACHINE_STATES + 2 * 3;
+const MACHINE4_STATE: u32 = MACHINE_STATES + 2 * 4;
+const MACHINE5_STATE: u32 = MACHINE_STATES + 2 * 5;
+const MACHINE6_STATE: u32 = MACHINE_STATES + 2 * 6;
 const MACHINE7_STATE: u32 = MACHINE_STATES + 2 * 7;
 const MACHINE30_STATE: u32 = MACHINE_STATES + 2 * 30;
+const MACHINE34_STATE: u32 = MACHINE_STATES + 2 * 34;
+const MACHINE44_STATE: u32 = MACHINE_STATES + 2 * 44;
+const MACHINE45_STATE: u32 = MACHINE_STATES + 2 * 45;
+const MACHINE46_STATE: u32 = MACHINE_STATES + 2 * 46;
+const MACHINE47_STATE: u32 = MACHINE_STATES + 2 * 47;
+const MACHINE56_STATE: u32 = MACHINE_STATES + 2 * 56;
+const MACHINE57_STATE: u32 = MACHINE_STATES + 2 * 57;
 const MACHINE61_STATE: u32 = MACHINE_STATES + 2 * 61;
+const MACHINE66_STATE: u32 = MACHINE_STATES + 2 * 66;
+const MACHINE70_STATE: u32 = MACHINE_STATES + 2 * 70;
 const MODE_STATE: u32 = 0x014e_a678;
 const BUFFER_STEP: u32 = MODE_STATE + 0x18;
 const MODE_VALUE: u32 = MODE_STATE + 0x1c;
@@ -26,6 +57,19 @@ const TRANSFER_STEP: u32 = TRANSFER + machine30::Word::Step as u32;
 const STEP: u32 = 0x014e_b5d0;
 const STEP_KIND: u32 = STEP + 4;
 const SELECTION: u32 = 0x014e_a9bc;
+const IMAGE: u32 = 0x014e_ad40;
+const JPEG: u32 = 0x014e_ae2c;
+const STORAGE: u32 = 0x0151_1338;
+const STORAGE_ACTIVE: u32 = STORAGE + 1;
+const OVERLAY47: u32 = 0x014f_f2f4;
+const BLOCK_14FF3C4: u32 = 0x014f_f3c4;
+const MACHINE46_BLOCK: u32 = 0x014f_f36c;
+const STREAM: u32 = 0x014e_f894;
+const SEQUENCE: u32 = 0x0151_3154;
+const IO: u32 = 0x014e_aca8;
+const IO_COUNT: u32 = IO + 0x20;
+const IMAGE_CONTROL: u32 = 0x0151_14f4;
+const MEDIA_OUTPUT: u32 = 0x0151_49a0;
 
 extern "C" {
     fn playback_status_parameter() -> i32;
@@ -169,6 +213,17 @@ extern "C" {
     fn playback_service_01243948(argument: u32) -> i32;
     fn playback_service_01243a6c() -> i32;
     fn playback_service_01245c7c(argument: u32) -> i32;
+}
+
+extern "C" {
+    fn playback_service_0120b9e0() -> i32;
+    fn playback_service_0120d22c() -> i32;
+    fn playback_service_0120e42c() -> i32;
+    fn playback_service_0120eb10() -> i32;
+    fn playback_service_012108d0() -> i32;
+    fn playback_service_012110f8() -> i32;
+    fn playback_service_01211dd0() -> i32;
+    fn playback_service_01213c50() -> i32;
 }
 
 struct Stock;
@@ -490,6 +545,937 @@ impl machine61::Services for Stock {
     }
 }
 
+impl machine34::Services for Stock {
+    fn call(&mut self, call: machine34::Call) -> i32 {
+        use machine34::Call as C;
+        unsafe {
+            match call {
+                C::Fn120b9e0 => playback_service_0120b9e0(),
+                C::Fn120d22c => playback_service_0120d22c(),
+                C::Fn120e42c => playback_service_0120e42c(),
+                C::Fn120e830 => playback_status_effect(),
+                C::Fn120eb10 => playback_service_0120eb10(),
+                C::Fn12108d0 => playback_service_012108d0(),
+                C::Fn12110f8 => playback_service_012110f8(),
+                C::Fn1211dd0 => playback_service_01211dd0(),
+                C::Fn1213c50 => playback_service_01213c50(),
+                C::Trace => playback_trace(),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine34::State) {
+        unsafe { write_volatile(MACHINE34_STATE as *mut u16, state as u16) }
+    }
+}
+
+extern "C" {
+    fn playback_service_00ec026c() -> i32;
+    fn playback_service_00ec03dc() -> i32;
+    fn playback_service_0121daa0(argument: u32) -> i32;
+    fn playback_service_0121daf4() -> i32;
+    fn playback_service_0121db3c() -> i32;
+    fn playback_service_0121db7c() -> i32;
+    fn playback_service_0121dbb4() -> i32;
+    fn playback_service_0121dc40() -> i32;
+    fn playback_service_0121dc78(argument: u32) -> i32;
+    fn playback_service_0121dcac() -> i32;
+    fn playback_service_0121dd98() -> i32;
+    fn playback_service_0121ddd0(argument: u32) -> i32;
+    fn playback_service_0121ddf0() -> i32;
+    fn playback_service_0121de10() -> i32;
+    fn playback_service_0121eabc() -> i32;
+}
+
+impl machine2::Services for Stock {
+    fn call(&mut self, call: machine2::Call) {
+        use machine2::Call as C;
+        unsafe {
+            match call {
+                C::PublishRequestedMode => playback_publish_requested_mode(),
+                C::Fn121daf4 => {
+                    playback_service_0121daf4();
+                }
+                C::Fn121db3c => {
+                    playback_service_0121db3c();
+                }
+                C::Fn121db7c => {
+                    playback_service_0121db7c();
+                }
+                C::Fn121dbb4 => {
+                    playback_service_0121dbb4();
+                }
+                C::Fn121dc40 => {
+                    playback_service_0121dc40();
+                }
+                C::Fn121dcac => {
+                    playback_service_0121dcac();
+                }
+                C::Fn121dd98 => {
+                    playback_service_0121dd98();
+                }
+                C::Trace => {
+                    playback_trace();
+                }
+            }
+        }
+    }
+
+    fn status(&mut self, status: machine2::Status) -> i32 {
+        use machine2::Status as S;
+        unsafe {
+            match status {
+                S::Fn0ec026c => playback_service_00ec026c(),
+                S::Fn0ec03dc => playback_service_00ec03dc(),
+                S::Fn121ddf0 => playback_service_0121ddf0(),
+                S::Fn121de10 => playback_service_0121de10(),
+                S::Fn121eabc => playback_service_0121eabc(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine2::CallWith, argument: u32) {
+        use machine2::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn121daa0 => playback_service_0121daa0(argument),
+                C::Fn121dc78 => playback_service_0121dc78(argument),
+                C::Fn121ddd0 => playback_service_0121ddd0(argument),
+            };
+        }
+    }
+
+    fn set_work_state(&mut self, state: machine2::WorkState) {
+        unsafe { playback_set_work_state(state as u32) }
+    }
+
+    fn set_state(&mut self, state: machine2::State) {
+        unsafe { write_volatile(MACHINE2_STATE as *mut u16, state as u16) }
+    }
+
+    fn request(&self, word: machine2::Request) -> u32 {
+        unsafe { read_volatile((REQUEST + word as u32) as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0122062c() -> i32;
+    fn playback_service_01220bdc(argument: u32) -> i32;
+    fn playback_service_01220c94() -> i32;
+    fn playback_service_01220cb8() -> i32;
+    fn playback_service_01220cc8() -> i32;
+    fn playback_service_01220dd0() -> i32;
+    fn playback_service_01220e68() -> i32;
+    fn playback_service_01220f34(argument: u32) -> i32;
+    fn playback_service_01220f4c() -> i32;
+    fn playback_service_01220fd0() -> i32;
+    fn playback_service_01220fe0() -> i32;
+    fn playback_service_01220ff0() -> i32;
+}
+
+impl machine3::Services for Stock {
+    fn call(&mut self, call: machine3::Call) -> i32 {
+        use machine3::Call as C;
+        unsafe {
+            match call {
+                C::Trace => playback_trace(),
+                C::Fn122062c => playback_service_0122062c(),
+                C::Fn1220c94 => playback_service_01220c94(),
+                C::Fn1220cb8 => playback_service_01220cb8(),
+                C::Fn1220cc8 => playback_service_01220cc8(),
+                C::Fn1220dd0 => playback_service_01220dd0(),
+                C::Fn1220e68 => playback_service_01220e68(),
+                C::Fn1220f4c => playback_service_01220f4c(),
+                C::Fn1220fd0 => playback_service_01220fd0(),
+                C::Fn1220fe0 => playback_service_01220fe0(),
+                C::Fn1220ff0 => playback_service_01220ff0(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine3::CallWith, argument: u32) -> i32 {
+        use machine3::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn1220bdc => playback_service_01220bdc(argument),
+                C::Fn1220f34 => playback_service_01220f34(argument),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine3::State) {
+        unsafe { write_volatile(MACHINE3_STATE as *mut u16, state as u16) }
+    }
+
+    fn word(&self, word: machine3::Word) -> u32 {
+        unsafe { read_volatile((IMAGE + word as u32) as *const u32) }
+    }
+
+    fn set_word(&mut self, word: machine3::Word, value: u32) {
+        unsafe { write_volatile((IMAGE + word as u32) as *mut u32, value) }
+    }
+
+    fn byte(&self, byte: machine3::Byte) -> u8 {
+        unsafe { read_volatile((IMAGE + byte as u32) as *const u8) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0123261c() -> i32;
+    fn playback_service_01249f84() -> i32;
+    fn playback_service_01249fa0() -> i32;
+    fn playback_service_0124a010() -> i32;
+    fn playback_service_0124a0a8() -> i32;
+    fn playback_service_0124a0d4() -> i32;
+    fn playback_service_0124a3c0() -> i32;
+    fn playback_service_0124a42c() -> i32;
+    fn playback_service_0124a480() -> i32;
+    fn playback_service_0124a4b0() -> i32;
+    fn playback_service_0124a518() -> i32;
+    fn playback_service_0124a54c() -> i32;
+    fn playback_service_0124a628() -> i32;
+    fn playback_service_0124a650() -> i32;
+    fn playback_service_0124a66c() -> i32;
+    fn playback_service_0124a688() -> i32;
+    fn playback_service_0124a698() -> i32;
+    fn playback_service_0124a8c0() -> i32;
+    fn playback_service_0124a8d4(argument: u32) -> i32;
+    fn playback_service_0124a8fc() -> i32;
+}
+
+impl machine4::Services for Stock {
+    fn call(&mut self, call: machine4::Call) -> i32 {
+        use machine4::Call as C;
+        unsafe {
+            match call {
+                C::Fn120e6e8 => playback_service_0120e6e8(),
+                C::Trace => playback_trace(),
+                C::Fn123261c => playback_service_0123261c(),
+                C::Fn12390d4 => playback_service_012390d4(),
+                C::Fn1239178 => playback_service_01239178(),
+                C::Fn1249f84 => playback_service_01249f84(),
+                C::Fn1249fa0 => playback_service_01249fa0(),
+                C::Fn124a010 => playback_service_0124a010(),
+                C::Fn124a0a8 => playback_service_0124a0a8(),
+                C::Fn124a0d4 => playback_service_0124a0d4(),
+                C::Fn124a3c0 => playback_service_0124a3c0(),
+                C::Fn124a42c => playback_service_0124a42c(),
+                C::Fn124a480 => playback_service_0124a480(),
+                C::Fn124a4b0 => playback_service_0124a4b0(),
+                C::Fn124a518 => playback_service_0124a518(),
+                C::Fn124a54c => playback_service_0124a54c(),
+                C::Fn124a628 => playback_service_0124a628(),
+                C::Fn124a650 => playback_service_0124a650(),
+                C::Fn124a66c => playback_service_0124a66c(),
+                C::Fn124a688 => playback_service_0124a688(),
+                C::Fn124a698 => playback_service_0124a698(),
+                C::Fn124a8c0 => playback_service_0124a8c0(),
+                C::Fn124a8fc => playback_service_0124a8fc(),
+            }
+        }
+    }
+
+    fn complete(&mut self, bit: machine4::Completion) {
+        unsafe {
+            playback_service_0124a8d4(bit as u32);
+        }
+    }
+
+    fn set_state(&mut self, state: machine4::State) {
+        unsafe { write_volatile(MACHINE4_STATE as *mut u16, state as u16) }
+    }
+
+    fn storage(&self, word: machine4::Storage) -> u32 {
+        unsafe { read_volatile((STORAGE + word as u32) as *const u32) }
+    }
+
+    fn set_storage(&mut self, word: machine4::Storage, value: u32) {
+        unsafe { write_volatile((STORAGE + word as u32) as *mut u32, value) }
+    }
+
+    fn set_active(&mut self) {
+        unsafe { write_volatile(STORAGE_ACTIVE as *mut u8, 1) }
+    }
+}
+
+extern "C" {
+    fn playback_service_012200c4() -> i32;
+    fn playback_service_012200ec() -> i32;
+    fn playback_service_01220120() -> i32;
+    fn playback_service_01220238() -> i32;
+    fn playback_service_0122026c() -> i32;
+    fn playback_service_01220294() -> i32;
+}
+
+impl machine5::Services for Stock {
+    fn call(&mut self, call: machine5::Call) {
+        use machine5::Call as C;
+        unsafe {
+            match call {
+                C::Trace => playback_trace(),
+                C::Fn12200c4 => playback_service_012200c4(),
+                C::Fn12200ec => playback_service_012200ec(),
+                C::Fn1220120 => playback_service_01220120(),
+                C::Fn1220238 => playback_service_01220238(),
+                C::Fn122026c => playback_service_0122026c(),
+                C::Fn1220294 => playback_service_01220294(),
+            };
+        }
+    }
+
+    fn set_state(&mut self, state: machine5::State) {
+        unsafe { write_volatile(MACHINE5_STATE as *mut u16, state as u16) }
+    }
+
+    fn word(&self, word: machine5::Word) -> u32 {
+        unsafe { read_volatile((JPEG + word as u32) as *const u32) }
+    }
+
+    fn set_word(&mut self, word: machine5::Word, value: u32) {
+        unsafe { write_volatile((JPEG + word as u32) as *mut u32, value) }
+    }
+
+    fn byte(&self, byte: machine5::Byte) -> u8 {
+        unsafe { read_volatile((JPEG + byte as u32) as *const u8) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0123a7cc(argument: u32);
+    fn playback_service_0123a7ec(argument: u32);
+    fn playback_service_0123a80c() -> i32;
+    fn playback_service_0123aa04() -> i32;
+    fn playback_service_0123aa84() -> i32;
+    fn playback_service_0123ab00() -> i32;
+    fn playback_service_0123ab84(argument: u32);
+    fn playback_service_0123b228() -> i32;
+}
+
+impl machine45::Services for Stock {
+    fn call(&mut self, call: machine45::Call) -> i32 {
+        use machine45::Call as C;
+        unsafe {
+            match call {
+                C::Fn120c1a8 => playback_service_0120c1a8(),
+                C::Trace => playback_trace(),
+                C::Fn12202d0 => playback_service_012202d0(),
+                C::Fn123a80c => playback_service_0123a80c(),
+                C::Fn123aa04 => playback_service_0123aa04(),
+                C::Fn123aa84 => playback_service_0123aa84(),
+                C::Fn123ab00 => playback_service_0123ab00(),
+                C::Fn123b228 => playback_service_0123b228(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine45::CallWith, argument: u32) {
+        use machine45::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn123a7cc => playback_service_0123a7cc(argument),
+                C::Fn123a7ec => playback_service_0123a7ec(argument),
+                C::Fn123ab84 => playback_service_0123ab84(argument),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine45::State) {
+        unsafe { write_volatile(MACHINE45_STATE as *mut u16, state as u16) }
+    }
+
+    fn overlay47(&self, word: machine45::Overlay47) -> u32 {
+        unsafe { read_volatile((OVERLAY47 + word as u32) as *const u32) }
+    }
+
+    fn word_at(&self, address: u32) -> u32 {
+        unsafe { read_volatile(address as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0120fe64() -> i32;
+    fn playback_service_0120ff70() -> i32;
+    fn playback_service_012100d8() -> i32;
+    fn playback_service_012136fc() -> i32;
+    fn playback_service_0123a724() -> i32;
+    fn playback_service_0123b470() -> i32;
+    fn playback_service_0123c2c8(argument: u32) -> i32;
+    fn playback_service_0123c2e8(argument: u32) -> i32;
+    fn playback_service_0123c308(argument: u32) -> i32;
+    fn playback_service_0123c328() -> i32;
+    fn playback_service_0123c490() -> i32;
+    fn playback_service_0123c4c8() -> i32;
+    fn playback_service_0123cb4c() -> i32;
+    fn playback_service_0123cba8() -> i32;
+    fn playback_service_0123cbe0() -> i32;
+    fn playback_service_0123cc18() -> i32;
+    fn playback_service_0123ce14() -> i32;
+    fn playback_service_0123cf48() -> i32;
+    fn playback_service_0123d078() -> i32;
+    fn playback_service_0123d16c() -> i32;
+    fn playback_service_0123d24c() -> i32;
+    fn playback_service_0123d264() -> i32;
+    fn playback_service_0123d390() -> i32;
+    fn playback_service_0123e298() -> i32;
+}
+
+impl machine47::Services for Stock {
+    fn call(&mut self, call: machine47::Call) -> i32 {
+        use machine47::Call as C;
+        unsafe {
+            match call {
+                C::Fn120fe64 => playback_service_0120fe64(),
+                C::Fn120ff70 => playback_service_0120ff70(),
+                C::Fn12100d8 => playback_service_012100d8(),
+                C::Fn12136fc => playback_service_012136fc(),
+                C::Trace => playback_trace(),
+                C::Fn123a724 => playback_service_0123a724(),
+                C::Fn123b470 => playback_service_0123b470(),
+                C::Fn123c328 => playback_service_0123c328(),
+                C::Fn123c490 => playback_service_0123c490(),
+                C::Fn123c4c8 => playback_service_0123c4c8(),
+                C::Fn123cb4c => playback_service_0123cb4c(),
+                C::Fn123cba8 => playback_service_0123cba8(),
+                C::Fn123cbe0 => playback_service_0123cbe0(),
+                C::Fn123cc18 => playback_service_0123cc18(),
+                C::Fn123ce14 => playback_service_0123ce14(),
+                C::Fn123cf48 => playback_service_0123cf48(),
+                C::Fn123d078 => playback_service_0123d078(),
+                C::Fn123d16c => playback_service_0123d16c(),
+                C::Fn123d24c => playback_service_0123d24c(),
+                C::Fn123d264 => playback_service_0123d264(),
+                C::Fn123d390 => playback_service_0123d390(),
+                C::Fn123e298 => playback_service_0123e298(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine47::CallWith, argument: u32) -> i32 {
+        use machine47::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn123c2c8 => playback_service_0123c2c8(argument),
+                C::Fn123c2e8 => playback_service_0123c2e8(argument),
+                C::Fn123c308 => playback_service_0123c308(argument),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine47::State) {
+        unsafe { write_volatile(MACHINE47_STATE as *mut u16, state as u16) }
+    }
+
+    fn block_14ff3c4(&self, word: machine47::Block14ff3c4) -> u32 {
+        unsafe { read_volatile((BLOCK_14FF3C4 + word as u32) as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0122b48c(argument: u32) -> i32;
+    fn playback_service_0122b4d8() -> i32;
+    fn playback_service_0122b504() -> i32;
+}
+
+impl machine57::Services for Stock {
+    fn call(&mut self, call: machine57::Call) -> i32 {
+        use machine57::Call as C;
+        unsafe {
+            match call {
+                C::Trace => playback_trace(),
+                C::Fn122b4d8 => playback_service_0122b4d8(),
+                C::Fn122b504 => playback_service_0122b504(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine57::CallWith, argument: u32) -> i32 {
+        use machine57::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn122b48c => playback_service_0122b48c(argument),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine57::State) {
+        unsafe { write_volatile(MACHINE57_STATE as *mut u16, state as u16) }
+    }
+
+    fn request(&self, word: machine57::Request) -> u32 {
+        unsafe { read_volatile((REQUEST + word as u32) as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_01211e78() -> i32;
+    fn playback_service_01211fdc() -> i32;
+    fn playback_service_01212120() -> i32;
+    fn playback_service_01212310() -> i32;
+}
+
+impl machine66::Services for Stock {
+    fn call(&mut self, call: machine66::Call) -> i32 {
+        use machine66::Call as C;
+        unsafe {
+            match call {
+                C::Fn1211e78 => playback_service_01211e78(),
+                C::Fn1211fdc => playback_service_01211fdc(),
+                C::Fn1212120 => playback_service_01212120(),
+                C::Fn1212310 => playback_service_01212310(),
+                C::Trace => playback_trace(),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine66::State) {
+        unsafe { write_volatile(MACHINE66_STATE as *mut u16, state as u16) }
+    }
+
+    fn request(&self, word: machine66::Request) -> u32 {
+        unsafe { read_volatile((REQUEST + word as u32) as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0120b40c() -> i32;
+    fn playback_service_0120cab0() -> i32;
+    fn playback_service_01210250() -> i32;
+    fn playback_service_012142f8() -> i32;
+    fn playback_service_0124c6fc(argument: u32) -> i32;
+}
+
+impl machine1::Services for Stock {
+    fn call(&mut self, call: machine1::Call) -> i32 {
+        use machine1::Call as C;
+        unsafe {
+            match call {
+                C::Fn120b40c => playback_service_0120b40c(),
+                C::Fn120cab0 => playback_service_0120cab0(),
+                C::Fn1210250 => playback_service_01210250(),
+                C::Fn12142f8 => playback_service_012142f8(),
+                C::Trace => playback_trace(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine1::CallWith, argument: u32) {
+        unsafe {
+            match call {
+                machine1::CallWith::Fn124c6fc => playback_service_0124c6fc(argument),
+            };
+        }
+    }
+
+    fn set_state(&mut self, state: machine1::State) {
+        unsafe { write_volatile(MACHINE1_STATE as *mut u16, state as u16) }
+    }
+
+    fn image_control(&self, byte: machine1::ImageControl) -> u8 {
+        unsafe { read_volatile((IMAGE_CONTROL + byte as u32) as *const u8) }
+    }
+
+    fn media_output(&self, word: machine1::MediaOutput) -> u32 {
+        unsafe { read_volatile((MEDIA_OUTPUT + word as u32) as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_01220314() -> i32;
+    fn playback_service_01220340() -> i32;
+    fn playback_service_01220378() -> i32;
+    fn playback_service_012203a4() -> i32;
+    fn playback_service_012203d0() -> i32;
+    fn playback_service_012203f4(argument: u32) -> i32;
+    fn playback_service_01220480() -> i32;
+    fn playback_service_012204cc() -> i32;
+    fn playback_service_01220560() -> i32;
+}
+
+impl machine6::Services for Stock {
+    fn call(&mut self, call: machine6::Call) {
+        use machine6::Call as C;
+        unsafe {
+            match call {
+                C::Fn1220314 => playback_service_01220314(),
+                C::Fn1220340 => playback_service_01220340(),
+                C::Fn1220378 => playback_service_01220378(),
+                C::Fn12203a4 => playback_service_012203a4(),
+                C::Fn12203d0 => playback_service_012203d0(),
+                C::Fn1220480 => playback_service_01220480(),
+                C::Fn12204cc => playback_service_012204cc(),
+                C::Fn1220560 => playback_service_01220560(),
+                C::Trace => playback_trace(),
+            };
+        }
+    }
+
+    fn call_with(&mut self, call: machine6::CallWith, argument: u32) {
+        unsafe {
+            match call {
+                machine6::CallWith::Fn12203f4 => playback_service_012203f4(argument),
+            };
+        }
+    }
+
+    fn set_state(&mut self, state: machine6::State) {
+        unsafe { write_volatile(MACHINE6_STATE as *mut u16, state as u16) }
+    }
+
+    fn request(&self, word: machine6::Request) -> u32 {
+        unsafe { read_volatile((REQUEST + word as u32) as *const u32) }
+    }
+
+    fn io(&self, word: machine6::Io) -> u32 {
+        unsafe { read_volatile((IO + word as u32) as *const u32) }
+    }
+
+    fn set_io(&mut self, word: machine6::Io, value: u32) {
+        unsafe { write_volatile((IO + word as u32) as *mut u32, value) }
+    }
+
+    fn io_count(&self) -> i64 {
+        unsafe { read_volatile(IO_COUNT as *const i64) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0121de50() -> i32;
+    fn playback_service_0121de64() -> i32;
+    fn playback_service_0121de80(argument: u32) -> i32;
+    fn playback_service_0121ded4(argument: u32) -> i32;
+    fn playback_service_0121df20() -> i32;
+    fn playback_service_0121df30() -> i32;
+}
+
+impl machine8::Services for Stock {
+    fn call(&mut self, call: machine8::Call) {
+        use machine8::Call as C;
+        unsafe {
+            match call {
+                C::Fn121de50 => playback_service_0121de50(),
+                C::Fn121de64 => playback_service_0121de64(),
+                C::Fn121df20 => playback_service_0121df20(),
+                C::Fn121df30 => playback_service_0121df30(),
+            };
+        }
+    }
+
+    fn call_with(&mut self, call: machine8::CallWith, argument: u32) {
+        use machine8::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn121de80 => playback_service_0121de80(argument),
+                C::Fn121ded4 => playback_service_0121ded4(argument),
+            };
+        }
+    }
+
+    fn set_peer_state(&mut self, peer: machine8::Peer, state: u16) {
+        unsafe { write_volatile((MACHINE_STATES + 2 * peer as u32) as *mut u16, state) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0120bfd8() -> i32;
+    fn playback_service_0121ff9c() -> i32;
+    fn playback_service_0121ffc0() -> i32;
+    fn playback_service_0123d3d4(argument: u32) -> i32;
+    fn playback_service_0123d3f4(argument: u32) -> i32;
+    fn playback_service_0123d414() -> i32;
+    fn playback_service_0123d454() -> i32;
+    fn playback_service_0123d4d0() -> i32;
+    fn playback_service_0123d54c() -> i32;
+    fn playback_service_0123d584() -> i32;
+    fn playback_service_0123d87c() -> i32;
+    fn playback_service_0123d89c() -> i32;
+    fn playback_service_0123d8bc() -> i32;
+    fn playback_service_0123da10() -> i32;
+    fn playback_service_0123db1c() -> i32;
+    fn playback_service_0123dc24() -> i32;
+    fn playback_service_0123dd1c() -> i32;
+    fn playback_service_0123dd38() -> i32;
+    fn playback_service_0123ddc0() -> i32;
+    fn playback_service_0123de08() -> i32;
+    fn playback_service_0123de38() -> i32;
+    fn playback_service_0123df40() -> i32;
+    fn playback_service_0123e084() -> i32;
+    fn playback_service_0123e098() -> i32;
+}
+
+impl machine44::Services for Stock {
+    fn call(&mut self, call: machine44::Call) -> i32 {
+        use machine44::Call as C;
+        unsafe {
+            match call {
+                C::Dispatch3Events => playback_dispatch_machine3_events(),
+                C::Fn120bfd8 => playback_service_0120bfd8(),
+                C::Fn120c1a8 => playback_service_0120c1a8(),
+                C::Trace => playback_trace(),
+                C::Fn121ff9c => playback_service_0121ff9c(),
+                C::Fn121ffc0 => playback_service_0121ffc0(),
+                C::Fn12202d0 => playback_service_012202d0(),
+                C::Fn12205e4 => playback_service_012205e4(),
+                C::Fn123d414 => playback_service_0123d414(),
+                C::Fn123d454 => playback_service_0123d454(),
+                C::Fn123d4d0 => playback_service_0123d4d0(),
+                C::Fn123d54c => playback_service_0123d54c(),
+                C::Fn123d584 => playback_service_0123d584(),
+                C::Fn123d87c => playback_service_0123d87c(),
+                C::Fn123d89c => playback_service_0123d89c(),
+                C::Fn123d8bc => playback_service_0123d8bc(),
+                C::Fn123da10 => playback_service_0123da10(),
+                C::Fn123db1c => playback_service_0123db1c(),
+                C::Fn123dc24 => playback_service_0123dc24(),
+                C::Fn123dd1c => playback_service_0123dd1c(),
+                C::Fn123dd38 => playback_service_0123dd38(),
+                C::Fn123ddc0 => playback_service_0123ddc0(),
+                C::Fn123de08 => playback_service_0123de08(),
+                C::Fn123de38 => playback_service_0123de38(),
+                C::Fn123df40 => playback_service_0123df40(),
+                C::Fn123e084 => playback_service_0123e084(),
+                C::Fn123e098 => playback_service_0123e098(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine44::CallWith, argument: u32) -> i32 {
+        use machine44::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn12293a8 => playback_service_012293a8(argument),
+                C::Fn123d3d4 => playback_service_0123d3d4(argument),
+                C::Fn123d3f4 => playback_service_0123d3f4(argument),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine44::State) {
+        unsafe { write_volatile(MACHINE44_STATE as *mut u16, state as u16) }
+    }
+
+    fn word(&self, word: machine44::Word) -> u32 {
+        unsafe { read_volatile((STREAM + word as u32) as *const u32) }
+    }
+
+    fn byte(&self, byte: machine44::Byte) -> u8 {
+        unsafe { read_volatile((STREAM + byte as u32) as *const u8) }
+    }
+
+    fn word_at(&self, address: u32) -> u32 {
+        unsafe { read_volatile(address as *const u32) }
+    }
+
+    fn set_word_at(&mut self, address: u32, value: u32) {
+        unsafe { write_volatile(address as *mut u32, value) }
+    }
+
+    fn request_code(&self) -> u16 {
+        unsafe { read_volatile(REQUEST as *const u16) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0123b4b4(argument: u32) -> i32;
+    fn playback_service_0123b4d4(argument: u32) -> i32;
+    fn playback_service_0123b4f4() -> i32;
+    fn playback_service_0123b5a8() -> i32;
+    fn playback_service_0123b688() -> i32;
+    fn playback_service_0123b76c() -> i32;
+    fn playback_service_0123b960() -> i32;
+    fn playback_service_0123ba6c() -> i32;
+    fn playback_service_0123bb74() -> i32;
+    fn playback_service_0123bf2c() -> i32;
+}
+
+impl machine46::Services for Stock {
+    fn call(&mut self, call: machine46::Call) -> i32 {
+        use machine46::Call as C;
+        unsafe {
+            match call {
+                C::Dispatch3Events => playback_dispatch_machine3_events(),
+                C::Fn120bfd8 => playback_service_0120bfd8(),
+                C::Fn120c1a8 => playback_service_0120c1a8(),
+                C::Trace => playback_trace(),
+                C::Fn121ffc0 => playback_service_0121ffc0(),
+                C::Fn12202d0 => playback_service_012202d0(),
+                C::Fn12205e4 => playback_service_012205e4(),
+                C::Fn123b4f4 => playback_service_0123b4f4(),
+                C::Fn123b5a8 => playback_service_0123b5a8(),
+                C::Fn123b688 => playback_service_0123b688(),
+                C::Fn123b76c => playback_service_0123b76c(),
+                C::Fn123b960 => playback_service_0123b960(),
+                C::Fn123ba6c => playback_service_0123ba6c(),
+                C::Fn123bb74 => playback_service_0123bb74(),
+                C::Fn123bf2c => playback_service_0123bf2c(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine46::CallWith, argument: u32) {
+        use machine46::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn123b4b4 => playback_service_0123b4b4(argument),
+                C::Fn123b4d4 => playback_service_0123b4d4(argument),
+            };
+        }
+    }
+
+    fn set_state(&mut self, state: machine46::State) {
+        unsafe { write_volatile(MACHINE46_STATE as *mut u16, state as u16) }
+    }
+
+    fn clear_request_code(&mut self) {
+        unsafe { write_volatile(REQUEST as *mut u16, 0) }
+    }
+
+    fn word(&self, word: machine46::Word) -> u32 {
+        unsafe { read_volatile((MACHINE46_BLOCK + word as u32) as *const u32) }
+    }
+
+    fn byte(&self, byte: machine46::Byte) -> u8 {
+        unsafe { read_volatile((MACHINE46_BLOCK + byte as u32) as *const u8) }
+    }
+
+    fn word_at(&self, address: u32) -> u32 {
+        unsafe { read_volatile(address as *const u32) }
+    }
+
+    fn set_word_at(&mut self, address: u32, value: u32) {
+        unsafe { write_volatile(address as *mut u32, value) }
+    }
+}
+
+extern "C" {
+    fn playback_service_01211250() -> i32;
+    fn playback_service_0121132c() -> i32;
+    fn playback_service_012135e8() -> i32;
+    fn playback_service_0122b3f0() -> i32;
+    fn playback_service_0122b440() -> i32;
+    fn playback_service_0122b468() -> i32;
+    fn playback_service_0122b800() -> i32;
+}
+
+impl machine56::Services for Stock {
+    fn call(&mut self, call: machine56::Call) -> i32 {
+        use machine56::Call as C;
+        unsafe {
+            match call {
+                C::Fn1211250 => playback_service_01211250(),
+                C::Fn121132c => playback_service_0121132c(),
+                C::Fn12135e8 => playback_service_012135e8(),
+                C::Trace => playback_trace(),
+                C::Fn122b3f0 => playback_service_0122b3f0(),
+                C::Fn122b440 => playback_service_0122b440(),
+                C::Fn122b468 => playback_service_0122b468(),
+                C::Fn122b800 => playback_service_0122b800(),
+            }
+        }
+    }
+
+    fn set_state(&mut self, state: machine56::State) {
+        unsafe { write_volatile(MACHINE56_STATE as *mut u16, state as u16) }
+    }
+
+    fn request(&self, word: machine56::Request) -> u32 {
+        unsafe { read_volatile((REQUEST + word as u32) as *const u32) }
+    }
+}
+
+extern "C" {
+    fn playback_service_0122c468() -> i32;
+    fn playback_service_01233dcc() -> i32;
+    fn playback_service_01233e0c() -> i32;
+    fn playback_service_01251c80(argument: u32) -> i32;
+    fn playback_service_01251cd0(argument: u32) -> i32;
+    fn playback_service_01251de8() -> i32;
+    fn playback_service_01251e10(argument: u32) -> i32;
+    fn playback_service_01251e40() -> i32;
+    fn playback_service_01251e80() -> i32;
+    fn playback_service_01251ea8() -> i32;
+    fn playback_service_01251f24(argument: u32) -> i32;
+    fn playback_service_01251fc8() -> i32;
+    fn playback_service_0125202c() -> i32;
+    fn playback_service_01252064(argument: u32) -> i32;
+    fn playback_service_012520b0(argument: u32) -> i32;
+    fn playback_service_012520ec() -> i32;
+    fn playback_service_01252328() -> i32;
+    fn playback_service_0125233c() -> i32;
+    fn playback_service_01252374(argument: u32) -> i32;
+    fn playback_service_01252430() -> i32;
+    fn playback_service_01252464() -> i32;
+    fn playback_service_01252490() -> i32;
+    fn playback_service_012524a0() -> i32;
+}
+
+impl machine70::Services for Stock {
+    fn call(&mut self, call: machine70::Call) -> i32 {
+        use machine70::Call as C;
+        unsafe {
+            match call {
+                C::Fn0ec03dc => playback_service_00ec03dc(),
+                C::Trace => playback_trace(),
+                C::Fn122c468 => playback_service_0122c468(),
+                C::Fn1233dcc => playback_service_01233dcc(),
+                C::Fn1233e0c => playback_service_01233e0c(),
+                C::Fn1251de8 => playback_service_01251de8(),
+                C::Fn1251e40 => playback_service_01251e40(),
+                C::Fn1251e80 => playback_service_01251e80(),
+                C::Fn1251ea8 => playback_service_01251ea8(),
+                C::Fn1251fc8 => playback_service_01251fc8(),
+                C::Fn125202c => playback_service_0125202c(),
+                C::Fn12520ec => playback_service_012520ec(),
+                C::Fn1252328 => playback_service_01252328(),
+                C::Fn125233c => playback_service_0125233c(),
+                C::Fn1252430 => playback_service_01252430(),
+                C::Fn1252464 => playback_service_01252464(),
+                C::Fn1252490 => playback_service_01252490(),
+                C::Fn12524a0 => playback_service_012524a0(),
+            }
+        }
+    }
+
+    fn call_with(&mut self, call: machine70::CallWith, argument: u32) {
+        use machine70::CallWith as C;
+        unsafe {
+            match call {
+                C::Fn123265c => playback_service_0123265c(argument),
+                C::Fn1251c80 => playback_service_01251c80(argument),
+                C::Fn1251cd0 => playback_service_01251cd0(argument),
+                C::Fn1251e10 => playback_service_01251e10(argument),
+                C::Fn1251f24 => playback_service_01251f24(argument),
+                C::Fn1252064 => playback_service_01252064(argument),
+                C::Fn12520b0 => playback_service_012520b0(argument),
+                C::Fn1252374 => playback_service_01252374(argument),
+            };
+        }
+    }
+
+    fn set_state(&mut self, state: machine70::State) {
+        unsafe { write_volatile(MACHINE70_STATE as *mut u16, state as u16) }
+    }
+
+    fn request(&self, word: machine70::Request) -> u32 {
+        unsafe { read_volatile((REQUEST + word as u32) as *const u32) }
+    }
+
+    fn word(&self, word: machine70::Word) -> u32 {
+        unsafe { read_volatile((SEQUENCE + word as u32) as *const u32) }
+    }
+
+    fn set_word(&mut self, word: machine70::Word, value: u32) {
+        unsafe { write_volatile((SEQUENCE + word as u32) as *mut u32, value) }
+    }
+
+    fn byte(&self, byte: machine70::Byte) -> u8 {
+        unsafe { read_volatile((SEQUENCE + byte as u32) as *const u8) }
+    }
+
+    fn set_byte(&mut self, byte: machine70::Byte, value: u8) {
+        unsafe { write_volatile((SEQUENCE + byte as u32) as *mut u8, value) }
+    }
+}
+
 macro_rules! actions {
     ($machine:ident { $($export:ident => $action:ident),* $(,)? }) => {
         $(
@@ -582,4 +1568,158 @@ actions! { machine61 {
     xm1_playback_m61_action22 => action22, xm1_playback_m61_action23 => action23,
     xm1_playback_m61_action24 => action24, xm1_playback_m61_action25 => action25,
     xm1_playback_m61_action26 => action26, xm1_playback_m61_action27 => action27,
+} }
+
+actions! { machine34 {
+    xm1_playback_m34_action02 => action02, xm1_playback_m34_action03 => action03,
+    xm1_playback_m34_action04 => action04, xm1_playback_m34_action05 => action05,
+    xm1_playback_m34_action06 => action06, xm1_playback_m34_action07 => action07,
+    xm1_playback_m34_action08 => action08, xm1_playback_m34_action09 => action09,
+    xm1_playback_m34_action10 => action10, xm1_playback_m34_action11 => action11,
+    xm1_playback_m34_action12 => action12, xm1_playback_m34_action13 => action13,
+    xm1_playback_m34_action14 => action14,
+} }
+
+actions! { machine2 {
+    xm1_playback_m2_action02 => action02, xm1_playback_m2_action03 => action03,
+    xm1_playback_m2_action04 => action04, xm1_playback_m2_action05 => action05,
+    xm1_playback_m2_action06 => action06, xm1_playback_m2_action07 => action07,
+    xm1_playback_m2_action08 => action08, xm1_playback_m2_action09 => action09,
+    xm1_playback_m2_action10 => action10, xm1_playback_m2_action11 => action11,
+    xm1_playback_m2_action12 => action12, xm1_playback_m2_action13 => action13,
+    xm1_playback_m2_action14 => action14, xm1_playback_m2_action15 => action15,
+} }
+
+actions! { machine3 {
+    xm1_playback_m3_action02 => action02, xm1_playback_m3_action03 => action03,
+    xm1_playback_m3_action04 => action04, xm1_playback_m3_action05 => action05,
+    xm1_playback_m3_action06 => action06, xm1_playback_m3_action07 => action07,
+    xm1_playback_m3_action08 => action08, xm1_playback_m3_action09 => action09,
+    xm1_playback_m3_action10 => action10,
+} }
+
+actions! { machine4 {
+    xm1_playback_m4_action02 => action02, xm1_playback_m4_action03 => action03,
+    xm1_playback_m4_action04 => action04, xm1_playback_m4_action05 => action05,
+    xm1_playback_m4_action06 => action06, xm1_playback_m4_action07 => action07,
+    xm1_playback_m4_action08 => action08, xm1_playback_m4_action09 => action09,
+    xm1_playback_m4_action10 => action10, xm1_playback_m4_action11 => action11,
+    xm1_playback_m4_action12 => action12, xm1_playback_m4_action13 => action13,
+    xm1_playback_m4_action14 => action14, xm1_playback_m4_action15 => action15,
+    xm1_playback_m4_action16 => action16, xm1_playback_m4_action17 => action17,
+    xm1_playback_m4_action18 => action18, xm1_playback_m4_action19 => action19,
+} }
+
+actions! { machine5 {
+    xm1_playback_m5_action02 => action02, xm1_playback_m5_action03 => action03,
+    xm1_playback_m5_action04 => action04, xm1_playback_m5_action05 => action05,
+    xm1_playback_m5_action06 => action06, xm1_playback_m5_action07 => action07,
+    xm1_playback_m5_action08 => action08, xm1_playback_m5_action09 => action09,
+    xm1_playback_m5_action10 => action10,
+} }
+
+actions! { machine45 {
+    xm1_playback_m45_action02 => action02, xm1_playback_m45_action03 => action03,
+    xm1_playback_m45_action04 => action04, xm1_playback_m45_action05 => action05,
+    xm1_playback_m45_action06 => action06, xm1_playback_m45_action07 => action07,
+    xm1_playback_m45_action08 => action08, xm1_playback_m45_action09 => action09,
+    xm1_playback_m45_action10 => action10,
+} }
+
+actions! { machine47 {
+    xm1_playback_m47_action02 => action02, xm1_playback_m47_action03 => action03,
+    xm1_playback_m47_action04 => action04, xm1_playback_m47_action05 => action05,
+    xm1_playback_m47_action06 => action06, xm1_playback_m47_action07 => action07,
+    xm1_playback_m47_action08 => action08, xm1_playback_m47_action09 => action09,
+    xm1_playback_m47_action10 => action10, xm1_playback_m47_action11 => action11,
+    xm1_playback_m47_action12 => action12, xm1_playback_m47_action13 => action13,
+} }
+
+actions! { machine57 {
+    xm1_playback_m57_action02 => action02, xm1_playback_m57_action03 => action03,
+    xm1_playback_m57_action04 => action04, xm1_playback_m57_action05 => action05,
+    xm1_playback_m57_action06 => action06, xm1_playback_m57_action07 => action07,
+    xm1_playback_m57_action08 => action08,
+} }
+
+actions! { machine66 {
+    xm1_playback_m66_action02 => action02, xm1_playback_m66_action03 => action03,
+    xm1_playback_m66_action04 => action04, xm1_playback_m66_action05 => action05,
+    xm1_playback_m66_action06 => action06, xm1_playback_m66_action07 => action07,
+    xm1_playback_m66_action08 => action08,
+} }
+
+actions! { machine1 {
+    xm1_playback_m1_action02 => action02, xm1_playback_m1_action03 => action03,
+    xm1_playback_m1_action04 => action04, xm1_playback_m1_action05 => action05,
+    xm1_playback_m1_action06 => action06, xm1_playback_m1_action07 => action07,
+    xm1_playback_m1_action08 => action08, xm1_playback_m1_action09 => action09,
+    xm1_playback_m1_action10 => action10, xm1_playback_m1_action11 => action11,
+    xm1_playback_m1_action12 => action12, xm1_playback_m1_action13 => action13,
+    xm1_playback_m1_action14 => action14, xm1_playback_m1_action15 => action15,
+} }
+
+actions! { machine6 {
+    xm1_playback_m6_action02 => action02, xm1_playback_m6_action03 => action03,
+    xm1_playback_m6_action04 => action04, xm1_playback_m6_action05 => action05,
+    xm1_playback_m6_action06 => action06, xm1_playback_m6_action07 => action07,
+    xm1_playback_m6_action08 => action08, xm1_playback_m6_action09 => action09,
+    xm1_playback_m6_action10 => action10, xm1_playback_m6_action11 => action11,
+} }
+
+actions! { machine8 {
+    xm1_playback_m8_action02 => action02, xm1_playback_m8_action03 => action03,
+    xm1_playback_m8_action04 => action04, xm1_playback_m8_action05 => action05,
+    xm1_playback_m8_action06 => action06, xm1_playback_m8_action07 => action07,
+    xm1_playback_m8_action08 => action08, xm1_playback_m8_action09 => action09,
+    xm1_playback_m8_action10 => action10, xm1_playback_m8_action11 => action11,
+} }
+
+actions! { machine44 {
+    xm1_playback_m44_action02 => action02, xm1_playback_m44_action03 => action03,
+    xm1_playback_m44_action04 => action04, xm1_playback_m44_action05 => action05,
+    xm1_playback_m44_action06 => action06, xm1_playback_m44_action07 => action07,
+    xm1_playback_m44_action08 => action08, xm1_playback_m44_action09 => action09,
+    xm1_playback_m44_action10 => action10, xm1_playback_m44_action11 => action11,
+    xm1_playback_m44_action12 => action12, xm1_playback_m44_action13 => action13,
+    xm1_playback_m44_action14 => action14, xm1_playback_m44_action15 => action15,
+    xm1_playback_m44_action16 => action16, xm1_playback_m44_action17 => action17,
+    xm1_playback_m44_action18 => action18, xm1_playback_m44_action19 => action19,
+    xm1_playback_m44_action20 => action20,
+} }
+
+actions! { machine46 {
+    xm1_playback_m46_action02 => action02, xm1_playback_m46_action03 => action03,
+    xm1_playback_m46_action04 => action04, xm1_playback_m46_action05 => action05,
+    xm1_playback_m46_action06 => action06, xm1_playback_m46_action07 => action07,
+    xm1_playback_m46_action08 => action08, xm1_playback_m46_action09 => action09,
+    xm1_playback_m46_action10 => action10, xm1_playback_m46_action11 => action11,
+    xm1_playback_m46_action12 => action12, xm1_playback_m46_action13 => action13,
+    xm1_playback_m46_action14 => action14, xm1_playback_m46_action15 => action15,
+} }
+
+actions! { machine56 {
+    xm1_playback_m56_action02 => action02, xm1_playback_m56_action03 => action03,
+    xm1_playback_m56_action04 => action04, xm1_playback_m56_action05 => action05,
+    xm1_playback_m56_action06 => action06, xm1_playback_m56_action07 => action07,
+    xm1_playback_m56_action08 => action08, xm1_playback_m56_action09 => action09,
+    xm1_playback_m56_action10 => action10, xm1_playback_m56_action11 => action11,
+    xm1_playback_m56_action12 => action12, xm1_playback_m56_action13 => action13,
+    xm1_playback_m56_action14 => action14, xm1_playback_m56_action15 => action15,
+    xm1_playback_m56_action16 => action16, xm1_playback_m56_action17 => action17,
+    xm1_playback_m56_action18 => action18,
+} }
+
+actions! { machine70 {
+    xm1_playback_m70_action02 => action02, xm1_playback_m70_action03 => action03,
+    xm1_playback_m70_action04 => action04, xm1_playback_m70_action05 => action05,
+    xm1_playback_m70_action06 => action06, xm1_playback_m70_action07 => action07,
+    xm1_playback_m70_action08 => action08, xm1_playback_m70_action09 => action09,
+    xm1_playback_m70_action10 => action10, xm1_playback_m70_action11 => action11,
+    xm1_playback_m70_action12 => action12, xm1_playback_m70_action13 => action13,
+    xm1_playback_m70_action14 => action14, xm1_playback_m70_action15 => action15,
+    xm1_playback_m70_action16 => action16, xm1_playback_m70_action17 => action17,
+    xm1_playback_m70_action18 => action18, xm1_playback_m70_action19 => action19,
+    xm1_playback_m70_action20 => action20, xm1_playback_m70_action21 => action21,
+    xm1_playback_m70_action22 => action22,
 } }
