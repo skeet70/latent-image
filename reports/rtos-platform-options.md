@@ -43,7 +43,7 @@ Objects are 120 C/T task records per kernel, eventflag records (12 B) and contro
 
 - IRQ entries are `0x40204/0xd0204`. The pinned emulator model configures controllers at `0xfffb3000/0xfffb4000` with 128 sources and active-bitmap arbitration. Physical routing, EOI and nesting are not qualified [Draft:40,56].
 - The repository does not establish whether the controller is an ARM GIC. **[INFERENCE]** That question decides several candidates below.
-- Timer: the loader's elapsed value is reload minus count from `0xfff91004/0xfff91000`. Divider, wrap and deadlines are open [Draft:57].
+- Timer: the loader's elapsed value is reload minus count from `0xfff91004/0xfff91000`. The tick rate is hardware-observed at 99.88 Hz (about 10 ms per tick, E-LOG-TICK-SOURCE-150), so tick-based deadlines have a measured time base. The 12 MHz input clock, divider and wrap are open [Draft:57].
 - Stock tasks block inside kernel waits on their own stacks. Examples: B93 waits on flag `0x724480(1,&out,-1)` and is observed reaching that block [Draft:27,58]; take `+0x7c` and receive `+0xc8` can block [Manifest]. T nodes save SP/PC, and resume goes through an exception-return frame [Draft:37-40].
 
 ### 1.5 Publication
@@ -408,7 +408,7 @@ Embassy does not supply preemptive threads with per-task stacks and blocking wai
 These are already listed as gaps in the manifest draft:
 
 1. Interrupt controller laws at `0xfffb3000/0xfffb4000`: routing, arbitration, EOI, nesting, software pend and per-core banks [Draft:56,58].
-2. Timer laws at `0xfff91000..`: divider and frequency, width, wrap, IRQ fan-out, deadlines [Draft:57].
+2. Timer laws at `0xfff91000..`: input clock and divider, width, wrap, IRQ fan-out. The tick rate (99.88 Hz) is hardware-observed [Draft:57].
 3. Cross-core notification registers and ordering [Draft:61].
 4. Exclusive-monitor behaviour across cores [Draft:59].
 

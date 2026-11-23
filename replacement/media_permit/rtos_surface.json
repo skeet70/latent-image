@@ -245,7 +245,7 @@
     {
       "lawName": "timers",
       "grounded": "Stock reads reload/count0xfff91004/0xfff91000 and stores their subtraction. Qualified comparison binds actual30000-23632 and30000-23630 transactions. Hardware log tick rate is separately bounded.",
-      "missing": "Physical frequency, divider/control semantics, IRQ fanout, reload/wrap races and scheduling deadlines remain unqualified.",
+      "missing": "The tick rate is hardware-observed at 99.88 Hz (E-LOG-TICK-SOURCE-150), so tick-based deadlines have a measured time base; the 12 MHz input clock, divider/control semantics, IRQ fanout and reload/wrap races remain unqualified.",
       "scenarios": [
         "Existing: loader elapsed provenance and natural menu route",
         "Existing: idle timer/IRQ wake in modeled system",
