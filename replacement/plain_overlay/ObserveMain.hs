@@ -219,10 +219,33 @@ instructionsOf, ranOf :: Value -> Integer
 instructionsOf ran = numberOf (field "instructions" ran)
 ranOf ran = numberOf (field "ran" ran)
 
--- | Runs one prior idle chunk [START, END) in pieces: a fetch watch over the extents in the gaps,
--- and a write watch over all of DRAM with the extents' fetches through every call window. Logs
--- each piece with the instructions it was armed over, the CPU writes from PCs in the extents and
--- the extents' fetch count.
+-- | Arms a watch, runs ACTION, which returns the instruction count it ended at, ends the watch and
+-- logs it with the instructions it was armed over, the CPU stores from PCs in the extents and the
+-- extents' fetch count. A window watches writes over all of DRAM and the extents' fetches; a gap
+-- watches the extents' fetches.
+watchPiece :: Emulator -> [Span] -> IORef [Value] -> T.Text -> Integer -> IO Integer -> IO ()
+watchPiece emulator extents logRef kind armedAt action = do
+  let writes = kind == "window"
+      fetchClass = map spanValue extents
+      ranges = if writes then [spanValue dram] else fetchClass
+      ownedPc r = maybe False (\pc -> any (`inside` pc) extents) (hexValue (field "pc" r))
+  _ <- emulatorBridgeCommand emulator (object
+    [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
+    , "ranges" .= ranges, "write_ranges" .= [spanValue dram | writes], "fetch_ranges" .= fetchClass ])
+  endedAt <- action
+  observed <- emulatorWatchEnd emulator
+  let records = arrayOf (field "records" observed)
+      stores = [r | r <- records, field "source" r == String "cpu-write", ownedPc r]
+      count = length stores
+  modifyIORef' logRef (object
+    [ "kind" .= kind, "armed_at" .= armedAt, "ended_at" .= endedAt, "violation" .= field "violation" observed
+    , "records" .= length records, "fetches" .= length [() | r <- records, field "source" r == String "cpu-fetch"]
+    , "owned_store_count" .= count
+    , "owned_stores" .= [object ["address" .= field "address" r, "physical" .= field "physical" r, "size" .= field "size" r, "pc" .= field "pc" r, "core" .= field "core" r] | r <- stores]
+    ] :)
+
+-- | Runs one prior idle chunk [START, END) in pieces: a window over every call window, a gap
+-- between them.
 attributeChunk :: Emulator -> [Span] -> [Window] -> IORef [Value] -> Integer -> Integer -> IO Value
 attributeChunk emulator extents windows logRef chunkStart chunkEnd = do
   now <- newIORef chunkStart
@@ -234,33 +257,17 @@ attributeChunk emulator extents windows logRef chunkStart chunkEnd = do
           unless (instructionsOf reply - ranOf reply == current) (writeIORef aligned False)
           writeIORef now (instructionsOf reply)
           advanceTo target
-      ownedPc r = maybe False (\pc -> any (`inside` pc) extents) (hexValue (field "pc" r))
-      piece kind writes target = do
+      piece kind target = do
         armedAt <- readIORef now
-        let fetchClass = map spanValue extents
-            writeClass = [spanValue dram | writes]
-            ranges = if writes then [spanValue dram] else fetchClass
-        _ <- emulatorBridgeCommand emulator (object
-          [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
-          , "ranges" .= ranges, "write_ranges" .= writeClass, "fetch_ranges" .= fetchClass ])
-        advanceTo target
-        observed <- emulatorWatchEnd emulator
-        endedAt <- readIORef now
-        let records = arrayOf (field "records" observed)
-            stores = [r | r <- records, field "source" r == String "cpu-write", ownedPc r]
-        modifyIORef' logRef (object
-          [ "kind" .= (kind :: T.Text), "armed_at" .= armedAt, "ended_at" .= endedAt, "violation" .= field "violation" observed
-          , "records" .= length records, "fetches" .= length [() | r <- records, field "source" r == String "cpu-fetch"]
-          , "owned_stores" .= [object ["address" .= field "address" r, "physical" .= field "physical" r, "size" .= field "size" r, "pc" .= field "pc" r, "core" .= field "core" r] | r <- stores]
-          ] :)
+        watchPiece emulator extents logRef kind armedAt (advanceTo target >> readIORef now)
       run [] = do
         current <- readIORef now
-        when (current < chunkEnd) (piece "gap" False chunkEnd)
+        when (current < chunkEnd) (piece "gap" chunkEnd)
       run (Window s e : rest) = do
         current <- readIORef now
-        when (current < s) (piece "gap" False s)
+        when (current < s) (piece "gap" s)
         current' <- readIORef now
-        when (current' < min e chunkEnd) (piece "window" True (min e chunkEnd))
+        when (current' < min e chunkEnd) (piece "window" (min e chunkEnd))
         run rest
   run [w | w <- windows, windowEnd w > chunkStart, windowStart w < chunkEnd]
   final <- readIORef now
@@ -483,6 +490,7 @@ observe inputs directory record = do
       record "attached_residency" (A.toJSON attachedResidency)
       record "attached_memory" (A.toJSON attachedMemory)
       windowsLog <- newIORef []
+      lastEnd <- newIORef (maximum (0 : [numberOf (field "instructions" s) | s <- arrayOf (field "segments" reset)]))
       let step index key = do
             first <- readIORef cursor
             case prior of
@@ -501,13 +509,22 @@ observe inputs directory record = do
                 putStrLn ("step " ++ show index ++ " " ++ maybe "final" crawlKeyWire key ++ " hits " ++ show (last' - first))
                 pure last'
               Just (windows, priorSteps) -> do
-                press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
                 let chunks = [(instructionsOf ran - ranOf ran, instructionsOf ran) | s <- take 1 (drop (index - 1) priorSteps), c <- arrayOf (field "idle" s), let ran = field "idle" c]
-                need (not (null chunks)) ("the prior observation has no step " ++ show index)
+                (firstStart, lastFinish) <- case chunks of
+                  (s, _) : _ -> pure (s, maximum (map snd chunks))
+                  [] -> ioError (userError ("the prior observation has no step " ++ show index))
+                pressedFrom <- readIORef lastEnd
+                pressRef <- newIORef Null
+                watchPiece emulator extents windowsLog "window" pressedFrom $ do
+                  press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
+                  writeIORef pressRef press
+                  pure firstStart
+                press <- readIORef pressRef
                 settled <- forM chunks $ \(chunkStart, chunkEnd) -> do
                   ran <- attributeChunk emulator extents windows windowsLog chunkStart chunkEnd
                   media <- emulatorBridgeCommand emulator (object ["command" .= ("media-state" :: T.Text)])
                   pure (object ["idle" .= ran, "media" .= media])
+                writeIORef lastEnd lastFinish
                 last' <- drain emulator
                 modifyIORef' steps (object ["step" .= index, "key" .= fmap crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled] :)
                 saveSteps
