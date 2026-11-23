@@ -5337,1459 +5337,299 @@
   },
   {
     "id": "E-DISPLAY-SCANOUT-FIXED-PAIR-150",
-    "claim": "On the one fixed-bank image, which links the display scanout with the file service (ELF {{elf}}), the natural no-card stock/owned route pair is {{verdict}} (qualified {{qualified}}): {{checkpoints}} route checkpoints equal ({{checkpoints_equal}}) over {{compared_calls}} compared calls ({{interrupt_calls}} interrupt, {{task_calls}} task). Both roles make {{commits}} commits with {{pending}} pending images and {{drained}} drained callbacks; unattributed writes are equal ({{unattributed}}). The deepest owned entry's sp is {{stack_excess}} bytes below its paired stock entry's. Owned commit_one executes {{owned_commit_instructions}} instructions over {{commit_calls}} calls against stock's {{stock_commit_instructions}}, and the owned body {{owned_body}} fetches against stock's carrier {{stock_carrier}}. The register-order control is refused on register-sequence ({{register_order_detected}}) and the skipped-drain control on drain ({{skipped_drain_detected}}). Fixed admission gives commit_one {{commit_one_stack}} owned stack bytes on a {{stack_budget}}-byte budget.",
-    "scope": "Emulated X-M1 1.50 on FujiMod: one natural no-card boot-to-menus route, the owned role replaying the stock role's route ticks, candidate DAT {{firmware_sha256}} and contract {{contract}}. Twelve stock entries are published; the route reaches capture, commit_one, isr_one, scheduler_register and the four shadow setters.",
-    "notes": "commit, commit_zero, isr_zero and blank are published but not reached on the route. The native suite covers engine 0 on the standalone build only; registering the literal 0x6cb0c4 and installing the isr_zero handler at 0x6c70e4 in the fixed-bank image are exercised by neither run. Both roles share one device model, so L1-L5 are not grounded. Admission counts owned direct calls only: on the core-0 IRQ stack (2044 bytes below entry sp 0x70001ffc) commit_one leaves 212 bytes and the ISR running commit_zero at most 92; drained callbacks, stock primitives and nested interrupts are unmeasured. No camera run.",
+    "claim": "On the single fixed bank, which links Root, the flag/mailbox family, the task60 loading owner, the file service and the display scanout (ELF {{elf}}), the natural no-card stock/owned route pair is {{verdict}} (qualified {{qualified}}): {{checkpoints}} route checkpoints equal ({{checkpoints_equal}}) over {{compared_calls}} compared calls ({{interrupt_calls}} interrupt, {{task_calls}} task). Both roles make {{commits}} commits with {{pending}} pending images and {{drained}} drained callbacks; unattributed writes are equal ({{unattributed}}). The deepest owned entry's sp is {{stack_excess}} bytes below its paired stock entry's. Owned commit_one executes {{owned_commit_instructions}} instructions over {{commit_calls}} calls against stock's {{stock_commit_instructions}}, and the owned body {{owned_body}} fetches against stock's carrier {{stock_carrier}}; the whole route takes {{owned_instructions}} owned and {{stock_instructions}} stock instructions. The register-order control is refused on register-sequence ({{register_order_detected}}) and the skipped-drain control on drain ({{skipped_drain_detected}}). Bank admission gives commit_one and commit_zero {{commit_one_stack}} and {{commit_zero_stack}} owned stack bytes and the isr_zero handler {{isr_zero_stack}}, on a {{stack_budget}}-byte budget.",
+    "scope": "Emulated X-M1 1.50 on FujiMod: one natural no-card boot-to-menus route, the owned role replaying the stock role's route ticks, candidate DAT {{firmware_sha256}}, stock-role DAT {{stock_role_dat}} (the same bank without the twelve scanout entry branches) and contract {{contract}}. Twelve stock entries are published; the route reaches capture, commit_one, isr_one, scheduler_register and the four shadow setters.",
+    "notes": "commit, commit_zero, isr_zero and blank are published but not reached on the route. The native suite covers engine 0 on the standalone build only; registering the literal 0x6cb0c4 and installing the isr_zero handler at 0x6c70e4 in the bank are exercised by neither run. Both roles share one device model, so L1-L5 are not grounded. Admission counts owned direct calls only; on the core-0 IRQ stack (2044 bytes below entry sp 0x70001ffc) the drained callbacks, stock primitives and nested interrupts the margins must hold are unmeasured. No camera run.",
     "artifacts": [
-      "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T173419Z-bank-display-role-stock/result/receipt.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T183235Z-bank-display-role-owned/result/receipt.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T183320Z-bank-display-role-register-order/result/receipt.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T183405Z-bank-display-role-skipped-drain/result/receipt.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-owned.json"
+      "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json",
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_commit_zero.json",
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_isr_zero.json",
+      "private-data/scratch/RootLanding/runs/20261122T183014Z-scanout-role-stock/result/receipt.json",
+      "private-data/scratch/RootLanding/runs/20261122T183327Z-scanout-role-default/result/receipt.json",
+      "private-data/scratch/RootLanding/runs/20261122T183327Z-scanout-role-register-order/result/receipt.json",
+      "private-data/scratch/RootLanding/runs/20261122T183327Z-scanout-role-skipped-drain/result/receipt.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/default-candidate.DAT.json"
     ],
     "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "update_sha256"
-        ]
-      },
-      {
-        "name": "verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "verdict"
-        ]
-      },
-      {
-        "name": "qualified",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "qualified"
-        ]
-      },
-      {
-        "name": "checkpoints",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "checkpoints"
-        ]
-      },
-      {
-        "name": "checkpoints_equal",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "checkpoints_equal"
-        ]
-      },
-      {
-        "name": "compared_calls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "compared_calls"
-        ]
-      },
-      {
-        "name": "interrupt_calls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "interrupt_calls"
-        ]
-      },
-      {
-        "name": "task_calls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "task_calls"
-        ]
-      },
-      {
-        "name": "commits",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "commits"
-        ]
-      },
-      {
-        "name": "pending",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "pending_commits"
-        ]
-      },
-      {
-        "name": "drained",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "drained_callbacks"
-        ]
-      },
-      {
-        "name": "unattributed",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "unattributed_writes_equal"
-        ]
-      },
-      {
-        "name": "stack_excess",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "stack_excess_bytes"
-        ]
-      },
-      {
-        "name": "owned_commit_instructions",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "instruction_spans",
-          "commit-one",
-          "1"
-        ]
-      },
-      {
-        "name": "commit_calls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "instruction_spans",
-          "commit-one",
-          "0"
-        ]
-      },
-      {
-        "name": "stock_commit_instructions",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "stock",
-          "instruction_spans",
-          "commit-one",
-          "1"
-        ]
-      },
-      {
-        "name": "owned_body",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "body_fetches"
-        ]
-      },
-      {
-        "name": "stock_carrier",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "stock",
-          "carrier_fetches"
-        ]
-      },
-      {
-        "name": "register_order_detected",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "controls",
-          "register-order",
-          "detected"
-        ]
-      },
-      {
-        "name": "skipped_drain_detected",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "controls",
-          "skipped-drain",
-          "detected"
-        ]
-      },
-      {
-        "name": "contract",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T221044Z-bank-display-qualify/result/qualification.json",
-        "pointer": [
-          "positive",
-          "owned",
-          "contract_sha256"
-        ]
-      },
-      {
-        "name": "elf",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
-        "pointer": [
-          "elf_sha256"
-        ]
-      },
-      {
-        "name": "commit_one_stack",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
-        "pointer": [
-          "owned_stack_bytes"
-        ]
-      },
-      {
-        "name": "stack_budget",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_scanout_commit_one.json",
-        "pointer": [
-          "owned_stack_budget"
-        ]
-      }
+      {"name": "firmware_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "update_sha256"]},
+      {"name": "verdict", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "verdict"]},
+      {"name": "qualified", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["qualified"]},
+      {"name": "checkpoints", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "checkpoints"]},
+      {"name": "checkpoints_equal", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "checkpoints_equal"]},
+      {"name": "compared_calls", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "compared_calls"]},
+      {"name": "interrupt_calls", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "interrupt_calls"]},
+      {"name": "task_calls", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "task_calls"]},
+      {"name": "commits", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "commits"]},
+      {"name": "pending", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "pending_commits"]},
+      {"name": "drained", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "drained_callbacks"]},
+      {"name": "unattributed", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "unattributed_writes_equal"]},
+      {"name": "stack_excess", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "stack_excess_bytes"]},
+      {"name": "owned_commit_instructions", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "instruction_spans", "commit-one", "1"]},
+      {"name": "commit_calls", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "instruction_spans", "commit-one", "0"]},
+      {"name": "stock_commit_instructions", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "stock", "instruction_spans", "commit-one", "1"]},
+      {"name": "owned_body", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "body_fetches"]},
+      {"name": "stock_carrier", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "stock", "carrier_fetches"]},
+      {"name": "owned_instructions", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "instructions"]},
+      {"name": "stock_instructions", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "stock", "instructions"]},
+      {"name": "register_order_detected", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["controls", "register-order", "detected"]},
+      {"name": "skipped_drain_detected", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["controls", "skipped-drain", "detected"]},
+      {"name": "contract", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "owned", "contract_sha256"]},
+      {"name": "stock_role_dat", "path": "private-data/scratch/RootLanding/runs/20261122T193547Z-scanout-qualify/result/qualification.json", "pointer": ["positive", "stock", "update_sha256"]},
+      {"name": "elf", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_commit_one.json", "pointer": ["elf_sha256"]},
+      {"name": "commit_one_stack", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_commit_one.json", "pointer": ["entries", "xm1_scanout_commit_one", "owned_stack_bytes"]},
+      {"name": "commit_zero_stack", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_commit_zero.json", "pointer": ["entries", "xm1_scanout_commit_zero", "owned_stack_bytes"]},
+      {"name": "isr_zero_stack", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_isr_zero.json", "pointer": ["entries", "xm1_scanout_isr_zero", "owned_stack_bytes"]},
+      {"name": "stack_budget", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_scanout_commit_one.json", "pointer": ["entries", "xm1_scanout_commit_one", "owned_stack_budget"]}
     ]
-  }
-  ,{
+  },
+  {
     "id": "E-FILE-SERVICE-HANDLES-150",
-    "claim": "The owned file-service tag allocator 0x71ef18/0x71eff4 and handle map 0x71ea34/0x71eaac/0x71eb28, linked in place over the stock tag slots 0x9101c0, sequence 0x910200 and map 0x910140, match the stock X-M1 1.50 image-4 bytes natively: the handles suite is {{verdict}} on {{cases}} cases and detects every one of {{controls}} deliberately wrong controls. Owned ELF {{owned_sha256}}, image 4 {{firmware_sha256}}, decomp {{decomp_commit}}. On the card route of E-FILE-SERVICE-REQUESTS-150, which is {{card_verdict}} to stock, the stock workers and helpers that the owned code retires call map_bind {{card_map_bind}}, map_unbind {{card_map_unbind}}, map_lookup {{card_map_lookup_internal}} and tag_release {{card_tag_release}} times, and retained code calls map_lookup {{card_stock_map_lookup}} and {{card_map_lookup}} times in stock and owned.",
+    "claim": "The owned file-service tag allocator 0x71ef18/0x71eff4 and handle map 0x71ea34/0x71eaac/0x71eb28, linked in place over the stock tag slots 0x9101c0, sequence 0x910200 and map 0x910140, match the stock X-M1 1.50 image-4 bytes natively: the handles suite is {{verdict}} on {{cases}} cases and detects every one of {{controls}} deliberately wrong controls. Owned ELF {{owned_sha256}}, image 4 {{firmware_sha256}}, decomp {{decomp_commit}}. On the card route of E-FILE-SERVICE-REQUESTS-150, which is {{card_verdict}} to fs-stock, the stock workers and helpers that the owned code retires call map_bind {{card_map_bind}}, map_unbind {{card_map_unbind}}, map_lookup {{card_map_lookup_internal}} and tag_release {{card_tag_release}} times, and retained code calls map_lookup {{card_stock_map_lookup}} and {{card_map_lookup}} times in fs-stock and owned.",
     "scope": "Host-only native per-entry cases on the Cortex-R5F runner over scripted stock semaphore and file-cache services, and the full-system card route of E-FILE-SERVICE-REQUESTS-150 with its interface, snapshots and watched writes.",
     "notes": "Tag allocation runs in full system only inside the owned open poster, so it is compared there through the tag in the watched open payload, not as an interface call. The owned workers call the owned map and tag bodies directly, so those calls are compared through the watched writes to the tag slots, sequence and map words. Semaphore contention and scheduling are scripted, not qualified.",
     "artifacts": [
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json"
+      "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json"
     ],
     "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-        "pointer": [
-          "image4_sha256"
-        ]
-      },
-      {
-        "name": "verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "owned_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-        "pointer": [
-          "owned_sha256"
-        ]
-      },
-      {
-        "name": "decomp_commit",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140523Z-file-service-handles/result/file-service-handles.json",
-        "pointer": [
-          "decomp_commit"
-        ]
-      },
-      {
-        "name": "card_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_map_bind",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "map_bind",
-          "stock",
-          "internal"
-        ]
-      },
-      {
-        "name": "card_map_unbind",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "map_unbind",
-          "stock",
-          "internal"
-        ]
-      },
-      {
-        "name": "card_map_lookup_internal",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "map_lookup",
-          "stock",
-          "internal"
-        ]
-      },
-      {
-        "name": "card_tag_release",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "tag_release",
-          "stock",
-          "internal"
-        ]
-      },
-      {
-        "name": "card_map_lookup",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "map_lookup",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_stock_map_lookup",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "map_lookup",
-          "stock",
-          "interface"
-        ]
-      }
+      {"name": "firmware_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json", "pointer": ["image4_sha256"]},
+      {"name": "verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json", "pointer": ["verdict"]},
+      {"name": "cases", "path": "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "controls", "path": "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "owned_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json", "pointer": ["owned_sha256"]},
+      {"name": "decomp_commit", "path": "private-data/scratch/RootLanding/runs/20261123T045532Z-file-service-handles/result/file-service-handles.json", "pointer": ["decomp_commit"]},
+      {"name": "card_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_map_bind", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "map_bind", "stock", "internal"]},
+      {"name": "card_map_unbind", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "map_unbind", "stock", "internal"]},
+      {"name": "card_map_lookup_internal", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "map_lookup", "stock", "internal"]},
+      {"name": "card_tag_release", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "tag_release", "stock", "internal"]},
+      {"name": "card_map_lookup", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "map_lookup", "owned", "interface"]},
+      {"name": "card_stock_map_lookup", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "map_lookup", "stock", "interface"]}
     ]
-  }
-  ,{
+  },
+  {
     "id": "E-FILE-SERVICE-REQUESTS-150",
-    "claim": "The owned file-service request path (open, read, write and close posters and their ten caller entries, result-slot helpers, post, status translation, media readiness, mediamsg routing with deferral and replay, the open interceptor and the media task) matches the stock X-M1 1.50 image-4 bytes natively: the requests suite is {{native_verdict}} on {{native_cases}} cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, image 4 {{image4_sha256}}). On the cardless full-system route the owned DAT {{owned_dat_sha256}} is {{fullsystem_verdict}} to stock: {{stock_interface_events}} and {{owned_interface_events}} interface events, {{stock_watched_writes}} and {{owned_watched_writes}} watched writes and every screen equal, with {{owned_retired_fetches}} owned fetches of the retired extents against {{stock_retired_fetches}} stock ones. A stock rerun is {{stock_rerun_verdict}}. On the card route (card {{card_sha256}}, FujiMod bridge {{card_bridge_sha256}}) the same DAT {{card_owned_dat_sha256}} is {{card_verdict}} to stock through {{card_opens}} opens, {{card_reads}} reads and {{card_closes}} closes: {{card_stock_interface_events}} and {{card_owned_interface_events}} interface events, {{card_stock_watched_writes}} and {{card_owned_watched_writes}} watched writes and every screen equal, with {{card_owned_retired_fetches}} owned fetches of the retired extents against {{card_stock_retired_fetches}} stock ones. A stock rerun is {{card_stock_rerun_verdict}}, and DATs staged from the media_task_worker_row ({{worker_row_dat_sha256}}) and intercept_keeps_callback ({{intercept_dat_sha256}}) control images are {{card_worker_row_verdict}} and {{card_intercept_verdict}}.",
-    "scope": "Host-only X-M1 1.50. Native: per-entry cases over scripted stock services on the Cortex-R5F runner; media-task cases stop at the worker and compare r0..r3 and sp. Full system: FujiMod RAM-push fresh boot to attach, then PLAY, LEFT, LEFT, RIGHT, RIGHT. With no card the route reaches post, mediamsg routing, readiness, the media task and the 0x2c00 worker but no open, read or close request. With the three-JPEG playback card it also reaches the async open, read and close entries, the 0x2c17, 0x2c18 and 0x2c1a workers, tag release, the handle map and the open interceptor. The interface is every call returning outside the retired extents and the owned body, compared on entry arguments up to the owned arity, return registers, r0..r3 at worker entries, result-slot, session and open-set snapshots and writes, request reads and screen digests. Both routes use one observer, which leaves out return registers the stock entry body writes on some path, and r0 at the eight stock callers that write it first after the resultless map_unbind and tag_release. It also masks mediamsg receive-buffer payload bytes past the request length and those the stock open and close posters leave undefined. The owned ELF is the one fixed bank (//replacement/fixed_image:fixed-bank-image), which also links the display scanout; fixed-image admission admits every file-service body, the deepest (close_wait, read_wait, write_wait) at {{admission_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
-    "notes": "Stock open (0x71c2b0) and close (0x71c134) copy the path or name with strcpy into an uninitialized stack payload, so the bytes after the terminator are undefined in stock as well. Close stores its slot words on every path (0x71c1b4..0x71c1bc), so they stay compared. A register the stock body writes on some path cannot be read after return by an AAPCS caller or one built with interprocedural register allocation. Card boots of DATs on the fixed first-stage image rely on FujiMod's source-inferred LZ masked-completion law (E-FUJIMOD-LZ-ENABLE-WINDOW-150). Retained callbacks are not traced; the retained services the owned workers call are (E-FILE-SERVICE-WORKERS-150, E-FILE-SERVICE-MEDIA-WORKERS-150). Kernel and device laws are not qualified natively.",
+    "claim": "The owned file-service request path (open, read, write and close posters and their ten caller entries, result-slot helpers, post, status translation, media readiness, mediamsg routing with deferral and replay, the open interceptor and the media task) matches the stock X-M1 1.50 image-4 bytes natively: the requests suite is {{native_verdict}} on {{native_cases}} cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, image 4 {{image4_sha256}}). On the cardless full-system route the owned DAT {{owned_dat_sha256}} is {{fullsystem_verdict}} to fs-stock, the same bank body ({{owned_body_sha256}}) staged without the file service's retired-region publications as DAT {{fs_stock_dat_sha256}}: {{stock_interface_events}} and {{owned_interface_events}} interface events, {{stock_watched_writes}} and {{owned_watched_writes}} watched writes and every screen equal, with {{owned_retired_fetches}} owned fetches of the retired extents against {{stock_retired_fetches}} fs-stock ones. A FWUP0002 rerun is {{stock_rerun_verdict}}, and on the board-tick clock the cardless pair is {{ticks_verdict}} with {{ticks_stock_interface_events}} and {{ticks_owned_interface_events}} interface events. On the card route (card {{card_sha256}}, FujiMod bridge {{card_bridge_sha256}}) the same DAT {{card_owned_dat_sha256}} is {{card_verdict}} to fs-stock through {{card_opens}} opens, {{card_reads}} reads and {{card_closes}} closes: {{card_stock_interface_events}} and {{card_owned_interface_events}} interface events, {{card_stock_watched_writes}} and {{card_owned_watched_writes}} watched writes and every screen equal, with {{card_owned_retired_fetches}} owned fetches of the retired extents against {{card_stock_retired_fetches}} fs-stock ones. A FWUP0002 rerun is {{card_stock_rerun_verdict}}, and DATs staged from the media_task_worker_row ({{worker_row_dat_sha256}}) and intercept_keeps_callback ({{intercept_dat_sha256}}) control images are {{card_worker_row_verdict}} and {{card_intercept_verdict}}. Against FWUP0002 the owned DAT and fs-stock are {{cardless_owned_vs_stock}} and {{cardless_fs_stock_vs_stock}} on the cardless route and {{card_owned_vs_stock}} and {{card_fs_stock_vs_stock}} on the card route.",
+    "scope": "Host-only X-M1 1.50. Native: per-entry cases over scripted stock services on the Cortex-R5F runner; media-task cases stop at the worker and compare r0..r3 and sp. Full system: FujiMod RAM-push fresh boot to attach, then PLAY, LEFT, LEFT, RIGHT, RIGHT. With no card the route reaches post, mediamsg routing, readiness, the media task and the 0x2c00 worker but no open, read or close request. With the three-JPEG playback card it also reaches the async open, read and close entries, the 0x2c17, 0x2c18 and 0x2c1a workers, tag release, the handle map and the open interceptor. The interface is every call returning outside the retired extents and the owned body, compared on entry arguments up to the owned arity, return registers, r0..r3 at worker entries, result-slot, session and open-set snapshots and writes, request reads and screen digests. Both routes use one observer, which leaves out return registers the stock entry body writes on some path, and r0 at the eight stock callers that write it first after the resultless map_unbind and tag_release. It also masks mediamsg receive-buffer payload bytes past the request length and those the stock open and close posters leave undefined. The owned ELF is the single fixed bank (//replacement/saclac:saclac-image), which also links Root, the flag/mailbox family, the task60 loading owner and the display scanout; bank admission admits every file-service body, the deepest (close_wait, read_wait, write_wait) at {{admission_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
+    "notes": "Stock open (0x71c2b0) and close (0x71c134) copy the path or name with strcpy into an uninitialized stack payload, so the bytes after the terminator are undefined in stock as well. Close stores its slot words on every path (0x71c1b4..0x71c1bc), so they stay compared. A register the stock body writes on some path cannot be read after return by an AAPCS caller or one built with interprocedural register allocation. Card boots of DATs on the fixed first-stage image rely on FujiMod's source-inferred LZ masked-completion law (E-FUJIMOD-LZ-ENABLE-WINDOW-150). Retained callbacks are not traced; the retained services the owned workers call are (E-FILE-SERVICE-WORKERS-150, E-FILE-SERVICE-MEDIA-WORKERS-150). Kernel and device laws are not qualified natively. The FWUP0002 comparisons differ by the bank's composition, which fs-stock and the owned DAT share, so they are not attributed to the file service.",
     "artifacts": [
-      "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T160240Z-file-service-requests/result/file-service-requests.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-stock-2.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-stock-2.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-media-task-worker-row.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-intercept-keeps-callback.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-media-task-worker-row.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-intercept-keeps-callback.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_close_wait.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-owned.json"
+      "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261123T045535Z-file-service-requests/result/file-service-requests.json",
+      "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-stock-2-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-fs-stock-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T183014Z-file-service-playback-cardless-ticks/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-stock-2-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-fs-stock-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-media-task-worker-row-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-intercept-keeps-callback-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-media-task-worker-row-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-intercept-keeps-callback-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_close_wait.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/default-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/fs-stock-staging.json"
     ],
     "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "inputs",
-          "update",
-          "sha256"
-        ]
-      },
-      {
-        "name": "native_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T160240Z-file-service-requests/result/file-service-requests.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "native_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T160240Z-file-service-requests/result/file-service-requests.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "native_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T160240Z-file-service-requests/result/file-service-requests.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "owned_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T160240Z-file-service-requests/result/file-service-requests.json",
-        "pointer": [
-          "owned_sha256"
-        ]
-      },
-      {
-        "name": "image4_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T160240Z-file-service-requests/result/file-service-requests.json",
-        "pointer": [
-          "image4_sha256"
-        ]
-      },
-      {
-        "name": "owned_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "inputs",
-          "update",
-          "sha256"
-        ]
-      },
-      {
-        "name": "fullsystem_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "stock_interface_events",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "interface_events"
-        ]
-      },
-      {
-        "name": "stock_watched_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "watched_writes"
-        ]
-      },
-      {
-        "name": "owned_interface_events",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "interface_events"
-        ]
-      },
-      {
-        "name": "owned_watched_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "watched_writes"
-        ]
-      },
-      {
-        "name": "owned_retired_fetches",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "retired_fetches"
-        ]
-      },
-      {
-        "name": "stock_retired_fetches",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "retired_fetches"
-        ]
-      },
-      {
-        "name": "stock_rerun_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-stock-2.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "inputs",
-          "card",
-          "sha256"
-        ]
-      },
-      {
-        "name": "card_bridge_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "inputs",
-          "bridge",
-          "sha256"
-        ]
-      },
-      {
-        "name": "card_owned_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "inputs",
-          "update",
-          "sha256"
-        ]
-      },
-      {
-        "name": "card_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_opens",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "open_async",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_reads",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "read_async",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_closes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "close_async",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_stock_interface_events",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "interface_events"
-        ]
-      },
-      {
-        "name": "card_stock_watched_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "watched_writes"
-        ]
-      },
-      {
-        "name": "card_owned_interface_events",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "interface_events"
-        ]
-      },
-      {
-        "name": "card_owned_watched_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "watched_writes"
-        ]
-      },
-      {
-        "name": "card_owned_retired_fetches",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "retired_fetches"
-        ]
-      },
-      {
-        "name": "card_stock_retired_fetches",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "retired_fetches"
-        ]
-      },
-      {
-        "name": "card_stock_rerun_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-stock-2.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_worker_row_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-media-task-worker-row.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_intercept_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-intercept-keeps-callback.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "worker_row_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-media-task-worker-row.json",
-        "pointer": [
-          "dat_sha256"
-        ]
-      },
-      {
-        "name": "intercept_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-intercept-keeps-callback.json",
-        "pointer": [
-          "dat_sha256"
-        ]
-      },
-      {
-        "name": "admission_stack",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_close_wait.json",
-        "pointer": [
-          "owned_stack_bytes"
-        ]
-      },
-      {
-        "name": "admission_budget",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_close_wait.json",
-        "pointer": [
-          "owned_stack_budget"
-        ]
-      }
+      {"name": "firmware_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-stock.json", "pointer": ["stock", "inputs", "update", "sha256"]},
+      {"name": "native_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045535Z-file-service-requests/result/file-service-requests.json", "pointer": ["verdict"]},
+      {"name": "native_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045535Z-file-service-requests/result/file-service-requests.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "native_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045535Z-file-service-requests/result/file-service-requests.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "owned_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T045535Z-file-service-requests/result/file-service-requests.json", "pointer": ["owned_sha256"]},
+      {"name": "image4_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T045535Z-file-service-requests/result/file-service-requests.json", "pointer": ["image4_sha256"]},
+      {"name": "owned_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "inputs", "update", "sha256"]},
+      {"name": "owned_body_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/default-candidate.DAT.json", "pointer": ["body_sha256"]},
+      {"name": "fs_stock_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "inputs", "update", "sha256"]},
+      {"name": "fullsystem_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "stock_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "interface_events"]},
+      {"name": "stock_watched_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "watched_writes"]},
+      {"name": "owned_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "interface_events"]},
+      {"name": "owned_watched_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "watched_writes"]},
+      {"name": "owned_retired_fetches", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "retired_fetches"]},
+      {"name": "stock_retired_fetches", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "retired_fetches"]},
+      {"name": "stock_rerun_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-stock-2-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "ticks_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T183014Z-file-service-playback-cardless-ticks/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "ticks_stock_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T183014Z-file-service-playback-cardless-ticks/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "interface_events"]},
+      {"name": "ticks_owned_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T183014Z-file-service-playback-cardless-ticks/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "interface_events"]},
+      {"name": "card_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "inputs", "card", "sha256"]},
+      {"name": "card_bridge_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "inputs", "bridge", "sha256"]},
+      {"name": "card_owned_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "inputs", "update", "sha256"]},
+      {"name": "card_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_opens", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "open_async", "owned", "interface"]},
+      {"name": "card_reads", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "read_async", "owned", "interface"]},
+      {"name": "card_closes", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "close_async", "owned", "interface"]},
+      {"name": "card_stock_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "interface_events"]},
+      {"name": "card_stock_watched_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "watched_writes"]},
+      {"name": "card_owned_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "interface_events"]},
+      {"name": "card_owned_watched_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "watched_writes"]},
+      {"name": "card_owned_retired_fetches", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "retired_fetches"]},
+      {"name": "card_stock_retired_fetches", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "retired_fetches"]},
+      {"name": "card_stock_rerun_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-stock-2-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_worker_row_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-media-task-worker-row-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_intercept_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-intercept-keeps-callback-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "worker_row_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-media-task-worker-row-candidate.DAT.json", "pointer": ["dat_sha256"]},
+      {"name": "intercept_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-intercept-keeps-callback-candidate.DAT.json", "pointer": ["dat_sha256"]},
+      {"name": "cardless_owned_vs_stock", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "cardless_fs_stock_vs_stock", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-fs-stock-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_owned_vs_stock", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_fs_stock_vs_stock", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-fs-stock-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "admission_stack", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_close_wait.json", "pointer": ["entries", "xm1_file_service_close_wait", "owned_stack_bytes"]},
+      {"name": "admission_budget", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_close_wait.json", "pointer": ["entries", "xm1_file_service_close_wait", "owned_stack_budget"]}
     ]
   },
   {
     "id": "E-FILE-SERVICE-WORKERS-150",
-    "claim": "The owned file-service open/create 0x7115a4, write 0x7116e4, close 0x711768, close-with-entry-update 0x711840, seek 0x71eca4 and release 0x71f134 workers, with the helpers only they call (0x71f2a8, 0x71ed34, 0x71f1d4, 0x71f078), match the stock X-M1 1.50 image-4 bytes natively: the workers suite is {{native_verdict}} on {{native_cases}} cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, image 4 {{image4_sha256}}, decomp {{decomp_commit}}). On the PROTECT card route the owned DAT {{owned_dat_sha256}} is {{verdict}} to stock: the owned open, seek and close workers are entered {{open_workers}}, {{seek_workers}} and {{close_workers}} times and submit {{fs_open}} filesystem opens, {{fs_seek}} seeks and {{fs_close}} closes around the owned attribute-set worker 0x2c04 (E-FILE-SERVICE-MEDIA-WORKERS-150), which writes the card {{accepted_writes}} times ({{accepted_bytes}} bytes). {{stock_interface_events}} and {{owned_interface_events}} interface events, {{stock_watched_writes}} and {{owned_watched_writes}} watched writes, the card summary (equal: {{card_equal}}) and every screen are equal, with {{owned_retired_fetches}} owned fetches of the retired extents against {{stock_retired_fetches}} stock ones. A stock rerun is {{stock_rerun_verdict}}, and DATs staged from the close_keeps_tag ({{close_dat_sha256}}) and media_task_worker_row control images are {{close_control_verdict}} and {{worker_row_control_verdict}}. On the playback card route of E-FILE-SERVICE-REQUESTS-150 the same DAT enters the owned open and close workers {{card_open_workers}} and {{card_close_workers}} times, and the close_keeps_tag DAT is {{card_close_control_verdict}}.",
-    "scope": "Host-only X-M1 1.50. Native: per-case runs of the six workers on the Cortex-R5F runner over scripted stock filesystem, path and media-state services, comparing the result, the ordered calls into the retained services and the final payload, tag map and media-state context. Full system: FujiMod RAM-push fresh boot to attach with the three-JPEG playback card, then PLAY, OK, DOWN, DOWN, DOWN, OK, OK, OK, which sets PROTECT on the first image. Beyond the interface of E-FILE-SERVICE-REQUESTS-150, the observer compares each call the component makes into the retained filesystem, path and media-state services (arguments, pointed-at bytes and r0 on return), watched writes to the tag map, tag slots and sequence, and the card's accepted writes, written bytes, dirty sectors and final SD command history after every step. The workers fit main's fixed bank; fixed-image admission admits every body, the open worker at {{open_worker_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
-    "notes": "No emulated route reaches the write worker 0x2c19, close with entry update 0x2c1b, release 0x2c1d or a write-mode open; those are qualified natively only. Card sector bytes are not compared: the bridge keeps writes in an in-memory overlay with no export. The 0x2c04 posters 0x70f55c and 0x70f5f8 build the payload in an uninitialized stack frame and store only the callback +0, the strcpy path +4, the value +0x34 and the selector byte +0x38 (id4.dis:248924-249002); worker 0x711f58 reads +0, +0x34, +0x38 and the path through its terminator (id4.dis:251611-251706, 0x71d1b8 at 263027-263049), so the path bytes after the terminator and +0x39..+0x3b are masked. Stock post 0x71fde4 writes r3 at 0x71fdf0 and r1 at 0x71fe1c, and send 0x72503c writes r2 at 0x725058, so post's return r1..r3 are not compared.",
+    "claim": "The owned file-service open/create 0x7115a4, write 0x7116e4, close 0x711768, close-with-entry-update 0x711840, seek 0x71eca4 and release 0x71f134 workers, with the helpers only they call (0x71f2a8, 0x71ed34, 0x71f1d4, 0x71f078), match the stock X-M1 1.50 image-4 bytes natively: the workers suite is {{native_verdict}} on {{native_cases}} cases and detects every one of {{native_controls}} deliberately wrong controls (owned ELF {{owned_sha256}}, image 4 {{image4_sha256}}, decomp {{decomp_commit}}). On the PROTECT card route the owned DAT {{owned_dat_sha256}} is {{verdict}} to fs-stock, the same bank staged without the file service's retired-region publications as DAT {{fs_stock_dat_sha256}}: the owned open, seek and close workers are entered {{open_workers}}, {{seek_workers}} and {{close_workers}} times and submit {{fs_open}} filesystem opens, {{fs_seek}} seeks and {{fs_close}} closes around the owned attribute-set worker 0x2c04 (E-FILE-SERVICE-MEDIA-WORKERS-150), which writes the card {{accepted_writes}} times ({{accepted_bytes}} bytes). {{stock_interface_events}} and {{owned_interface_events}} interface events, {{stock_watched_writes}} and {{owned_watched_writes}} watched writes, the card summary (equal: {{card_equal}}) and every screen are equal, with {{owned_retired_fetches}} owned fetches of the retired extents against {{stock_retired_fetches}} fs-stock ones. A FWUP0002 rerun is {{stock_rerun_verdict}}, and against FWUP0002 the owned DAT and fs-stock are {{owned_vs_stock}} and {{fs_stock_vs_stock}}. DATs staged from the close_keeps_tag ({{close_dat_sha256}}) and media_task_worker_row control images are {{close_control_verdict}} and {{worker_row_control_verdict}}. On the playback card route of E-FILE-SERVICE-REQUESTS-150 the same DAT enters the owned open and close workers {{card_open_workers}} and {{card_close_workers}} times, and the close_keeps_tag DAT is {{card_close_control_verdict}}.",
+    "scope": "Host-only X-M1 1.50. Native: per-case runs of the six workers on the Cortex-R5F runner over scripted stock filesystem, path and media-state services, comparing the result, the ordered calls into the retained services and the final payload, tag map and media-state context. Full system: FujiMod RAM-push fresh boot to attach with the three-JPEG playback card, then PLAY, OK, DOWN, DOWN, DOWN, OK, OK, OK, which sets PROTECT on the first image. Beyond the interface of E-FILE-SERVICE-REQUESTS-150, the observer compares each call the component makes into the retained filesystem, path and media-state services (arguments, pointed-at bytes and r0 on return), watched writes to the tag map, tag slots and sequence, and the card's accepted writes, written bytes, dirty sectors and final SD command history after every step. The workers link into the single fixed bank; bank admission admits every body, the open worker at {{open_worker_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
+    "notes": "No emulated route reaches the write worker 0x2c19, close with entry update 0x2c1b, release 0x2c1d or a write-mode open; those are qualified natively only. Card sector bytes are not compared: the bridge keeps writes in an in-memory overlay with no export. The 0x2c04 posters 0x70f55c and 0x70f5f8 build the payload in an uninitialized stack frame and store only the callback +0, the strcpy path +4, the value +0x34 and the selector byte +0x38 (id4.dis:248924-249002); worker 0x711f58 reads +0, +0x34, +0x38 and the path through its terminator (id4.dis:251611-251706, 0x71d1b8 at 263027-263049), so the path bytes after the terminator and +0x39..+0x3b are masked. Stock post 0x71fde4 writes r3 at 0x71fdf0 and r1 at 0x71fe1c, and send 0x72503c writes r2 at 0x725058, so post's return r1..r3 are not compared. The FWUP0002 comparisons differ by the bank's composition, which fs-stock and the owned DAT share, so they are not attributed to the file service.",
     "artifacts": [
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-stock-2.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-close-keeps-tag.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-media-task-worker-row.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-close-keeps-tag.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-close-keeps-tag.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_open_worker.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-owned.json"
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-stock-2-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-fs-stock-vs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-close-keeps-tag-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-media-task-worker-row-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-close-keeps-tag-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-close-keeps-tag-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_open_worker.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/default-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/fs-stock-staging.json"
     ],
     "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "inputs",
-          "update",
-          "sha256"
-        ]
-      },
-      {
-        "name": "native_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "native_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "native_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "owned_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-        "pointer": [
-          "owned_sha256"
-        ]
-      },
-      {
-        "name": "image4_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-        "pointer": [
-          "image4_sha256"
-        ]
-      },
-      {
-        "name": "decomp_commit",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140550Z-file-service-workers/result/file-service-workers.json",
-        "pointer": [
-          "decomp_commit"
-        ]
-      },
-      {
-        "name": "owned_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "inputs",
-          "update",
-          "sha256"
-        ]
-      },
-      {
-        "name": "verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "open_workers",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c17",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "seek_workers",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c1c",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "close_workers",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c1a",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "fs_open",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "fs_open",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "fs_seek",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "fs_seek",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "fs_close",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "fs_close",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "accepted_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "card",
-          "owned",
-          "8",
-          "accepted_writes"
-        ]
-      },
-      {
-        "name": "accepted_bytes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "card",
-          "owned",
-          "8",
-          "accepted_write_bytes"
-        ]
-      },
-      {
-        "name": "card_equal",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "card",
-          "comparison",
-          "equal"
-        ]
-      },
-      {
-        "name": "stock_interface_events",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "interface_events"
-        ]
-      },
-      {
-        "name": "stock_watched_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "watched_writes"
-        ]
-      },
-      {
-        "name": "owned_interface_events",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "interface_events"
-        ]
-      },
-      {
-        "name": "owned_watched_writes",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "watched_writes"
-        ]
-      },
-      {
-        "name": "owned_retired_fetches",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "retired_fetches"
-        ]
-      },
-      {
-        "name": "stock_retired_fetches",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "stock",
-          "retired_fetches"
-        ]
-      },
-      {
-        "name": "stock_rerun_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-stock-2.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "close_control_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-close-keeps-tag.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "worker_row_control_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-media-task-worker-row.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "close_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-close-keeps-tag.json",
-        "pointer": [
-          "dat_sha256"
-        ]
-      },
-      {
-        "name": "card_open_workers",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c17",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_close_workers",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c1a",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_close_control_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-close-keeps-tag.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "open_worker_stack",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_open_worker.json",
-        "pointer": [
-          "owned_stack_bytes"
-        ]
-      },
-      {
-        "name": "admission_budget",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_open_worker.json",
-        "pointer": [
-          "owned_stack_budget"
-        ]
-      }
+      {"name": "firmware_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-stock.json", "pointer": ["stock", "inputs", "update", "sha256"]},
+      {"name": "native_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json", "pointer": ["verdict"]},
+      {"name": "native_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "native_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "owned_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json", "pointer": ["owned_sha256"]},
+      {"name": "image4_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json", "pointer": ["image4_sha256"]},
+      {"name": "decomp_commit", "path": "private-data/scratch/RootLanding/runs/20261123T045635Z-file-service-workers/result/file-service-workers.json", "pointer": ["decomp_commit"]},
+      {"name": "owned_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "inputs", "update", "sha256"]},
+      {"name": "fs_stock_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "inputs", "update", "sha256"]},
+      {"name": "verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "open_workers", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c17", "owned", "interface"]},
+      {"name": "seek_workers", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c1c", "owned", "interface"]},
+      {"name": "close_workers", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c1a", "owned", "interface"]},
+      {"name": "fs_open", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "fs_open", "owned", "interface"]},
+      {"name": "fs_seek", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "fs_seek", "owned", "interface"]},
+      {"name": "fs_close", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "fs_close", "owned", "interface"]},
+      {"name": "accepted_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["card", "owned", "8", "accepted_writes"]},
+      {"name": "accepted_bytes", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["card", "owned", "8", "accepted_write_bytes"]},
+      {"name": "card_equal", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["card", "comparison", "equal"]},
+      {"name": "stock_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "interface_events"]},
+      {"name": "stock_watched_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "watched_writes"]},
+      {"name": "owned_interface_events", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "interface_events"]},
+      {"name": "owned_watched_writes", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "watched_writes"]},
+      {"name": "owned_retired_fetches", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "retired_fetches"]},
+      {"name": "stock_retired_fetches", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["stock", "retired_fetches"]},
+      {"name": "stock_rerun_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-stock-2-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "owned_vs_stock", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "fs_stock_vs_stock", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-fs-stock-vs-stock.json", "pointer": ["verdict"]},
+      {"name": "close_control_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-close-keeps-tag-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "worker_row_control_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-media-task-worker-row-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "close_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-close-keeps-tag-candidate.DAT.json", "pointer": ["dat_sha256"]},
+      {"name": "card_open_workers", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c17", "owned", "interface"]},
+      {"name": "card_close_workers", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c1a", "owned", "interface"]},
+      {"name": "card_close_control_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-close-keeps-tag-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "open_worker_stack", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_open_worker.json", "pointer": ["entries", "xm1_file_service_open_worker", "owned_stack_bytes"]},
+      {"name": "admission_budget", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_open_worker.json", "pointer": ["entries", "xm1_file_service_open_worker", "owned_stack_budget"]}
     ]
   },
   {
     "id": "E-FILE-SERVICE-MEDIA-WORKERS-150",
-    "claim": "The 28 further owned file-service media-task workers, with the helpers only they call, match the stock X-M1 1.50 image-4 bytes natively, every suite detecting every one of its deliberately wrong controls: search is {{search_verdict}} on {{search_cases}} cases with {{search_controls}} controls, volume is {{volume_verdict}} on {{volume_cases}} cases with {{volume_controls}} controls, counts is {{counts_verdict}} on {{counts_cases}} cases with {{counts_controls}} controls, selection is {{selection_verdict}} on {{selection_cases}} cases with {{selection_controls}} controls, catalog is {{catalog_verdict}} on {{catalog_cases}} cases with {{catalog_controls}} controls, paths is {{paths_verdict}} on {{paths_cases}} cases with {{paths_controls}} controls and media-io is {{media_io_verdict}} on {{media_io_cases}} cases with {{media_io_controls}} controls (owned ELF {{owned_sha256}}, image 4 {{firmware_sha256}}, decomp {{decomp_commit}}). On the PROTECT card route of E-FILE-SERVICE-WORKERS-150, which is {{protect_verdict}} to stock with owned DAT {{owned_dat_sha256}}, the owned attach 0x2c00, catalog rebuild 0x2c02, attribute set 0x2c04, find first entry 0x2c06, find entry 0x2c0d, read 0x2c18 and capacity 0x2c26 workers are entered {{protect_2c00}}, {{protect_2c02}}, {{protect_2c04}}, {{protect_2c06}}, {{protect_2c0d}}, {{protect_2c18}} and {{protect_2c26}} times; on the playback card route ({{card_verdict}}) all but 0x2c04 are entered {{card_2c00}}, {{card_2c02}}, {{card_2c06}}, {{card_2c0d}}, {{card_2c18}} and {{card_2c26}} times, and on the cardless route ({{cardless_verdict}}) attach is entered {{cardless_2c00}} times. DATs staged from three control images are not caught on any route: volume_attach_kind_unset ({{attach_dat_sha256}}) is {{cardless_attach_verdict}} on the cardless route and {{protect_attach_verdict}} on PROTECT, catalog_rebuild_selection_kept ({{rebuild_dat_sha256}}) is {{protect_rebuild_verdict}} on PROTECT and {{card_rebuild_verdict}} on the playback card route, and read_redirect_keeps_position ({{redirect_dat_sha256}}) is {{card_redirect_verdict}} on the playback card route. They are caught only natively: {{native_attach_control}} detected {{native_attach_detected}}, {{native_rebuild_control}} detected {{native_rebuild_detected}} and {{native_redirect_control}} detected {{native_redirect_detected}}.",
-    "scope": "Host-only X-M1 1.50. Native: per-case runs of the search (find first and next 0x712700/0x7127e0, find first and next entry 0x71e3a4/0x71e550), volume (attach 0x7120d8, detach 0x7122dc, armed format 0x7123b4, format 0x712580), counts (file counts 0x718a8c, file position 0x718de4), selection (select 0x719098), catalog (group select 0x71a834, catalog rebuild 0x71a8a0, find entry 0x71b8c0, request completion 0x71b9b0, index resolution 0x719614), paths (file delete 0x7118fc, filename set 0x7119b0, directory delete 0x711b50, image remove 0x711bc8, read-only 0x711ea4, attribute set 0x711f58) and media-io (capacity 0x715a58, pattern 0x715de4, query 0x71ded4, page read 0x71e828, page write 0x71e8c4, read 0x71edbc) workers on the Cortex-R5F runner over scripted stock filesystem, path, catalog, volume and media-state services, comparing the result, the ordered calls into the retained services and the final payload and context. Full system: the cardless, playback card and PROTECT routes of E-FILE-SERVICE-REQUESTS-150 and E-FILE-SERVICE-WORKERS-150 with one observer, which also compares the calls the reached workers make into the retained services they call and the component's own calls to divide 0x4d978, paired by order. Fixed-image admission admits every body, the deepest (image remove 0x2c25) at {{deepest_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
-    "notes": "The other 21 workers are reached on no emulated route and are qualified natively only. Selection's 0x2c1f reload path passes two query words stock leaves uninitialised to 0x717a24; the native cases compare them only when set. Stock path split 0x71543c writes its name output only on the dotted-path branch (0x71553c): a last segment without a dot (return at 0x715624) or a path starting with a space or NUL (0x715488) leaves it unwritten, and the stock callers select (0x7190e4), counts (0x718aec), filename set (0x711a2c) and attribute set (0x711fd4) do not clear it first, so stock's extension kind and the name filename set passes to 0x714940 come from stale stack bytes, while the owned workers zero-fill the buffer. The native cases script 0x71543c to always write the name, so that path is not compared. Copy 0x70e6c4 has no observer row, so the routes do not compare calls into it. The cited route runs used the earlier observer, which left out fill_memory's r0 for every destination; the current one leaves it out only for destinations in the caller's frame. On these routes the non-frame destinations it left out were find-entry records, whose bytes are captured at catalog_find entry.",
+    "claim": "The 28 further owned file-service media-task workers, with the helpers only they call, match the stock X-M1 1.50 image-4 bytes natively, every suite detecting every one of its deliberately wrong controls: search is {{search_verdict}} on {{search_cases}} cases with {{search_controls}} controls, volume is {{volume_verdict}} on {{volume_cases}} cases with {{volume_controls}} controls, counts is {{counts_verdict}} on {{counts_cases}} cases with {{counts_controls}} controls, selection is {{selection_verdict}} on {{selection_cases}} cases with {{selection_controls}} controls, catalog is {{catalog_verdict}} on {{catalog_cases}} cases with {{catalog_controls}} controls, paths is {{paths_verdict}} on {{paths_cases}} cases with {{paths_controls}} controls and media-io is {{media_io_verdict}} on {{media_io_cases}} cases with {{media_io_controls}} controls (owned ELF {{owned_sha256}}, image 4 {{firmware_sha256}}, decomp {{decomp_commit}}). On the PROTECT card route of E-FILE-SERVICE-WORKERS-150, which is {{protect_verdict}} to fs-stock with owned DAT {{owned_dat_sha256}}, the owned attach 0x2c00, catalog rebuild 0x2c02, attribute set 0x2c04, find first entry 0x2c06, find entry 0x2c0d, read 0x2c18 and capacity 0x2c26 workers are entered {{protect_2c00}}, {{protect_2c02}}, {{protect_2c04}}, {{protect_2c06}}, {{protect_2c0d}}, {{protect_2c18}} and {{protect_2c26}} times; on the playback card route ({{card_verdict}}) all but 0x2c04 are entered {{card_2c00}}, {{card_2c02}}, {{card_2c06}}, {{card_2c0d}}, {{card_2c18}} and {{card_2c26}} times, and on the cardless route ({{cardless_verdict}}) attach is entered {{cardless_2c00}} times. DATs staged from three control images are not caught by any route's interface or watched writes: volume_attach_kind_unset ({{attach_dat_sha256}}) is {{protect_attach_verdict}} on PROTECT and {{cardless_attach_verdict}} on the cardless route only through screen {{cardless_attach_screen}} ({{cardless_attach_screens}} differing of {{cardless_screens}}; interface equal {{cardless_attach_interface_equal}}, watched writes equal {{cardless_attach_writes_equal}}), catalog_rebuild_selection_kept ({{rebuild_dat_sha256}}) is {{protect_rebuild_verdict}} on PROTECT and {{card_rebuild_verdict}} on the playback card route, and read_redirect_keeps_position ({{redirect_dat_sha256}}) is {{card_redirect_verdict}} on the playback card route. Natively each is caught: {{native_attach_control}} detected {{native_attach_detected}}, {{native_rebuild_control}} detected {{native_rebuild_detected}} and {{native_redirect_control}} detected {{native_redirect_detected}}.",
+    "scope": "Host-only X-M1 1.50. Native: per-case runs of the search (find first and next 0x712700/0x7127e0, find first and next entry 0x71e3a4/0x71e550), volume (attach 0x7120d8, detach 0x7122dc, armed format 0x7123b4, format 0x712580), counts (file counts 0x718a8c, file position 0x718de4), selection (select 0x719098), catalog (group select 0x71a834, catalog rebuild 0x71a8a0, find entry 0x71b8c0, request completion 0x71b9b0, index resolution 0x719614), paths (file delete 0x7118fc, filename set 0x7119b0, directory delete 0x711b50, image remove 0x711bc8, read-only 0x711ea4, attribute set 0x711f58) and media-io (capacity 0x715a58, pattern 0x715de4, query 0x71ded4, page read 0x71e828, page write 0x71e8c4, read 0x71edbc) workers on the Cortex-R5F runner over scripted stock filesystem, path, catalog, volume and media-state services, comparing the result, the ordered calls into the retained services and the final payload and context. Full system: the cardless, playback card and PROTECT routes of E-FILE-SERVICE-REQUESTS-150 and E-FILE-SERVICE-WORKERS-150 with one observer, which also compares the calls the reached workers make into the retained services they call and the component's own calls to divide 0x4d978, paired by order. Bank admission admits every body, the deepest (image remove 0x2c25) at {{deepest_stack}} owned stack bytes on a {{admission_budget}}-byte budget.",
+    "notes": "The other 21 workers are reached on no emulated route and are qualified natively only. Selection's 0x2c1f reload path passes two query words stock leaves uninitialised to 0x717a24; the native cases compare them only when set. Stock path split 0x71543c writes its name output only on the dotted-path branch (0x71553c): a last segment without a dot (return at 0x715624) or a path starting with a space or NUL (0x715488) leaves it unwritten, and the stock callers select (0x7190e4), counts (0x718aec), filename set (0x711a2c) and attribute set (0x711fd4) do not clear it first, so stock's extension kind and the name filename set passes to 0x714940 come from stale stack bytes, while the owned workers zero-fill the buffer. The native cases script 0x71543c to always write the name, so that path is not compared. Copy 0x70e6c4 has no observer row, so the routes do not compare calls into it. The cardless volume_attach_kind_unset difference is one final-screen digest under the instruction clock, with interface and watched writes equal; it is not attributed to the attach defect.",
     "artifacts": [
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140615Z-file-service-volume/result/file-service-volume.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140627Z-file-service-counts/result/file-service-counts.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140638Z-file-service-selection/result/file-service-selection.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T143329Z-file-service-catalog/result/file-service-catalog.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T152409Z-file-service-paths/result/file-service-paths.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T154649Z-file-service-media-io/result/file-service-media-io.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned-volume-attach-kind-unset.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-volume-attach-kind-unset.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-catalog-rebuild-selection-kept.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-catalog-rebuild-selection-kept.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-read-redirect-keeps-position.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-volume-attach-kind-unset.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-catalog-rebuild-selection-kept.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-read-redirect-keeps-position.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_image_remove_worker.json",
-      "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-owned.json"
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json",
+      "private-data/scratch/RootLanding/runs/20261123T045714Z-file-service-volume/result/file-service-volume.json",
+      "private-data/scratch/RootLanding/runs/20261123T045745Z-file-service-counts/result/file-service-counts.json",
+      "private-data/scratch/RootLanding/runs/20261123T045810Z-file-service-selection/result/file-service-selection.json",
+      "private-data/scratch/RootLanding/runs/20261123T045835Z-file-service-catalog/result/file-service-catalog.json",
+      "private-data/scratch/RootLanding/runs/20261123T045503Z-file-service-paths/result/file-service-paths.json",
+      "private-data/scratch/RootLanding/runs/20261123T051515Z-file-service-media-io/result/file-service-media-io.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-catalog-rebuild-selection-kept-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-catalog-rebuild-selection-kept-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-read-redirect-keeps-position-vs-fs-stock.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-volume-attach-kind-unset-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-catalog-rebuild-selection-kept-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-read-redirect-keeps-position-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_image_remove_worker.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/default-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/fs-stock-staging.json"
     ],
     "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-        "pointer": [
-          "image4_sha256"
-        ]
-      },
-      {
-        "name": "owned_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-        "pointer": [
-          "owned_sha256"
-        ]
-      },
-      {
-        "name": "decomp_commit",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-        "pointer": [
-          "decomp_commit"
-        ]
-      },
-      {
-        "name": "search_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "search_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "search_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140609Z-file-service-search/result/file-service-search.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "volume_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140615Z-file-service-volume/result/file-service-volume.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "volume_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140615Z-file-service-volume/result/file-service-volume.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "volume_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140615Z-file-service-volume/result/file-service-volume.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "counts_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140627Z-file-service-counts/result/file-service-counts.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "counts_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140627Z-file-service-counts/result/file-service-counts.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "counts_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140627Z-file-service-counts/result/file-service-counts.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "selection_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140638Z-file-service-selection/result/file-service-selection.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "selection_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140638Z-file-service-selection/result/file-service-selection.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "selection_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140638Z-file-service-selection/result/file-service-selection.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "catalog_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T143329Z-file-service-catalog/result/file-service-catalog.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "catalog_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T143329Z-file-service-catalog/result/file-service-catalog.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "catalog_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T143329Z-file-service-catalog/result/file-service-catalog.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "paths_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T152409Z-file-service-paths/result/file-service-paths.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "paths_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T152409Z-file-service-paths/result/file-service-paths.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "paths_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T152409Z-file-service-paths/result/file-service-paths.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "media_io_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T154649Z-file-service-media-io/result/file-service-media-io.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "media_io_cases",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T154649Z-file-service-media-io/result/file-service-media-io.json",
-        "pointer": [
-          "cases"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "media_io_controls",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T154649Z-file-service-media-io/result/file-service-media-io.json",
-        "pointer": [
-          "controls"
-        ],
-        "operation": "length"
-      },
-      {
-        "name": "owned_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "owned",
-          "inputs",
-          "update",
-          "sha256"
-        ]
-      },
-      {
-        "name": "protect_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "protect_2c00",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c00",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "protect_2c02",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c02",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "protect_2c04",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c04",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "protect_2c06",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c06",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "protect_2c0d",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c0d",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "protect_2c18",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c18",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "protect_2c26",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c26",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_2c00",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c00",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_2c02",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c02",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_2c06",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c06",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_2c0d",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c0d",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_2c18",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c18",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "card_2c26",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c26",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "cardless_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "cardless_2c00",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned.json",
-        "pointer": [
-          "entry_counts",
-          "worker:0x2c00",
-          "owned",
-          "interface"
-        ]
-      },
-      {
-        "name": "cardless_attach_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T231433Z-file-service-workers-playback-cardless/result/comparison-owned-volume-attach-kind-unset.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "protect_attach_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-volume-attach-kind-unset.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "protect_rebuild_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T071030Z-file-service-workers-protect-card/result/comparison-owned-catalog-rebuild-selection-kept.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_rebuild_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-catalog-rebuild-selection-kept.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "card_redirect_verdict",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261122T155019Z-file-service-workers-playback-card/result/comparison-owned-read-redirect-keeps-position.json",
-        "pointer": [
-          "verdict"
-        ]
-      },
-      {
-        "name": "native_attach_control",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140615Z-file-service-volume/result/file-service-volume.json",
-        "pointer": [
-          "controls",
-          "0",
-          "name"
-        ]
-      },
-      {
-        "name": "native_attach_detected",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140615Z-file-service-volume/result/file-service-volume.json",
-        "pointer": [
-          "controls",
-          "0",
-          "detected"
-        ]
-      },
-      {
-        "name": "native_rebuild_control",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T143329Z-file-service-catalog/result/file-service-catalog.json",
-        "pointer": [
-          "controls",
-          "1",
-          "name"
-        ]
-      },
-      {
-        "name": "native_rebuild_detected",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T143329Z-file-service-catalog/result/file-service-catalog.json",
-        "pointer": [
-          "controls",
-          "1",
-          "detected"
-        ]
-      },
-      {
-        "name": "native_redirect_control",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T154649Z-file-service-media-io/result/file-service-media-io.json",
-        "pointer": [
-          "controls",
-          "5",
-          "name"
-        ]
-      },
-      {
-        "name": "native_redirect_detected",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T154649Z-file-service-media-io/result/file-service-media-io.json",
-        "pointer": [
-          "controls",
-          "5",
-          "detected"
-        ]
-      },
-      {
-        "name": "attach_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-volume-attach-kind-unset.json",
-        "pointer": [
-          "dat_sha256"
-        ]
-      },
-      {
-        "name": "rebuild_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-catalog-rebuild-selection-kept.json",
-        "pointer": [
-          "dat_sha256"
-        ]
-      },
-      {
-        "name": "redirect_dat_sha256",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140537Z-file-service-workers-stage/result/staging-control-read-redirect-keeps-position.json",
-        "pointer": [
-          "dat_sha256"
-        ]
-      },
-      {
-        "name": "deepest_stack",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_image_remove_worker.json",
-        "pointer": [
-          "owned_stack_bytes"
-        ]
-      },
-      {
-        "name": "admission_budget",
-        "path": "private-data/scratch/FileServiceWorkers/runs/20261121T140708Z-fixed-bank-admission/result/xm1_file_service_image_remove_worker.json",
-        "pointer": [
-          "owned_stack_budget"
-        ]
-      }
+      {"name": "firmware_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json", "pointer": ["image4_sha256"]},
+      {"name": "owned_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json", "pointer": ["owned_sha256"]},
+      {"name": "decomp_commit", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json", "pointer": ["decomp_commit"]},
+      {"name": "search_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json", "pointer": ["verdict"]},
+      {"name": "search_cases", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "search_controls", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-file-service-search/result/file-service-search.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "volume_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045714Z-file-service-volume/result/file-service-volume.json", "pointer": ["verdict"]},
+      {"name": "volume_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045714Z-file-service-volume/result/file-service-volume.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "volume_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045714Z-file-service-volume/result/file-service-volume.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "counts_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045745Z-file-service-counts/result/file-service-counts.json", "pointer": ["verdict"]},
+      {"name": "counts_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045745Z-file-service-counts/result/file-service-counts.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "counts_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045745Z-file-service-counts/result/file-service-counts.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "selection_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045810Z-file-service-selection/result/file-service-selection.json", "pointer": ["verdict"]},
+      {"name": "selection_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045810Z-file-service-selection/result/file-service-selection.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "selection_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045810Z-file-service-selection/result/file-service-selection.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "catalog_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045835Z-file-service-catalog/result/file-service-catalog.json", "pointer": ["verdict"]},
+      {"name": "catalog_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045835Z-file-service-catalog/result/file-service-catalog.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "catalog_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045835Z-file-service-catalog/result/file-service-catalog.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "paths_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T045503Z-file-service-paths/result/file-service-paths.json", "pointer": ["verdict"]},
+      {"name": "paths_cases", "path": "private-data/scratch/RootLanding/runs/20261123T045503Z-file-service-paths/result/file-service-paths.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "paths_controls", "path": "private-data/scratch/RootLanding/runs/20261123T045503Z-file-service-paths/result/file-service-paths.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "media_io_verdict", "path": "private-data/scratch/RootLanding/runs/20261123T051515Z-file-service-media-io/result/file-service-media-io.json", "pointer": ["verdict"]},
+      {"name": "media_io_cases", "path": "private-data/scratch/RootLanding/runs/20261123T051515Z-file-service-media-io/result/file-service-media-io.json", "pointer": ["cases"], "operation": "length"},
+      {"name": "media_io_controls", "path": "private-data/scratch/RootLanding/runs/20261123T051515Z-file-service-media-io/result/file-service-media-io.json", "pointer": ["controls"], "operation": "length"},
+      {"name": "owned_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["owned", "inputs", "update", "sha256"]},
+      {"name": "protect_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "protect_2c00", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c00", "owned", "interface"]},
+      {"name": "protect_2c02", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c02", "owned", "interface"]},
+      {"name": "protect_2c04", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c04", "owned", "interface"]},
+      {"name": "protect_2c06", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c06", "owned", "interface"]},
+      {"name": "protect_2c0d", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c0d", "owned", "interface"]},
+      {"name": "protect_2c18", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c18", "owned", "interface"]},
+      {"name": "protect_2c26", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c26", "owned", "interface"]},
+      {"name": "card_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_2c00", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c00", "owned", "interface"]},
+      {"name": "card_2c02", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c02", "owned", "interface"]},
+      {"name": "card_2c06", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c06", "owned", "interface"]},
+      {"name": "card_2c0d", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c0d", "owned", "interface"]},
+      {"name": "card_2c18", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c18", "owned", "interface"]},
+      {"name": "card_2c26", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c26", "owned", "interface"]},
+      {"name": "cardless_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "cardless_2c00", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-vs-fs-stock.json", "pointer": ["entry_counts", "worker:0x2c00", "owned", "interface"]},
+      {"name": "cardless_attach_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "cardless_attach_screen", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["screens", "comparison", "differences", "0", "index"]},
+      {"name": "cardless_attach_screens", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["screens", "comparison", "differences"], "operation": "length"},
+      {"name": "cardless_screens", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["screens", "comparison", "stock_length"]},
+      {"name": "cardless_attach_interface_equal", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["interface_sequence", "equal"]},
+      {"name": "cardless_attach_writes_equal", "path": "private-data/scratch/RootLanding/runs/20261122T190645Z-file-service-playback-cardless/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["watched_writes", "equal"]},
+      {"name": "protect_attach_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-volume-attach-kind-unset-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "protect_rebuild_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190705Z-file-service-write-protect-card/result/comparison-owned-catalog-rebuild-selection-kept-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_rebuild_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-catalog-rebuild-selection-kept-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "card_redirect_verdict", "path": "private-data/scratch/RootLanding/runs/20261122T190625Z-file-service-playback-card/result/comparison-owned-read-redirect-keeps-position-vs-fs-stock.json", "pointer": ["verdict"]},
+      {"name": "native_attach_control", "path": "private-data/scratch/RootLanding/runs/20261123T045714Z-file-service-volume/result/file-service-volume.json", "pointer": ["controls", "0", "name"]},
+      {"name": "native_attach_detected", "path": "private-data/scratch/RootLanding/runs/20261123T045714Z-file-service-volume/result/file-service-volume.json", "pointer": ["controls", "0", "detected"]},
+      {"name": "native_rebuild_control", "path": "private-data/scratch/RootLanding/runs/20261123T045835Z-file-service-catalog/result/file-service-catalog.json", "pointer": ["controls", "1", "name"]},
+      {"name": "native_rebuild_detected", "path": "private-data/scratch/RootLanding/runs/20261123T045835Z-file-service-catalog/result/file-service-catalog.json", "pointer": ["controls", "1", "detected"]},
+      {"name": "native_redirect_control", "path": "private-data/scratch/RootLanding/runs/20261123T051515Z-file-service-media-io/result/file-service-media-io.json", "pointer": ["controls", "5", "name"]},
+      {"name": "native_redirect_detected", "path": "private-data/scratch/RootLanding/runs/20261123T051515Z-file-service-media-io/result/file-service-media-io.json", "pointer": ["controls", "5", "detected"]},
+      {"name": "attach_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-volume-attach-kind-unset-candidate.DAT.json", "pointer": ["dat_sha256"]},
+      {"name": "rebuild_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-catalog-rebuild-selection-kept-candidate.DAT.json", "pointer": ["dat_sha256"]},
+      {"name": "redirect_dat_sha256", "path": "private-data/scratch/RootLanding/runs/20261122T181944Z-final-stage/result/control-read-redirect-keeps-position-candidate.DAT.json", "pointer": ["dat_sha256"]},
+      {"name": "deepest_stack", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_image_remove_worker.json", "pointer": ["entries", "xm1_file_service_image_remove_worker", "owned_stack_bytes"]},
+      {"name": "admission_budget", "path": "private-data/scratch/RootLanding/runs/20261122T182046Z-fixed-bank-admission/result/xm1_file_service_image_remove_worker.json", "pointer": ["entries", "xm1_file_service_image_remove_worker", "owned_stack_budget"]}
     ]
   },
   {
@@ -8163,90 +7003,32 @@
   },
   {
     "id": "E-LATER-TASK60-OWNER-ROOT-BANK-150",
-    "claim": "Root's fixed bank links the typed task60/lower-read owner, the NAND owner already in power services, the owned image5 decoder and one configuration whose stock-wrapper timeout is the Root startup caller policy of {{success_timeout_ms}} ms, converted through the timer contract at 3000 counts per ms. From reset the natural stock wrappers construct and drive it: success role reaches image5 decoder finish and callback failed={{success_callback_failed}} with {{success_deadlines}} configured deadlines for {{success_deadlines}} posts and final latches {{success_latches}}; the false-drain role reports callback failed={{retention_callback_failed}}, NAND state {{retention_nand_state}} and busy {{retention_busy}} with the lease retained. Native harness passed={{native_passed}}.",
-    "scope": "Emulator (FujiMod) and native harness, X-M1 1.50, Root source 87e78874d plus LowerReadOwnership a71860750; queue60 keeps stock 0x30x16-byte geometry with 8-byte (id, kind) messages and owned envelope records.",
-    "facts": [
-      {
-        "name": "firmware_sha256",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-runtime-contract.json",
-        "pointer": [
-          "firmware_sha256"
-        ]
-      },
-      {
-        "name": "success_timeout_ms",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-runtime-contract.json",
-        "pointer": [
-          "deadline_policy",
-          "timeout_ms"
-        ]
-      },
-      {
-        "name": "success_callback_failed",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-receipt.json",
-        "pointer": [
-          "callbacks",
-          "0",
-          "failed"
-        ]
-      },
-      {
-        "name": "success_deadlines",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-receipt.json",
-        "pointer": [
-          "deadline_calls"
-        ]
-      },
-      {
-        "name": "success_latches",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-receipt.json",
-        "pointer": [
-          "final_state",
-          "latches"
-        ]
-      },
-      {
-        "name": "retention_callback_failed",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/retention-receipt.json",
-        "pointer": [
-          "callbacks",
-          "0",
-          "failed"
-        ]
-      },
-      {
-        "name": "retention_nand_state",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/retention-receipt.json",
-        "pointer": [
-          "final_state",
-          "nand_state"
-        ]
-      },
-      {
-        "name": "retention_busy",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/retention-receipt.json",
-        "pointer": [
-          "final_state",
-          "busy"
-        ]
-      },
-      {
-        "name": "native_passed",
-        "path": "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/native.json",
-        "pointer": [
-          "passed"
-        ]
-      }
-    ],
+    "claim": "The single fixed bank links the typed task60/lower-read owner, the NAND owner already in power services, the owned image5 decoder and one configuration whose stock-wrapper timeout is the Root startup caller policy of {{success_timeout_ms}} ms, converted through the timer contract at 3000 counts per ms. From reset the natural stock wrappers construct and drive it: success role reaches image5 decoder finish and callback failed={{success_callback_failed}} with {{success_deadlines}} configured deadlines for {{success_deadlines}} posts and final latches {{success_latches}}; the false-drain role reports callback failed={{retention_callback_failed}}, NAND state {{retention_nand_state}} and busy {{retention_busy}} with the lease retained. Native harness passed={{native_passed}}.",
+    "scope": "Emulator (FujiMod) and native harness, X-M1 1.50, composition {{composition}}: the success role boots the single fixed bank's candidate {{candidate_dat}} and the false-drain role its retention-control variant {{retention_dat}}; queue60 keeps stock 0x30x16-byte geometry with 8-byte (id, kind) messages and owned envelope records.",
+    "notes": "FujiMod 3d90035d synchronous-copy drain is emulator-only; physical NAND/DMA quiescence, a production deadline policy, natural skip/missing-segment/device-failure reachability, retained-operation recovery and whole-system menu acceptance of the composed bank remain open.",
     "artifacts": [
-      "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-receipt.json",
-      "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/retention-receipt.json",
-      "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/native.json",
-      "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/fujimod-runtime-contract.json",
-      "private-data/scratch/LowerReadOwnership/runs/20261118T190631Z-lower-read-loading-runtime/result/retention-runtime-contract.json",
-      "private-data/scratch/LowerReadOwnership/runs/20261118T185641Z-lower-read-root-bank-gate/result/gate.log"
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-receipt.json",
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/retention-receipt.json",
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/native.json",
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-runtime-contract.json",
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/retention-runtime-contract.json",
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-candidate.DAT.json",
+      "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-vs-bank-default.txt"
     ],
-    "notes": "FujiMod 3d90035d synchronous-copy drain is emulator-only; physical NAND/DMA quiescence, a production deadline policy, natural skip/missing-segment/device-failure reachability, retained-operation recovery and whole-system menu acceptance of the composed bank remain open."
+    "facts": [
+      {"name": "firmware_sha256", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-runtime-contract.json", "pointer": ["firmware_sha256"]},
+      {"name": "success_timeout_ms", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-runtime-contract.json", "pointer": ["deadline_policy", "timeout_ms"]},
+      {"name": "candidate_dat", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-runtime-contract.json", "pointer": ["candidate_dat_sha256"]},
+      {"name": "composition", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-runtime-contract.json", "pointer": ["composition"]},
+      {"name": "retention_dat", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/retention-runtime-contract.json", "pointer": ["candidate_dat_sha256"]},
+      {"name": "success_callback_failed", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-receipt.json", "pointer": ["callbacks", "0", "failed"]},
+      {"name": "success_deadlines", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-receipt.json", "pointer": ["deadline_calls"]},
+      {"name": "success_latches", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/fujimod-receipt.json", "pointer": ["final_state", "latches"]},
+      {"name": "retention_callback_failed", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/retention-receipt.json", "pointer": ["callbacks", "0", "failed"]},
+      {"name": "retention_nand_state", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/retention-receipt.json", "pointer": ["final_state", "nand_state"]},
+      {"name": "retention_busy", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/retention-receipt.json", "pointer": ["final_state", "busy"]},
+      {"name": "native_passed", "path": "private-data/scratch/RootLanding/runs/20261123T023212Z-loading-runtime/result/native.json", "pointer": ["passed"]}
+    ]
   },
 {
   "id": "E-RTOS-BANK-FAMILY-CUTOVER-150",

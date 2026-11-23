@@ -10,7 +10,7 @@ The recursive lock pair `0x72b164/0x72b1cc` is the retained RTOS synchronization
 
 ## Placement and staging
 
-The allocator remains one linked image distributed over retired stock carriers: image 4 `[0x89cda4,0x89d4f8)`, `[0x89d4fc,0x89d908)`, `[0x89da3c,0x89dfc0)`, `[0x89e464,0x89e7c4)` and image 5 `[0xbf1c1c,0xbf1cd4)`. Their capacity is 5,372 bytes. `stage-general-heap` reuses image-4 staging and shared record-5 staging; there is no runtime overwrite of a live allocator. Fixed placement `[0x00a9fa00,0x00bf1a00)` is unnecessary while the artifact fits these carriers.
+The allocator remains one linked image distributed over retired stock carriers: image 4 `[0x89cda4,0x89d4f8)`, `[0x89d4fc,0x89d908)`, `[0x89da3c,0x89dfc0)`, `[0x89e464,0x89e7c4)` and image 5 `[0xbf1c1c,0xbf1cd4)`. Their capacity is 5,372 bytes. `stage-general-heap` reuses image-4 staging and shared record-5 staging; there is no runtime overwrite of a live allocator. Fixed placement `[0x00a9b880,0x00bf1a00)` is unnecessary while the artifact fits these carriers.
 
 The sentinel at `0x89d4f8` is staged below phase-0 arena clearing. First use initializes owned state under the retained lock. The original arena is `[0xa71a00,0xbf1a00)`, or `[0xa71a00,0xbe1a00)` for the recipe-ceiling build, with a 32-byte end guard and charged state prefix. Retirement guards authenticate staged carriers and reject owned fetches outside admitted code. They do not tie every interior fetch to a declared entry or pending heap call after sealing. Unknown interior/computed callers and metadata readers remain final-pass obligations.
 
@@ -109,7 +109,7 @@ The one-level fatal path is unmeasured: with fatal reports excluded the abort `0
 - Close unknown computed references, metadata readers beyond `payload-4`, external arena writers and address-sensitive clients before a firmware-wide retirement claim.
 - Exercise image-6 Wi-Fi clients, including hostapd and netstack, their 15 resize calls, calloc(1,20), malloc/free lifetimes and alias-pointer handling.
 - Qualify the separate `general-heap-recipe-image` artifact with the recipe ceiling, not only the standard arena image.
-- Qualify `general-heap-fixed-image` at the `0x00a9fa00` ceiling with card-backed capture, saved-image playback and Wi-Fi heap demand. The current fixed-placement scenarios cover only cardless inputs.
+- Qualify `general-heap-fixed-image` at the `0x00a9b880` ceiling with card-backed capture, saved-image playback and Wi-Fi heap demand. The fixed-placement heap-demand runs cover the no-card menu and half-press routes and the three-JPEG playback card route.
 - Check DMA-loaded instruction visibility and later MPU changes on the camera before promoting the fixed-range image.
 - Close interior jumps into retired carriers after sealing, when guards no longer bind a fetch to an entry or pending invocation.
 - Close task-stack headroom. Under S1-S7 thirteen published tasks reach the recursive fatal report through the kernel abort `0x4d978`, and tasks 33, 36 and 72 stop at an argument-filled callback word, a RAM-indexed state table and an object callback array. Under S8 all sixteen stop at the register branches the [stack-headroom table](#stack-headroom) names, and the reporter `0x40cac` stops at `0x6f16e0`; bounds need closed target sets for those branches. The census also lacks image-6 Wi-Fi tasks and any heap caller outside the published tables.
