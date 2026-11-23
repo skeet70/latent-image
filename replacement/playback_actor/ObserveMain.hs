@@ -22,7 +22,7 @@
 module Main (main) where
 
 import Control.DeepSeq (rnf)
-import Control.Exception (SomeException, bracket, displayException, try)
+import Control.Exception (SomeException, bracket, displayException, evaluate, try)
 import Control.Monad (foldM, forM, forM_, replicateM, unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
@@ -50,6 +50,7 @@ import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), IOMode (..), hFlush, hSetBuffering, stdout, withBinaryFile)
+import GHC.Clock (getMonotonicTime)
 
 data Role = Stock | Owned deriving (Eq)
 
@@ -262,6 +263,8 @@ trackWindow state window hits records = do
         Number n -> truncate n :: Integer
         _ -> -1
   (t0, found0) <- readIORef state
+  started <- getMonotonicTime
+  putStrLn (window ++ ": " ++ show (length records) ++ " records, " ++ show (length hits) ++ " provenance hits")
   let go (t, found, masks) (_, _, i, e) =
         let (t', findings, masked) = P.step t (either id id e)
             masks' = case (e, masked) of
@@ -269,6 +272,9 @@ trackWindow state window hits records = do
               _ -> masks
          in (t', found ++ map (findingValue window) findings, masks')
       (t1, found1, masks1) = foldl go (t0, found0, M.empty) (sortOn (\(n, o, i, _) -> (n, o, i)) timed)
+  _ <- evaluate (M.size (P.marked t1) + M.size masks1 + length found1)
+  finished <- getMonotonicTime
+  putStrLn (window ++ ": tracked in " ++ show (finished - started) ++ " s, " ++ show (length found1) ++ " findings, " ++ show (M.size (P.marked t1)) ++ " marked")
   writeIORef state (t1, found1)
   pure masks1
 
@@ -455,6 +461,7 @@ observe inputs directory record = do
         summary <- summarise ("step-" ++ show index) (last' + 1) observed
         screen <- emulatorCapture emulator ("step-" ++ show index)
         state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
+        putStrLn ("step-" ++ show index ++ ": captured")
         memoryDigest <- memory emulator (show index)
         modifyIORef' steps (object
           [ "step" .= index, "key" .= crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
