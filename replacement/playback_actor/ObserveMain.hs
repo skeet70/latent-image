@@ -167,8 +167,12 @@ watchSummary boundary masks watch =
 provenanceConfig :: P.Config
 provenanceConfig = P.Config [(s, e) | Span s e <- provenanceMemory] appCopyLoads appCopyStores
 
+-- | A guest DRAM address with the `0x40000000` alias removed.
+dramPhysical :: Word32 -> Word32
+dramPhysical a = if a >= 0x40000000 && a < 0x60000000 then a - 0x40000000 else a
+
 registerValue :: T.Text -> Value -> Either String Word32
-registerValue name hit = maybe (Left ("a provenance hit lacks " ++ T.unpack name)) Right (hexValue (field name (field "registers" hit)))
+registerValue name hit = maybe (Left ("a provenance hit lacks " ++ T.unpack name)) (Right . dramPhysical) (hexValue (field name (field "registers" hit)))
 
 numberOf :: T.Text -> Value -> Either String Int
 numberOf name value = case field name value of
@@ -190,7 +194,7 @@ byteList text
   | [(b, "")] <- readHex (T.unpack (T.take 2 text)) = (b :) <$> byteList (T.drop 2 text)
   | otherwise = Left "provenance read bytes are not hexadecimal"
 
--- | The tracker event of a provenance site hit.
+-- | The tracker event of a provenance site hit, its addresses physical.
 hitEvent :: Value -> Either String (Maybe P.Event)
 hitEvent hit = do
   core <- numberOf "core" hit
@@ -212,7 +216,7 @@ hitEvent hit = do
           pure (Just (P.CopyEnds core (or [copySiteReleasesSource c | c <- messageCopies, copySiteName c == name])))
     _ -> pure Nothing
 
--- | The tracker event of a watch record.
+-- | The tracker event of a watch record, its addresses physical.
 recordEvent :: Value -> Either String (Maybe P.Event)
 recordEvent r = case field "source" r of
   String "cpu-read" -> do
@@ -230,8 +234,8 @@ recordEvent r = case field "source" r of
     common = do
       core <- numberOf "core" r
       size <- numberOf "size" r
-      pc <- maybe (Left "a CPU record lacks its pc") Right (hexValue (field "pc" r))
-      address <- maybe (Left "a CPU record lacks its address") Right (hexValue (field "address" r))
+      pc <- maybe (Left "a CPU record lacks its pc") (Right . dramPhysical) (hexValue (field "pc" r))
+      address <- maybe (Left "a CPU record lacks its physical address") Right (hexValue (field "physical" r))
       pure (core, pc, address, size)
     byte (Number n) = Right (truncate n)
     byte _ = Left "a CPU write record's before bytes are not numbers"

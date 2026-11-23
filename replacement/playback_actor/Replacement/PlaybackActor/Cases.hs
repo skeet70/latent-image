@@ -97,7 +97,8 @@ code = Code
   }
   where
     tablesLow = 0x01215510
-    tablesHigh = 0x0121a6dc
+    -- The end of the 95 state counts at 0x0121a67c.
+    tablesHigh = 0x0121a73a
     gaps low holes high = case [h | h <- holes, fst h >= low] of
       [] -> [(low, high)]
       hs -> let (s, e) = minimum hs in (low, s) : gaps e [h | h <- holes, fst h >= e] high

@@ -162,10 +162,13 @@ appCopyLoads, appCopyStores :: [Word32]
 appCopyLoads = [0x00722080, 0x007220c4, 0x007220e8, 0x00722130, 0x00722150, 0x0072215c]
 appCopyStores = [0x00722084, 0x007220c8, 0x007220ec, 0x00722134, 0x00722154, 0x00722160]
 
--- | Memory every observation watches for reads and writes of the message: the request payloads
--- `0x014ea6f0` and `0x014ea7b4` and the four saved requests.
+-- | Physical memory every observation watches for reads and writes of the message: the
+-- builder's frames on the task-1 stack (payload at 0x00a4cb04 or 0x00a4cb14 on the card routes),
+-- the channel-4 queue buffer at 0x009e68a0 the send fills, the request payloads `0x014ea6f0` and
+-- `0x014ea7b4` and the four saved requests. A mark created or copied outside them is a finding.
 provenanceMemory :: [Span]
-provenanceMemory = [Span 0x014ea6f0 0x014ea878, Span 0x01511020 0x01511330]
+provenanceMemory =
+  [Span 0x00a4cb00 0x00a4cc00, Span 0x009e68a0 0x009e6970, Span 0x014ea6f0 0x014ea878, Span 0x01511020 0x01511330]
 
 none :: Capture
 none = Capture [] []
@@ -250,7 +253,9 @@ machine7And30Services =
   , status 0x01229068 "service_01229068"
   , status 0x0122925c "prepare_selected_source_event"
   , status 0x012292a4 "prepare_selected_transfer_event"
-  , withArgument 0x012293a8 "service_012293a8"
+  , -- Void: r0 at its return is whatever its last callee left. Its callers 0x011f3acc and
+    -- 0x011f9b14 reach a callee that sets r0 without reading it on every path before any read.
+    Service 0x012293a8 "service_012293a8" ["r0"] [] none
   , status 0x012294cc "service_012294cc"
   , status 0x0122962c "service_0122962c"
   , status 0x0122968c "service_0122968c"
