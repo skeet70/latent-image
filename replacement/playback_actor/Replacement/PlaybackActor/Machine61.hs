@@ -171,7 +171,7 @@ actions =
       when (not latched) (voidWith s1245c7c v)
       kind <- req 0x10c [48]
       when (kind == 48) $ do
-        p <- req 0x178 [0, namePointee]
+        p <- loadOnly (request + 0x178) Word [0, namePointee]
         b <- if p == 0 then pure 0 else load p Byte [0]
         when (b == 0) (void s121f85c >> finish 0)
       void s121eda0
