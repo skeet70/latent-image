@@ -1356,7 +1356,7 @@
         "playback_trace",
         "playback_write_error_trace"
       ],
-      "expected_sha256": "8f1b00445d95ef4e649c05f5a52199fb3c9e4c359fd949b34cab75e8755fa0a5"
+      "expected_sha256": "ef23bfec1eb157972fa9bb0bd03cc74fdeb46acf710e3edf4634218640665baf"
     },
     {
       "id": "//replacement/power_lifecycle:record-helpers",
