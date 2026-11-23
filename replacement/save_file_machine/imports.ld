@@ -1,0 +1,16 @@
+sfm_register = 0x6e27ac;
+sfm_unregister = 0x6e2808;
+sfm_post = 0x6e2b80;
+sfm_open = 0x71c648;
+sfm_seek = 0x71c8d8;
+sfm_write = 0x71c75c;
+sfm_close = 0x71c7bc;
+sfm_release = 0x71c938;
+sfm_delete = 0x70f430;
+sfm_report = 0x726c74;
+sfm_prepare_name = 0x70fbfc;
+sfm_set_prefix_mode = 0x70f790;
+sfm_property = 0x69f8fc;
+sfm_copy_string = 0x721b04;
+sfm_append_string = 0x721bac;
+sfm_copy_memory = 0x722054;

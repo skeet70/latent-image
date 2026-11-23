@@ -1,0 +1,104 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["imports.ld"])
+
+_SOURCES = ["src/machine.rs", "src/stock.rs"]
+
+SAVE_FILE_MACHINE_CONTROLS = [
+    "index_unadvanced",
+    "terminator_by_size",
+    "append_mode_create",
+    "status3_unmapped",
+    "path_unsaved",
+    "cancel_always_registers",
+    "append_full_at_14",
+    "extension_swapped",
+    "name_cut_44",
+    "output_mode_3_as_1",
+    "write_error_completes",
+    "prefix_version_for_source",
+    "seek_callback_open",
+]
+
+_VARIANTS = [("", [])] + [
+    ("-control-" + control.replace("_", "-"), ["--cfg", "sfm_control_" + control])
+    for control in SAVE_FILE_MACHINE_CONTROLS
+]
+
+[xm1_rust_staticlib(
+    name = "save-file-machine-rust" + suffix,
+    src = "src/lib.rs",
+    crate_name = "xm1_save_file_machine",
+    data = _SOURCES,
+    rustc_flags = ["-C", "overflow-checks=off"] + flags,
+) for suffix, flags in _VARIANTS]
+
+[xm1_rust_elf(
+    name = "save-file-machine-image" + suffix,
+    rust_staticlib = ":save-file-machine-rust" + suffix,
+    asm_srcs = ["entry.S"],
+    entry = "sfm_entry_begin",
+    link_script = "save-file-machine.ld",
+    link_includes = ["imports.ld"],
+    extra_ldflags = ["-Wl,--gc-sections"],
+) for suffix, _ in _VARIANTS]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+haskell_library(
+    name = "cases",
+    srcs = ["Replacement/SaveFileMachine/Cases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+haskell_binary(
+    name = "save-file-machine-suite",
+    srcs = ["SuiteMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "SuiteMain.hs",
+    deps = [
+        ":cases",
+        "//emulation:case-sha256",
+        "//emulation:coverage-lib",
+        "//emulation:native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
+        "//replacement/exif_writer:cases",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":host-tests",
+        ":save-file-machine-suite",
+    ] + [":save-file-machine-image" + suffix for suffix, _ in _VARIANTS],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["shims.json", "**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)

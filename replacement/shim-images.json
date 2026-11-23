@@ -1892,6 +1892,38 @@
       "expected_sha256": "d77874c0529d1558f6a18d0d80dd69a792a6fc243c00093fb449031b2ca92a4d"
     },
     {
+      "id": "//replacement/save_file_machine:save-file-machine-image",
+      "elf": "replacement/save_file_machine/save-file-machine-image.elf",
+      "units": [
+        "save_file_machine"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/save_file_machine/save-file-machine.ld",
+        "replacement/save_file_machine/imports.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "sfm_append_string",
+        "sfm_close",
+        "sfm_copy_memory",
+        "sfm_copy_string",
+        "sfm_delete",
+        "sfm_open",
+        "sfm_post",
+        "sfm_prepare_name",
+        "sfm_property",
+        "sfm_register",
+        "sfm_release",
+        "sfm_report",
+        "sfm_seek",
+        "sfm_set_prefix_mode",
+        "sfm_unregister",
+        "sfm_write"
+      ],
+      "expected_sha256": "PENDING"
+    },
+    {
       "id": "//replacement/secondary_stage:secondary-stage-image",
       "elf": "replacement/secondary_stage/secondary-stage-image.elf",
       "units": [

@@ -1,0 +1,121 @@
+{
+  "unit": "save_file_machine",
+  "summary": "The overlay-46 save file machine carrier ELF: entry veneers at the stock entries and the file-service callbacks, the dispatcher tables at their stock addresses, and import stubs for the registry, file-service, naming and string services.",
+  "classification": "linked",
+  "rows": [
+    {
+      "id": "save_file_machine-01",
+      "shim": "`sfm_entry_*` in `entry.S` and `save-file-machine.ld`",
+      "kind": "veneer or carrier at a stock address",
+      "other_side": "image-5 and plain-image callers of the start, append, cancel, scatter-append, output-mode and name entries, and the file service calling the five result callbacks",
+      "owned": "no",
+      "removal": "every caller and the file service enter the owned machine directly",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/save_file_machine:save-file-machine-image",
+          "kind": "publication",
+          "symbols": [
+            "sfm_entry_append_buffer",
+            "sfm_entry_begin",
+            "sfm_entry_begin_append",
+            "sfm_entry_copy_name",
+            "sfm_entry_on_closed",
+            "sfm_entry_on_deleted",
+            "sfm_entry_on_opened",
+            "sfm_entry_on_positioned",
+            "sfm_entry_on_written",
+            "sfm_entry_request_cancel",
+            "sfm_entry_set_name",
+            "sfm_entry_set_output_mode"
+          ],
+          "contract": "replacement/save_file_machine/save-file-machine.ld",
+          "requirement": "`sfm_entry_*` in `entry.S` and `save-file-machine.ld`. image-5 and plain-image callers of the machine entries and the file-service result callbacks. every caller and the file service enter the owned machine directly"
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save_file_machine-03",
+      "shim": "Owned bodies behind the entry veneers in `save_file_machine/src/stock.rs`",
+      "kind": "stock-ABI export",
+      "other_side": "the veneers at the 12 stock addresses and the stock argument and return conventions of their callers",
+      "owned": "partly",
+      "removal": "every caller uses a typed owned save API",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/save_file_machine:save-file-machine-image",
+          "kind": "export",
+          "symbols": [
+            "xm1_sfm_append_buffer",
+            "xm1_sfm_begin",
+            "xm1_sfm_begin_append",
+            "xm1_sfm_copy_name",
+            "xm1_sfm_on_closed",
+            "xm1_sfm_on_deleted",
+            "xm1_sfm_on_opened",
+            "xm1_sfm_on_positioned",
+            "xm1_sfm_on_written",
+            "xm1_sfm_request_cancel",
+            "xm1_sfm_set_name",
+            "xm1_sfm_set_output_mode"
+          ],
+          "contract": "replacement/save_file_machine/save-file-machine.ld",
+          "requirement": "The linker places every body inside the retired overlay-46 extent with no writable statics.",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    },
+    {
+      "id": "save_file_machine-02",
+      "shim": "`imports.ld` import stubs",
+      "kind": "trampoline into retained stock",
+      "other_side": "the retained image-4 message registry, file-service posters, event report, DCF name, prefix mode, property byte, strcpy, strcat and memcpy",
+      "owned": "no",
+      "removal": "owned registry, file-service, numbering and string APIs replace them",
+      "state": "required",
+      "evidence": [
+        {
+          "image": "//replacement/save_file_machine:save-file-machine-image",
+          "kind": "retained-import",
+          "symbols": [
+            "sfm_append_string",
+            "sfm_close",
+            "sfm_copy_memory",
+            "sfm_copy_string",
+            "sfm_delete",
+            "sfm_open",
+            "sfm_post",
+            "sfm_prepare_name",
+            "sfm_property",
+            "sfm_register",
+            "sfm_release",
+            "sfm_report",
+            "sfm_seek",
+            "sfm_set_prefix_mode",
+            "sfm_unregister",
+            "sfm_write"
+          ],
+          "contract": "replacement/save_file_machine/imports.ld",
+          "requirement": "`imports.ld` import stubs. the retained image-4 message registry, file-service posters, event report, DCF name, prefix mode, property byte, strcpy, strcat and memcpy. owned registry, file-service, numbering and string APIs replace them",
+          "retained_targets": []
+        }
+      ],
+      "predicates": {
+        "caller_closure": "unestablished",
+        "same_image_comparison": "unestablished",
+        "direct_owned_api": "unestablished"
+      }
+    }
+  ]
+}
