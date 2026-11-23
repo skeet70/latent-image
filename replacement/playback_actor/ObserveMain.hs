@@ -23,7 +23,7 @@ module Main (main) where
 
 import Control.DeepSeq (rnf)
 import Control.Exception (SomeException, bracket, catch, displayException, evaluate, try)
-import Control.Monad (foldM, forM, forM_, replicateM, unless)
+import Control.Monad (foldM, forM, forM_, replicateM, unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
@@ -288,12 +288,12 @@ trackWindow state window hits records = do
   writeIORef state (t1, found1)
   pure masks
 
--- | A screen capture, or the bridge's refusal (no display plane is up) as the screen.
-captureScreen :: Emulator -> String -> IO Value
-captureScreen emulator label = emulatorCapture emulator label `catch` refused
+-- | A screen capture, or Left the bridge's refusal (no display plane is up) as the screen.
+captureScreen :: Emulator -> String -> IO (Either Value Value)
+captureScreen emulator label = (Right <$> emulatorCapture emulator label) `catch` refused
   where
     refused e
-      | isUserError e = pure (object ["refused" .= ioeGetErrorString e])
+      | isUserError e = pure (Left (object ["refused" .= ioeGetErrorString e]))
       | otherwise = ioError e
 
 main :: IO ()
@@ -457,7 +457,13 @@ observe inputs directory record = do
             digest `seq` pure digest
           BL.writeFile (directory </> ("memory-" ++ name ++ ".json")) (A.encode (object ["chunk_bytes" .= memoryChunk, "chunks" .= chunks]) <> "\n")
           pure (sha256Hex (sha256 (BC.pack (concat chunks))))
-    bracket (startEmulator (paths M.! "bridge") directory bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, ()) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
+    -- The bridge exits after refusing a capture.
+    gone <- newIORef False
+    let capture emulator label = do
+          shot <- captureScreen emulator label
+          either (const (writeIORef gone True)) (const (pure ())) shot
+          pure shot
+    bracket (startEmulator (paths M.! "bridge") directory bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, ()) -> readIORef gone >>= \g -> unless g (stopEmulator emulator)) $ \(emulator, start, ()) -> do
       need (bootStart start == FreshBootStart) "bridge did not fresh boot"
       record "emulator_start" (startRecord start)
       attached <- drain emulator
@@ -470,37 +476,50 @@ observe inputs directory record = do
       builtBeforeAttach <- P.builtMessages . fst <$> readIORef provenance
       need (builtBeforeAttach == 0) "a 0x119 message was built before attach, where its memory is not watched"
       record "hits_at_attach" (A.toJSON attached)
-      shot <- captureScreen emulator "attached"
-      record "attached_screen" shot
-      record "attached_memory" . A.toJSON =<< memory emulator "attached"
-      forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> do
+      shot <- capture emulator "attached"
+      record "attached_screen" (either id id shot)
+      let route [] = pure True
+          route ((index, key) : rest) = do
+            first <- readIORef cursor
+            _ <- emulatorBridgeCommand emulator watch
+            press <- emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire key])
+            settled <- idle emulator settleChunks
+            observed <- emulatorWatchEnd emulator
+            last' <- drain emulator
+            summary <- summarise ("step-" ++ show index) (last' + 1) observed
+            let common = ["step" .= index, "key" .= crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled, "watch" .= summary]
+            screen <- capture emulator ("step-" ++ show index)
+            case screen of
+              Left refusal -> do
+                modifyIORef' steps (object (common ++ ["screen" .= refusal]) :)
+                saveSteps
+                putStrLn ("step " ++ show index ++ " " ++ crawlKeyWire key ++ ": capture refused, route ends")
+                pure False
+              Right shown -> do
+                state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
+                putStrLn ("step-" ++ show index ++ ": captured")
+                memoryDigest <- memory emulator (show index)
+                modifyIORef' steps (object (common ++ ["screen" .= shown, "ui_state" .= state, "memory" .= memoryDigest]) :)
+                saveSteps
+                putStrLn ("step " ++ show index ++ " " ++ crawlKeyWire key ++ " hits " ++ show (last' - first))
+                route rest
+      live <- case shot of
+        Left _ -> pure False
+        Right _ -> do
+          record "attached_memory" . A.toJSON =<< memory emulator "attached"
+          route (zip [1 :: Int ..] (inputRoute inputs))
+      when live $ do
         first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator watch
-        press <- emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire key])
-        settled <- idle emulator settleChunks
+        settled <- idle emulator finalChunks
         observed <- emulatorWatchEnd emulator
         last' <- drain emulator
-        summary <- summarise ("step-" ++ show index) (last' + 1) observed
-        screen <- captureScreen emulator ("step-" ++ show index)
-        state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
-        putStrLn ("step-" ++ show index ++ ": captured")
-        memoryDigest <- memory emulator (show index)
-        modifyIORef' steps (object
-          [ "step" .= index, "key" .= crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
-          , "watch" .= summary, "screen" .= screen, "ui_state" .= state, "memory" .= memoryDigest ] :)
+        summary <- summarise "final" (last' + 1) observed
+        screen <- capture emulator "final"
+        memoryDigest <- either (const (pure Null)) (const (A.toJSON <$> memory emulator (show (length (inputRoute inputs) + 1)))) screen
+        modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= summary, "screen" .= either id id screen, "memory" .= memoryDigest] :)
         saveSteps
-        putStrLn ("step " ++ show index ++ " " ++ crawlKeyWire key ++ " hits " ++ show (last' - first))
-      first <- readIORef cursor
-      _ <- emulatorBridgeCommand emulator watch
-      settled <- idle emulator finalChunks
-      observed <- emulatorWatchEnd emulator
-      last' <- drain emulator
-      summary <- summarise "final" (last' + 1) observed
-      screen <- captureScreen emulator "final"
-      memoryDigest <- memory emulator (show (length (inputRoute inputs) + 1))
-      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= summary, "screen" .= screen, "memory" .= memoryDigest] :)
-      saveSteps
-      record "hit_count" (A.toJSON last')
+      record "hit_count" . A.toJSON =<< readIORef cursor
       (finalTracker, findings) <- readIORef provenance
       let provenanceRecord =
             object
