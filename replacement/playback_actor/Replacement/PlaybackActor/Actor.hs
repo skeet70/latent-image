@@ -29,6 +29,7 @@ module Replacement.PlaybackActor.Actor
 import Data.List (intercalate, nub, nubBy, sort)
 import qualified Data.Text as T
 import Data.Word (Word32)
+import Numeric (showHex)
 
 -- | A half-open guest address range.
 data Span = Span Word32 Word32
@@ -139,22 +140,29 @@ message119Sent = 0x00db303c
 data CopySite = CopySite {copySiteName :: String, copySiteCall :: Word32, copySiteReleasesSource :: Bool}
 
 -- | The dispatch send into a queue buffer, the dispatch receive out of it (the buffer is released
--- after), and the overlay-47 copies between the playback request payload `0x014ea6f0` and the
--- saved requests at `0x01511020`.
+-- after), and every overlay-47 copy longer than 8 bytes out of the request payload `0x014ea6f0`,
+-- the restore payload `0x014ea7b4` or a saved request (reader-inventory section 1.4).
 messageCopies :: [CopySite]
 messageCopies =
-  [ CopySite "dispatch_send" 0x0072517c False
-  , CopySite "dispatch_receive" 0x007253f8 True
-  , CopySite "restore_first" 0x01249850 False
-  , CopySite "restore_second" 0x01249864 False
-  , CopySite "save_012499c4" 0x012499c4 False
-  , CopySite "save_012499fc" 0x012499fc False
-  , CopySite "save_01249a20" 0x01249a20 False
-  , CopySite "save_01249a44" 0x01249a44 False
-  , CopySite "save_01249a68" 0x01249a68 False
-  , CopySite "save_01249a84" 0x01249a84 False
-  , CopySite "save_01249ab0" 0x01249ab0 False
-  , CopySite "save_01249adc" 0x01249adc False
+  CopySite "dispatch_send" 0x0072517c False
+    : CopySite "dispatch_receive" 0x007253f8 True
+    : [CopySite ("request_" ++ showHex call "") call False | call <- requestCopies]
+
+requestCopies :: [Word32]
+requestCopies =
+  [ 0x011f5ae4, 0x011f5b4c, 0x011fc264, 0x0120b440, 0x0120b57c, 0x0120b6b4, 0x0120b6f4, 0x0120bb20
+  , 0x0120bddc, 0x0120be30, 0x0120be80, 0x0120c1dc, 0x0120c814, 0x0120c86c, 0x0120c944, 0x0120ca20
+  , 0x0120caec, 0x0120cc54, 0x0120ccac, 0x0120ccf0, 0x0120cd30, 0x0120d134, 0x0120d544, 0x0120de5c
+  , 0x0120e108, 0x0120e370, 0x0120e624, 0x0120e7b4, 0x0120e93c, 0x0120f098, 0x0120f758, 0x0120fddc
+  , 0x012100b0, 0x012102b8, 0x01210758, 0x012107fc, 0x01210b7c, 0x01210d24, 0x01210e4c, 0x01210f0c
+  , 0x01210f40, 0x01210fe4, 0x012110a4, 0x012110d8, 0x01211228, 0x01211518, 0x01211624, 0x01211938
+  , 0x0121197c, 0x012120b4, 0x012120f8, 0x01212244, 0x012122cc, 0x0121257c, 0x012125c0, 0x012126c8
+  , 0x012127f8, 0x01212cd0, 0x01212d14, 0x01212d58, 0x012130a0, 0x0121322c, 0x01213300, 0x01213378
+  , 0x012133bc, 0x012134d4, 0x01213594, 0x012135c8, 0x01213b08, 0x01213e08, 0x01213fe4, 0x0121422c
+  , 0x01214270, 0x012142b4, 0x01214370, 0x012143c8, 0x01214528, 0x012148d0, 0x01214aa0, 0x01214c9c
+  , 0x01214d58, 0x01214e08, 0x01214e60, 0x01214eb8, 0x01214f10, 0x01215168, 0x01215254, 0x01249850
+  , 0x01249864, 0x012499c4, 0x012499fc, 0x01249a20, 0x01249a44, 0x01249a68, 0x01249a84, 0x01249ab0
+  , 0x01249adc
   ]
 
 -- | The loads and stores of `0x722054`; it branches only on its addresses and length.
@@ -164,11 +172,14 @@ appCopyStores = [0x00722084, 0x007220c8, 0x007220ec, 0x00722134, 0x00722154, 0x0
 
 -- | Physical memory every observation watches for reads and writes of the message: the
 -- builder's frames on the task-1 stack (payload at 0x00a4cb04 or 0x00a4cb14 on the card routes),
--- the channel-4 queue buffer at 0x009e68a0 the send fills, the request payloads `0x014ea6f0` and
--- `0x014ea7b4` and the four saved requests. A mark created or copied outside them is a finding.
+-- the channel-4 queue buffer at 0x009e68a0 the send fills, the request block from its payload
+-- `0x014ea6f0` to the end of the copies' destinations at 0x014ea91c, the saved requests and the
+-- copies' other destinations `0x01511524` and `0x015151ec`. A mark created or copied outside them
+-- is a finding.
 provenanceMemory :: [Span]
 provenanceMemory =
-  [Span 0x00a4cb00 0x00a4cc00, Span 0x009e68a0 0x009e6970, Span 0x014ea6f0 0x014ea878, Span 0x01511020 0x01511330]
+  [ Span 0x00a4cb00 0x00a4cc00, Span 0x009e68a0 0x009e6970, Span 0x014ea6f0 0x014ea91c
+  , Span 0x01511020 0x01511330, Span 0x01511524 0x01511530, Span 0x015151ec 0x01515254 ]
 
 none :: Capture
 none = Capture [] []
