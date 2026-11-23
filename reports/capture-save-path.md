@@ -16,7 +16,7 @@ What runs after a still JPEG is encoded until its file is closed on the card, an
 | 8. Numbering after close | `0x71141c` advances the slot group's last-used pair, persists it and creates the next folder | media task | bytes |
 | 9. Completion | `stream_signal_phase` posts `0x2b16`; `file_complete_path` `0x011d536c` copies the path to `0x014ddba8` and calls `0x00e4e5dc`, which sets `0x0154d970` and signals `0x10` to the task at `0x0155ccb8` | file machine, then record controller | C |
 
-The card I/O (steps 5 to 7) is the owned file service. The machine tables `0x011d5d44`/`0x011d5dac` and `registry_queue_ids[1]` (`0x007d088c`) are not byte-read (**open**).
+The card I/O (steps 5 to 7) is the owned file service. The file machine of steps 4, 6, 7 and 9, its tables `0x011d5d44`/`0x011d5dac` and its cancel and error paths are byte-read in [the save file machine contract](save-file-machine.md); `registry_queue_ids[1]` (`0x007d088c`) is `0x1d`.
 
 ## DCF naming and the number store
 
@@ -71,7 +71,7 @@ Retained services: media status `0x71ddf0`, current drive `0x71f708`, group inde
 
 References into the five extents (bytes, the staging census of E-DCF-NUMBERING-CARD-PAIR-150 over image 4, image 5, the plain image, both loaders, image 2 and image 3): 36 A32 `bl`, all to entries. Image 4 calls `0x70fb68` (6), `0x71141c` (2) and `0x716184` (1); image 5 calls `0x70fbfc` (4), `0x70f790` (2), `0x70fb68` (2) and `0x70faa0` (1); the overlays call `0x70fbfc` (10), `0x70f790` (5) and `0x70fb68` (3). No MOVW/MOVT pair, ADR or Thumb branch names an entry or an interior address, and no word at a word-aligned site names an entry. Four words at word-aligned sites have word-aligned values inside the extents (image 4 `0x7bdfd0`, `0x7dfd50`, `0x7ea76c`, image 5 `0xf580bc`); they sit in tables of like values and are loaded by no PC-relative instruction. The census also admits by rule 49 words at halfword-aligned sites (22 of them with word-aligned interior values, for example image 4 `0x788052` = `0x710000`) and 23 words whose value is not word-aligned. It does not see addresses computed at run time.
 
-Not owned here: the overlay-46 file machine (steps 4, 6, 9) and the EXIF writer need an overlay carrier that main does not have; the EXIF writer also needs its serializers and callbacks recovered from bytes. The snapshot query `0x7101e4` and refresh `0x712b4c`, and the card scan, stay stock.
+Owned elsewhere: the overlay-46 file machine of steps 4, 6, 7 and 9 ([`replacement/save_file_machine`](../replacement/save_file_machine/), [contract](save-file-machine.md)) and the EXIF writer ([`replacement/exif_writer`](../replacement/exif_writer/)), both linked in place in one overlay-46 carrier and qualified natively; main has no overlay-46 staging path. The snapshot query `0x7101e4` and refresh `0x712b4c`, and the card scan, stay stock.
 
 ## Emulated route
 

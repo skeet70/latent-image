@@ -105,5 +105,5 @@ The [Exif writer](exif-writer-interface.md) shares the overlay: its extents end 
 
 ## Blocks to a complete owned version
 
-- No emulated capture reaches save ([#139](https://github.com/skeet70/latent-image/issues/139)); the unit is qualified natively, driven through the stock registry dispatch.
+- No emulated capture reaches save ([#139](https://github.com/skeet70/latent-image/issues/139)); the unit is qualified natively through the stock registry dispatch, with every stock branch direction reached (E-SAVE-FILE-MACHINE-NATIVE-150, [suite](../replacement/README.md#save-file-machine)).
 - Main has no overlay-46 staging path, so neither overlay unit is staged.
