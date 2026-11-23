@@ -22,8 +22,7 @@ import Replacement.FixedImage.Layout
 import Replacement.FixedImage.Record
 import qualified Replacement.DisplayScanout.Artifact as Scanout
 import qualified Replacement.FileService.Native as FileService
-import qualified Replacement.FileService.Requests as FileService
-import qualified Replacement.FileService.Workers as Workers
+import qualified Replacement.FileService.StockRole as StockRole
 import System.Environment (getArgs, getEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -130,7 +129,7 @@ main = do
       let scanoutRows = [(address, old, new) | Scanout.Publication address old new <- scanout]
           (loadingRows, unitRows) = partition (\(address, _, _) -> address `elem` map entryAddress [minBound .. maxBound]) image4Rows
           (scanoutPublished, fileServiceRows) = partition (\(address, _, _) -> address `elem` [address' | (address', _, _) <- scanoutRows]) unitRows
-          retired address = any (\(_, extent) -> FileService.extentContains extent address) (FileService.codeExtents FileService.code ++ FileService.codeExtents Workers.code)
+          retired address = any (`FileService.extentContains` address) StockRole.retiredRegions
       H.ensure (sort loadingRows == sort veneers) "image4 publications are not exactly the loading and decoder veneers"
       H.ensure (sort scanoutPublished == sort scanoutRows) "image4 publications are not exactly the scanout entry branches"
       H.ensure (all (\(address, _, _) -> retired address) fileServiceRows) "an image4 publication lies outside the loading, decoder, scanout and file-service sites"
