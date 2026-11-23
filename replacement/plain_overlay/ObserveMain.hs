@@ -2,8 +2,9 @@
 
 -- | plain-overlay-observe observe --role stock|owned --update DAT --plain PLAIN --unit UNIT_JSON...
 --     --run JSON --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...]
---     [--dump-chunk 0xADDR...] --bridge BRIDGE --output NEW_DIR
+--     [--dump-chunk 0xADDR...] [--prior PRIOR_DIR] --bridge BRIDGE --output NEW_DIR
 --   plain-overlay-observe compare STOCK_DIR OTHER_DIR OUTPUT_JSON [OWNED_ELF...]
+--   plain-overlay-observe attribute OBSERVATION_DIR OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at every unit entry, a fetch watch over
 -- the units' extents and a write watch over the RAM they own. PLAIN is the plain image the DAT
@@ -17,15 +18,26 @@
 -- and final command history must be equal, and an owned observation must fetch nothing in the
 -- extents outside the functions its OWNED_ELF files place there. The DRAM digests must be equal
 -- when neither observation fetches in the extents.
+--
+-- observe --prior: replays the keys and idle chunks of PRIOR_DIR, an observation of the same DAT
+-- and route, and arms a write watch over all of DRAM, with the extents' fetches, over each window
+-- from an interface entry to its return in the prior hits, and a fetch watch over the extents
+-- between windows. windows.json logs each watch with the CPU stores from PCs in the extents.
+--
+-- attribute: every interface call of the observation must lie inside an armed window, the gaps
+-- must fetch nothing in the extents, and every store from a PC in the extents must land in the
+-- units' state, a declared output of a call in its window, or that call's task stack.
 module Main (main) where
 
 import qualified ArmElf as E
+import Control.Applicative ((<|>))
 import Control.Exception (SomeException, bracket, displayException, try)
 import Control.Monad (forM, forM_, replicateM, unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
@@ -111,7 +123,7 @@ parseInputs arguments = do
       others = [(k, v) | (k, v) <- pairs, k `notElem` ["unit", "dump-chunk"]]
       values = M.fromList others
       required = ["adjustment-nand", "boot-rom", "bridge", "output", "plain", "role", "run", "update"]
-  need (length others == M.size values && M.keys (foldr M.delete values ["card", "route"]) == required && not (null units))
+  need (length others == M.size values && M.keys (foldr M.delete values ["card", "route", "prior"]) == required && not (null units))
     "observe requires each of --role --update --plain --run --boot-rom --adjustment-nand --bridge --output once, at least one --unit, and at most one --card and --route"
   role <- case values M.! "role" of
     "stock" -> pure Stock
@@ -151,6 +163,175 @@ watchSummary watch =
     writes = [r | r <- records, field "source" r /= String "cpu-fetch", field "source" r /= String "cpu-read"]
     byPc = M.fromListWith (+) [(a, 1 :: Int) | a <- mapMaybe (hexValue . field "address") fetches]
 
+-- * Store attribution
+
+-- | A span of the global instruction count.
+data Window = Window {windowStart :: Integer, windowEnd :: Integer} deriving (Eq, Show)
+
+-- | Instructions a window extends before an entry hit and after its return.
+windowMargin :: Integer
+windowMargin = 16
+
+-- | The whole of guest DRAM.
+dram :: Span
+dram = Span 0 (fromIntegral dramBytes)
+
+mergedWindows :: [Window] -> [Window]
+mergedWindows = foldr merge [] . sortOn windowStart
+  where
+    merge w [] = [w]
+    merge (Window s e) (Window s' e' : rest)
+      | e >= s' = Window s (max e e') : rest
+      | otherwise = Window s e : Window s' e' : rest
+
+loadHitValues :: FilePath -> IO [Value]
+loadHitValues directory = do
+  bytes <- BL.readFile (directory </> "hits.jsonl")
+  forM (filter (not . BL.null) (BLC.lines bytes)) (either (ioError . userError) pure . A.eitherDecode)
+
+numberOf :: Value -> Integer
+numberOf (Number n) = truncate n
+numberOf _ = 0
+
+-- | Every unit entry hit called from outside the extents, with its return hit: entries and returns
+-- pair last-in first-out per core.
+interfaceCalls :: [Unit] -> [Value] -> [(Value, Value)]
+interfaceCalls units = go M.empty
+  where
+    entrySites = M.fromList [(entryAddress e, ()) | u <- units, e <- unitEntries u]
+    outside a = not (any (\u -> any (`inside` a) (unitExtents u)) units)
+    go _ [] = []
+    go open (hit : rest)
+      | Just label <- textOf (field "site" hit), "entry:" `isPrefixOf` label, Just a <- hexValue (field "address" hit), M.member a entrySites =
+          go (M.insertWith (++) (core hit) [(a, hit)] open) rest
+      | textOf (field "site" hit) == Just "call-return", Just site <- hexValue (field "site" (field "observation" hit)) =
+          case M.findWithDefault [] (core hit) open of
+            (a, entry) : stack | a == site ->
+              [(entry, hit) | Just lr <- [hexValue (field "lr" entry)], outside lr] ++ go (M.insert (core hit) stack open) rest
+            _ -> go open rest
+      | otherwise = go open rest
+    core hit = numberOf (field "core" hit)
+
+callSpans :: [Unit] -> [Value] -> [(Integer, Integer)]
+callSpans units hits = [(numberOf (field "instructions" entry), numberOf (field "instructions" back)) | (entry, back) <- interfaceCalls units hits]
+
+instructionsOf, ranOf :: Value -> Integer
+instructionsOf ran = numberOf (field "instructions" ran)
+ranOf ran = numberOf (field "ran" ran)
+
+-- | Runs one prior idle chunk [START, END) in pieces: a fetch watch over the extents in the gaps,
+-- and a write watch over all of DRAM with the extents' fetches through every call window. Logs
+-- each piece with the instructions it was armed over, the CPU writes from PCs in the extents and
+-- the extents' fetch count.
+attributeChunk :: Emulator -> [Span] -> [Window] -> IORef [Value] -> Integer -> Integer -> IO Value
+attributeChunk emulator extents windows logRef chunkStart chunkEnd = do
+  now <- newIORef chunkStart
+  aligned <- newIORef True
+  let advanceTo target = do
+        current <- readIORef now
+        when (current < target) $ do
+          reply <- emulatorBridgeCommand emulator (object ["command" .= ("idle" :: T.Text), "instructions" .= (target - current)])
+          unless (instructionsOf reply - ranOf reply == current) (writeIORef aligned False)
+          writeIORef now (instructionsOf reply)
+          advanceTo target
+      ownedPc r = maybe False (\pc -> any (`inside` pc) extents) (hexValue (field "pc" r))
+      piece kind writes target = do
+        armedAt <- readIORef now
+        let fetchClass = map spanValue extents
+            writeClass = [spanValue dram | writes]
+            ranges = if writes then [spanValue dram] else fetchClass
+        _ <- emulatorBridgeCommand emulator (object
+          [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
+          , "ranges" .= ranges, "write_ranges" .= writeClass, "fetch_ranges" .= fetchClass ])
+        advanceTo target
+        observed <- emulatorWatchEnd emulator
+        endedAt <- readIORef now
+        let records = arrayOf (field "records" observed)
+            stores = [r | r <- records, field "source" r == String "cpu-write", ownedPc r]
+        modifyIORef' logRef (object
+          [ "kind" .= (kind :: T.Text), "armed_at" .= armedAt, "ended_at" .= endedAt, "violation" .= field "violation" observed
+          , "records" .= length records, "fetches" .= length [() | r <- records, field "source" r == String "cpu-fetch"]
+          , "owned_stores" .= [object ["address" .= field "address" r, "physical" .= field "physical" r, "size" .= field "size" r, "pc" .= field "pc" r, "core" .= field "core" r] | r <- stores]
+          ] :)
+      run [] = do
+        current <- readIORef now
+        when (current < chunkEnd) (piece "gap" False chunkEnd)
+      run (Window s e : rest) = do
+        current <- readIORef now
+        when (current < s) (piece "gap" False s)
+        current' <- readIORef now
+        when (current' < min e chunkEnd) (piece "window" True (min e chunkEnd))
+        run rest
+  run [w | w <- windows, windowEnd w > chunkStart, windowStart w < chunkEnd]
+  final <- readIORef now
+  ok <- readIORef aligned
+  pure (object ["instructions" .= final, "ran" .= (final - chunkStart), "aligned" .= (ok && final == chunkEnd)])
+
+-- | Bytes a store may land in: the units' state, the declared outputs of the interface calls whose
+-- windows contain it (read back at their returns), and the calling task's stack.
+attributeMain :: FilePath -> FilePath -> IO ()
+attributeMain directory output = do
+  exists <- doesPathExist output
+  need (not exists) "attribution output must be new"
+  receipt <- loadJson (directory </> "receipt.json")
+  need (field "status" (field "outcome" receipt) == String "completed") "the observation did not complete"
+  units <- either (ioError . userError) pure (mapM (parseUnit . BL.toStrict . A.encode) (arrayOf (field "units" receipt)))
+  hits <- loadHitValues directory
+  pieces <- arrayOf <$> loadJson (directory </> "windows.json")
+  steps <- arrayOf <$> loadJson (directory </> "steps.json")
+  let physical a = a .&. 0x3fffffff
+      entryOf = M.fromList [(entryAddress e, e) | u <- units, e <- unitEntries u]
+      calls = interfaceCalls units hits
+      region base count = Span (physical base) (physical base + count)
+      outputs (entry, back) =
+        [ region base (fromIntegral (if limited then min captured (maybe 0 fromIntegral (hexValue (field "r0" (field "registers" back)))) else captured))
+        | Just a <- [hexValue (field "address" entry)], Just e <- [M.lookup a entryOf]
+        , (Output _ _ size, read') <- zip (entryOutputs e) (arrayOf (field "reads" (field "observation" back)))
+        , Just base <- [hexValue (field "address" read')], String t <- [field "bytes" read']
+        , let captured = T.length t `div` 2 :: Int
+              limited = case size of UpToResult _ -> True; _ -> False
+        ]
+      stack entry =
+        let task = field "stack" (field "task" entry)
+         in [region b (fromIntegral n) | Just b <- [hexValue (field "base" task)], Just n <- [hexValue (field "bytes" task)]]
+      state = [Span (physical s) (physical e) | u <- units, Span s e <- unitState u]
+      armed = [(numberOf (field "armed_at" p), numberOf (field "ended_at" p)) | p <- pieces, field "kind" p == String "window"]
+      covered (entry, back) = any (\(a, b) -> a <= numberOf (field "instructions" entry) && numberOf (field "instructions" back) <= b) armed
+      callsIn (a, b) = [c | c@(entry, back) <- calls, numberOf (field "instructions" entry) <= b, a <= numberOf (field "instructions" back)]
+      judged =
+        [ (store, allowed)
+        | p <- pieces, field "kind" p == String "window"
+        , let span' = (numberOf (field "armed_at" p), numberOf (field "ended_at" p))
+              allowedSpans = state ++ concat [outputs c ++ stack (fst c) | c <- callsIn span']
+        , store <- arrayOf (field "owned_stores" p)
+        , Just at <- [hexValue (field "physical" store) <|> hexValue (field "address" store)]
+        , let size = maybe 1 id (hexValue (field "size" store))
+              allowed = any (\(Span s e) -> s <= physical at && physical at + size <= e) allowedSpans
+        ]
+      undeclared = [s | (s, False) <- judged]
+      uncovered = [hexWord (fromIntegral (numberOf (field "instructions" entry))) | c@(entry, _) <- calls, not (covered c)]
+      gapFetches = sum [numberOf (field "fetches" p) | p <- pieces, field "kind" p == String "gap"]
+      violations = [v | p <- pieces, let v = field "violation" p, v /= Null]
+      unaligned = [field "step" s | s <- steps, c <- arrayOf (field "idle" s), field "aligned" (field "idle" c) /= Bool True]
+      holds = null undeclared && null uncovered && gapFetches == 0 && null violations && null unaligned && not (null pieces)
+  BL.writeFile output $ A.encode $ object
+    [ "schema" .= (1 :: Int)
+    , "interface_calls" .= length calls
+    , "windows" .= length armed
+    , "calls_outside_windows" .= uncovered
+    , "fetches_outside_windows" .= gapFetches
+    , "watch_violations" .= violations
+    , "unaligned_steps" .= unaligned
+    , "window_records" .= sum [numberOf (field "records" p) | p <- pieces, field "kind" p == String "window"]
+    , "owned_stores" .= length judged
+    , "owned_store_pcs" .= nub [field "pc" s | (s, _) <- judged]
+    , "undeclared_stores" .= take 50 undeclared
+    , "undeclared_store_count" .= length undeclared
+    , "verdict" .= (if holds then "attributed" else "unattributed" :: T.Text)
+    ]
+  putStrLn ("stores " ++ (if holds then "attributed" else "unattributed"))
+  unless holds exitFailure
+
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
@@ -158,7 +339,8 @@ main = do
   case arguments of
     ("observe" : rest) -> parseInputs rest >>= observeMain
     ("compare" : stock : other : output : elves) -> compareMain stock other output elves
-    _ -> ioError (userError "usage: plain-overlay-observe observe OPTIONS | compare STOCK_DIR OTHER_DIR OUTPUT_JSON [OWNED_ELF...]")
+    ["attribute", directory, output] -> attributeMain directory output
+    _ -> ioError (userError "usage: plain-overlay-observe observe OPTIONS | compare STOCK_DIR OTHER_DIR OUTPUT_JSON [OWNED_ELF...] | attribute OBSERVATION_DIR OUTPUT_JSON")
 
 observeMain :: Inputs -> IO ()
 observeMain inputs = do
@@ -182,8 +364,12 @@ observeMain inputs = do
 
 observe :: Inputs -> FilePath -> (K.Key -> Value -> IO ()) -> IO ()
 observe inputs directory record = do
-  paths <- mapM makeAbsolute (M.delete "output" (inputPaths inputs))
+  paths <- mapM makeAbsolute (M.delete "prior" (M.delete "output" (inputPaths inputs)))
   units <- loadUnits (inputUnits inputs)
+  prior <- forM (M.lookup "prior" (inputPaths inputs)) $ \dir -> do
+    priorHits <- loadHitValues dir
+    priorSteps <- arrayOf <$> loadJson (dir </> "steps.json")
+    pure (mergedWindows [Window (s - windowMargin) (e + windowMargin) | (s, e) <- callSpans units priorHits], priorSteps)
   bindings <- forM (M.toList paths) $ \(name, path) -> do
     digest <- sha256File path
     pure (K.fromString name .= object ["path" .= path, "sha256" .= sha256Hex digest])
@@ -296,21 +482,38 @@ observe inputs directory record = do
       (attachedResidency, attachedMemory) <- point emulator "attached"
       record "attached_residency" (A.toJSON attachedResidency)
       record "attached_memory" (A.toJSON attachedMemory)
+      windowsLog <- newIORef []
       let step index key = do
             first <- readIORef cursor
-            _ <- emulatorBridgeCommand emulator watch
-            press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
-            settled <- idle emulator (maybe finalChunks (const settleChunks) key)
-            observed <- emulatorWatchEnd emulator
-            last' <- drain emulator
-            screen <- emulatorCapture emulator (maybe "final" (const ("step-" ++ show index)) key)
-            (resident, digest) <- point emulator (show index)
-            modifyIORef' steps (object
-              [ "step" .= index, "key" .= fmap crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
-              , "watch" .= watchSummary observed, "screen" .= screen, "residency" .= resident, "memory" .= digest ] :)
-            saveSteps
-            putStrLn ("step " ++ show index ++ " " ++ maybe "final" crawlKeyWire key ++ " hits " ++ show (last' - first))
-            pure last'
+            case prior of
+              Nothing -> do
+                _ <- emulatorBridgeCommand emulator watch
+                press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
+                settled <- idle emulator (maybe finalChunks (const settleChunks) key)
+                observed <- emulatorWatchEnd emulator
+                last' <- drain emulator
+                screen <- emulatorCapture emulator (maybe "final" (const ("step-" ++ show index)) key)
+                (resident, digest) <- point emulator (show index)
+                modifyIORef' steps (object
+                  [ "step" .= index, "key" .= fmap crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
+                  , "watch" .= watchSummary observed, "screen" .= screen, "residency" .= resident, "memory" .= digest ] :)
+                saveSteps
+                putStrLn ("step " ++ show index ++ " " ++ maybe "final" crawlKeyWire key ++ " hits " ++ show (last' - first))
+                pure last'
+              Just (windows, priorSteps) -> do
+                press <- maybe (pure Null) (\k -> emulatorBridgeCommand emulator (object ["command" .= ("key" :: T.Text), "key" .= crawlKeyWire k])) key
+                let chunks = [(instructionsOf ran - ranOf ran, instructionsOf ran) | s <- take 1 (drop (index - 1) priorSteps), c <- arrayOf (field "idle" s), let ran = field "idle" c]
+                need (not (null chunks)) ("the prior observation has no step " ++ show index)
+                settled <- forM chunks $ \(chunkStart, chunkEnd) -> do
+                  ran <- attributeChunk emulator extents windows windowsLog chunkStart chunkEnd
+                  media <- emulatorBridgeCommand emulator (object ["command" .= ("media-state" :: T.Text)])
+                  pure (object ["idle" .= ran, "media" .= media])
+                last' <- drain emulator
+                modifyIORef' steps (object ["step" .= index, "key" .= fmap crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled] :)
+                saveSteps
+                BL.writeFile (directory </> "windows.json") . A.encode . reverse =<< readIORef windowsLog
+                putStrLn ("step " ++ show index ++ " " ++ maybe "final" crawlKeyWire key ++ " hits " ++ show (last' - first))
+                pure last'
       forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> step index (Just key)
       total <- step (length (inputRoute inputs) + 1) Nothing
       record "hit_count" (A.toJSON total)

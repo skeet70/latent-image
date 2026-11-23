@@ -134,5 +134,48 @@ main = do
         pure [name ++ ": exit " ++ show code ++ ", verdict " ++ show verdict ++ "\n" ++ err | code /= expectedCode || verdict /= String expected]
     | (name, reference, role, observation, elves, expectedCode, expected) <- cases
     ]
-  forM_ failures putStrLn
-  unless (null failures) exitFailure
+  attributionFailures <- fmap concat . sequence $
+    [ do
+        let directory = root </> ("attribute-" ++ name)
+            output = directory ++ ".json"
+        writeAttribution directory unit armedAt store gapFetches
+        (code, _, err) <- readProcessWithExitCode observe ["attribute", directory, output] ""
+        verdict <- verdictOf output
+        pure [name ++ ": exit " ++ show code ++ ", verdict " ++ show verdict ++ "\n" ++ err | code /= expectedCode || verdict /= String expected]
+    | (name, armedAt, store, gapFetches, expectedCode, expected) <-
+        [ ("store-in-declared-output", 984, 0x014e014c, 0, ExitSuccess, "attributed")
+        , ("store-in-task-stack", 984, 0x00a41f00, 0, ExitSuccess, "attributed")
+        , ("store-in-unit-state", 984, 0x014ddbfc, 0, ExitSuccess, "attributed")
+        , ("store-undeclared", 984, 0x014e0150, 0, ExitFailure 1, "unattributed")
+        , ("call-outside-window", 1050, 0x014e014c, 0, ExitFailure 1, "unattributed")
+        , ("fetch-between-windows", 984, 0x014e014c, 1, ExitFailure 1, "unattributed")
+        ]
+    ]
+  forM_ (failures ++ attributionFailures) putStrLn
+  unless (null (failures ++ attributionFailures)) exitFailure
+
+-- | An attribution observation of one `begin` call entered at instruction 1000 on a task whose
+-- stack is [0xa41200,0xa42200), returning at 1100 with descriptor+0x14c at 0x14e014c; one window
+-- armed from ARMED_AT to 1116 holding a four-byte owned store at STORE, and a gap fetching
+-- GAP_FETCHES times in the extents.
+writeAttribution :: FilePath -> Value -> Int -> Int -> Int -> IO ()
+writeAttribution directory unit armedAt store gapFetches = do
+  createDirectory directory
+  let stackTask = object ["kernel" .= ("a" :: T.Text), "task_id" .= (3 :: Int), "kind" .= ("available" :: T.Text), "stack" .= object ["base" .= ("0x00a41200" :: T.Text), "bytes" .= (4096 :: Int)]]
+      entry = object
+        [ "site" .= ("entry:save_file_machine:begin" :: T.Text), "address" .= ("0x11d5600" :: T.Text), "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int)
+        , "instructions" .= (1000 :: Int), "task" .= stackTask
+        , "registers" .= object ["r0" .= ("0x1" :: T.Text), "r1" .= ("0x14e0000" :: T.Text), "r2" .= ("0xe4e5dc" :: T.Text)] ]
+      back = object
+        [ "site" .= ("call-return" :: T.Text), "address" .= ("0xe51aec" :: T.Text), "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int)
+        , "instructions" .= (1100 :: Int), "task" .= stackTask, "registers" .= object ["r0" .= ("0x0" :: T.Text)]
+        , "observation" .= object ["site" .= (0x11d5600 :: Int), "reads" .= [object ["address" .= (0x14e014c :: Int), "bytes" .= ("01000000" :: T.Text)]]] ]
+  BL.writeFile (directory </> "hits.jsonl") (BL.concat [A.encode h <> "\n" | h <- [entry, back]])
+  BL.writeFile (directory </> "receipt.json") . A.encode $ object ["outcome" .= object ["status" .= ("completed" :: T.Text)], "units" .= [unit]]
+  BL.writeFile (directory </> "steps.json") . A.encode $ [object ["step" .= (1 :: Int), "idle" .= [object ["idle" .= object ["aligned" .= True]]]]]
+  BL.writeFile (directory </> "windows.json") . A.encode $
+    [ object ["kind" .= ("gap" :: T.Text), "armed_at" .= (0 :: Int), "ended_at" .= armedAt, "violation" .= Null, "records" .= gapFetches, "fetches" .= gapFetches, "owned_stores" .= ([] :: [Value])]
+    , object
+        [ "kind" .= ("window" :: T.Text), "armed_at" .= armedAt, "ended_at" .= (1116 :: Int), "violation" .= Null, "records" .= (3 :: Int), "fetches" .= (2 :: Int)
+        , "owned_stores" .= [object ["address" .= store, "physical" .= store, "size" .= (4 :: Int), "pc" .= ("0x11d5610" :: T.Text), "core" .= (0 :: Int)]] ]
+    ]
