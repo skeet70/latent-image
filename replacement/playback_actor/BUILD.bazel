@@ -5,10 +5,10 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["imports.ld"])
 
-_SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/stock.rs"]
+_SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/machine61.rs", "src/stock.rs"]
 
-# Staged machines' controls; the native image also carries the native-only machine 30 and its
-# controls.
+# Staged machines' controls; the native image also carries the native-only machines 30 and 61
+# and their controls.
 PLAYBACK_ACTOR_CONTROLS = [
     "abort_keeps_state",
     "start_unpublished",
@@ -22,6 +22,7 @@ PLAYBACK_ACTOR_CONTROLS = [
 PLAYBACK_ACTOR_NATIVE_CONTROLS = PLAYBACK_ACTOR_CONTROLS + [
     "m30_gate_swapped",
     "m30_action17_result_shifted",
+    "m61_action22_result_shifted",
 ]
 
 _VARIANTS = [("", [])] + [
@@ -94,6 +95,7 @@ haskell_library(
     srcs = [
         "Replacement/PlaybackActor/Cases.hs",
         "Replacement/PlaybackActor/Machine30.hs",
+        "Replacement/PlaybackActor/Machine61.hs",
         "Replacement/PlaybackActor/Machine7.hs",
         "Replacement/PlaybackActor/Model.hs",
     ],

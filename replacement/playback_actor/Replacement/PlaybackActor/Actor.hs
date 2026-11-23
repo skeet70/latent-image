@@ -43,15 +43,17 @@ data Service = Service
 dispatcher :: Word32
 dispatcher = 0x011e8bf8
 
-machineEvents, machineStates, modeState, requestState, transferState, stepState :: Span
+machineEvents, machineStates, modeState, requestState, selectionState, transferState, stepState :: Span
 machineEvents = Span 0x014ea4ec 0x014ea5ac
 machineStates = Span 0x014ea5ac 0x014ea66c
 modeState = Span 0x014ea678 0x014ea6e4
 requestState = Span 0x014ea6e4 0x014ea714
+selectionState = Span 0x014ea9bc 0x014eaaf4
 transferState = Span 0x014eaed8 0x014eb5d0
 stepState = Span 0x014eb5d0 0x014eb5d8
 
--- | The machine set an observation watches: machine 0, or the native image's machines 0, 7 and 30.
+-- | The machine set an observation watches: machine 0, or the native image's machines 0, 7, 30
+-- and 61.
 data Boundary = Machine0 | Native
   deriving (Eq, Show, Enum, Bounded)
 
@@ -59,22 +61,23 @@ boundaryWire :: Boundary -> String
 boundaryWire Machine0 = "machine0"
 boundaryWire Native = "native"
 
-machine0Extent, machine7Extent, machine30Extent :: Span
+machine0Extent, machine7Extent, machine30Extent, machine61Extent :: Span
 machine0Extent = Span 0x011e8ce4 0x011ea434
 machine7Extent = Span 0x011eb824 0x011ec980
 machine30Extent = Span 0x011f31bc 0x011f4810
+machine61Extent = Span 0x011fe4d0 0x011ff0dc
 
 boundaryRetired :: Boundary -> [Span]
 boundaryRetired Machine0 = [machine0Extent]
-boundaryRetired Native = [machine0Extent, machine7Extent, machine30Extent]
+boundaryRetired Native = [machine0Extent, machine7Extent, machine30Extent, machine61Extent]
 
 boundaryServices :: Boundary -> [Service]
 boundaryServices Machine0 = machine0Services
-boundaryServices Native = machine0Services ++ machine7And30Services
+boundaryServices Native = machine0Services ++ machine7And30Services ++ machine61Services
 
 boundaryWrites :: Boundary -> [Span]
 boundaryWrites Machine0 = [machineEvents, machineStates, modeState]
-boundaryWrites Native = [machineEvents, machineStates, modeState, requestState, transferState, stepState]
+boundaryWrites Native = [machineEvents, machineStates, modeState, requestState, selectionState, transferState, stepState]
 
 none :: Capture
 none = Capture [] []
@@ -196,4 +199,38 @@ machine7And30Services =
   , void 0x012390d4 "service_012390d4"
   , void 0x01239134 "service_01239134"
   , status 0x01239178 "service_01239178"
+  ]
+
+machine61Services :: [Service]
+machine61Services =
+  [ status 0x0120c1a8 "service_0120c1a8"
+  , status 0x0121eda0 "service_0121eda0"
+  , status 0x0121ef68 "service_0121ef68"
+  , status 0x0121f0fc "service_0121f0fc"
+  , status 0x0121f118 "service_0121f118"
+  , status 0x0121f1c4 "service_0121f1c4"
+  , status 0x0121f1e8 "service_0121f1e8"
+  , status 0x0121f20c "service_0121f20c"
+  , status 0x0121f224 "service_0121f224"
+  , status 0x0121f254 "service_0121f254"
+  , status 0x0121f2a4 "service_0121f2a4"
+  , status 0x0121f390 "service_0121f390"
+  , status 0x0121f3ec "service_0121f3ec"
+  , status 0x0121f500 "service_0121f500"
+  , status 0x0121f518 "service_0121f518"
+  , status 0x0121f7ac "service_0121f7ac"
+  , status 0x0121f83c "service_0121f83c"
+  , status 0x0121f85c "service_0121f85c"
+  , status 0x012202d0 "service_012202d0"
+  , withArgument 0x01229f84 "service_01229f84"
+  , withArgument 0x0123265c "service_0123265c"
+  , status 0x01243590 "service_01243590"
+  , status 0x01243644 "service_01243644"
+  , status 0x01243760 "service_01243760"
+  , status 0x012437bc "service_012437bc"
+  , status 0x01243890 "service_01243890"
+  , status 0x012438f0 "service_012438f0"
+  , withArgument 0x01243948 "service_01243948"
+  , status 0x01243a6c "service_01243a6c"
+  , withArgument 0x01245c7c "service_01245c7c"
   ]

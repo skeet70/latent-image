@@ -31,3 +31,15 @@ xm1_playback_m7_table:
     .word xm1_playback_m7_action46, xm1_playback_m7_action47, xm1_playback_m7_action48, xm1_playback_m7_action49
     .word xm1_playback_m7_action50
 .size xm1_playback_m7_table, .-xm1_playback_m7_table
+
+.section .playback.m61.table,"a",%progbits
+.global xm1_playback_m61_table
+xm1_playback_m61_table:
+    .word xm1_playback_m61_action02, xm1_playback_m61_action03, xm1_playback_m61_action04, xm1_playback_m61_action05
+    .word xm1_playback_m61_action06, xm1_playback_m61_action07, xm1_playback_m61_action08, xm1_playback_m61_action09
+    .word xm1_playback_m61_action10, xm1_playback_m61_action11, xm1_playback_m61_action12, xm1_playback_m61_action13
+    .word xm1_playback_m61_action14, xm1_playback_m61_action15, xm1_playback_m61_action16, xm1_playback_m61_action17
+    .word xm1_playback_m61_action18, xm1_playback_m61_action19, xm1_playback_m61_action20, xm1_playback_m61_action21
+    .word xm1_playback_m61_action22, xm1_playback_m61_action23, xm1_playback_m61_action24, xm1_playback_m61_action25
+    .word xm1_playback_m61_action26, xm1_playback_m61_action27
+.size xm1_playback_m61_table, .-xm1_playback_m61_table

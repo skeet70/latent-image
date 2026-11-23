@@ -9,6 +9,8 @@ pub mod machine0;
 pub mod machine30;
 #[cfg(any(test, playback_native_machines))]
 pub mod machine7;
+#[cfg(any(test, playback_native_machines))]
+pub mod machine61;
 #[cfg(target_arch = "arm")]
 #[allow(unsafe_code)]
 mod stock;

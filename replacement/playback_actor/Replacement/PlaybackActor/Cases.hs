@@ -17,6 +17,7 @@ import qualified Data.ByteString as B
 import Data.Word (Word32)
 import Replacement.FileService.Native
 import Replacement.PlaybackActor.Machine30 (machine30)
+import Replacement.PlaybackActor.Machine61 (machine61)
 import Replacement.PlaybackActor.Machine7 (machine7)
 import Replacement.PlaybackActor.Model (machineScenarios)
 
@@ -56,6 +57,14 @@ ownedMachines =
       ]
       0x011f4810
       0x01219890
+  , OwnedMachine "machine61" "xm1_playback_m61_action"
+      [ 0x011fe4d0, 0x011fe578, 0x011fe5d0, 0x011fe604, 0x011fe618, 0x011fe670, 0x011fe6a4, 0x011fe6c8
+      , 0x011fe76c, 0x011fe7a4, 0x011fe848, 0x011fe8f0, 0x011fe950, 0x011fe9c8, 0x011fe9f4, 0x011fea1c
+      , 0x011fea44, 0x011fea6c, 0x011fea80, 0x011feac0, 0x011fead4, 0x011fec28, 0x011fed54, 0x011fee5c
+      , 0x011fef68, 0x011ff000
+      ]
+      0x011ff0dc
+      0x01215c34
   ]
 
 rowsEnd :: OwnedMachine -> Word32
@@ -407,7 +416,7 @@ preludeServices p = case p of
   Discard address -> returning address 0x31
 
 scenarios :: B.ByteString -> [Scenario]
-scenarios image = machine0Scenarios image ++ concatMap (machineScenarios image) [machine7, machine30]
+scenarios image = machine0Scenarios image ++ concatMap (machineScenarios image) [machine7, machine30, machine61]
 
 -- | Every machine-0 action with every status; the action at 0x011e8e48 also with every second
 -- status after navigation status 8.

@@ -8,6 +8,7 @@ module Replacement.PlaybackActor.Model
   , call
   , callWith
   , load
+  , loadOnly
   , store
   , packet
   , finish
@@ -36,7 +37,7 @@ widthBytes w = case w of
 data Program
   = Return Word32
   | Invoke Word32 (Maybe Word32) [Word32] (Word32 -> Program)
-  | Load Word32 Width [Word32] (Word32 -> Program)
+  | Load Word32 Width Bool [Word32] (Word32 -> Program)
   | Store Word32 Width Word32 Program
   | Packet Word32 Word32 Program
 
@@ -62,7 +63,12 @@ callWith address argument results = Action (Invoke address (Just argument) resul
 
 -- | A guest read, branching over the given values and the region's own bytes when first read.
 load :: Word32 -> Width -> [Word32] -> Action Word32
-load address width values = Action (Load address width values)
+load address width values = Action (Load address width True values)
+
+-- | A guest read branching over the given values only, for a pointer whose other values the
+-- cases cannot map.
+loadOnly :: Word32 -> Width -> [Word32] -> Action Word32
+loadOnly address width values = Action (Load address width False values)
 
 store :: Word32 -> Width -> Word32 -> Action ()
 store address width value = Action (\k -> Store address width value (k ()))
@@ -134,14 +140,14 @@ explore regions path program = case program of
     , let service = Service address (maybe [] (\a -> [("r0", a)]) argument) [("r0", value)] [] []
     , (final, result) <- explore regions path {pathServices = service : pathServices path} (k value)
     ]
-  Load address width values k ->
+  Load address width other values k ->
     let span' = [address .. address + fromIntegral (widthBytes width) - 1]
         known = [M.lookup a (pathMemory path) | a <- span']
      in case sequence known of
           Just bytes -> explore regions path (k (valueOf bytes))
           Nothing ->
             [ (final, result)
-            | value <- nub (values ++ [valueOf (map (fill regions) span')])
+            | value <- nub (values ++ [valueOf (map (fill regions) span') | other])
             , let path' = path {pathInitial = poke address width value (pathInitial path), pathMemory = poke address width value (pathMemory path)}
             , (final, result) <- explore regions path' (k value)
             ]
