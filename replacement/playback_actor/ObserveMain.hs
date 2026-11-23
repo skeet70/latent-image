@@ -1,20 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | playback-actor-observe observe --role stock|owned --update DAT --run JSON --boot-rom ROM
---     --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
+-- | playback-actor-observe observe --role stock|owned --boundary machine0|native --update DAT --run JSON
+--     --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
 --   playback-actor-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
+--   playback-actor-observe same-machine FIRST_DIR SECOND_DIR OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the queue-4 machine dispatcher
--- and the retained services the owned machines call, a write watch over the machine and mode
--- state and a fetch watch over the retired action extents. After attach it presses the route
--- keys (by default PLAY and the playback keys), idles a fixed budget after each, and captures
--- the screen. Every hit samples the machine event and state halfwords.
+-- and the boundary's retained services, a write watch over the boundary's state and a fetch
+-- watch over its retired action extents. After attach it presses the route keys (by default
+-- PLAY and the playback keys), idles a fixed budget after each, captures the screen and
+-- fingerprints the whole machine. Every hit samples the machine event and state halfwords.
 --
 -- compare: the dispatcher's entries and returns, the calls the machines make into the
 -- retained services (calls returning into a retired extent) with the bytes they point at and r0
 -- on return, the watched writes, the screens and the card's accepted writes, dirty sectors and
 -- final command history must be equal, and the owned role must fetch nothing in the retired
 -- extents outside the owned code (the functions OWNED_SYMBOLS places there).
+--
+-- same-machine: two observations of one role, DAT and route must have equal machine
+-- fingerprints after every step, whatever their boundaries.
 module Main (main) where
 
 import Control.DeepSeq (rnf)
@@ -52,6 +56,7 @@ roleName Owned = "owned"
 
 data Inputs = Inputs
   { inputRole :: Role
+  , inputBoundary :: Boundary
   , inputUpdate :: FilePath
   , inputRun :: FilePath
   , inputRom :: FilePath
@@ -116,8 +121,10 @@ captureValue capture =
     , "returns" .= [readSpec (registerBase r) n | (r, n) <- captureReturn capture]
     ]
 
-fetchSpans :: [Span]
-fetchSpans = retired
+boundaryNamed :: String -> Maybe Boundary
+boundaryNamed wire = case [b | b <- [minBound .. maxBound], boundaryWire b == wire] of
+  [b] -> Just b
+  _ -> Nothing
 
 mergedSpans :: [Span] -> [Span]
 mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
@@ -129,8 +136,8 @@ mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
 
 -- | Fetch records per retired extent and per PC; write records without the role-specific PC,
 -- instruction count and tick, and the writers' PCs apart, outside the comparison.
-watchSummary :: Value -> Value
-watchSummary watch =
+watchSummary :: Boundary -> Value -> Value
+watchSummary boundary watch =
   object
     [ "violation" .= field "violation" watch
     , "record_count" .= length records
@@ -145,7 +152,7 @@ watchSummary watch =
     fetches = [r | r <- records, field "source" r == String "cpu-fetch"]
     writes = [r | r <- records, field "source" r /= String "cpu-fetch", field "source" r /= String "cpu-read"]
     fetchAddresses = mapMaybe (hexValue . field "address") fetches
-    byExtent = [(extent, length (filter (inside extent) fetchAddresses)) | extent <- retired]
+    byExtent = [(extent, length (filter (inside extent) fetchAddresses)) | extent <- boundaryRetired boundary]
     byPc = M.fromListWith (+) [(a, 1 :: Int) | a <- fetchAddresses]
 
 main :: IO ()
@@ -155,24 +162,26 @@ main = do
   case arguments of
     ("observe" : rest) -> parseInputs rest >>= observeMain
     ["compare", stock, owned, symbols, output] -> compareMain stock owned symbols output
-    _ -> ioError (userError "usage: playback-actor-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON")
+    ["same-machine", first, second, output] -> sameMachineMain first second output
+    _ -> ioError (userError "usage: playback-actor-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON | same-machine FIRST_DIR SECOND_DIR OUTPUT_JSON")
 
 parseInputs :: [String] -> IO Inputs
 parseInputs arguments = do
   pairs <- collect arguments
   let values = M.fromList pairs
-      names = ["role", "update", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
-  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --role --update --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
+      names = ["boundary", "role", "update", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
+  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --boundary --role --update --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
+  boundary <- maybe (ioError (userError "--boundary must be machine0 or native")) pure (boundaryNamed (values M.! "boundary"))
   keys <- case M.lookup "route" values of
     Nothing -> pure playbackRoute
     Just text -> mapM crawlKey (splitOn text)
   pure
     Inputs
-      { inputRole = role, inputUpdate = values M.! "update", inputRun = values M.! "run", inputRom = values M.! "boot-rom"
+      { inputRole = role, inputBoundary = boundary, inputUpdate = values M.! "update", inputRun = values M.! "run", inputRom = values M.! "boot-rom"
       , inputNand = values M.! "adjustment-nand", inputCard = M.lookup "card" values, inputBridge = values M.! "bridge"
       , inputOutput = values M.! "output", inputRoute = keys
       }
@@ -218,13 +227,15 @@ observe inputs directory record = do
   observerDigest <- sha256File observer
   record "schema" (Number 1)
   record "role" (String (roleName (inputRole inputs)))
+  record "boundary" (A.toJSON (boundaryWire (inputBoundary inputs)))
   record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer, "sha256" .= sha256Hex observerDigest]]))
-  let sites =
+  let boundary = inputBoundary inputs
+      sites =
         (dispatcher, "dispatch", Capture [] [])
-          : [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s) | s <- services]
+          : [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s) | s <- boundaryServices boundary]
       machineReads = A.toJSON [[s, e - s] | Span s e <- [machineEvents, machineStates]]
-      writes = map spanValue watchedWrites
-      fetches = map spanValue fetchSpans
+      writes = map spanValue (boundaryWrites boundary)
+      fetches = map spanValue (boundaryRetired boundary)
       spec =
         object
           [ "schema" .= (1 :: Int)
@@ -241,7 +252,7 @@ observe inputs directory record = do
       watch =
         object
           [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
-          , "ranges" .= map spanValue (mergedSpans (watchedWrites ++ fetchSpans))
+          , "ranges" .= map spanValue (mergedSpans (boundaryWrites boundary ++ boundaryRetired boundary))
           , "write_ranges" .= writes, "fetch_ranges" .= fetches ]
       bridgeArguments =
         [ "--run", paths M.! "run", "--boot-rom", paths M.! "boot-rom", "--installed-dat", paths M.! "update"
@@ -271,15 +282,21 @@ observe inputs directory record = do
           media <- emulatorBridgeCommand emulator (object ["command" .= ("media-state" :: T.Text)])
           pure (object ["idle" .= ran, "media" .= media])
         saveSteps = BL.writeFile (directory </> "steps.json") . A.encode . reverse =<< readIORef steps
+        fingerprint emulator name = do
+          reply <- emulatorBridgeCommand emulator (object ["command" .= ("machine-fingerprint" :: T.Text)])
+          need (field "status" reply == String "complete") "machine fingerprint did not complete"
+          BL.writeFile (directory </> ("machine-" ++ name ++ ".json")) (A.encode (field "components" reply) <> "\n")
+          pure (object ["sha256" .= field "machine_sha256" reply, "counts" .= field "counts" reply, "now" .= field "now" reply])
     bracket (startEmulator (paths M.! "bridge") directory bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, ()) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
       need (bootStart start == FreshBootStart) "bridge did not fresh boot"
       record "emulator_start" (startRecord start)
       attached <- drain emulator
       reset <- B.readFile (directory </> "reset-observation.json") >>= either (ioError . userError) pure . A.eitherDecodeStrict'
-      record "reset_segments" (A.toJSON [object ["phase" .= field "phase" s, "instructions" .= field "instructions" s, "hits_end" .= field "hits_end" s, "watch" .= watchSummary (field "watch" s)] | s <- arrayOf (field "segments" reset)])
+      record "reset_segments" (A.toJSON [object ["phase" .= field "phase" s, "instructions" .= field "instructions" s, "hits_end" .= field "hits_end" s, "watch" .= watchSummary boundary (field "watch" s)] | s <- arrayOf (field "segments" reset)])
       record "hits_at_attach" (A.toJSON attached)
       shot <- emulatorCapture emulator "attached"
       record "attached_screen" shot
+      record "attached_machine" =<< fingerprint emulator "attached"
       forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> do
         first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator watch
@@ -289,9 +306,10 @@ observe inputs directory record = do
         last' <- drain emulator
         screen <- emulatorCapture emulator ("step-" ++ show index)
         state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
+        machine <- fingerprint emulator (show index)
         modifyIORef' steps (object
           [ "step" .= index, "key" .= crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
-          , "watch" .= watchSummary observed, "screen" .= screen, "ui_state" .= state ] :)
+          , "watch" .= watchSummary boundary observed, "screen" .= screen, "ui_state" .= state, "machine" .= machine ] :)
         saveSteps
         putStrLn ("step " ++ show index ++ " " ++ crawlKeyWire key ++ " hits " ++ show (last' - first))
       first <- readIORef cursor
@@ -300,7 +318,8 @@ observe inputs directory record = do
       observed <- emulatorWatchEnd emulator
       last' <- drain emulator
       screen <- emulatorCapture emulator "final"
-      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary observed, "screen" .= screen] :)
+      machine <- fingerprint emulator (show (length (inputRoute inputs) + 1))
+      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary boundary observed, "screen" .= screen, "machine" .= machine] :)
       saveSteps
       record "hit_count" (A.toJSON last')
 
@@ -309,8 +328,8 @@ observe inputs directory record = do
 data Event = Event {eventKind :: String, eventName :: String, eventExternal :: Bool, eventValue :: Value}
 
 -- | A return address inside a retired extent belongs to the actor.
-external :: Word32 -> Bool
-external address = not (any (`inside` address) retired)
+external :: Boundary -> Word32 -> Bool
+external boundary address = not (any (`inside` address) (boundaryRetired boundary))
 
 registersOf :: [T.Text] -> Value -> Value
 registersOf names hit = object [K.fromText r .= field r (field "registers" hit) | r <- names]
@@ -321,18 +340,16 @@ taskOf hit = object ["kernel" .= field "kernel" (field "task" hit), "task_id" .=
 readsOf :: Value -> Value
 readsOf hit = A.toJSON [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
 
-serviceSites :: M.Map Word32 Service
-serviceSites = M.fromList [(serviceAddress s, s) | s <- services]
-
-event :: Value -> Maybe Event
-event hit = do
+event :: Boundary -> Value -> Maybe Event
+event boundary hit = do
   label <- textOf (field "site" hit)
   address <- hexValue (field "address" hit)
   lr <- hexValue (field "lr" hit)
   let common = ["core" .= field "core" hit, "task" .= taskOf hit, "machines" .= field "memory" hit]
+      serviceSites = M.fromList [(serviceAddress s, s) | s <- boundaryServices boundary]
   case label of
     "dispatch" -> Just (Event "dispatch" "dispatch" True (object (["kind" .= ("dispatch" :: T.Text), "machine" .= registersOf ["r0"] hit] ++ common)))
-    _ | "service:" `isPrefixOf` label, Just s <- M.lookup address serviceSites, not (external lr) ->
+    _ | "service:" `isPrefixOf` label, Just s <- M.lookup address serviceSites, not (external boundary lr) ->
           Just (Event "service" (serviceName s) True (object (["kind" .= ("service" :: T.Text), "name" .= serviceName s, "arguments" .= registersOf (serviceArguments s) hit, "reads" .= readsOf hit] ++ common)))
       | "service:" `isPrefixOf` label -> Nothing
       | label == "call-return" -> do
@@ -340,19 +357,19 @@ event hit = do
           case (site == dispatcher, M.lookup site serviceSites) of
             (True, _) -> Just (Event "dispatch-return" "dispatch" True (object (["kind" .= ("dispatch-return" :: T.Text), "result" .= registersOf ["r0"] hit] ++ common)))
             (_, Just s)
-              | external address -> Nothing
+              | external boundary address -> Nothing
               | otherwise -> Just (Event "service-return" (serviceName s) True (object (["kind" .= ("service-return" :: T.Text), "name" .= serviceName s, "result" .= registersOf (serviceResult s) hit, "reads" .= readsOf hit] ++ common)))
             _ -> Nothing
       | otherwise -> Nothing
 
-loadEvents :: FilePath -> IO [Event]
-loadEvents directory = do
+loadEvents :: Boundary -> FilePath -> IO [Event]
+loadEvents boundary directory = do
   bytes <- BL.readFile (directory </> "hits.jsonl")
   reverse <$> foldM keep [] (filter (not . BL.null) (BLC.lines bytes))
   where
     keep kept line = case A.eitherDecode line of
       Left problem -> ioError (userError problem)
-      Right hit -> case event hit of
+      Right hit -> case event boundary hit of
         Nothing -> pure kept
         Just e -> rnf (eventValue e) `seq` rnf (eventKind e, eventName e, eventExternal e) `seq` pure (e : kept)
 
@@ -375,25 +392,32 @@ counts events = M.fromListWith add [(eventName e, if eventExternal e then (1, 0)
   where add (a, b) (c, d) = (a + c, b + d)
 
 -- | The owned functions inside the retired extents, from a `.symbols` listing.
-readBody :: FilePath -> IO [Span]
-readBody path = do
+readBody :: Boundary -> FilePath -> IO [Span]
+readBody boundary path = do
   rows <- map words . lines <$> readFile path
-  let spans = [Span a (a + n) | [address, size, kind, _] <- rows, kind `elem` ["T", "t"], [(a, "")] <- [readHex address], [(n, "")] <- [readHex size], n > 0, any (`inside` a) retired]
+  let spans = [Span a (a + n) | [address, size, kind, _] <- rows, kind `elem` ["T", "t"], [(a, "")] <- [readHex address], [(n, "")] <- [readHex size], n > 0, any (`inside` a) (boundaryRetired boundary)]
   need (not (null spans)) (path ++ " places no function in a retired extent")
   pure spans
+
+receiptBoundary :: Value -> IO Boundary
+receiptBoundary receipt = maybe (ioError (userError "an observation names no boundary")) pure (textOf (field "boundary" receipt) >>= boundaryNamed)
 
 compareMain :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 compareMain stockDir ownedDir symbols output = do
   exists <- doesPathExist output
   need (not exists) "comparison output must be new"
-  body <- readBody symbols
+  stockReceipt <- loadJson (stockDir </> "receipt.json")
+  ownedReceipt <- loadJson (ownedDir </> "receipt.json")
+  boundary <- receiptBoundary stockReceipt
+  ownedBoundary <- receiptBoundary ownedReceipt
+  need (boundary == ownedBoundary) "the observations watch different boundaries"
+  body <- readBody boundary symbols
   let load directory = do
-        events <- loadEvents directory
-        receipt <- loadJson (directory </> "receipt.json")
+        events <- loadEvents boundary directory
         steps <- arrayOf <$> loadJson (directory </> "steps.json")
-        pure (events, receipt, steps)
-  (stockEvents, stockReceipt, stockSteps) <- load stockDir
-  (ownedEvents, ownedReceipt, ownedSteps) <- load ownedDir
+        pure (events, steps)
+  (stockEvents, stockSteps) <- load stockDir
+  (ownedEvents, ownedSteps) <- load ownedDir
   forM_ [stockReceipt, ownedReceipt] $ \r -> need (field "status" (field "outcome" r) == String "completed") "an observation did not complete"
   need (field "role" stockReceipt == String (roleName Stock)) "the first observation must have the stock role"
   let watches receipt steps = [field "watch" s | s <- arrayOf (field "reset_segments" receipt)] ++ [field "watch" s | s <- steps]
@@ -436,7 +460,8 @@ compareMain stockDir ownedDir symbols output = do
         , "retired_fetches" .= fetches, "watched_writes" .= length writes, "steps" .= length steps ]
   BL.writeFile output $ A.encode $ object
     [ "schema" .= (1 :: Int)
-    , "retired" .= map spanValue retired
+    , "boundary" .= boundaryWire boundary
+    , "retired" .= map spanValue (boundaryRetired boundary)
     , "owned_body" .= map spanValue body
     , "stock" .= summary stockEvents stockReceipt stockSteps (fetchTotal stockReceipt stockSteps) stockWrites
     , "owned" .= summary ownedEvents ownedReceipt ownedSteps ownedFetches ownedWrites
@@ -454,4 +479,49 @@ compareMain stockDir ownedDir symbols output = do
     , "verdict" .= (if equal then "equal" else "different" :: T.Text)
     ]
   putStrLn ("verdict " ++ (if equal then "equal" else "different"))
+  unless equal exitFailure
+
+-- * Machine identity across boundaries
+
+-- | The machine components (leaf headers and RAM/state chunks) whose digests differ.
+differingComponents :: Value -> Value -> [Value]
+differingComponents first second =
+  [ object ["path" .= path, "first" .= a, "second" .= b]
+  | (path, (a, b)) <- M.toList (M.mergeWithKey (\_ a b -> Just (a, b)) (M.map (\a -> (a, Null))) (M.map (\b -> (Null, b))) (leaves first) (leaves second))
+  , a /= b
+  ]
+  where
+    leaves components = M.fromList [(path, field "sha256" e) | e <- arrayOf (field "entries" components), field "kind" e `elem` [String "chunk", String "header"], Just path <- [textOf (field "path" e)]]
+
+sameMachineMain :: FilePath -> FilePath -> FilePath -> IO ()
+sameMachineMain firstDir secondDir output = do
+  exists <- doesPathExist output
+  need (not exists) "same-machine output must be new"
+  firstReceipt <- loadJson (firstDir </> "receipt.json")
+  secondReceipt <- loadJson (secondDir </> "receipt.json")
+  forM_ [firstReceipt, secondReceipt] $ \r -> need (field "status" (field "outcome" r) == String "completed") "an observation did not complete"
+  forM_ ["role", "inputs", "route", "budget"] $ \name ->
+    need (field name firstReceipt == field name secondReceipt) ("the observations differ in " ++ T.unpack name)
+  firstSteps <- arrayOf <$> loadJson (firstDir </> "steps.json")
+  secondSteps <- arrayOf <$> loadJson (secondDir </> "steps.json")
+  need (length firstSteps == length secondSteps) "the observations ran different step counts"
+  let points = ("attached", field "attached_machine" firstReceipt, field "attached_machine" secondReceipt)
+        : [(show (n :: Int), field "machine" a, field "machine" b) | (n, a, b) <- zip3 [1 ..] firstSteps secondSteps]
+  rows <- forM points $ \(name, a, b) -> do
+    need (a /= Null && b /= Null) ("step " ++ name ++ " has no machine fingerprint")
+    differing <- if a == b then pure [] else do
+      firstComponents <- loadJson (firstDir </> ("machine-" ++ name ++ ".json"))
+      secondComponents <- loadJson (secondDir </> ("machine-" ++ name ++ ".json"))
+      pure (differingComponents firstComponents secondComponents)
+    pure (a == b, object ["step" .= name, "first" .= a, "second" .= b, "equal" .= (a == b), "differing_components" .= take 20 differing, "differing_component_count" .= length differing])
+  let equal = all fst rows
+  BL.writeFile output $ A.encode $ object
+    [ "schema" .= (1 :: Int)
+    , "role" .= field "role" firstReceipt
+    , "route" .= field "route" firstReceipt
+    , "boundaries" .= [field "boundary" firstReceipt, field "boundary" secondReceipt]
+    , "steps" .= map snd rows
+    , "verdict" .= (if equal then "equal" else "different" :: T.Text)
+    ]
+  putStrLn ("machine " ++ (if equal then "equal" else "different"))
   unless equal exitFailure
