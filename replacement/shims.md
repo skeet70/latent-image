@@ -671,15 +671,15 @@ Classification: `module`. [Declarations](playback/shims.json).
 
 ## playback_actor
 
-Owned queue-4 playback machine 0 in place in the plain image: republished action-table rows, A32 action exports behind the stock dispatcher and import stubs for the retained playback services.
+Owned queue-4 playback machines 0, 7, 30 and 61 in place in the plain image: republished action-table rows, A32 action exports behind the stock dispatcher and import stubs for the retained playback services.
 
 Classification: `linked`. [Declarations](playback_actor/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| machine-0 action-table rows in `table.S` and `playback-actor.ld` | veneer or carrier at a stock address | the stock queue-4 dispatcher 0x011e8bf8 | no | the owned dispatcher calls the owned machine directly | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Publication, 1 symbols, 0 definite references) |
-| `imports.ld` import stubs | trampoline into retained stock | the retained playback status sources, notifications, pending-event, mode-work and device-notification services | no | the owned playback machines and notification services replace them | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Import, 32 symbols, 0 definite references) |
-| Owned machine-0 actions in `playback_actor/src/stock.rs` | stock-ABI export | the stock dispatcher's no-argument action call and its use of r0 as the dispatch result | partly | an owned dispatcher calls a typed owned machine API | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Export, 31 symbols, 0 definite references) |
+| machine 0, 7, 30 and 61 action-table rows in `table.S` and `playback-actor.ld` | veneer or carrier at a stock address | the stock queue-4 dispatcher 0x011e8bf8 | no | the owned dispatcher calls the owned machine directly | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Publication, 4 symbols, 0 definite references) |
+| `imports.ld` import stubs | trampoline into retained stock | the retained playback status sources, notifications, pending-event, mode-work, device-notification, machine-dispatch and playback services | no | the owned playback machines and notification services replace them | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Import, 132 symbols, 0 definite references) |
+| Owned machine 0, 7, 30 and 61 actions in `playback_actor/src/stock.rs` | stock-ABI export | the stock dispatcher's no-argument action call and its use of r0 as the dispatch result | partly | an owned dispatcher calls a typed owned machine API | required | unestablished | `//replacement/playback_actor:playback-actor-image` (Export, 140 symbols, 0 definite references) |
 
 ## power_lifecycle
 
