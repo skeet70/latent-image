@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | playback-actor-observe observe --role stock|owned --boundary machine0|native --update DAT --run JSON
+-- | playback-actor-observe observe --role stock|owned --machines N,... --update DAT --run JSON
 --     --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
 --   playback-actor-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
 --   playback-actor-observe same-memory FIRST_DIR SECOND_DIR OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the queue-4 machine dispatcher
--- and the boundary's retained services, a write watch over the boundary's state and a fetch
--- watch over its retired action extents. After attach it presses the route keys (by default
+-- and the retained services of the named owned machines, a write watch over their state and a
+-- fetch watch over their retired action extents. After attach it presses the route keys (by default
 -- PLAY and the playback keys), idles a fixed budget after each, captures the screen and
 -- hashes the guest DRAM per MiB. Every hit samples the machine event and state halfwords.
 --
@@ -126,11 +126,6 @@ captureValue capture =
     , "returns" .= [readSpec (registerBase r) n | (r, n) <- captureReturn capture]
     ]
 
-boundaryNamed :: String -> Maybe Boundary
-boundaryNamed wire = case [b | b <- [minBound .. maxBound], boundaryWire b == wire] of
-  [b] -> Just b
-  _ -> Nothing
-
 mergedSpans :: [Span] -> [Span]
 mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
   where
@@ -174,13 +169,13 @@ parseInputs :: [String] -> IO Inputs
 parseInputs arguments = do
   pairs <- collect arguments
   let values = M.fromList pairs
-      names = ["boundary", "role", "update", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
-  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --boundary --role --update --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
+      names = ["machines", "role", "update", "run", "boot-rom", "adjustment-nand", "bridge", "output"]
+  need (length pairs == M.size values && M.keys (foldr M.delete values ["card", "route"]) == sort names) "observe requires each of --machines --role --update --run --boot-rom --adjustment-nand --bridge --output once, and at most one --card and --route"
   role <- case values M.! "role" of
     "stock" -> pure Stock
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
-  boundary <- maybe (ioError (userError "--boundary must be machine0 or native")) pure (boundaryNamed (values M.! "boundary"))
+  boundary <- maybe (ioError (userError "--machines must name distinct owned machines, comma-separated")) pure (boundaryParse (values M.! "machines"))
   keys <- case M.lookup "route" values of
     Nothing -> pure playbackRoute
     Just text -> mapM crawlKey (splitOn text)
@@ -411,7 +406,7 @@ readBody boundary path = do
   pure spans
 
 receiptBoundary :: Value -> IO Boundary
-receiptBoundary receipt = maybe (ioError (userError "an observation names no boundary")) pure (textOf (field "boundary" receipt) >>= boundaryNamed)
+receiptBoundary receipt = maybe (ioError (userError "an observation names no machines")) pure (textOf (field "boundary" receipt) >>= boundaryParse)
 
 compareMain :: FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 compareMain stockDir ownedDir symbols output = do

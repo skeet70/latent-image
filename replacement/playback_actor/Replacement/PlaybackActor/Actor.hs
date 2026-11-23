@@ -10,13 +10,16 @@ module Replacement.PlaybackActor.Actor
   , dispatcher
   , machineEvents
   , machineStates
-  , Boundary (..)
+  , OwnedMachine (..)
+  , Boundary
+  , boundaryParse
   , boundaryWire
   , boundaryRetired
   , boundaryServices
   , boundaryWrites
   ) where
 
+import Data.List (intercalate, nub, nubBy, sort)
 import qualified Data.Text as T
 import Data.Word (Word32)
 
@@ -52,32 +55,68 @@ selectionState = Span 0x014ea9bc 0x014eaaf4
 transferState = Span 0x014eaed8 0x014eb5d0
 stepState = Span 0x014eb5d0 0x014eb5d8
 
--- | The machine set an observation watches: machine 0, or the native image's machines 0, 7, 30
--- and 61.
-data Boundary = Machine0 | Native
-  deriving (Eq, Show, Enum, Bounded)
+-- | A playback machine with an owned implementation.
+data OwnedMachine = Machine0 | Machine7 | Machine30 | Machine61
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+machineNumber :: OwnedMachine -> Int
+machineNumber m = case m of
+  Machine0 -> 0
+  Machine7 -> 7
+  Machine30 -> 30
+  Machine61 -> 61
+
+machineExtent :: OwnedMachine -> Span
+machineExtent m = case m of
+  Machine0 -> Span 0x011e8ce4 0x011ea434
+  Machine7 -> Span 0x011eb824 0x011ec980
+  Machine30 -> Span 0x011f31bc 0x011f4810
+  Machine61 -> Span 0x011fe4d0 0x011ff0dc
+
+machineServices :: OwnedMachine -> [Service]
+machineServices m = case m of
+  Machine0 -> machine0Services
+  Machine7 -> machine7And30Services
+  Machine30 -> machine7And30Services
+  Machine61 -> machine61Services
+
+-- | State a machine writes beyond the machine and mode halfwords every boundary watches.
+machineWrites :: OwnedMachine -> [Span]
+machineWrites m = case m of
+  Machine0 -> []
+  Machine7 -> [requestState, stepState]
+  Machine30 -> [requestState, transferState]
+  Machine61 -> [selectionState]
+
+-- | The machines an observation treats as owned: their action extents are retired, and their
+-- services and state are watched.
+newtype Boundary = Boundary [OwnedMachine]
+  deriving (Eq, Show)
+
+-- | Comma-separated machine numbers, each owned and named once.
+boundaryParse :: String -> Maybe Boundary
+boundaryParse wire = do
+  machines <- mapM named (splitOn wire)
+  if null machines || nub machines /= machines then Nothing else Just (Boundary (sort machines))
+  where
+    named text = case [m | m <- [minBound .. maxBound], show (machineNumber m) == text] of
+      [m] -> Just m
+      _ -> Nothing
+    splitOn text = case break (== ',') text of
+      (part, ',' : rest) -> part : splitOn rest
+      (part, _) -> [part]
 
 boundaryWire :: Boundary -> String
-boundaryWire Machine0 = "machine0"
-boundaryWire Native = "native"
-
-machine0Extent, machine7Extent, machine30Extent, machine61Extent :: Span
-machine0Extent = Span 0x011e8ce4 0x011ea434
-machine7Extent = Span 0x011eb824 0x011ec980
-machine30Extent = Span 0x011f31bc 0x011f4810
-machine61Extent = Span 0x011fe4d0 0x011ff0dc
+boundaryWire (Boundary machines) = intercalate "," (map (show . machineNumber) machines)
 
 boundaryRetired :: Boundary -> [Span]
-boundaryRetired Machine0 = [machine0Extent]
-boundaryRetired Native = [machine0Extent, machine7Extent, machine30Extent, machine61Extent]
+boundaryRetired (Boundary machines) = map machineExtent machines
 
 boundaryServices :: Boundary -> [Service]
-boundaryServices Machine0 = machine0Services
-boundaryServices Native = machine0Services ++ machine7And30Services ++ machine61Services
+boundaryServices (Boundary machines) = nubBy (\a b -> serviceAddress a == serviceAddress b) (concatMap machineServices machines)
 
 boundaryWrites :: Boundary -> [Span]
-boundaryWrites Machine0 = [machineEvents, machineStates, modeState]
-boundaryWrites Native = [machineEvents, machineStates, modeState, requestState, selectionState, transferState, stepState]
+boundaryWrites (Boundary machines) = [machineEvents, machineStates, modeState] ++ nub (concatMap machineWrites machines)
 
 none :: Capture
 none = Capture [] []
