@@ -53,6 +53,24 @@
     {"image": "plain", "site": "0x01217a70", "word": "0x011d0100", "reason": "overlay-47 halfword table [0x0121797c,0x01217b50)"},
     {"image": "plain", "site": "0x01217f84", "word": "0x011d0100", "reason": "overlay-47 halfword table [0x01217cd8,0x01217f98)"},
     {"image": "plain", "site": "0x01218a54", "word": "0x011d0100", "reason": "overlay-47 halfword table [0x012188ac,0x01218ab4)"},
-    {"image": "plain", "site": "0x012195c4", "word": "0x011d010c", "reason": "overlay-47 halfword table [0x0121955c,0x01219890)"}
+    {"image": "plain", "site": "0x012195c4", "word": "0x011d010c", "reason": "overlay-47 halfword table [0x0121955c,0x01219890)"},
+    {"image": "plain", "site": "0x011f068c", "word": "0xeb00f7d2", "reason": "overlay-47 code: an A32 bl inside function 0x011f063c, read as a Thumb BLX"},
+    {"image": "image4", "site": "0x007d5010", "word": "0x011d006c", "reason": "image4 data outside every function range: signed halfword table (0xff17ff23, 0x0034009e)"},
+    {"image": "image4", "site": "0x008191e4", "word": "0x011d011c", "reason": "image4 data outside every function range: halfword table (0x01030116, 0x011f011e)"},
+    {"image": "image5", "site": "0x00d5f3a4", "word": "0xbb11bb0f", "reason": "image5 data outside every function range: ascending halfword run 0xbaff..0xbb21"},
+    {"image": "image5", "site": "0x00e1c610", "word": "0xebfef3b1", "reason": "image5 code: an A32 bl inside function 0x00e1c11c, read as a Thumb BLX"},
+    {"image": "image5", "site": "0x00e3e0d0", "word": "0x011cf61c", "reason": "image5 data outside every function range: halfword table (0x0106011c, 0xfd20011f)"},
+    {"image": "image5", "site": "0x00e3f5f4", "word": "0x011d011c", "reason": "image5 data outside every function range: halfword table (0x01070107 run)"},
+    {"image": "image5", "site": "0x00e403fc", "word": "0x011d011c", "reason": "image5 data outside every function range: ascending halfword run 0x0111..0x0125"},
+    {"image": "image5", "site": "0x00e7db90", "word": "0xebe2f352", "reason": "image5 code: an A32 bl inside function 0x00e7d6f0, read as a Thumb BLX"},
+    {"image": "image5", "site": "0x00f11698", "word": "0x011d011c", "reason": "image5 data outside every function range: halfword table (0x0119011a, 0x011f011e)"},
+    {"image": "image5", "site": "0x00f11ee4", "word": "0x011d0104", "reason": "image5 data outside every function range: halfword table (0x01040104 run)"},
+    {"image": "image5", "site": "0x00f11f10", "word": "0x011d0104", "reason": "image5 data outside every function range: halfword table (0x01040104 run)"},
+    {"image": "image5", "site": "0x00f11fec", "word": "0x011d0104", "reason": "image5 data outside every function range: halfword table (0x01040104 run)"},
+    {"image": "image5", "site": "0x010928d4", "word": "0xe8f0f12f", "reason": "image5 data outside every function range: high-entropy run"},
+    {"image": "image5", "site": "0x010a6164", "word": "0x0b04d3e8", "reason": "image5 data outside every function range: high-entropy run"},
+    {"image": "image5", "site": "0x010ab750", "word": "0x011d0000", "reason": "image5 data outside every function range: ascending halfword ramp 0x023b..0x0a03"},
+    {"image": "image3", "site": "0x003f8334", "word": "0x011db100", "reason": "image3 font window: ascending word table 0x011bb900..0x0121df00"},
+    {"image": "image3", "site": "0x0041e0a4", "word": "0x9b36902b", "reason": "image3 font window: glyph bytes"}
   ]
 }

@@ -90,6 +90,7 @@ main = do
         , (0xbf2014, begin + 4)
         , (0xbf2018, begin + 1)
         , (0xbf2020, 0xe3050604), (0xbf2024, 0xe340011d)
+        , (0xbf2030, 0xfa000000 + (((begin + 8 - 0xbf2030 - 8) `shiftR` 2) .&. 0xffffff))
         , (0x01098488, 0x1a04f515)
         , (0x0109848c, 0x1a04f515)
         ]
@@ -102,6 +103,7 @@ main = do
   check "a pointer word into the extent refuses" (verdictAt "image5" 0xbf2014 == [Refused])
   check "a word whose value is not word-aligned is admitted" (verdictAt "image5" 0xbf2018 == [NotWordAddress])
   check "a MOVW/MOVT pair into the extent refuses" (Refused `elem` verdictAt "image5" 0xbf2024)
+  check "an A32 BLX into the extent arrives in Thumb state and is admitted" (ThumbStateEntry `elem` verdictAt "image5" 0xbf2030)
   check "a reviewed data word is admitted" (case verdictAt "image5" 0x01098488 of [Reviewed _] -> True; _ -> False)
   check "the reviewed word at another site refuses" (verdictAt "image5" 0x0109848c == [Refused])
   check "a plain-image reference from outside the extents refuses" (verdictAt "plain" 0x011d5000 == [Refused])

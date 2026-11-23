@@ -99,6 +99,7 @@ data Verdict
   = EntryBranch
   | EntryPointer
   | NotWordAddress
+  | ThumbStateEntry
   | HalfwordSite
   | Reviewed String
   | Refused
@@ -110,8 +111,9 @@ data Finding = Finding {findingUnit :: String, findingReference :: Reference, fi
 
 -- | Every reference from the scanned images into the units' extents. An A32 branch or an aligned
 -- pointer word to an entry is admitted. The extents hold A32 code and word literals, so a pointer
--- word whose value is not word-aligned names neither, and a word at a halfword-aligned site is
--- read by no A32 or Thumb literal load. A reviewed site holding its reviewed word is admitted;
+-- word whose value is not word-aligned names neither, a word at a halfword-aligned site is read by
+-- no A32 or Thumb literal load, and a branch that arrives in Thumb state (A32 BLX, Thumb BL and
+-- B.W) would execute A32 code as Thumb. A reviewed site holding its reviewed word is admitted;
 -- anything else is refused.
 census :: [Unit] -> [(Scanned, Image)] -> [Finding]
 census units images = concatMap scan images
@@ -129,6 +131,7 @@ census units images = concatMap scan images
       | kind `elem` [ArmB, ArmBL] && target `elem` entries = EntryBranch
       | kind == PointerWord && word `elem` entries = EntryPointer
       | kind == PointerWord && word .&. 3 /= 0 = NotWordAddress
+      | kind `elem` [ArmBLX, ThumbBL, ThumbBW, ThumbConditionalBW] = ThumbStateEntry
       | kind == PointerHalfword = HalfwordSite
       | Just r <- find (\r -> reviewedImage r == scanned && reviewedSite r == site && reviewedWord r == word) reviewed = Reviewed (reviewedReason r)
       | otherwise = Refused
@@ -144,6 +147,7 @@ verdictKey verdict = case verdict of
   EntryBranch -> "entry-branch"
   EntryPointer -> "entry-pointer"
   NotWordAddress -> "not-word-aligned"
+  ThumbStateEntry -> "thumb-state-entry"
   HalfwordSite -> "halfword-aligned-site"
   Reviewed _ -> "reviewed-data"
   Refused -> "refused"
