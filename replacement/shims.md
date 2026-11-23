@@ -25,6 +25,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/develop:develop-candidate` | Production | callback_core, capture, develop, kernel, media_permit, property_service, record_store, save, settings_storage | 27 |
 | `//replacement/display_scanout:display-scanout` | Production | display_scanout | 4 |
 | `//replacement/display_scanout:display-scanout-panel` | Production | display_scanout | 4 |
+| `//replacement/exif_writer:exif-writer-image` | Production | exif_writer | 3 |
 | `//replacement/first_stage:first-stage-fixed-image` | Production | first_stage | 7 |
 | `//replacement/first_stage:first-stage-image` | Production | first_stage | 7 |
 | `//replacement/fixed_image:fixed-bank-image` | Production | display_scanout, file_service | 10 |
@@ -62,6 +63,7 @@ A removal requires established caller closure, direct owned API use and a qualif
 | `//replacement/rtos_platform:platform-b` | Production | rtos_cyclic, rtos_data_queue, rtos_fixed_pool, rtos_global_lock, rtos_objects, rtos_own_first, rtos_platform, rtos_scheduler, rtos_semaphore, rtos_task_records, rtos_timer | 31 |
 | `//replacement/saclac:saclac-image` | Production | saclac, saclac_interface | 5 |
 | `//replacement/save:save-owned` | Qualification | save | 6 |
+| `//replacement/save_file_machine:save-file-machine-image` | Production | save_file_machine | 3 |
 | `//replacement/secondary_stage:secondary-stage-image` | Production | secondary_stage | 3 |
 | `//replacement/settings_storage:custom-settings-image` | Production | kernel, record_store, settings_storage | 14 |
 | `//replacement/settings_storage:custom-settings-published-image` | Production | kernel, record_store, settings_storage | 13 |
@@ -365,6 +367,18 @@ Classification: `module`. [Declarations](embassy_trial/shims.json).
 
 | Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+
+## exif_writer
+
+The overlay-46 Exif writer carrier ELF: entry veneers at the stock entries and table callbacks, and import stubs for the leaf string and memory services.
+
+Classification: `linked`. [Declarations](exif_writer/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `exif_entry_*` in `entry.S` and `exif-writer.ld` | veneer or carrier at a stock address | stock callers of the Exif header and finish entries, the RAF, MPF and parser code that calls the shared helpers, and the callback words of the retained tag tables | no | every caller and tag table enters the owned writer directly | required | unestablished | `//replacement/exif_writer:exif-writer-image` (Publication, 33 symbols, 0 definite references) |
+| Owned bodies behind the entry veneers in `exif_writer/src/stock.rs` | stock-ABI export | the veneers at the 33 stock entries and the stock argument and return conventions of their callers and of the tag-table callback calls | partly | every caller uses a typed owned Exif writer API | required | unestablished | `//replacement/exif_writer:exif-writer-image` (Export, 33 symbols, 0 definite references) |
+| `imports.ld` import stubs | trampoline into retained stock | the retained loader-A byte copy and the image-4 memcpy, strcpy, strncpy, strlen and memset | no | owned memory and string primitives replace them | required | unestablished | `//replacement/exif_writer:exif-writer-image` (Import, 6 symbols, 0 definite references) |
 
 ## file_service
 
@@ -994,6 +1008,18 @@ Classification: `linked`. [Declarations](save/shims.json).
 | `save.ld`, `stage.ld`, `storage.ld`, `wait.ld` placements and the `xm1_save_*_probe` entries | veneer or carrier at a stock address | stock save callers and the qualification probes | no | owned code is called directly | required | unestablished | `//replacement/save:save-owned` (Publication, 1 symbols, 0 definite references) |
 | Additional linked unmangled ABI entry points | stock-ABI export | the publication or qualification consumers of the current linked image | partly | all consumers use owned typed interfaces and both sides have a qualified comparison in the same image | required | unestablished | `//replacement/save:save-owned` (Export, 2 symbols, 0 definite references) |
 | Definite retained references in the current linked instruction and relocation metadata | retained stock seam in assembly | retained code and guest address contracts reached by the composed image | partly | all declared retained targets have owned typed replacements and both sides are compared in the same image | required | unestablished | `//replacement/save:save-owned` (RetainedEntry, 0 symbols, 15 definite references) |
+
+## save_file_machine
+
+The overlay-46 save file machine carrier ELF: entry veneers at the stock entries and the file-service callbacks, the dispatcher tables at their stock addresses, and import stubs for the registry, file-service, naming and string services.
+
+Classification: `linked`. [Declarations](save_file_machine/shims.json).
+
+| Shim | Kind | Other side | Owned now | Removal condition | State | Removal predicate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `sfm_entry_*` in `entry.S` and `save-file-machine.ld` | veneer or carrier at a stock address | image-5 and plain-image callers of the start, append, cancel, scatter-append, output-mode and name entries, and the file service calling the five result callbacks | no | every caller and the file service enter the owned machine directly | required | unestablished | `//replacement/save_file_machine:save-file-machine-image` (Publication, 12 symbols, 0 definite references) |
+| Owned bodies behind the entry veneers in `save_file_machine/src/stock.rs` | stock-ABI export | the veneers at the 12 stock addresses and the stock argument and return conventions of their callers | partly | every caller uses a typed owned save API | required | unestablished | `//replacement/save_file_machine:save-file-machine-image` (Export, 12 symbols, 0 definite references) |
+| `imports.ld` import stubs | trampoline into retained stock | the retained image-4 message registry, file-service posters, event report, DCF name, prefix mode, property byte, strcpy, strcat and memcpy | no | owned registry, file-service, numbering and string APIs replace them | required | unestablished | `//replacement/save_file_machine:save-file-machine-image` (Import, 16 symbols, 0 definite references) |
 
 ## secondary_stage
 

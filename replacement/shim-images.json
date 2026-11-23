@@ -704,6 +704,28 @@
       "expected_sha256": "c1eb5279f4368705c7ece35fd28709ea6e292eacea3bcab55aec3ec99d35ea45"
     },
     {
+      "id": "//replacement/exif_writer:exif-writer-image",
+      "elf": "replacement/exif_writer/exif-writer-image.elf",
+      "units": [
+        "exif_writer"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/exif_writer/exif-writer.ld",
+        "replacement/exif_writer/imports.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "exif_copy_bytes",
+        "exif_copy_memory",
+        "exif_copy_string",
+        "exif_copy_string_bounded",
+        "exif_fill",
+        "exif_string_length"
+      ],
+      "expected_sha256": "c6188a28a895b11f9387fa8d7f0c8044d116beb1abdb915549ba08269d1ca0d5"
+    },
+    {
       "id": "//replacement/first_stage:first-stage-fixed-image",
       "elf": "replacement/first_stage/first-stage-fixed-image.elf",
       "units": [
@@ -2016,6 +2038,38 @@
       "required_exports": [],
       "allowed_imports": [],
       "expected_sha256": "d77874c0529d1558f6a18d0d80dd69a792a6fc243c00093fb449031b2ca92a4d"
+    },
+    {
+      "id": "//replacement/save_file_machine:save-file-machine-image",
+      "elf": "replacement/save_file_machine/save-file-machine-image.elf",
+      "units": [
+        "save_file_machine"
+      ],
+      "classification": "production",
+      "contracts": [
+        "replacement/save_file_machine/save-file-machine.ld",
+        "replacement/save_file_machine/imports.ld"
+      ],
+      "required_exports": [],
+      "allowed_imports": [
+        "sfm_append_string",
+        "sfm_close",
+        "sfm_copy_memory",
+        "sfm_copy_string",
+        "sfm_delete",
+        "sfm_open",
+        "sfm_post",
+        "sfm_prepare_name",
+        "sfm_property",
+        "sfm_register",
+        "sfm_release",
+        "sfm_report",
+        "sfm_seek",
+        "sfm_set_prefix_mode",
+        "sfm_unregister",
+        "sfm_write"
+      ],
+      "expected_sha256": "3ff9eaa714608d9a76c15a8d0c59a5548fcc680a52be76d94910798395ba5a1b"
     },
     {
       "id": "//replacement/secondary_stage:secondary-stage-image",

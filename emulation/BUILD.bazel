@@ -3231,6 +3231,7 @@ haskell_library(
         "//replacement/dcf_numbering:__pkg__",
         "//replacement/file_service:__pkg__",
         "//replacement/playback_actor:__pkg__",
+        "//replacement/plain_overlay:__pkg__",
         "//transport:__pkg__",
     ],
     deps = [
