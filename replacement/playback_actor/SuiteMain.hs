@@ -9,6 +9,8 @@
 module Main (main) where
 
 import qualified ArmElf as E
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless)
 import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString as B
@@ -63,7 +65,7 @@ main = do
       controls <- forM (map splitControl controlArguments) $ \(name, path) -> do
         (elf, digest) <- loadElf path
         observed <- runRole runner output code image (Owned name elf) cases
-        let (detected, unreturned) = controlDetections observed
+        (detected, unreturned) <- evaluate (force (controlDetections observed))
         pure (name, digest, detected, unreturned)
       let different = [() | (_, _, _, differences) <- compared, not (null differences)]
           undetected = [name | (name, _, detected, _) <- controls, null detected]

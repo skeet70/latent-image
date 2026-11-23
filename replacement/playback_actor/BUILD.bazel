@@ -121,6 +121,7 @@ haskell_binary(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:deepseq",
         "//host:directory",
         "//host:filepath",
         "//replacement/file_service:native-lib",
