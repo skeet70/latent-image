@@ -114,12 +114,13 @@ data Finding = Finding {findingUnit :: String, findingReference :: Reference, fi
 -- word whose value is not word-aligned names neither, a word at a halfword-aligned site is read by
 -- no A32 or Thumb literal load, and a branch that arrives in Thumb state (A32 BLX, Thumb BL and
 -- B.W) would execute A32 code as Thumb. A reviewed site holding its reviewed word is admitted;
--- anything else is refused.
+-- anything else is refused. Plain-image sites the units stage, in their extents and rows, are
+-- not reported.
 census :: [Unit] -> [(Scanned, Image)] -> [Finding]
 census units images = concatMap scan images
   where
     targets = map Address (concat [[s .. e - 1] | u <- units, Span s e <- unitExtents u])
-    staged a = any (\u -> any (`inside` a) (unitExtents u)) units
+    staged a = any (\u -> any (`inside` a) (unitSpans u)) units
     owner a = find (\u -> any (`inside` a) (unitExtents u)) units
     scan (scanned, image) =
       [ Finding (maybe "" unitName (owner target)) reference word (verdict scanned (owner target) reference word)

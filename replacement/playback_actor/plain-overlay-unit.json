@@ -371,5 +371,22 @@
   ],
   "entries": [],
   "state": [],
-  "reviewed_data": []
+  "reviewed_data": [
+    {"image": "image4", "site": "0x007bdae0", "word": "0x011f9b00", "reason": "image4 data outside every function range: (value, register address) pair table, this word is the value paired with 0xf0103d28"},
+    {"image": "image4", "site": "0x007e8ecc", "word": "0x1a280eb5", "reason": "image4 data outside every function range: high-entropy run"},
+    {"image": "image4", "site": "0x007ea934", "word": "0x0a2807cf", "reason": "image4 data outside every function range: small signed-byte run"},
+    {"image": "image5", "site": "0x00e19eac", "word": "0xebfef3e7", "reason": "image5 code: an A32 bl inside function 0x00e19d30, read as a Thumb BLX"},
+    {"image": "image5", "site": "0x00e1c548", "word": "0xebfef3e3", "reason": "image5 code: an A32 bl inside function 0x00e1c11c, read as a Thumb BLX"},
+    {"image": "image5", "site": "0x00e90d00", "word": "0xebc6f359", "reason": "image5 code: an A32 bl inside function 0x00e90628, read as a Thumb BLX"},
+    {"image": "image5", "site": "0x00fe36ac", "word": "0xebdaf205", "reason": "image5 code: an A32 bl inside function 0x00fe1a60, read as a Thumb BLX"},
+    {"image": "image5", "site": "0x010a18bc", "word": "0xdb051d0d", "reason": "image5 data outside every function range: small signed-byte run"},
+    {"image": "image5", "site": "0x010a6418", "word": "0x0a050cdd", "reason": "image5 data outside every function range: small signed-byte run"},
+    {"image": "plain", "site": "0x011560f0", "word": "0xebfef09d", "reason": "overlay-44 code: an A32 bl inside function 0x0115609c, read as a Thumb BLX"},
+    {"image": "plain", "site": "0x011e62c4", "word": "0xebd4f018", "reason": "overlay-47 code: an A32 bl inside function 0x011e5ee4, read as a Thumb BLX"},
+    {"image": "plain", "site": "0x012bb174", "word": "0x3afce105", "reason": "overlay-47 data outside every function range: high-entropy run"},
+    {"image": "plain", "site": "0x01367db4", "word": "0xebfef68c", "reason": "overlay-47 code: an A32 bl inside function 0x013676d0, read as a Thumb BLX"},
+    {"image": "image3", "site": "0x0041cf24", "word": "0x5b375b2f", "reason": "image3 font window: glyph bytes"},
+    {"image": "image3", "site": "0x004240cc", "word": "0x1b371e33", "reason": "image3 font window: glyph bytes"},
+    {"image": "image3", "site": "0x00434088", "word": "0x2a373492", "reason": "image3 font window: glyph bytes"}
+  ]
 }

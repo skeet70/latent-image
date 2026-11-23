@@ -102,8 +102,11 @@ main = do
         , (0x01098488, 0x1a04f515)
         , (0x0109848c, 0x1a04f515)
         ]
-      plainImage = placed plainBase 0x34a5e0 [(0x011d5000, bl 0x011d5000 (begin + 8)), (0x011d5200, bl 0x011d5200 (begin + 8))]
-      findings = census [saveUnit, exifUnit] [(Image5, Image "image5" (Address base5) five), (Plain, Image "plain" (Address plainBase) plainImage)]
+      plainImage =
+        placed plainBase 0x34a5e0
+          [(0x011d5000, bl 0x011d5000 (begin + 8)), (0x011d5200, bl 0x011d5200 (begin + 8)), (0x011d6000, begin + 4), (0x011d6004, begin + 4)]
+      rowed = saveUnit {unitRows = [Row 0x011d6000 (begin + 4)]}
+      findings = census [rowed, exifUnit] [(Image5, Image "image5" (Address base5) five), (Plain, Image "plain" (Address plainBase) plainImage)]
       verdictAt name site = [findingVerdict f | f <- findings, let Reference _ _ image (Address s) = findingReference f, image == name, s == site]
   check "a branch to an entry is admitted" (verdictAt "image5" 0xbf2000 == [EntryBranch])
   check "a branch into an entry's body refuses" (verdictAt "image5" 0xbf2004 == [Refused])
@@ -116,6 +119,8 @@ main = do
   check "the reviewed word at another site refuses" (verdictAt "image5" 0x0109848c == [Refused])
   check "a plain-image reference from outside the extents refuses" (verdictAt "plain" 0x011d5000 == [Refused])
   check "a plain-image reference from inside a staged extent is not reported" (null (verdictAt "plain" 0x011d5200))
+  check "a stock word in a row the unit republishes is not reported" (null (verdictAt "plain" 0x011d6000))
+  check "the same word beside the row refuses" (verdictAt "plain" 0x011d6004 == [Refused])
   where
     refusalOf = either Just (const Nothing)
     isLeft = either (const True) (const False)
