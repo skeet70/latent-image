@@ -192,6 +192,18 @@ Scope: Host-only X-M1 1.50. Native Cortex-R5F runs that register, post and dispa
 
 <!-- /evidence-record E-SAVE-FILE-MACHINE-NATIVE-150 -->
 
+## Plain-image overlay staging
+
+[`plain_overlay/`](plain_overlay/) stages owned units into the overlays of the plain image (44 at `0x01100000`, 46 at `0x011c0000`, 47 at `0x011e0000`) and carries the result into a DAT. Each unit declares itself in a `plain-overlay-unit.json` beside its crate: its overlay, the stock extents its ELF replaces, the stock table words outside them it republishes (`rows`, each with its stock value), its entries, the RAM it owns (`state`) and the census sites reviewed as data. `save_file_machine/` and `exif_writer/` declare the two overlay-46 units.
+
+`plain-overlay-stage REBUILD DAT IMAGE4 IMAGE5 PLAIN LOADER_A LOADER_B IMAGE2 OUT_DIR (UNIT_JSON ELF)...` writes each unit's ELF bytes over its extents (the trap word `0xe7f000f0` where the ELF defines none) and its row words, runs `rebuild-update replace-plain` and checks that the candidate DAT carries the staged plain image. It refuses an allocated ELF byte outside the unit's extents and rows, two units sharing a byte, an entry that is not an A32 `b` into the unit's extents, a row the ELF does not define and a row whose prior word is not its declared stock value. Its census scans image 4, image 5, the plain image, loaders A and B, image 2 and image 3 for A32 and Thumb branches, pointer words, MOVW/MOVT pairs and ADR into the extents and refuses any it does not admit: an A32 branch or aligned word to an entry, a word whose value is not word-aligned, a word at a halfword-aligned site, a branch that arrives in Thumb state, or a reviewed site holding its reviewed word. `//replacement/plain_overlay:stage-tests` and `:observe-compare-tests` cover the refusals, the census verdicts and the comparison.
+
+`plain-overlay-observe observe --role stock|owned --update DAT --plain PLAIN --unit UNIT_JSON... ...` fresh-boots the RAM-push bridge with trace sites at every unit entry, a fetch watch over the extents and a write watch over the units' state. After attach and each route key it reads each unit's overlay back against PLAIN and digests guest DRAM per MiB with the extents and rows zeroed. `compare STOCK_DIR OTHER_DIR OUTPUT [OWNED_ELF...]` requires equal entry hits and returns, watched writes, residency, DRAM digests, screens and card state, and no owned fetch in the extents outside the ELFs' functions.
+
+<!-- evidence-record E-OVERLAY46-STAGED-PAIR-150 -->
+
+<!-- /evidence-record E-OVERLAY46-STAGED-PAIR-150 -->
+
 ## Power lifecycle
 
 [`power_lifecycle/`](power_lifecycle/) is two crates. `xm1_power_services` (root `src/services.rs`) is the services leaf: OSAL and delay primitives, the timer services, queue construction, resource routes, the serial driver, area 2, standby, the shutdown path with its task 6, 7 and 8 executors, the settings and storage shutdown actors, a typed callback registry and the dispatch of stock's installed-callback words through it. `:services-host-tests` runs its host tests and `:services-arm` builds the ARM rlib.

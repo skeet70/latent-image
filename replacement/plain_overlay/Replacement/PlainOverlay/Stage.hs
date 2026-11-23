@@ -62,7 +62,7 @@ stagePlain plain units = do
         case find (not . covered) [E.sectionAddress s .. E.sectionAddress s + E.sectionSize s - 1] of
           Just a -> Left (OutsideUnit name a)
           Nothing -> pure ()
-      forM_ (unitEntries unit) $ \(Entry entry address) ->
+      forM_ (unitEntries unit) $ \(Entry entry address _ _ _) ->
         case E.wordAt elf address of
           Just w | w .&. 0xff000000 == 0xea000000, any (`inside` branchTarget address w) (unitExtents unit) -> pure ()
           _ -> Left (EntryNotBranch name entry)

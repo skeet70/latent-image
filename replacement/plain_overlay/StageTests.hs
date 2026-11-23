@@ -73,13 +73,14 @@ main = do
   check "two units over one byte refuse"
     (refusalOf (stagePlain plain [(saveUnit, saveElf), (saveUnit {unitName = "again"}, saveElf)]) == Just (UnitsOverlap "save_file_machine" "again"))
   check "an entry that is not a branch into the unit refuses"
-    (refusalOf (stagePlain plain [(saveUnit {unitEntries = Entry "tables" tables : unitEntries saveUnit}, saveElf)]) == Just (EntryNotBranch "save_file_machine" "tables"))
+    (refusalOf (stagePlain plain [(saveUnit {unitEntries = Entry "tables" tables 0 False [] : unitEntries saveUnit}, saveElf)]) == Just (EntryNotBranch "save_file_machine" "tables"))
   check "a plain image too short for the overlay refuses"
     (refusalOf (stagePlain (B.take 0xc0000 plain) [(saveUnit, saveElf)]) == Just PlainTooShort)
   check "the manifests round-trip" (reparse saveUnit == Right saveUnit && reparse exifUnit == Right exifUnit)
   check "an extent outside its overlay refuses" (isLeft (reparse saveUnit {unitExtents = [Span 0x011dc000 0x011dd000]}))
   check "overlapping extents refuse" (isLeft (reparse saveUnit {unitExtents = [Span 0x011d5090 0x011d5df8, Span 0x011d5d00 0x011d5e00]}))
-  check "an entry outside the extents refuses" (isLeft (reparse saveUnit {unitEntries = [Entry "outside" 0x011d5df8]}))
+  check "an entry outside the extents refuses" (isLeft (reparse saveUnit {unitEntries = [Entry "outside" 0x011d5df8 0 False []]}))
+  check "an output through a register the entry does not read refuses" (isLeft (reparse saveUnit {unitEntries = [Entry "begin" 0x011d5600 1 False [(1, 4)]]}))
   check "a row inside an extent refuses" (isLeft (reparse saveUnit {unitRows = [Row tables 0]}))
   let base5 = 0xbf1a00
       begin = 0x011d5600

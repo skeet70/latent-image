@@ -24,13 +24,17 @@ data Role = Role {roleHits :: [Value], roleFetches :: [(T.Text, Int)], roleResid
 stockRole :: Role
 stockRole = Role [] [] True "c0"
 
-entryHit :: Value
-entryHit =
+-- | An entry of `begin` (three register arguments) from image 5 with R1 and R3.
+entryHit :: T.Text -> T.Text -> Value
+entryHit r1 r3 =
   object
     [ "site" .= ("entry:save_file_machine:begin" :: T.Text), "address" .= ("0x11d5600" :: T.Text), "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int)
     , "task" .= object ["kernel" .= ("a" :: T.Text), "task_id" .= (3 :: Int), "kind" .= ("available" :: T.Text)]
-    , "registers" .= object ["r0" .= ("0x1" :: T.Text), "r1" .= ("0x14e0000" :: T.Text), "r2" .= ("0xe4e5dc" :: T.Text), "r3" .= ("0x0" :: T.Text)]
+    , "registers" .= object ["r0" .= ("0x1" :: T.Text), "r1" .= r1, "r2" .= ("0xe4e5dc" :: T.Text), "r3" .= r3]
     ]
+
+reachedRole :: Role
+reachedRole = stockRole {roleHits = [entryHit "0x14e0000" "0x0"], roleFetches = [("0x11d5604", 3)]}
 
 writeRole :: FilePath -> Value -> T.Text -> Role -> IO ()
 writeRole directory unit name role = do
@@ -69,23 +73,29 @@ main = do
   let root = base </> "plain-overlay-observe-compare"
   createDirectory root
   writeRole (root </> "stock") unit "stock" stockRole
-  let cases =
-        [ ("unreached", "owned", stockRole, [elf], ExitSuccess, "equal")
-        , ("fetch-in-owned-function", "owned", stockRole {roleFetches = [("0x11d5600", 1)]}, [elf], ExitSuccess, "equal")
-        , ("fetch-outside-owned-functions", "owned", stockRole {roleFetches = [("0x11d5d44", 1)]}, [elf], ExitFailure 1, "different")
-        , ("entry-reached", "owned", stockRole {roleHits = [entryHit]}, [elf], ExitFailure 1, "different")
-        , ("not-resident", "owned", stockRole {roleResident = False}, [elf], ExitFailure 1, "different")
-        , ("memory-chunk", "owned", stockRole {roleChunk = "c1"}, [elf], ExitFailure 1, "different")
-        , ("stock-rerun", "stock", stockRole, [], ExitSuccess, "equal")
+  writeRole (root </> "stock-reached") unit "stock" reachedRole
+  let ownedReached = reachedRole {roleFetches = [("0x11d5600", 1)]}
+      cases =
+        [ ("unreached", "stock", "owned", stockRole, [elf], ExitSuccess, "equal")
+        , ("fetch-in-owned-function", "stock", "owned", stockRole {roleFetches = [("0x11d5600", 1)]}, [elf], ExitSuccess, "equal")
+        , ("fetch-outside-owned-functions", "stock", "owned", stockRole {roleFetches = [("0x11d5d44", 1)]}, [elf], ExitFailure 1, "different")
+        , ("entry-reached", "stock", "owned", stockRole {roleHits = [entryHit "0x14e0000" "0x0"]}, [elf], ExitFailure 1, "different")
+        , ("not-resident", "stock", "owned", stockRole {roleResident = False}, [elf], ExitFailure 1, "different")
+        , ("unreached-memory-chunk", "stock", "owned", stockRole {roleChunk = "c1"}, [elf], ExitFailure 1, "different")
+        , ("stock-rerun", "stock", "stock", stockRole, [], ExitSuccess, "equal")
+        , ("reached-equal", "stock-reached", "owned", ownedReached, [elf], ExitSuccess, "equal")
+        , ("reached-memory-chunk", "stock-reached", "owned", ownedReached {roleChunk = "c1"}, [elf], ExitSuccess, "equal")
+        , ("reached-unread-register", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0000" "0x5"]}, [elf], ExitSuccess, "equal")
+        , ("reached-argument", "stock-reached", "owned", ownedReached {roleHits = [entryHit "0x14e0004" "0x0"]}, [elf], ExitFailure 1, "different")
         ]
   failures <- fmap concat . sequence $
     [ do
         writeRole (root </> name) unit role observation
         let output = root </> (name ++ ".json")
-        (code, _, err) <- readProcessWithExitCode observe (["compare", root </> "stock", root </> name, output] ++ elves) ""
+        (code, _, err) <- readProcessWithExitCode observe (["compare", root </> reference, root </> name, output] ++ elves) ""
         verdict <- verdictOf output
         pure [name ++ ": exit " ++ show code ++ ", verdict " ++ show verdict ++ "\n" ++ err | code /= expectedCode || verdict /= String expected]
-    | (name, role, observation, elves, expectedCode, expected) <- cases
+    | (name, reference, role, observation, elves, expectedCode, expected) <- cases
     ]
   forM_ failures putStrLn
   unless (null failures) exitFailure

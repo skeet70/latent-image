@@ -1,24 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | plain-overlay-observe observe --role stock|owned --update DAT --plain PLAIN --unit UNIT_JSON...
---     --run JSON --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE
---     --output NEW_DIR
+--     --run JSON --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...]
+--     [--dump-chunk 0xADDR...] --bridge BRIDGE --output NEW_DIR
 --   plain-overlay-observe compare STOCK_DIR OTHER_DIR OUTPUT_JSON [OWNED_ELF...]
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at every unit entry, a fetch watch over
 -- the units' extents and a write watch over the RAM they own. PLAIN is the plain image the DAT
 -- carries. After attach and after each route key it reads each units' overlay back and compares
--- it with PLAIN, and digests guest DRAM per MiB with the units' extents and rows zeroed.
+-- it with PLAIN, and digests guest DRAM per MiB with the units' extents and rows zeroed; each
+-- --dump-chunk MiB is also written whole.
 --
--- compare: the entry hits and returns, the watched writes, the overlay residency, the DRAM digests,
--- the screens and the card's accepted writes, dirty sectors and final command history must be
--- equal, and an owned observation must fetch nothing in the extents outside the functions its
--- OWNED_ELF files place there.
+-- compare: the entry hits and returns whose return address lies outside the extents (the declared
+-- register arguments, r0 of entries that return a value and the declared output buffers), the
+-- watched writes, the overlay residency, the screens and the card's accepted writes, dirty sectors
+-- and final command history must be equal, and an owned observation must fetch nothing in the
+-- extents outside the functions its OWNED_ELF files place there. The DRAM digests must be equal
+-- when neither observation fetches in the extents.
 module Main (main) where
 
 import qualified ArmElf as E
 import Control.Exception (SomeException, bracket, displayException, try)
-import Control.Monad (forM, forM_, replicateM, unless)
+import Control.Monad (forM, forM_, replicateM, unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
@@ -54,6 +57,7 @@ data Inputs = Inputs
   { inputRole :: Role
   , inputPaths :: M.Map String FilePath
   , inputUnits :: [FilePath]
+  , inputDumps :: [Word32]
   , inputRoute :: [CrawlKey]
   }
 
@@ -104,7 +108,7 @@ parseInputs :: [String] -> IO Inputs
 parseInputs arguments = do
   pairs <- collect arguments
   let units = [v | ("unit", v) <- pairs]
-      others = [(k, v) | (k, v) <- pairs, k /= "unit"]
+      others = [(k, v) | (k, v) <- pairs, k `notElem` ["unit", "dump-chunk"]]
       values = M.fromList others
       required = ["adjustment-nand", "boot-rom", "bridge", "output", "plain", "role", "run", "update"]
   need (length others == M.size values && M.keys (foldr M.delete values ["card", "route"]) == required && not (null units))
@@ -114,8 +118,10 @@ parseInputs arguments = do
     "owned" -> pure Owned
     _ -> ioError (userError "--role must be stock or owned")
   keys <- maybe (pure [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]) (mapM crawlKey . splitOn) (M.lookup "route" values)
-  pure (Inputs role (M.delete "role" (M.delete "route" values)) units keys)
+  dumps <- mapM (\v -> maybe (ioError (userError ("--dump-chunk takes a MiB-aligned 0x address: " ++ v))) pure (aligned =<< hexValue (String (T.pack v)))) [v | ("dump-chunk", v) <- pairs]
+  pure (Inputs role (M.delete "role" (M.delete "route" values)) units dumps keys)
   where
+    aligned a = if a `mod` fromIntegral memoryChunk == 0 && fromIntegral a < dramBytes then Just a else Nothing
     collect [] = pure []
     collect (('-' : '-' : key) : value : rest) = ((key, value) :) <$> collect rest
     collect _ = ioError (userError "options require --name value")
@@ -192,11 +198,13 @@ observe inputs directory record = do
       stateSpans = mergedSpans (concatMap unitState units)
       masked = mergedSpans (concatMap unitSpans units)
       overlays = nub (map unitOverlay units)
-      sites = [(entryAddress e, "entry:" ++ unitName u ++ ":" ++ entryName e) | u <- units, e <- unitEntries u]
+      sites = [(e, "entry:" ++ unitName u ++ ":" ++ entryName e) | u <- units, e <- unitEntries u]
+      capture e = object ["entry" .= ([] :: [Value]), "returns" .= [object ["base" .= object ["register" .= r], "count" .= n] | (r, n) <- entryOutputs e]]
       spec =
         object
           [ "schema" .= (1 :: Int)
-          , "sites" .= object [K.fromString (hexWord a) .= label | (a, label) <- sites]
+          , "sites" .= object [K.fromString (hexWord (entryAddress e)) .= label | (e, label) <- sites]
+          , "captures" .= object [K.fromString (hexWord (entryAddress e)) .= capture e | (e, _) <- sites]
           , "task" .= ("logical" :: T.Text)
           , "hit_limit" .= hitLimit
           , "write_ranges" .= map spanValue stateSpans
@@ -248,7 +256,9 @@ observe inputs directory record = do
           chunks <- forM [0 .. dramBytes `div` memoryChunk - 1] $ \chunk -> do
             let base = fromIntegral (chunk * memoryChunk) :: Word32
             pages <- forM [0 .. memoryChunk `div` memoryRead - 1] $ \page -> emulatorReadMemory emulator (base + fromIntegral (page * memoryRead)) memoryRead
-            let digest = sha256Hex (sha256 (mask base (B.concat pages)))
+            let whole = B.concat pages
+                digest = sha256Hex (sha256 (mask base whole))
+            when (base `elem` inputDumps inputs) (B.writeFile (directory </> ("chunk-" ++ name ++ "-" ++ hexWord base ++ ".bin")) whole)
             digest `seq` pure digest
           BL.writeFile (directory </> ("memory-" ++ name ++ ".json")) (A.encode (object ["chunk_bytes" .= memoryChunk, "masked" .= map spanValue masked, "chunks" .= chunks]) <> "\n")
           pure (sha256Hex (sha256 (BC.pack (concat chunks))))
@@ -308,14 +318,15 @@ event units hit = do
   let common = ["core" .= field "core" hit, "task" .= object ["kernel" .= field "kernel" task, "task_id" .= field "task_id" task, "kind" .= field "kind" task]]
       task = field "task" hit
       outside a = not (any (\u -> any (`inside` a) (unitExtents u)) units)
-      named = M.fromList [(entryAddress e, unitName u ++ ":" ++ entryName e) | u <- units, e <- unitEntries u]
+      named = M.fromList [(entryAddress e, (unitName u ++ ":" ++ entryName e, e)) | u <- units, e <- unitEntries u]
   case label of
-    _ | "entry:" `isPrefixOf` label, Just name <- M.lookup address named, Just lr <- hexValue (field "lr" hit) ->
-          Just (Event name "entry" (outside lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= [fmap hexWord (registerOf hit r) | r <- [0 .. 3]]] ++ common)))
+    _ | "entry:" `isPrefixOf` label, Just (name, e) <- M.lookup address named, Just lr <- hexValue (field "lr" hit) ->
+          Just (Event name "entry" (outside lr) (object (["kind" .= ("entry" :: T.Text), "name" .= name, "lr" .= hexWord lr, "arguments" .= [fmap hexWord (registerOf hit r) | r <- [0 .. entryArguments e - 1]]] ++ common)))
       | label == "call-return" -> do
           site <- hexValue (field "site" (field "observation" hit))
-          name <- M.lookup site named
-          Just (Event name "return" (outside address) (object (["kind" .= ("return" :: T.Text), "name" .= name, "return_address" .= hexWord address, "result" .= fmap hexWord (registerOf hit 0)] ++ common)))
+          (name, e) <- M.lookup site named
+          let outputs = [field "bytes" r | r <- arrayOf (field "reads" (field "observation" hit))]
+          Just (Event name "return" (outside address) (object (["kind" .= ("return" :: T.Text), "name" .= name, "return_address" .= hexWord address, "result" .= [fmap hexWord (registerOf hit 0) | entryReturns e], "outputs" .= outputs] ++ common)))
       | otherwise -> Nothing
 
 loadEvents :: [Unit] -> FilePath -> IO [Event]
@@ -400,12 +411,12 @@ compareMain stockDir otherDir output elves = do
         Object fields -> Object (KM.delete "update" (KM.delete "plain" fields))
         other -> other
       memoryEqual = all fst memoryRows && length (points "memory" stockReceipt stockSteps) == length (points "memory" otherReceipt otherSteps)
+      unreached = M.null stockFetches && M.null otherFetches
       behaviorEqual =
         events True stockEvents == events True otherEvents
-          && events False stockEvents == events False otherEvents
           && writesOf stockReceipt stockSteps == writesOf otherReceipt otherSteps
           && residency stockReceipt stockSteps == residency otherReceipt otherSteps
-          && memoryEqual
+          && (memoryEqual || not unreached)
           && screens stockReceipt stockSteps == screens otherReceipt otherSteps
           && card stockSteps == card otherSteps
           && null (violations stockReceipt stockSteps) && null (violations otherReceipt otherSteps)
@@ -434,7 +445,7 @@ compareMain stockDir otherDir output elves = do
     , "internal_sequence" .= firstDifferences 20 (events False stockEvents) (events False otherEvents)
     , "watched_writes" .= firstDifferences 20 (writesOf stockReceipt stockSteps) (writesOf otherReceipt otherSteps)
     , "residency" .= firstDifferences 5 (map A.toJSON (residency stockReceipt stockSteps)) (map A.toJSON (residency otherReceipt otherSteps))
-    , "memory" .= object ["equal" .= memoryEqual, "points" .= map snd memoryRows]
+    , "memory" .= object ["equal" .= memoryEqual, "gates_verdict" .= unreached, "points" .= map snd memoryRows]
     , "screens" .= firstDifferences 20 (screens stockReceipt stockSteps) (screens otherReceipt otherSteps)
     , "card" .= object ["stock" .= card stockSteps, "other" .= card otherSteps, "equal" .= (card stockSteps == card otherSteps)]
     , "watch_violations" .= object ["stock" .= violations stockReceipt stockSteps, "other" .= violations otherReceipt otherSteps]

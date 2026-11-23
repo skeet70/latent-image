@@ -73,8 +73,10 @@ data Row = Row {rowAddress :: Word32, rowStock :: Word32}
 rowSpan :: Row -> Span
 rowSpan (Row a _) = Span a (a + 4)
 
--- | A stock address callers enter; the ELF holds an A32 branch there into the unit.
-data Entry = Entry {entryName :: String, entryAddress :: Word32}
+-- | A stock address callers enter; the ELF holds an A32 branch there into the unit. The entry
+-- reads `entryArguments` registers from r0, returns a value in r0 when `entryReturns`, and writes
+-- the buffers `entryOutputs` names: (argument register, byte count).
+data Entry = Entry {entryName :: String, entryAddress :: Word32, entryArguments :: Int, entryReturns :: Bool, entryOutputs :: [(Int, Int)]}
   deriving (Eq, Show)
 
 -- | The images the reference census scans.
@@ -135,11 +137,15 @@ instance FromJSON Unit where
       _ -> fail ("no overlay " ++ show number)
     extents <- mapM pairSpan =<< o .: "extents"
     rows <- mapM (withObject "row" (\r -> (\(Hex a) (Hex v) -> Row a v) <$> r .: "address" <*> r .: "stock")) =<< o .: "rows"
-    entries <- mapM (withObject "entry" (\r -> (\n (Hex a) -> Entry n a) <$> r .: "name" <*> r .: "address")) =<< o .: "entries"
+    entries <- mapM entry =<< o .: "entries"
     state <- mapM pairSpan =<< o .: "state"
     reviewed <- mapM reviewedEntry =<< o .: "reviewed_data"
     pure (Unit name overlay extents rows entries state reviewed)
     where
+      entry = withObject "entry" $ \r -> do
+        Hex address <- r .: "address"
+        outputs <- mapM (withObject "output" (\b -> (,) <$> b .: "register" <*> b .: "bytes")) =<< r .: "outputs"
+        (\n a ret -> Entry n address a ret outputs) <$> r .: "name" <*> r .: "arguments" <*> r .: "returns"
       reviewedEntry = withObject "reviewed word" $ \r -> do
         imageText <- r .: "image"
         image <- case [s | s <- [minBound .. maxBound], scannedName s == imageText] of
@@ -166,8 +172,9 @@ parseUnit bytes = do
     unless (within span') (refuse ("span " ++ hexWord s ++ " leaves overlay " ++ show (overlayNumber (unitOverlay unit))))
   forM_ [(a, b) | (a : rest) <- tails spans, b <- take 1 rest] $ \(Span _ e, Span s' _) ->
     unless (e <= s') (refuse ("spans overlap at " ++ hexWord s'))
-  forM_ (unitEntries unit) $ \(Entry entry address) ->
+  forM_ (unitEntries unit) $ \(Entry entry address arguments _ outputs) -> do
     unless (aligned address && any (`inside` address) (unitExtents unit)) (refuse ("entry " ++ entry ++ " is not a word inside an extent"))
+    unless (0 <= arguments && arguments <= 4 && all (\(r, n) -> 0 <= r && r < arguments && n > 0) outputs) (refuse ("entry " ++ entry ++ " has register arguments outside r0..r3 or an empty output"))
   forM_ (unitState unit) $ \(Span s e) -> unless (s < e) (refuse "empty state span")
   pure unit
 
@@ -179,7 +186,10 @@ unitValue unit =
     , "overlay" .= overlayNumber (unitOverlay unit)
     , "extents" .= map spanValue (unitExtents unit)
     , "rows" .= [object ["address" .= hexWord a, "stock" .= hexWord v] | Row a v <- unitRows unit]
-    , "entries" .= [object ["name" .= n, "address" .= hexWord a] | Entry n a <- unitEntries unit]
+    , "entries" .=
+        [ object ["name" .= n, "address" .= hexWord a, "arguments" .= k, "returns" .= ret, "outputs" .= [object ["register" .= r, "bytes" .= b] | (r, b) <- outs]]
+        | Entry n a k ret outs <- unitEntries unit
+        ]
     , "state" .= map spanValue (unitState unit)
     , "reviewed_data" .= [object ["image" .= scannedName i, "site" .= hexWord s, "word" .= hexWord w, "reason" .= r] | ReviewedData i s w r <- unitReviewed unit]
     ]
