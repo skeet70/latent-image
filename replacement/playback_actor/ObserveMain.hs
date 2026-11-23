@@ -373,7 +373,8 @@ observe inputs directory record = do
           : concat
             [ [(copySiteCall c, "provenance:copy:" ++ copySiteName c, Nothing, Nothing), (copySiteCall c + 4, "provenance:copy-end:" ++ copySiteName c, Nothing, Nothing)]
             | c <- messageCopies ]
-      writes = map spanValue (writeSpans (boundaryWrites boundary ++ provenanceMemory))
+      writeRanges = writeSpans (boundaryWrites boundary ++ provenanceMemory)
+      writes = map spanValue writeRanges
       readSpans = map spanValue provenanceMemory
       fetches = map spanValue (boundaryRetired boundary)
       spec =
@@ -393,7 +394,7 @@ observe inputs directory record = do
       watch =
         object
           [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
-          , "ranges" .= map spanValue (mergedSpans (boundaryWrites boundary ++ provenanceMemory ++ boundaryRetired boundary))
+          , "ranges" .= map spanValue (mergedSpans (writeRanges ++ boundaryRetired boundary))
           , "write_ranges" .= writes, "read_ranges" .= readSpans, "fetch_ranges" .= fetches ]
       bridgeArguments =
         [ "--run", paths M.! "run", "--boot-rom", paths M.! "boot-rom", "--installed-dat", paths M.! "update"
