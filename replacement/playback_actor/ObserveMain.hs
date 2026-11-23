@@ -33,17 +33,18 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import qualified Data.ByteString.Char8 as BC
 import Data.IORef
-import Data.List (isPrefixOf, sort, sortOn)
+import Data.List (isPrefixOf, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word8)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import EmulatorUsb
 import Numeric (readHex, showHex)
 import Replacement.PlaybackActor.Actor
+import qualified Replacement.PlaybackActor.Provenance as P
 import System.Directory (createDirectory, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
 import System.Exit (exitFailure)
@@ -134,26 +135,138 @@ mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
       | e >= s' = Span s (max e e') : rest
       | otherwise = Span s e : Span s' e' : rest
 
--- | Fetch records per retired extent and per PC; write records without the role-specific PC,
--- instruction count and tick, and the writers' PCs apart, outside the comparison.
-watchSummary :: Boundary -> Value -> Value
-watchSummary boundary watch =
+-- | Fetch records per retired extent and per PC; writes inside the boundary's write spans without
+-- the role-specific PC, instruction count and tick, the writers' PCs apart, outside the
+-- comparison. A CPU write's before and written bytes are byte lists in which a byte still marked
+-- by provenance is null.
+watchSummary :: Boundary -> M.Map Int P.MaskedWrite -> Value -> Value
+watchSummary boundary masks watch =
   object
     [ "violation" .= field "violation" watch
     , "record_count" .= length records
     , "fetch_count" .= length fetches
     , "fetches_by_extent" .= object [K.fromString (hexWord s) .= n | (Span s _, n) <- byExtent, n > 0]
     , "fetches_by_pc" .= object [K.fromString (hexWord pc) .= n | (pc, n) <- M.toList byPc]
-    , "writes" .= [object ["address" .= field "address" r, "size" .= field "size" r, "before" .= field "before" r, "value" .= field "value" r, "source" .= field "source" r, "core" .= field "core" r] | r <- writes]
-    , "write_pcs" .= [field "pc" r | r <- writes]
+    , "writes" .= [object ["address" .= field "address" r, "size" .= field "size" r, "before" .= before i r, "value" .= value i r, "source" .= field "source" r, "core" .= field "core" r] | (i, r) <- writes]
+    , "write_pcs" .= [field "pc" r | (_, r) <- writes]
     ]
   where
     records = arrayOf (field "records" watch)
     fetches = [r | r <- records, field "source" r == String "cpu-fetch"]
-    writes = [r | r <- records, field "source" r /= String "cpu-fetch", field "source" r /= String "cpu-read"]
+    writes =
+      [ (i, r) | (i, r) <- zip [0 ..] records, field "source" r /= String "cpu-fetch", field "source" r /= String "cpu-read"
+      , Just a <- [hexValue (field "address" r)], any (`inside` a) (boundaryWrites boundary) ]
+    before i r = maybe (field "before" r) (A.toJSON . P.maskedBefore) (M.lookup i masks)
+    value i r = maybe (field "value" r) (A.toJSON . P.maskedValue) (M.lookup i masks)
     fetchAddresses = mapMaybe (hexValue . field "address") fetches
     byExtent = [(extent, length (filter (inside extent) fetchAddresses)) | extent <- boundaryRetired boundary]
     byPc = M.fromListWith (+) [(a, 1 :: Int) | a <- fetchAddresses]
+
+-- * Provenance of message 0x119
+
+provenanceConfig :: P.Config
+provenanceConfig = P.Config [(s, e) | Span s e <- provenanceMemory] appCopyLoads appCopyStores
+
+registerValue :: T.Text -> Value -> Either String Word32
+registerValue name hit = maybe (Left ("a provenance hit lacks " ++ T.unpack name)) Right (hexValue (field name (field "registers" hit)))
+
+numberOf :: T.Text -> Value -> Either String Int
+numberOf name value = case field name value of
+  Number n -> Right (truncate n)
+  _ -> Left ("a provenance event lacks " ++ T.unpack name)
+
+-- | Little-endian words from a hex byte string.
+hexWords :: T.Text -> Either String [Word32]
+hexWords text = do
+  bytes <- byteList text
+  pure [sum [fromIntegral b * 256 ^ k | (k, b) <- zip [0 :: Int ..] chunk] | chunk <- chunksOf4 bytes]
+  where
+    chunksOf4 [] = []
+    chunksOf4 xs = take 4 xs : chunksOf4 (drop 4 xs)
+
+byteList :: T.Text -> Either String [Word8]
+byteList text
+  | T.null text = Right []
+  | [(b, "")] <- readHex (T.unpack (T.take 2 text)) = (b :) <$> byteList (T.drop 2 text)
+  | otherwise = Left "provenance read bytes are not hexadecimal"
+
+-- | The tracker event of a provenance site hit.
+hitEvent :: Value -> Either String (Maybe P.Event)
+hitEvent hit = do
+  core <- numberOf "core" hit
+  case textOf (field "site" hit) of
+    Just "provenance:send" -> do
+      code <- case arrayOf (field "memory" hit) of
+        [String text] -> hexWords text
+        _ -> Left "the builder hit lacks its code bytes"
+      count <- registerValue "r1" hit
+      base <- registerValue "r2" hit
+      stored <- P.builderStoredOffsets count code
+      pure (Just (P.Built core base count stored))
+    Just "provenance:sent" -> pure (Just (P.Sent core))
+    Just label
+      | Just _ <- stripPrefix "provenance:copy:" label -> do
+          copy <- P.Copy <$> registerValue "r0" hit <*> registerValue "r1" hit <*> registerValue "r2" hit
+          pure (Just (P.CopyBegins core copy))
+      | Just name <- stripPrefix "provenance:copy-end:" label ->
+          pure (Just (P.CopyEnds core (or [copySiteReleasesSource c | c <- messageCopies, copySiteName c == name])))
+    _ -> pure Nothing
+
+-- | The tracker event of a watch record.
+recordEvent :: Value -> Either String (Maybe P.Event)
+recordEvent r = case field "source" r of
+  String "cpu-read" -> do
+    (core, pc, address, size) <- common
+    pure (Just (P.Read core pc address size))
+  String "cpu-write" -> do
+    (core, pc, address, size) <- common
+    before <- mapM byte (arrayOf (field "before" r))
+    value <- case field "value" r of
+      Number n | field "byte_order" r == String "little" -> Right [fromIntegral ((truncate n :: Integer) `div` (256 ^ k)) | k <- [0 .. size - 1]]
+      _ -> Left "a CPU write record lacks a little-endian value"
+    pure (Just (P.Write core pc address before value))
+  _ -> pure Nothing
+  where
+    common = do
+      core <- numberOf "core" r
+      size <- numberOf "size" r
+      pc <- maybe (Left "a CPU record lacks its pc") Right (hexValue (field "pc" r))
+      address <- maybe (Left "a CPU record lacks its address") Right (hexValue (field "address" r))
+      pure (core, pc, address, size)
+    byte (Number n) = Right (truncate n)
+    byte _ = Left "a CPU write record's before bytes are not numbers"
+
+findingValue :: String -> P.Finding -> Value
+findingValue window finding =
+  object
+    [ "window" .= window
+    , "kind" .= (case finding of P.Interpreted {} -> "interpreted"; P.Untracked {} -> "untracked-copy"; P.Escaped {} -> "escaped" :: T.Text)
+    , "pc" .= (case finding of P.Escaped {} -> Null; _ -> String (T.pack (hexWord (P.findingPc finding))))
+    , "address" .= hexWord (P.findingAddress finding)
+    , "message" .= P.originMessage (P.findingOrigin finding)
+    , "offset" .= P.originOffset (P.findingOrigin finding)
+    ]
+
+-- | Steps the tracker through one watch window: its provenance hits and records in instruction
+-- order, hits first at equal counts. Returns the masks of the window's write records by index.
+trackWindow :: IORef (P.Tracker, [Value]) -> String -> [Value] -> [Value] -> IO (M.Map Int P.MaskedWrite)
+trackWindow state window hits records = do
+  hitEvents <- either (ioError . userError) pure (sequence [fmap ((,,) i (0 :: Int) . Left) <$> hitEvent h | (i, h) <- zip [0 :: Int ..] hits])
+  recordEvents <- either (ioError . userError) pure (sequence [fmap ((,,) i (1 :: Int) . Right) <$> recordEvent r | (i, r) <- zip [0 :: Int ..] records])
+  let timed = [(instructions, order, i, e) | (Just (i, order, e), instructions) <- zip hitEvents (map instructionsOf hits) ++ zip recordEvents (map instructionsOf records)]
+      instructionsOf v = case field "instructions" v of
+        Number n -> truncate n :: Integer
+        _ -> -1
+  (t0, found0) <- readIORef state
+  let go (t, found, masks) (_, _, i, e) =
+        let (t', findings, masked) = P.step t (either id id e)
+            masks' = case (e, masked) of
+              (Right _, Just m) -> M.insert i m masks
+              _ -> masks
+         in (t', found ++ map (findingValue window) findings, masks')
+      (t1, found1, masks1) = foldl go (t0, found0, M.empty) (sortOn (\(n, o, i, _) -> (n, o, i)) timed)
+  writeIORef state (t1, found1)
+  pure masks1
 
 main :: IO ()
 main = do
@@ -230,21 +343,29 @@ observe inputs directory record = do
   record "boundary" (A.toJSON (boundaryWire (inputBoundary inputs)))
   record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer, "sha256" .= sha256Hex observerDigest]]))
   let boundary = inputBoundary inputs
-      sites =
-        (dispatcher, "dispatch", Capture [] [])
-          : [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s) | s <- boundaryServices boundary]
       machineReads = A.toJSON [[s, e - s] | Span s e <- [machineEvents, machineStates]]
-      writes = map spanValue (boundaryWrites boundary)
+      Span builderStart builderCall = message119Builder
+      sites =
+        (dispatcher, "dispatch", Capture [] [], Just machineReads)
+          : [(serviceAddress s, "service:" ++ serviceName s, serviceCapture s, Just machineReads) | s <- boundaryServices boundary]
+          ++ (builderCall, "provenance:send", Capture [] [], Just (A.toJSON [[builderStart, builderCall - builderStart]]))
+          : (message119Sent, "provenance:sent", Capture [] [], Nothing)
+          : concat
+            [ [(copySiteCall c, "provenance:copy:" ++ copySiteName c, Capture [] [], Nothing), (copySiteCall c + 4, "provenance:copy-end:" ++ copySiteName c, Capture [] [], Nothing)]
+            | c <- messageCopies ]
+      writes = map spanValue (mergedSpans (boundaryWrites boundary ++ provenanceMemory))
+      readSpans = map spanValue provenanceMemory
       fetches = map spanValue (boundaryRetired boundary)
       spec =
         object
           [ "schema" .= (1 :: Int)
-          , "sites" .= object [siteKey a .= label | (a, label, _) <- sites]
-          , "reads" .= object [siteKey a .= machineReads | (a, _, _) <- sites]
-          , "captures" .= object [siteKey a .= captureValue capture | (a, _, capture) <- sites]
+          , "sites" .= object [siteKey a .= label | (a, label, _, _) <- sites]
+          , "reads" .= object [siteKey a .= r | (a, _, _, Just r) <- sites]
+          , "captures" .= object [siteKey a .= captureValue capture | (a, _, capture, _) <- sites]
           , "task" .= ("logical" :: T.Text)
           , "hit_limit" .= hitLimit
           , "write_ranges" .= writes
+          , "read_ranges" .= readSpans
           , "fetch_ranges" .= fetches
           , "watch_limit" .= watchLimit
           ]
@@ -252,8 +373,8 @@ observe inputs directory record = do
       watch =
         object
           [ "command" .= ("watch-begin" :: T.Text), "views" .= ("fixed" :: T.Text), "limit" .= watchLimit
-          , "ranges" .= map spanValue (mergedSpans (boundaryWrites boundary ++ boundaryRetired boundary))
-          , "write_ranges" .= writes, "fetch_ranges" .= fetches ]
+          , "ranges" .= map spanValue (mergedSpans (boundaryWrites boundary ++ provenanceMemory ++ boundaryRetired boundary))
+          , "write_ranges" .= writes, "read_ranges" .= readSpans, "fetch_ranges" .= fetches ]
       bridgeArguments =
         [ "--run", paths M.! "run", "--boot-rom", paths M.! "boot-rom", "--installed-dat", paths M.! "update"
         , "--adjustment-nand", paths M.! "adjustment-nand"
@@ -265,18 +386,30 @@ observe inputs directory record = do
   record "budget" (object ["settle_chunks" .= settleChunks, "final_chunks" .= finalChunks, "chunk_instructions" .= chunkInstructions])
   steps <- newIORef []
   cursor <- newIORef (0 :: Int)
+  pending <- newIORef ([] :: [(Int, Value)])
+  provenance <- newIORef (P.tracker provenanceConfig, [])
   withBinaryFile (directory </> "hits.jsonl") WriteMode $ \hits -> do
     let drain emulator = do
           start <- readIORef cursor
           reply <- emulatorTraceHitsPage emulator start 65536
           let values = arrayOf (field "hits" reply)
           forM_ values (\value -> BL.hPut hits (A.encode value <> "\n"))
+          modifyIORef' pending (++ [(i, v) | (i, v) <- zip [start ..] values, maybe False ("provenance:" `isPrefixOf`) (textOf (field "site" v))])
           let end = start + length values
           writeIORef cursor end
           hFlush hits
           case field "count" reply of
             Number total | end < truncate total -> drain emulator
             _ -> pure end
+        -- The provenance hits drained before the given hit count, in order.
+        takeHits end = do
+          (taken, kept) <- span ((< end) . fst) <$> readIORef pending
+          writeIORef pending kept
+          pure (map snd taken)
+        summarise window end observed = do
+          windowHits <- takeHits end
+          masks <- trackWindow provenance window windowHits (arrayOf (field "records" observed))
+          pure (watchSummary boundary masks observed)
         idle emulator count = replicateM count $ do
           ran <- emulatorBridgeCommand emulator (object ["command" .= ("idle" :: T.Text), "instructions" .= chunkInstructions])
           media <- emulatorBridgeCommand emulator (object ["command" .= ("media-state" :: T.Text)])
@@ -298,7 +431,11 @@ observe inputs directory record = do
       record "emulator_start" (startRecord start)
       attached <- drain emulator
       reset <- B.readFile (directory </> "reset-observation.json") >>= either (ioError . userError) pure . A.eitherDecodeStrict'
-      record "reset_segments" (A.toJSON [object ["phase" .= field "phase" s, "instructions" .= field "instructions" s, "hits_end" .= field "hits_end" s, "watch" .= watchSummary boundary (field "watch" s)] | s <- arrayOf (field "segments" reset)])
+      segments <- forM (arrayOf (field "segments" reset)) $ \s -> do
+        end <- either (ioError . userError) pure (numberOf "hits_end" s)
+        summary <- summarise ("reset-" ++ fromMaybe "?" (textOf (field "phase" s))) end (field "watch" s)
+        pure (object ["phase" .= field "phase" s, "instructions" .= field "instructions" s, "hits_end" .= field "hits_end" s, "watch" .= summary])
+      record "reset_segments" (A.toJSON segments)
       record "hits_at_attach" (A.toJSON attached)
       shot <- emulatorCapture emulator "attached"
       record "attached_screen" shot
@@ -310,12 +447,13 @@ observe inputs directory record = do
         settled <- idle emulator settleChunks
         observed <- emulatorWatchEnd emulator
         last' <- drain emulator
+        summary <- summarise ("step-" ++ show index) (last' + 1) observed
         screen <- emulatorCapture emulator ("step-" ++ show index)
         state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
         memoryDigest <- memory emulator (show index)
         modifyIORef' steps (object
           [ "step" .= index, "key" .= crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
-          , "watch" .= watchSummary boundary observed, "screen" .= screen, "ui_state" .= state, "memory" .= memoryDigest ] :)
+          , "watch" .= summary, "screen" .= screen, "ui_state" .= state, "memory" .= memoryDigest ] :)
         saveSteps
         putStrLn ("step " ++ show index ++ " " ++ crawlKeyWire key ++ " hits " ++ show (last' - first))
       first <- readIORef cursor
@@ -323,11 +461,23 @@ observe inputs directory record = do
       settled <- idle emulator finalChunks
       observed <- emulatorWatchEnd emulator
       last' <- drain emulator
+      summary <- summarise "final" (last' + 1) observed
       screen <- emulatorCapture emulator "final"
       memoryDigest <- memory emulator (show (length (inputRoute inputs) + 1))
-      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary boundary observed, "screen" .= screen, "memory" .= memoryDigest] :)
+      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= summary, "screen" .= screen, "memory" .= memoryDigest] :)
       saveSteps
       record "hit_count" (A.toJSON last')
+      (finalTracker, findings) <- readIORef provenance
+      let provenanceRecord =
+            object
+              [ "messages_built" .= P.builtMessages finalTracker
+              , "marked_at_end" .= M.size (P.marked finalTracker)
+              , "watched" .= map spanValue provenanceMemory
+              , "finding_count" .= length findings
+              , "findings" .= take 64 findings
+              ]
+      BL.writeFile (directory </> "provenance.json") (A.encode (object ["findings" .= findings]) <> "\n")
+      record "provenance" provenanceRecord
 
 -- * Comparison
 
@@ -459,7 +609,9 @@ compareMain stockDir ownedDir symbols output = do
           && null (violations stockReceipt stockSteps) && null (violations ownedReceipt ownedSteps)
           && sharedInputs stockReceipt == sharedInputs ownedReceipt
       ownedRole = field "role" ownedReceipt == String (roleName Owned)
-      equal = behaviorEqual && (not ownedRole || ownedFetches == 0)
+      provenanceClean receipt = field "finding_count" (field "provenance" receipt) == Number 0
+      maskedBytes writes = length [() | w <- writes, b <- arrayOf (field "before" w) ++ arrayOf (field "value" w), b == Null]
+      equal = behaviorEqual && provenanceClean stockReceipt && provenanceClean ownedReceipt && (not ownedRole || ownedFetches == 0)
       summary events receipt steps fetches writes = object
         [ "inputs" .= field "inputs" receipt, "hits" .= field "hit_count" receipt, "events" .= length events
         , "interface_events" .= length (interface events), "internal_events" .= length (internal events)
@@ -475,6 +627,9 @@ compareMain stockDir ownedDir symbols output = do
     , "interface_sequence" .= firstDifferences 20 (interface stockEvents) (interface ownedEvents)
     , "internal_sequence" .= firstDifferences 20 (internal stockEvents) (internal ownedEvents)
     , "watched_writes" .= firstDifferences 20 stockWrites ownedWrites
+    , "provenance" .= object
+        [ "stock" .= field "provenance" stockReceipt, "owned" .= field "provenance" ownedReceipt
+        , "masked_bytes" .= object ["stock" .= maskedBytes stockWrites, "owned" .= maskedBytes ownedWrites] ]
     , "screens" .= object ["stock" .= screens stockReceipt stockSteps, "owned" .= screens ownedReceipt ownedSteps, "comparison" .= firstDifferences 20 (screens stockReceipt stockSteps) (screens ownedReceipt ownedSteps)]
     , "card" .= object ["stock" .= card stockSteps, "owned" .= card ownedSteps, "comparison" .= firstDifferences 20 (cardOf stockSteps) (cardOf ownedSteps)]
     , "owned_retired_fetches_by_extent" .= [field "fetches_by_extent" w | w <- watches ownedReceipt ownedSteps]

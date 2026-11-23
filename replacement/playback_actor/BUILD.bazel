@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -81,12 +81,28 @@ genrule(
 
 haskell_library(
     name = "actor",
-    srcs = ["Replacement/PlaybackActor/Actor.hs"],
+    srcs = [
+        "Replacement/PlaybackActor/Actor.hs",
+        "Replacement/PlaybackActor/Provenance.hs",
+    ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
         "//host:base",
+        "//host:containers",
         "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "provenance-tests",
+    size = "small",
+    srcs = ["ProvenanceTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    main_file = "ProvenanceTests.hs",
+    deps = [
+        ":actor",
+        "//host:base",
     ],
 )
 
@@ -172,6 +188,7 @@ filegroup(
         ":playback-actor-observe",
         ":playback-actor-stage",
         ":playback-actor-suite",
+        ":provenance-tests",
     ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS] + [
         ":playback-actor-native-image" + suffix
         for suffix, _ in _NATIVE_VARIANTS

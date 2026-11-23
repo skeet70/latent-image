@@ -17,6 +17,13 @@ module Replacement.PlaybackActor.Actor
   , boundaryRetired
   , boundaryServices
   , boundaryWrites
+  , message119Builder
+  , message119Sent
+  , CopySite (..)
+  , messageCopies
+  , appCopyLoads
+  , appCopyStores
+  , provenanceMemory
   ) where
 
 import Data.List (intercalate, nub, nubBy, sort)
@@ -117,6 +124,48 @@ boundaryServices (Boundary machines) = nubBy (\a b -> serviceAddress a == servic
 
 boundaryWrites :: Boundary -> [Span]
 boundaryWrites (Boundary machines) = [machineEvents, machineStates, modeState] ++ nub (concatMap machineWrites machines)
+
+-- | The stock builder of playback message 0x119 (image 5 `0x00db2fc0`) up to its send call, at
+-- which r1 is the payload length and r2 the payload on the builder's frame.
+message119Builder :: Span
+message119Builder = Span 0x00db2fc0 0x00db3038
+
+-- | The instruction after the send call; the builder's frame dies there.
+message119Sent :: Word32
+message119Sent = 0x00db303c
+
+-- | A call of the stock byte copy `0x722054` (r0 destination, r1 source, r2 length) that can carry
+-- the message; the copy has returned at the next instruction.
+data CopySite = CopySite {copySiteName :: String, copySiteCall :: Word32, copySiteReleasesSource :: Bool}
+
+-- | The dispatch send into a queue buffer, the dispatch receive out of it (the buffer is released
+-- after), and the overlay-47 copies between the playback request payload `0x014ea6f0` and the
+-- saved requests at `0x01511020`.
+messageCopies :: [CopySite]
+messageCopies =
+  [ CopySite "dispatch_send" 0x0072517c False
+  , CopySite "dispatch_receive" 0x007253f8 True
+  , CopySite "restore_first" 0x01249850 False
+  , CopySite "restore_second" 0x01249864 False
+  , CopySite "save_012499c4" 0x012499c4 False
+  , CopySite "save_012499fc" 0x012499fc False
+  , CopySite "save_01249a20" 0x01249a20 False
+  , CopySite "save_01249a44" 0x01249a44 False
+  , CopySite "save_01249a68" 0x01249a68 False
+  , CopySite "save_01249a84" 0x01249a84 False
+  , CopySite "save_01249ab0" 0x01249ab0 False
+  , CopySite "save_01249adc" 0x01249adc False
+  ]
+
+-- | The loads and stores of `0x722054`; it branches only on its addresses and length.
+appCopyLoads, appCopyStores :: [Word32]
+appCopyLoads = [0x00722080, 0x007220c4, 0x007220e8, 0x00722130, 0x00722150, 0x0072215c]
+appCopyStores = [0x00722084, 0x007220c8, 0x007220ec, 0x00722134, 0x00722154, 0x00722160]
+
+-- | Memory every observation watches for reads and writes of the message: the request payloads
+-- `0x014ea6f0` and `0x014ea7b4` and the four saved requests.
+provenanceMemory :: [Span]
+provenanceMemory = [Span 0x014ea6f0 0x014ea878, Span 0x01511020 0x01511330]
 
 none :: Capture
 none = Capture [] []
