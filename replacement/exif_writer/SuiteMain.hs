@@ -32,7 +32,7 @@ import qualified Emulation.NativeCase as Native
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.ExifWriter.Cases
 import Replacement.ExifWriter.Structure (checkHeader)
-import Replacement.FileService.Native (Call (..), Extent (..), extentContains, hexWord, word32le, words32le)
+import Replacement.FileService.Native (Extent (..), extentContains, hexWord, word32le, words32le)
 import System.Directory (createDirectoryIfMissing, doesPathExist)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -92,20 +92,29 @@ recorder at service displaced arguments =
       , 0xe4856004
       ]
 
-driverWords :: [Call] -> [Word32]
-driverWords calls = 0xe92d4010 : go (driverBase + 4) 0 calls ++ [0xe8bd8010]
+-- | Saves r4, r8 and r10, keeps the cursor in r8 and its start in r10, and makes each step's call:
+-- stack arguments spilled, register arguments loaded, r0 stored to the next result slot when the
+-- step returns and added to the cursor when it advances.
+driverWords :: Word32 -> [Step] -> [Word32]
+driverWords cursor steps = prologue ++ go (driverBase + 4 * fromIntegral (length prologue)) 0 steps ++ [0xe8bd8510]
   where
+    prologue = [0xe92d4510, movw 8 cursor, movt 8 cursor, 0xe1a0a008]
+    load register argument = case argument of
+      Literal value -> [movw register value, movt register value]
+      Cursor -> [0xe1a00008 .|. (register `shiftL` 12)]
+      Advanced -> [0xe048000a .|. (register `shiftL` 12)]
     go _ _ [] = []
-    go pc slot (Call entry arguments stack returns : rest) =
+    go pc slot (Step entry arguments stack returns advances : rest) =
       let frame = 8 * ((fromIntegral (length stack) + 1) `div` 2) :: Word32
           reserve = if null stack then [] else [0xe24dd000 .|. frame]
-          spill = concat [[movw 12 value, movt 12 value, 0xe58dc000 .|. (4 * index)] | (index, value) <- zip [0 ..] stack]
-          loads = concat [[movw register value, movt register value] | (register, value) <- zip [0 ..] arguments]
+          spill = concat [load 12 value ++ [0xe58dc000 .|. (4 * index)] | (index, value) <- zip [0 ..] stack]
+          loads = concat [load register value | (register, value) <- zip [0 ..] arguments]
           before = reserve ++ spill ++ loads
           callAt = pc + 4 * fromIntegral (length before)
           release = if null stack then [] else [0xe28dd000 .|. frame]
           store = if returns then [movw 12 (resultsBase .&. 0xffff), movt 12 resultsBase, 0xe58c0000 .|. (4 * slot)] else []
-          block = before ++ [branchLink callAt entry] ++ release ++ store
+          advance = [0xe0888000 | advances]
+          block = before ++ [branchLink callAt entry] ++ release ++ store ++ advance
        in block ++ go (pc + 4 * fromIntegral (length block)) (if returns then slot + 1 else slot) rest
 
 -- Images ----------------------------------------------------------------------
@@ -189,7 +198,7 @@ caseDocument loaded role scenario expectation = (ident, document, blob)
   where
     ident = scenarioName scenario ++ "-" ++ (case role of Stock -> "stock"; Owned "owned" _ -> "owned"; Owned _ _ -> "control")
     (serviceCode, serviceFunctions) = serviceRegions loaded
-    driver = words32le (driverWords (scenarioCalls scenario))
+    driver = words32le (driverWords (scenarioCursor scenario) (scenarioSteps scenario))
     Extent overlayLow _ = overlay
     writable =
       [Region (blockName b) (blockAddress b) "rw" (blockBytes b) | b <- scenarioBlocks scenario]
@@ -335,13 +344,13 @@ expectationOf scenario observation =
     }
   where
     bytesAt address = fromMaybe B.empty (lookup address (observationMemory observation))
-    returning = length (filter callReturns (scenarioCalls scenario))
+    returning = length (filter stepReturns (scenarioSteps scenario))
 
 initialExpectation :: Scenario -> Expectation
 initialExpectation scenario =
   Expectation
     { expectedRegions = [(blockName b, blockBytes b) | b <- scenarioBlocks scenario]
-    , expectedResults = [0 | call <- scenarioCalls scenario, callReturns call]
+    , expectedResults = [0 | step <- scenarioSteps scenario, stepReturns step]
     }
 
 writableRegions :: Scenario -> [(String, Word32)]
@@ -436,12 +445,22 @@ main = do
         unless (sha256Hex (sha256 bytes) == imageDigest image) (fail (imageLabel image ++ " identity differs"))
         pure (imageLabel image, Loaded (imageBase image) bytes)
       let plain = loadedBytes (fromMaybe (error "plain") (lookup "plain" loaded))
-          cases = scenarios plain
+          base = scenarios plain
+          observeStock phase batch = do
+            observations <- runRole runner output loaded Stock phase [(scenario, initialExpectation scenario) | scenario <- batch]
+            forM_ observations $ \observation ->
+              unless (atExit observation) (fail ("stock observation " ++ observationCase observation ++ " ended " ++ observationStatus observation ++ ": " ++ unwords (observationMismatches observation)))
+            pure observations
       (owned, ownedDigest) <- loadElf ownedPath
-      observed <- runRole runner output loaded Stock "observe" [(scenario, initialExpectation scenario) | scenario <- cases]
-      forM_ observed $ \observation ->
-        unless (atExit observation) (fail ("stock observation " ++ observationCase observation ++ " ended " ++ observationStatus observation ++ ": " ++ unwords (observationMismatches observation)))
-      let expectations = zipWith expectationOf cases observed
+      observedBase <- observeStock "observe" base
+      derived <- fmap concat . forM replaySources $ \name ->
+        case [(scenario, observation) | (scenario, observation) <- zip base observedBase, scenarioName scenario == name] of
+          [(source, observation)] -> either (\problem -> fail (name ++ " read-back: " ++ problem)) pure (parsedReplays plain source (fromMaybe B.empty (lookup outputBase (observationMemory observation))))
+          _ -> fail ("no replay source " ++ name)
+      observedDerived <- observeStock "observe-parsed" derived
+      let cases = base ++ derived
+          observed = observedBase ++ observedDerived
+          expectations = zipWith expectationOf cases observed
           judged = zip cases expectations
       stocks <- runRole runner output loaded Stock "judge" judged
       covered <- stockCoverage loaded (output </> "judge-stock") cases
