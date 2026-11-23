@@ -66,7 +66,7 @@ _NATIVE_VARIANTS = [("", [])] + [
     asm_srcs = ["table.S", "table-native.S"],
     entry = "xm1_playback_m0_action02",
     link_script = "playback-actor-native.ld",
-    link_includes = ["imports.ld"],
+    link_includes = ["imports.ld", "imports-native.ld"],
     extra_ldflags = ["-Wl,--gc-sections"],
 ) for suffix, _ in _NATIVE_VARIANTS]
 

@@ -2,6 +2,7 @@
    the highest machine extent takes the code no machine names. */
 ENTRY(xm1_playback_m0_action02)
 INCLUDE imports.ld
+INCLUDE imports-native.ld
 SECTIONS {
   .compiler_builtins 0 : { *compiler_builtins*(.text* .rodata* .data* .bss*) }
   .m0_actions 0x011e8ce4 : { *(.text.xm1_playback_m0_*) *(.text.*8machine0*) }
