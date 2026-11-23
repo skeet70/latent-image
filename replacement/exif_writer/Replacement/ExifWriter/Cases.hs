@@ -9,6 +9,7 @@ module Replacement.ExifWriter.Cases
   , ownedExtents
   , entries
   , stockFunctions
+  , unreachableDirections
   , Service (..)
   , services
   , Block (..)
@@ -105,6 +106,11 @@ stockFunctions =
   , (0x011cf6e0, 104), (0x011cf748, 228), (0x011cf82c, 40), (0x011cf854, 180), (0x011cf908, 136)
   , (0x011cf990, 968), (0x011cfd58, 252), (0x011cfe54, 1456), (0x011db098, 240), (0x011db188, 36)
   ]
+
+-- | Conditional branch directions of 'stockFunctions' no input reaches: (branch address,
+-- @taken@ or @not-taken@, the bytes that decide it).
+unreachableDirections :: [(Word32, String, String)]
+unreachableDirections = []
 
 -- | A retained leaf service: the image it lives in, its entry, its extent and the label its
 -- recorder writes.

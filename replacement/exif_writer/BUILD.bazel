@@ -71,6 +71,7 @@ haskell_binary(
     deps = [
         ":cases",
         "//emulation:case-sha256",
+        "//emulation:coverage-lib",
         "//emulation:native-adapter",
         "//host:aeson",
         "//host:base",

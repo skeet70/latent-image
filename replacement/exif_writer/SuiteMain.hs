@@ -27,6 +27,7 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
+import qualified Emulation.Coverage as Coverage
 import qualified Emulation.NativeCase as Native
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.ExifWriter.Cases
@@ -346,6 +347,30 @@ initialExpectation scenario =
 writableRegions :: Scenario -> [(String, Word32)]
 writableRegions scenario = [(blockName b, blockAddress b) | b <- scenarioBlocks scenario] ++ [("log", callLog), ("results", resultsBase)]
 
+-- | The stock functions' branch coverage over the judged stock reports, each extent
+-- authenticated against the plain image's bytes.
+stockCoverage :: [(String, Loaded)] -> FilePath -> [Scenario] -> IO Coverage.Coverage
+stockCoverage loaded directory cases = do
+  observations <- forM cases $ \scenario -> do
+    bytes <- B.readFile (directory </> (scenarioName scenario ++ "-stock.report.json"))
+    either (\problem -> fail (scenarioName scenario ++ " coverage: " ++ problem)) pure (Coverage.parseObservation bytes)
+  pure (Coverage.coverage extents observations)
+  where
+    extents = [Coverage.Extent entry size (Just (sha256Hex (sha256 (slice loaded "plain" entry (entry + size))))) | (entry, size) <- stockFunctions]
+
+-- | Every conditional branch direction no case reached, as (address, missing direction).
+missingDirections :: Coverage.Coverage -> [(Word32, String)]
+missingDirections result =
+  [ (Coverage.branchAddress decision, missing)
+  | function <- Coverage.coverageFunctions result
+  , decision <- Coverage.functionBranches function
+  , missing <- case Coverage.branchDirection decision of
+      Coverage.Both -> []
+      Coverage.PassedOnly -> ["not-taken"]
+      Coverage.FailedOnly -> ["taken"]
+      _ -> ["taken", "not-taken"]
+  ]
+
 wordsOf :: B.ByteString -> [Word32]
 wordsOf bytes
   | B.length bytes < 4 = []
@@ -419,6 +444,7 @@ main = do
       let expectations = zipWith expectationOf cases observed
           judged = zip cases expectations
       stocks <- runRole runner output loaded Stock "judge" judged
+      covered <- stockCoverage loaded (output </> "judge-stock") cases
       owneds <- runRole runner output loaded (Owned "owned" owned) "judge" judged
       controls <- forM (map splitControl controlArguments) $ \(name, path) -> do
         (elf, digest) <- loadElf path
@@ -438,7 +464,14 @@ main = do
             ]
           different = [() | (_, _, _, problems) <- compared, not (null problems)]
           undetected = [name | (name, _, detected, _) <- controls, null detected]
-          equal = null different && null undetected
+          branches = concatMap Coverage.functionBranches (Coverage.coverageFunctions covered)
+          missing = missingDirections covered
+          declared = [(address, direction) | (address, direction, _) <- unreachableDirections]
+          uncovered = [gap | gap <- missing, gap `notElem` declared]
+          staleUnreachable = [gap | gap <- declared, gap `notElem` missing]
+          unauthenticated = [entry | function <- Coverage.coverageFunctions covered, let entry = Coverage.functionEntry function, not (Coverage.functionAuthenticated function)]
+          complete = null uncovered && null staleUnreachable && null unauthenticated
+          equal = null different && null undetected && complete
           report =
             object
               [ "suite" .= ("exif-writer" :: String)
@@ -470,13 +503,29 @@ main = do
                       ]
                   | (name, digest, detected, other) <- controls
                   ]
+              , "stock_coverage" .=
+                  object
+                    [ "functions" .= length (Coverage.coverageFunctions covered)
+                    , "unauthenticated" .= map hexWord unauthenticated
+                    , "branches" .= length branches
+                    , "directions" .= (2 * length branches)
+                    , "directions_covered" .= (2 * length branches - length missing)
+                    , "unreachable" .= [object ["address" .= hexWord address, "direction" .= direction, "reason" .= reason] | (address, direction, reason) <- unreachableDirections]
+                    , "uncovered" .= [object ["address" .= hexWord address, "direction" .= direction] | (address, direction) <- uncovered]
+                    , "stale_unreachable" .= [object ["address" .= hexWord address, "direction" .= direction] | (address, direction) <- staleUnreachable]
+                    , "complete" .= complete
+                    ]
               ]
       BL.writeFile (output </> "report.json") (encode report)
       result <- lookupEnv "XM1_RUN_RESULT"
-      forM_ result $ \directory -> BL.writeFile (directory </> "exif-writer.json") (encode report)
+      forM_ result $ \directory -> do
+        BL.writeFile (directory </> "exif-writer.json") (encode report)
+        BL.writeFile (directory </> "exif-writer-coverage.json") (Coverage.coverageJson covered)
       putStrLn
         ( show (length compared) ++ " cases, " ++ show (length different) ++ " different; "
             ++ show (length controls - length undetected) ++ "/" ++ show (length controls) ++ " controls detected; "
+            ++ show (2 * length branches - length missing) ++ "/" ++ show (2 * length branches) ++ " stock branch directions covered, "
+            ++ show (length declared) ++ " declared unreachable, " ++ show (length uncovered) ++ " uncovered; "
             ++ (if equal then "equal" else "different")
         )
       unless equal exitFailure
