@@ -122,7 +122,40 @@ retainedCallers = [(0x011c1d18, 48), (0x011c1d48, 64), (0x011c1d88, 120)]
 -- | Conditional branch directions of 'stockFunctions' no input reaches: (branch address,
 -- @taken@ or @not-taken@, the bytes that decide it).
 unreachableDirections :: [(Word32, String, String)]
-unreachableDirections = []
+unreachableDirections =
+  [ (0x011c1730, "taken", mode3), (0x011c17f4, "taken", mode3), (0x011c1a08, "taken", mode3), (0x011c1b70, "taken", mode3)
+  , (0x011c1c3c, "taken", "Mode above 2 in the IFD1 writer: its only caller, 0x011db178, runs after initialize with mode 0.")
+  , (0x011c1a84, "taken", "Maker note armed with a directory format above 2: the halfword at 0x014e9d94 is set only by the MakerNote callback 0x011ceda0 inside an Exif directory body, which formats above 2 do not write, and initialize clears it.")
+  , (0x011c1bac, "not-taken", gpsArmed), (0x011c1bb8, "taken", gpsArmed), (0x011c1bb8, "not-taken", gpsArmed)
+  , (0x011c1e20, "taken", "Byte order at 0x014e9e3e nonzero: initialize stores 0 from both callers, and 0x011c1a4c stores 0 and 0x011c1b04 restores 1 only after reading 1.")
+  , (0x011c21b0, "taken", "r4 holds the constant 0x014e9e50 or 0x014e9e54.")
+  , (0x011cdbe4, "not-taken", "Reached only by falling through 0x011cdbb8, which found the halfword at source+0x20a equal to 0xffff; the reload reads the same halfword.")
+  , (0x011ce21c, "not-taken", "Reached only by falling through 0x011ce1f0, which found the halfword at source+0x20a equal to 0xffff; the reload reads the same halfword.")
+  , (0x011cdf60, "not-taken", flagsZero 0x1210 0x011d153e), (0x011cdf74, "taken", flagsZero 0x1210 0x011d153e), (0x011cdf74, "not-taken", flagsZero 0x1210 0x011d153e)
+  , (0x011cdf80, "taken", flagsZero 0x1210 0x011d153e), (0x011cdf80, "not-taken", flagsZero 0x1210 0x011d153e)
+  , (0x011ce290, "not-taken", flagsZero 0x4106 0x011d1cbe), (0x011ce2a4, "taken", flagsZero 0x4106 0x011d1cbe), (0x011ce2a4, "not-taken", flagsZero 0x4106 0x011d1cbe)
+  , (0x011ce318, "not-taken", flagsZero 0x4206 0x011d1dde), (0x011ce32c, "taken", flagsZero 0x4206 0x011d1dde), (0x011ce32c, "not-taken", flagsZero 0x4206 0x011d1dde)
+  , (0x011ce714, "not-taken", absentTag "0x1440"), (0x011ce724, "taken", absentTag "0x1440"), (0x011ce724, "not-taken", absentTag "0x1440")
+  , (0x011ce734, "not-taken", absentTag "0x1441"), (0x011ce744, "taken", absentTag "0x1441"), (0x011ce744, "not-taken", absentTag "0x1441")
+  , (0x011cee78, "not-taken", "Callback 0x011cee4c with directory format 1: its only rule, maker 0x1431, has pass-0 mask 9 (0x011d18d0), which covers the pass-0 saved mask 1, so a pass-0 replay copies or skips it and never calls the callback; format 1 replays the maker note in pass 0 because mode is 0 whenever the format is nonzero.")
+  , (0x011ceec0, "not-taken", "Element type outside 1..10: every callback rule of the retained tables has a type in 1..10.")
+  , (0x011cf4c0, "not-taken", "Value type outside 1..10: every rule of the retained tables has a type in 1..10.")
+  , (0x011cf1e0, "taken", "Only tags 0x4103 and 0x4104 reach it, and 0x4103 branched at 0x011cf1d4.")
+  , (0x011cf1f0, "not-taken", absentTag "0x4107..0x417f"), (0x011cf1fc, "taken", absentTag "0x4107..0x417f"), (0x011cf1fc, "not-taken", absentTag "0x4107..0x417f")
+  , (0x011cf268, "taken", absentTag "0x4209..0x427f")
+  , (0x011cfa10, "taken", knownKinds), (0x011cfa58, "taken", knownKinds)
+  , (0x011cfd80, "taken", "Frame-record count at source+0x58a zero in the 0x4282 callback: 0x011cdea0 and 0x011cda48 reject 0x4282 when it is zero, and a pass-1 replay skips 0x4282, whose pass-1 mask (0x011d1e74) is 0.")
+  , (0x011cfe84, "taken", savedKinds), (0x011cfe98, "taken", savedKinds), (0x011cfeec, "taken", savedKinds), (0x011d010c, "taken", savedKinds)
+  , (0x011d02b8, "taken", "Reached only after 0x011d0198 found the rule mask covering the saved mask at 0x011d040c; r1 and r2 are unchanged since.")
+  ]
+  where
+    mode3 = "Mode at 0x014e9e3c above 3: its only store is initialize 0x011c1500, called with mode 0 (0x011db0c4) and 3 (0x011cb740)."
+    gpsArmed = "GPS armed with directory format 2 or above: the GPS pointer callback 0x011ced48 runs only for IFD0 rule 0x8825, whose pass-1 mask (0x011d0bf4) is 0, so a format-2 replay skips it; formats above 2 write no IFD0 body."
+    flagsZero :: Int -> Int -> String
+    flagsZero tag flags = "Tag 0x" ++ showHex tag "" ++ ": its rule's flags (0x" ++ showHex flags "" ++ ") are 0, which no mode mask at 0x011d230c selects, and 0x011cdea0 runs only for selected rules."
+    absentTag tags = "Tags " ++ tags ++ " are not in the maker table 0x011d0fbc."
+    knownKinds = "A kind without a table: the callers pass kinds 0, 1, 2, 5, 6 (0x011c1788, 0x011c1858, 0x011c1aa0, 0x011c1bd8, 0x011c1ca4), 3 (0x011cfde0), 7 (0x011c1d78) and 8 (0x011c1df4), each with a table and a nonzero count."
+    savedKinds = "Its callers pass kinds 0, 1, 2, 5 and 6, each with a saved area, a table and a nonzero count."
 
 -- | A retained leaf service: the image it lives in, its entry, its extent and the label its
 -- recorder writes.
@@ -331,6 +364,10 @@ recognizedOnly = Faces True 0 2 0 [0, 0, 2, 0] [0, 0, 0, 0, 0, 0] 0 0 0 [FrameRe
 -- | Detected faces without recognition records, rectangles unset, frame word 2.
 detectedOnly :: Faces
 detectedOnly = Faces True 3 0 0xffff [3, 1, 0, 0] [1, 1, 0, 0, 1, 1] 1 2 1 []
+
+-- | Two faces whose frame word at 0x1d38 is unset.
+framesUnrecorded :: Faces
+framesUnrecorded = (detectedFaces 2) {facesFrames = 0}
 
 -- | Counts left from an earlier frame with the capture byte clear.
 staleFaces :: Faces
@@ -579,13 +616,17 @@ tableRules plain kind = [(half (rule + 0), half (rule + 4)) | index <- [0 .. cou
       _ -> (0, 0)
     half address = let offset = fromIntegral (address - 0x01100000 :: Word32) in fromIntegral (B.index plain offset) + 256 * fromIntegral (B.index plain (offset + 1))
 
--- | @blocks@ with the saved-parse state word at @0x014e9e50@ naming @state@, mapped at
--- 'savedBase'.
+-- | @blocks@ with @state@ mapped at 'savedBase' and named by the saved-parse state word at
+-- @0x014e9e50@.
 withSavedState :: B.ByteString -> [Block] -> [Block]
-withSavedState state blocks =
-  [if blockName b == "globals" then b {blockBytes = put (blockBytes b)} else b | b <- blocks] ++ [Block "saved" savedBase state]
+withSavedState = withSavedStateAt savedBase savedBase
+
+-- | @blocks@ with the state word at @0x014e9e50@ holding @pointer@ and @state@ mapped at @address@.
+withSavedStateAt :: Word32 -> Word32 -> B.ByteString -> [Block] -> [Block]
+withSavedStateAt pointer address state blocks =
+  [if blockName b == "globals" then b {blockBytes = put (blockBytes b)} else b | b <- blocks] ++ [Block "saved" address state]
   where
-    put bytes = B.take 0x110 bytes <> u32 savedBase <> B.drop 0x114 bytes
+    put bytes = B.take 0x110 bytes <> u32 pointer <> B.drop 0x114 bytes
 
 -- Scenarios ------------------------------------------------------------------------
 
@@ -636,7 +677,7 @@ captureBlocks c =
   , Block "maker" makerBase (makerBlock (captureFaces c) (captureGroup c) (captureMaker c))
   ]
 
-twoFaces, fieldsPresent, fieldsAbsent, fieldsMixed, maximumCapture, recognizedCapture, detectedCapture, staleCapture :: Capture
+twoFaces, fieldsPresent, fieldsAbsent, fieldsMixed, maximumCapture, recognizedCapture, detectedCapture, unrecordedCapture, staleCapture :: Capture
 twoFaces = plainCapture {captureCopyright = "J. Doe", capturePrintMatching = 2, capturePrintBlock = 1, captureColorSpace = 0xffff, captureFaces = detectedFaces 2, captureGroup = 0}
 fieldsPresent = plainCapture {captureCopyright = "ABC", capturePrintBlock = 1, capturePrimary = primaryChromaticity, captureExif = exifGamma, captureFaces = oneFace, captureGroup = 0, captureMaker = makerPresent, captureGps = gpsPresent}
 fieldsAbsent = plainCapture {captureMaker = makerAbsent, captureGps = gpsAbsent}
@@ -644,6 +685,7 @@ fieldsMixed = plainCapture {captureCopyright = "J. Does", captureFaces = recogni
 maximumCapture = plainCapture {captureCopyright = "M", captureFaces = maximumFaces, captureGroup = 0}
 recognizedCapture = plainCapture {captureFaces = recognizedOnly}
 detectedCapture = plainCapture {captureFaces = detectedOnly, captureGroup = 0}
+unrecordedCapture = plainCapture {captureFaces = framesUnrecorded, captureGroup = 0}
 staleCapture = plainCapture {captureFaces = staleFaces}
 
 -- | The captures whose stock Exif block the parsed replays read back.
@@ -661,14 +703,23 @@ scenarios plain =
   , header "capture-faces-maximum" 0 0 "Ten detected faces and sixty recognition records, the maker block's array bounds, in every record shape." maximumCapture
   , header "capture-faces-recognized" 0 0 "Recognition records without detected faces." recognizedCapture
   , header "capture-faces-detected" 0 1 "Detected faces without recognition records." detectedCapture
+  , header "capture-faces-unrecorded" 0 1 "Two faces with the frame word unset." unrecordedCapture
   , header "capture-faces-stale" 0 0 "Face counts left from an earlier frame with the capture byte clear." staleCapture
   , saved "saved-replay-pass0" 1 1 "" (withSavedState (savedState plain 0) (captureBlocks plainCapture))
   , saved "saved-replay-pass1" 2 1 "" (withSavedState (savedState plain 1) (captureBlocks twoFaces {captureFaces = detectedFaces 1}))
   ]
     ++ [ saved ("saved-maker-" ++ name) 1 1 ("Maker block of capture-" ++ name ++ " against the synthetic pass-0 slots.") (withSavedState (savedState plain 0) (captureBlocks capture))
-       | (name, capture) <- [("fields-present", fieldsPresent), ("fields-absent", fieldsAbsent), ("fields-mixed", fieldsMixed), ("faces-maximum", maximumCapture), ("faces-recognized", recognizedCapture), ("faces-detected", detectedCapture), ("faces-stale", staleCapture)]
+       | (name, capture) <- [("fields-present", fieldsPresent), ("fields-absent", fieldsAbsent), ("fields-mixed", fieldsMixed), ("faces-maximum", maximumCapture), ("faces-recognized", recognizedCapture), ("faces-detected", detectedCapture), ("faces-unrecorded", unrecordedCapture), ("faces-stale", staleCapture)]
        ]
     ++ [ Scenario
+          { scenarioName = "saved-state-wrapped"
+          , scenarioProvenance = provenance ++ " Saved replay whose parse-state word at 0x014e9e50 is 0xfffff004, so the IFD0 slot address state+0xffc wraps to 0; the synthetic pass-0 state is mapped from its IFD0 slots at 0. Directory format 1, GPS option 1."
+          , scenarioBlocks = withSavedStateAt 0xfffff004 0 (B.drop 0xffc (savedState plain 0)) (captureBlocks plainCapture)
+          , scenarioCursor = outputBase
+          , scenarioSteps = [headerStep 1 1]
+          , scenarioHeader = Nothing
+          }
+       , Scenario
           { scenarioName = "capture-format-unknown"
           , scenarioProvenance = provenance ++ " Directory format 3, a value of the caller's format word (image_work+0xf2e8) outside 0..2: no directory body, and the pointer patches write through the zero slots, mapped here as a page at 0."
           , scenarioBlocks = Block "zero-page" 0 (B.replicate 0x100 0) : captureBlocks plainCapture
