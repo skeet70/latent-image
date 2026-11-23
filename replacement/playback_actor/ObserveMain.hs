@@ -3,13 +3,13 @@
 -- | playback-actor-observe observe --role stock|owned --boundary machine0|native --update DAT --run JSON
 --     --boot-rom ROM --adjustment-nand NAND [--card IMG] [--route KEY,...] --bridge BRIDGE --output NEW_DIR
 --   playback-actor-observe compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON
---   playback-actor-observe same-machine FIRST_DIR SECOND_DIR OUTPUT_JSON
+--   playback-actor-observe same-memory FIRST_DIR SECOND_DIR OUTPUT_JSON
 --
 -- observe: fresh-boots the RAM-push bridge with trace sites at the queue-4 machine dispatcher
 -- and the boundary's retained services, a write watch over the boundary's state and a fetch
 -- watch over its retired action extents. After attach it presses the route keys (by default
 -- PLAY and the playback keys), idles a fixed budget after each, captures the screen and
--- fingerprints the whole machine. Every hit samples the machine event and state halfwords.
+-- hashes the guest DRAM per MiB. Every hit samples the machine event and state halfwords.
 --
 -- compare: the dispatcher's entries and returns, the calls the machines make into the
 -- retained services (calls returning into a retired extent) with the bytes they point at and r0
@@ -17,8 +17,8 @@
 -- final command history must be equal, and the owned role must fetch nothing in the retired
 -- extents outside the owned code (the functions OWNED_SYMBOLS places there).
 --
--- same-machine: two observations of one role, DAT and route must have equal machine
--- fingerprints after every step, whatever their boundaries.
+-- same-memory: two observations of one role, DAT and route must have equal guest DRAM after
+-- attach and after every step, whatever their boundaries.
 module Main (main) where
 
 import Control.DeepSeq (rnf)
@@ -31,14 +31,16 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BLC
+import qualified Data.ByteString.Char8 as BC
 import Data.IORef
 import Data.List (isPrefixOf, sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Data.Word (Word32)
-import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import EmulatorUsb
 import Numeric (readHex, showHex)
 import Replacement.PlaybackActor.Actor
@@ -72,12 +74,15 @@ data Inputs = Inputs
 playbackRoute :: [CrawlKey]
 playbackRoute = [KeyPlay, KeyLeft, KeyLeft, KeyRight, KeyRight]
 
-settleChunks, finalChunks, chunkInstructions, hitLimit, watchLimit :: Int
+settleChunks, finalChunks, chunkInstructions, hitLimit, watchLimit, dramBytes, memoryChunk, memoryRead :: Int
 settleChunks = 2
 finalChunks = 2
 chunkInstructions = 20000000
 hitLimit = 4000000
 watchLimit = 1048576
+dramBytes = 0x20000000
+memoryChunk = 0x100000
+memoryRead = 4096
 
 hexWord :: Word32 -> String
 hexWord w = "0x" ++ showHex w ""
@@ -162,8 +167,8 @@ main = do
   case arguments of
     ("observe" : rest) -> parseInputs rest >>= observeMain
     ["compare", stock, owned, symbols, output] -> compareMain stock owned symbols output
-    ["same-machine", first, second, output] -> sameMachineMain first second output
-    _ -> ioError (userError "usage: playback-actor-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON | same-machine FIRST_DIR SECOND_DIR OUTPUT_JSON")
+    ["same-memory", first, second, output] -> sameMemoryMain first second output
+    _ -> ioError (userError "usage: playback-actor-observe observe OPTIONS | compare STOCK_DIR OWNED_DIR OWNED_SYMBOLS OUTPUT_JSON | same-memory FIRST_DIR SECOND_DIR OUTPUT_JSON")
 
 parseInputs :: [String] -> IO Inputs
 parseInputs arguments = do
@@ -282,11 +287,17 @@ observe inputs directory record = do
           media <- emulatorBridgeCommand emulator (object ["command" .= ("media-state" :: T.Text)])
           pure (object ["idle" .= ran, "media" .= media])
         saveSteps = BL.writeFile (directory </> "steps.json") . A.encode . reverse =<< readIORef steps
-        fingerprint emulator name = do
-          reply <- emulatorBridgeCommand emulator (object ["command" .= ("machine-fingerprint" :: T.Text)])
-          need (field "status" reply == String "complete") "machine fingerprint did not complete"
-          BL.writeFile (directory </> ("machine-" ++ name ++ ".json")) (A.encode (field "components" reply) <> "\n")
-          pure (object ["sha256" .= field "machine_sha256" reply, "counts" .= field "counts" reply, "now" .= field "now" reply])
+        memory emulator name = do
+          chunks <- forM [0 .. dramBytes `div` memoryChunk - 1] $ \chunk -> do
+            pages <- forM [0 .. memoryChunk `div` memoryRead - 1] $ \page -> do
+              reply <- emulatorBridgeCommand emulator (object ["command" .= ("read-memory" :: T.Text), "address" .= (chunk * memoryChunk + page * memoryRead), "count" .= memoryRead])
+              case field "bytes" reply of
+                String hexBytes | T.length hexBytes == 2 * memoryRead -> pure (TE.encodeUtf8 hexBytes)
+                _ -> ioError (userError "read-memory returned no bytes")
+            let digest = sha256Hex (sha256 (B.concat pages))
+            digest `seq` pure digest
+          BL.writeFile (directory </> ("memory-" ++ name ++ ".json")) (A.encode (object ["chunk_bytes" .= memoryChunk, "chunks" .= chunks]) <> "\n")
+          pure (sha256Hex (sha256 (BC.pack (concat chunks))))
     bracket (startEmulator (paths M.! "bridge") directory bridgeArguments (\_ -> pure (Nothing, ()))) (\(emulator, _, ()) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
       need (bootStart start == FreshBootStart) "bridge did not fresh boot"
       record "emulator_start" (startRecord start)
@@ -296,7 +307,7 @@ observe inputs directory record = do
       record "hits_at_attach" (A.toJSON attached)
       shot <- emulatorCapture emulator "attached"
       record "attached_screen" shot
-      record "attached_machine" =<< fingerprint emulator "attached"
+      record "attached_memory" . A.toJSON =<< memory emulator "attached"
       forM_ (zip [1 :: Int ..] (inputRoute inputs)) $ \(index, key) -> do
         first <- readIORef cursor
         _ <- emulatorBridgeCommand emulator watch
@@ -306,10 +317,10 @@ observe inputs directory record = do
         last' <- drain emulator
         screen <- emulatorCapture emulator ("step-" ++ show index)
         state <- emulatorBridgeCommand emulator (object ["command" .= ("ui-state" :: T.Text)])
-        machine <- fingerprint emulator (show index)
+        memoryDigest <- memory emulator (show index)
         modifyIORef' steps (object
           [ "step" .= index, "key" .= crawlKeyWire key, "hits" .= [first, last'], "press" .= press, "idle" .= settled
-          , "watch" .= watchSummary boundary observed, "screen" .= screen, "ui_state" .= state, "machine" .= machine ] :)
+          , "watch" .= watchSummary boundary observed, "screen" .= screen, "ui_state" .= state, "memory" .= memoryDigest ] :)
         saveSteps
         putStrLn ("step " ++ show index ++ " " ++ crawlKeyWire key ++ " hits " ++ show (last' - first))
       first <- readIORef cursor
@@ -318,8 +329,8 @@ observe inputs directory record = do
       observed <- emulatorWatchEnd emulator
       last' <- drain emulator
       screen <- emulatorCapture emulator "final"
-      machine <- fingerprint emulator (show (length (inputRoute inputs) + 1))
-      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary boundary observed, "screen" .= screen, "machine" .= machine] :)
+      memoryDigest <- memory emulator (show (length (inputRoute inputs) + 1))
+      modifyIORef' steps (object ["step" .= (length (inputRoute inputs) + 1), "key" .= Null, "hits" .= [first, last'], "idle" .= settled, "watch" .= watchSummary boundary observed, "screen" .= screen, "memory" .= memoryDigest] :)
       saveSteps
       record "hit_count" (A.toJSON last')
 
@@ -481,22 +492,19 @@ compareMain stockDir ownedDir symbols output = do
   putStrLn ("verdict " ++ (if equal then "equal" else "different"))
   unless equal exitFailure
 
--- * Machine identity across boundaries
+-- * Guest memory identity across boundaries
 
--- | The machine components (leaf headers and RAM/state chunks) whose digests differ.
-differingComponents :: Value -> Value -> [Value]
-differingComponents first second =
-  [ object ["path" .= path, "first" .= a, "second" .= b]
-  | (path, (a, b)) <- M.toList (M.mergeWithKey (\_ a b -> Just (a, b)) (M.map (\a -> (a, Null))) (M.map (\b -> (Null, b))) (leaves first) (leaves second))
-  , a /= b
+-- | The DRAM chunks, by guest physical address, whose digests differ.
+differingChunks :: Value -> Value -> [Value]
+differingChunks first second =
+  [ object ["address" .= hexWord (fromIntegral (i * memoryChunk)), "first" .= a, "second" .= b]
+  | (i, a, b) <- zip3 [0 :: Int ..] (arrayOf (field "chunks" first)) (arrayOf (field "chunks" second)), a /= b
   ]
-  where
-    leaves components = M.fromList [(path, field "sha256" e) | e <- arrayOf (field "entries" components), field "kind" e `elem` [String "chunk", String "header"], Just path <- [textOf (field "path" e)]]
 
-sameMachineMain :: FilePath -> FilePath -> FilePath -> IO ()
-sameMachineMain firstDir secondDir output = do
+sameMemoryMain :: FilePath -> FilePath -> FilePath -> IO ()
+sameMemoryMain firstDir secondDir output = do
   exists <- doesPathExist output
-  need (not exists) "same-machine output must be new"
+  need (not exists) "same-memory output must be new"
   firstReceipt <- loadJson (firstDir </> "receipt.json")
   secondReceipt <- loadJson (secondDir </> "receipt.json")
   forM_ [firstReceipt, secondReceipt] $ \r -> need (field "status" (field "outcome" r) == String "completed") "an observation did not complete"
@@ -505,23 +513,24 @@ sameMachineMain firstDir secondDir output = do
   firstSteps <- arrayOf <$> loadJson (firstDir </> "steps.json")
   secondSteps <- arrayOf <$> loadJson (secondDir </> "steps.json")
   need (length firstSteps == length secondSteps) "the observations ran different step counts"
-  let points = ("attached", field "attached_machine" firstReceipt, field "attached_machine" secondReceipt)
-        : [(show (n :: Int), field "machine" a, field "machine" b) | (n, a, b) <- zip3 [1 ..] firstSteps secondSteps]
+  let points = ("attached", field "attached_memory" firstReceipt, field "attached_memory" secondReceipt)
+        : [(show (n :: Int), field "memory" a, field "memory" b) | (n, a, b) <- zip3 [1 ..] firstSteps secondSteps]
   rows <- forM points $ \(name, a, b) -> do
-    need (a /= Null && b /= Null) ("step " ++ name ++ " has no machine fingerprint")
-    differing <- if a == b then pure [] else do
-      firstComponents <- loadJson (firstDir </> ("machine-" ++ name ++ ".json"))
-      secondComponents <- loadJson (secondDir </> ("machine-" ++ name ++ ".json"))
-      pure (differingComponents firstComponents secondComponents)
-    pure (a == b, object ["step" .= name, "first" .= a, "second" .= b, "equal" .= (a == b), "differing_components" .= take 20 differing, "differing_component_count" .= length differing])
+    need (a /= Null && b /= Null) ("step " ++ name ++ " has no memory snapshot")
+    firstChunks <- loadJson (firstDir </> ("memory-" ++ name ++ ".json"))
+    secondChunks <- loadJson (secondDir </> ("memory-" ++ name ++ ".json"))
+    let differing = differingChunks firstChunks secondChunks
+        same = a == b && null differing
+    pure (same, object ["step" .= name, "first" .= a, "second" .= b, "equal" .= same, "differing_chunks" .= differing])
   let equal = all fst rows
   BL.writeFile output $ A.encode $ object
     [ "schema" .= (1 :: Int)
     , "role" .= field "role" firstReceipt
     , "route" .= field "route" firstReceipt
     , "boundaries" .= [field "boundary" firstReceipt, field "boundary" secondReceipt]
+    , "dram_bytes" .= dramBytes
     , "steps" .= map snd rows
     , "verdict" .= (if equal then "equal" else "different" :: T.Text)
     ]
-  putStrLn ("machine " ++ (if equal then "equal" else "different"))
+  putStrLn ("memory " ++ (if equal then "equal" else "different"))
   unless equal exitFailure
