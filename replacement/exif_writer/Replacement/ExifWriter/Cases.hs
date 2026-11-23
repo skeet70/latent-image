@@ -9,6 +9,7 @@ module Replacement.ExifWriter.Cases
   , ownedExtents
   , entries
   , stockFunctions
+  , retainedCallers
   , unreachableDirections
   , Service (..)
   , services
@@ -112,6 +113,11 @@ stockFunctions =
   , (0x011cf6e0, 104), (0x011cf748, 228), (0x011cf82c, 40), (0x011cf854, 180), (0x011cf908, 136)
   , (0x011cf990, 968), (0x011cfd58, 252), (0x011cfe54, 1456), (0x011db098, 240), (0x011db188, 36)
   ]
+
+-- | Stock overlay functions outside the extents that cases call: the thumbnail offset patch of
+-- the RAF writer and the MPF index and attribute writers.
+retainedCallers :: [(Word32, Word32)]
+retainedCallers = [(0x011c1d18, 48), (0x011c1d48, 64), (0x011c1d88, 120)]
 
 -- | Conditional branch directions of 'stockFunctions' no input reaches: (branch address,
 -- @taken@ or @not-taken@, the bytes that decide it).

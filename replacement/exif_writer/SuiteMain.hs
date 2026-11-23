@@ -249,7 +249,7 @@ caseDocument loaded role scenario expectation = (ident, document, blob)
                 ]
             | (Region name address permissions bytes, offset) <- zip regions offsets
             ]
-        , "functions" .= [object ["address" .= hexWord address, "size" .= size] | (address, size) <- functions ++ serviceFunctions ++ [(driverBase, fromIntegral (B.length driver))]]
+        , "functions" .= [object ["address" .= hexWord address, "size" .= size] | (address, size) <- functions ++ retainedCallers ++ serviceFunctions ++ [(driverBase, fromIntegral (B.length driver))]]
         , "stubs" .= ([] :: [Value])
         , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (10000 :: Int)]
         , "ignored_memory" .= [object ["region" .= ("stack" :: String), "offset" .= (0 :: Int), "length" .= (fromIntegral (stackTop - stackBase) :: Int), "reason" .= ("private-frame" :: String)]]
