@@ -1,0 +1,99 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["imports.ld"])
+
+_SOURCES = ["src/stock.rs", "src/writer.rs"]
+
+EXIF_CONTROLS = [
+    "motorola_header",
+    "interop_index_fixed",
+    "saved_values_unpadded",
+    "gps_pointer_unarmed",
+    "odd_values_unpadded",
+    "capacity_unclamped",
+    "identity_not_copied",
+]
+
+_VARIANTS = [("", [])] + [
+    ("-control-" + control.replace("_", "-"), ["--cfg", "exif_control_" + control])
+    for control in EXIF_CONTROLS
+]
+
+[xm1_rust_staticlib(
+    name = "exif-writer-rust" + suffix,
+    src = "src/lib.rs",
+    crate_name = "xm1_exif_writer",
+    data = _SOURCES,
+    rustc_flags = ["-C", "overflow-checks=off"] + flags,
+) for suffix, flags in _VARIANTS]
+
+[xm1_rust_elf(
+    name = "exif-writer-image" + suffix,
+    rust_staticlib = ":exif-writer-rust" + suffix,
+    asm_srcs = ["entry.S"],
+    entry = "exif_entry_write_exif_header",
+    link_script = "exif-writer.ld",
+    link_includes = ["imports.ld"],
+    extra_ldflags = ["-Wl,--gc-sections"],
+) for suffix, _ in _VARIANTS]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs"] + _SOURCES,
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+)
+
+haskell_library(
+    name = "cases",
+    srcs = [
+        "Replacement/ExifWriter/Cases.hs",
+        "Replacement/ExifWriter/Structure.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+haskell_binary(
+    name = "exif-writer-suite",
+    srcs = ["SuiteMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "SuiteMain.hs",
+    deps = [
+        ":cases",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
+        "//replacement/file_service:native-lib",
+    ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":exif-writer-suite",
+        ":host-tests",
+    ] + [":exif-writer-image" + suffix for suffix, _ in _VARIANTS],
+)
+
+filegroup(
+    name = "shim-catalog-data",
+    srcs = glob(["**/*.ld"]) + ["BUILD.bazel"],
+    visibility = ["//replacement/shim_check:__pkg__"],
+)
