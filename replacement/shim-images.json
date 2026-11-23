@@ -723,7 +723,7 @@
         "exif_fill",
         "exif_string_length"
       ],
-      "expected_sha256": "072d4c0a862715c2358947b6997989e166701aad3b37b6a7bfb8697b2e0638ac"
+      "expected_sha256": "c6188a28a895b11f9387fa8d7f0c8044d116beb1abdb915549ba08269d1ca0d5"
     },
     {
       "id": "//replacement/first_stage:first-stage-fixed-image",
