@@ -188,7 +188,6 @@ filegroup(
         ":playback-actor-observe",
         ":playback-actor-stage",
         ":playback-actor-suite",
-        ":provenance-tests",
     ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS] + [
         ":playback-actor-native-image" + suffix
         for suffix, _ in _NATIVE_VARIANTS
