@@ -5,7 +5,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["imports.ld"])
 
-_SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/machine61.rs", "src/stock.rs"]
+_SOURCES = ["src/machine0.rs", "src/machine7.rs", "src/machine30.rs", "src/machine61.rs", "src/request.rs", "src/stock.rs"]
 
 # Staged machines' controls; the native image also carries the native-only machines 30 and 61
 # and their controls.

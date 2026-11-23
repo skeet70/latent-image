@@ -11,6 +11,7 @@ pub mod machine30;
 pub mod machine7;
 #[cfg(any(test, playback_native_machines))]
 pub mod machine61;
+pub mod request;
 #[cfg(target_arch = "arm")]
 #[allow(unsafe_code)]
 mod stock;

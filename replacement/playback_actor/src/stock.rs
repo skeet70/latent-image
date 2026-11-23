@@ -26,9 +26,9 @@ const MODE_STATE: u32 = 0x014e_a678;
 const BUFFER_STEP: u32 = MODE_STATE + 0x18;
 const MODE_VALUE: u32 = MODE_STATE + 0x1c;
 #[cfg(playback_native_machines)]
-const REQUEST: u32 = 0x014e_a6e4;
+const REQUEST: u32 = crate::request::BLOCK;
 #[cfg(playback_native_machines)]
-const REQUEST_EVENT: u32 = REQUEST + 0x2c;
+const REQUEST_EVENT: u32 = crate::request::Message119::Event.address();
 #[cfg(playback_native_machines)]
 const TRANSFER: u32 = 0x014e_aed8;
 #[cfg(playback_native_machines)]
