@@ -25,7 +25,7 @@ machine44 =
 
 request, stream :: Word32
 request = 0x014ea6e4
-stream = 0x014ef894
+stream = 0x014ff894
 
 -- | Words inside the stream region that no action names, for the pointers at +0 and +0x4c.
 currentPointee, targetPointee :: Word32

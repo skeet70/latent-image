@@ -3,7 +3,10 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["imports.ld"])
+exports_files([
+    "imports.ld",
+    "plain-overlay-unit.json",
+])
 
 _SOURCES = [
     "src/machine0.rs",
@@ -172,23 +175,6 @@ haskell_binary(
 )
 
 haskell_binary(
-    name = "playback-actor-stage",
-    srcs = ["StageMain.hs"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    main_file = "StageMain.hs",
-    deps = [
-        ":cases",
-        "//emulation:case-sha256",
-        "//host/firmware:bank-allowlist",
-        "//host:aeson",
-        "//host:base",
-        "//host:bytestring",
-        "//host:containers",
-        "//host:directory",
-    ],
-)
-
-haskell_binary(
     name = "playback-actor-observe",
     srcs = ["ObserveMain.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-rtsopts"],
@@ -214,7 +200,6 @@ filegroup(
     srcs = [
         ":host-tests",
         ":playback-actor-observe",
-        ":playback-actor-stage",
         ":playback-actor-suite",
     ] + [":playback-actor-image" + suffix for suffix, _ in _VARIANTS],
 )

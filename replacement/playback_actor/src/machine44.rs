@@ -1,5 +1,5 @@
 //! Machine 44. Its 19 actions (table indices 2..=20 of the action table at 0x01217c84) read the
-//! stream block at 0x014ef894 and the request halfword at 0x014ea6e4, call retained services, set
+//! stream block at 0x014ff894 and the request halfword at 0x014ea6e4, call retained services, set
 //! the machine's state halfword and return the dispatcher's result. Where stock returns the r0 a
 //! service left, the action returns that service's result.
 
@@ -92,7 +92,7 @@ pub enum CallWith {
     Fn123d3f4,
 }
 
-/// Words of the stream block at 0x014ef894, by offset.
+/// Words of the stream block at 0x014ff894, by offset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Word {
@@ -105,7 +105,7 @@ pub enum Word {
     W5c = 0x5c,
 }
 
-/// Bytes of the stream block at 0x014ef894, by offset.
+/// Bytes of the stream block at 0x014ff894, by offset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Byte {

@@ -16,8 +16,8 @@ machine1 =
     , machineEvents = 9
     , machineRegions =
         [ Region "machines" 0x014ea4ec 0x1c0 False
-        , Region "image_control" imageControl 0x8 True
-        , Region "media_output" mediaOutput 0x4 True
+        , Region "image-control" imageControl 0x8 True
+        , Region "media-output" mediaOutput 0x4 True
         ]
     , machineActions = actions
     }
