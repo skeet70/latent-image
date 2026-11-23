@@ -1,0 +1,91 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | plain-overlay-observe compare on synthetic observations of the save file machine unit.
+module Main (main) where
+
+import Control.Monad (forM_, unless)
+import Data.Aeson (Value (..), object, (.=))
+import qualified Data.Aeson as A
+import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Text as T
+import System.Directory (createDirectory, doesPathExist, getTemporaryDirectory)
+import System.Environment (getArgs, lookupEnv)
+import System.Exit (ExitCode (..), exitFailure)
+import System.FilePath ((</>))
+import System.Process (readProcessWithExitCode)
+
+-- | One role's observation: its entry hits, the fetches in the extent, overlay residency and the
+-- DRAM chunk digests of its one step.
+data Role = Role {roleHits :: [Value], roleFetches :: [(T.Text, Int)], roleResident :: Bool, roleChunk :: T.Text}
+
+stockRole :: Role
+stockRole = Role [] [] True "c0"
+
+entryHit :: Value
+entryHit =
+  object
+    [ "site" .= ("entry:save_file_machine:begin" :: T.Text), "address" .= ("0x11d5600" :: T.Text), "lr" .= ("0xe51aec" :: T.Text), "core" .= (0 :: Int)
+    , "task" .= object ["kernel" .= ("a" :: T.Text), "task_id" .= (3 :: Int), "kind" .= ("available" :: T.Text)]
+    , "registers" .= object ["r0" .= ("0x1" :: T.Text), "r1" .= ("0x14e0000" :: T.Text), "r2" .= ("0xe4e5dc" :: T.Text), "r3" .= ("0x0" :: T.Text)]
+    ]
+
+writeRole :: FilePath -> Value -> T.Text -> Role -> IO ()
+writeRole directory unit name role = do
+  createDirectory directory
+  let residency = [object ["overlay" .= (46 :: Int), "resident" .= roleResident role]]
+      memory point = BL.writeFile (directory </> ("memory-" ++ point ++ ".json")) (A.encode (object ["chunk_bytes" .= (1048576 :: Int), "masked" .= [[1 :: Int, 2]], "chunks" .= ["a0" :: T.Text, roleChunk role]]))
+  BL.writeFile (directory </> "hits.jsonl") (BL.concat [A.encode h <> "\n" | h <- roleHits role])
+  memory "attached"
+  memory "1"
+  BL.writeFile (directory </> "steps.json") . A.encode $
+    [ object
+        [ "step" .= (1 :: Int), "watch" .= object ["violation" .= Null, "fetches_by_pc" .= object [K.fromText pc .= n | (pc, n) <- roleFetches role], "writes" .= ([] :: [Value])]
+        , "screen" .= object ["sha256" .= ("screen" :: T.Text)], "residency" .= residency, "memory" .= roleChunk role ] ]
+  BL.writeFile (directory </> "receipt.json") . A.encode $
+    object
+      [ "role" .= name, "outcome" .= object ["status" .= ("completed" :: T.Text)], "reset_segments" .= ([] :: [Value]), "units" .= [unit]
+      , "inputs" .= object ["update" .= object ["sha256" .= name], "plain" .= object ["sha256" .= name]]
+      , "attached_screen" .= object ["sha256" .= ("screen" :: T.Text)], "attached_residency" .= residency, "attached_memory" .= roleChunk role ]
+
+verdictOf :: FilePath -> IO Value
+verdictOf path = do
+  present <- doesPathExist path
+  bytes <- if present then BL.readFile path else pure ""
+  pure $ case A.decode bytes of
+    Just (Object fields) | Just verdict <- KM.lookup "verdict" fields -> verdict
+    _ -> Null
+
+main :: IO ()
+main = do
+  arguments <- getArgs
+  (observe, manifest, elf) <- case arguments of
+    [tool, unitPath, elfPath] -> pure (tool, unitPath, elfPath)
+    _ -> fail "usage: observe-compare-tests PLAIN_OVERLAY_OBSERVE SAVE_UNIT SAVE_ELF"
+  unit <- B.readFile manifest >>= either fail pure . A.eitherDecodeStrict'
+  base <- maybe getTemporaryDirectory pure =<< lookupEnv "TEST_TMPDIR"
+  let root = base </> "plain-overlay-observe-compare"
+  createDirectory root
+  writeRole (root </> "stock") unit "stock" stockRole
+  let cases =
+        [ ("unreached", "owned", stockRole, [elf], ExitSuccess, "equal")
+        , ("fetch-in-owned-function", "owned", stockRole {roleFetches = [("0x11d5600", 1)]}, [elf], ExitSuccess, "equal")
+        , ("fetch-outside-owned-functions", "owned", stockRole {roleFetches = [("0x11d5d44", 1)]}, [elf], ExitFailure 1, "different")
+        , ("entry-reached", "owned", stockRole {roleHits = [entryHit]}, [elf], ExitFailure 1, "different")
+        , ("not-resident", "owned", stockRole {roleResident = False}, [elf], ExitFailure 1, "different")
+        , ("memory-chunk", "owned", stockRole {roleChunk = "c1"}, [elf], ExitFailure 1, "different")
+        , ("stock-rerun", "stock", stockRole, [], ExitSuccess, "equal")
+        ]
+  failures <- fmap concat . sequence $
+    [ do
+        writeRole (root </> name) unit role observation
+        let output = root </> (name ++ ".json")
+        (code, _, err) <- readProcessWithExitCode observe (["compare", root </> "stock", root </> name, output] ++ elves) ""
+        verdict <- verdictOf output
+        pure [name ++ ": exit " ++ show code ++ ", verdict " ++ show verdict ++ "\n" ++ err | code /= expectedCode || verdict /= String expected]
+    | (name, role, observation, elves, expectedCode, expected) <- cases
+    ]
+  forM_ failures putStrLn
+  unless (null failures) exitFailure

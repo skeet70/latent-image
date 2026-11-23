@@ -3,7 +3,10 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["imports.ld"])
+exports_files([
+    "imports.ld",
+    "plain-overlay-unit.json",
+])
 
 _SOURCES = ["src/machine.rs", "src/stock.rs"]
 

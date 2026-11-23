@@ -1,0 +1,127 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+_GHCOPTS = ["-XGHC2021", "-Wall", "-Werror", "-O2"]
+
+_UNITS = [
+    "//replacement/save_file_machine:plain-overlay-unit.json",
+    "//replacement/save_file_machine:save-file-machine-image.elf",
+    "//replacement/exif_writer:plain-overlay-unit.json",
+    "//replacement/exif_writer:exif-writer-image.elf",
+]
+
+haskell_library(
+    name = "plain-overlay",
+    srcs = [
+        "Replacement/PlainOverlay/Stage.hs",
+        "Replacement/PlainOverlay/Unit.hs",
+    ],
+    ghcopts = _GHCOPTS,
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:text",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:reference-scan-model",
+    ],
+)
+
+haskell_binary(
+    name = "plain-overlay-stage",
+    srcs = ["StageMain.hs"],
+    ghcopts = _GHCOPTS,
+    main_file = "StageMain.hs",
+    deps = [
+        ":plain-overlay",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:font-window",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:reference-scan-model",
+    ],
+)
+
+haskell_test(
+    name = "stage-tests",
+    size = "small",
+    srcs = ["StageTests.hs"],
+    args = ["$(rootpath %s)" % label for label in _UNITS],
+    data = _UNITS,
+    ghcopts = _GHCOPTS,
+    main_file = "StageTests.hs",
+    deps = [
+        ":plain-overlay",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:reference-scan-model",
+    ],
+)
+
+haskell_binary(
+    name = "plain-overlay-observe",
+    srcs = ["ObserveMain.hs"],
+    ghcopts = _GHCOPTS + ["-rtsopts"],
+    main_file = "ObserveMain.hs",
+    deps = [
+        ":plain-overlay",
+        "//emulation:case-sha256",
+        "//emulation:emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_test(
+    name = "observe-compare-tests",
+    size = "small",
+    srcs = ["ObserveCompareTests.hs"],
+    args = [
+        "$(rootpath :plain-overlay-observe)",
+        "$(rootpath //replacement/save_file_machine:plain-overlay-unit.json)",
+        "$(rootpath //replacement/save_file_machine:save-file-machine-image.elf)",
+    ],
+    data = [
+        ":plain-overlay-observe",
+        "//replacement/save_file_machine:plain-overlay-unit.json",
+        "//replacement/save_file_machine:save-file-machine-image.elf",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    main_file = "ObserveCompareTests.hs",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+        "//host:text",
+    ],
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":plain-overlay-observe",
+        ":plain-overlay-stage",
+    ],
+)

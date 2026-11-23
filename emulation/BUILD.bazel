@@ -3230,6 +3230,7 @@ haskell_library(
     visibility = [
         "//replacement/dcf_numbering:__pkg__",
         "//replacement/file_service:__pkg__",
+        "//replacement/plain_overlay:__pkg__",
         "//transport:__pkg__",
     ],
     deps = [
