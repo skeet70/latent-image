@@ -136,6 +136,18 @@ mergedSpans = foldr merge [] . sortOn (\(Span s _) -> s)
       | e >= s' = Span s (max e e') : rest
       | otherwise = Span s e : Span s' e' : rest
 
+-- | The merged spans, the closest neighbours joined until at most the bridge's 8 write ranges remain.
+-- Writes the join adds are recorded but fall outside every compared span.
+writeSpans :: [Span] -> [Span]
+writeSpans = bound . mergedSpans
+  where
+    bound spans
+      | length spans <= 8 = spans
+      | otherwise = bound (joinAt (snd (minimum (zip (zipWith (\(Span _ e) (Span s _) -> s - e) spans (drop 1 spans)) [0 :: Int ..]))) spans)
+    joinAt 0 (Span s _ : Span _ e : rest) = Span s e : rest
+    joinAt k (range : rest) = range : joinAt (k - 1) rest
+    joinAt _ [] = []
+
 -- | Fetch records per retired extent and per PC; writes inside the boundary's write spans without
 -- the role-specific PC, instruction count and tick, the writers' PCs apart, outside the
 -- comparison. A CPU write's before and written bytes are byte lists in which a byte still marked
@@ -361,7 +373,7 @@ observe inputs directory record = do
           : concat
             [ [(copySiteCall c, "provenance:copy:" ++ copySiteName c, Nothing, Nothing), (copySiteCall c + 4, "provenance:copy-end:" ++ copySiteName c, Nothing, Nothing)]
             | c <- messageCopies ]
-      writes = map spanValue (mergedSpans (boundaryWrites boundary ++ provenanceMemory))
+      writes = map spanValue (writeSpans (boundaryWrites boundary ++ provenanceMemory))
       readSpans = map spanValue provenanceMemory
       fetches = map spanValue (boundaryRetired boundary)
       spec =
